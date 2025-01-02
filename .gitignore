@@ -1,0 +1,23 @@
+echo "# Build artifacts
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.tlog
+*.ipch
+*.log
+
+# IDE/Editor Files
+.vs/
+*.user
+*.suo
+
+# Qt Build Files
+/GUI/build/
+*.ninja
+*.cmake
+
+# Misc
+*.dll
+*.cache
+" > .gitignore
