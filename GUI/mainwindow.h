@@ -26,13 +26,6 @@ public:
     struct AxisRange {
         LONG min;
         LONG max;
-        LONG minDeadzone;
-        LONG maxDeadzone;
-    };
-    struct DeadzoneSettings {
-        bool enabled = false;
-        LONG minDeadzone = 0;
-        LONG maxDeadzone = 0;
     };
 
 private slots:
@@ -41,9 +34,6 @@ private slots:
     void restoreDefaults();
     void setAxisMin(int axis);
     void setAxisMax(int axis);
-    void adjustDeadzone(int axis, bool isTop, bool increase, QLabel* valueLabel);
-    void saveDeadzoneSettings(int axis);
-    void updateDeadzoneVisuals();
 
 private:
     Ui::MainWindow *ui;
@@ -106,13 +96,6 @@ private:
 
     // Setup UI
     void setupUI();
-
-    // Deadzones
-    DeadzoneSettings xDeadzone, zDeadzone, ryDeadzone;
-    struct AxisDeadzones { int bottomPercent = 0; int topPercent = 0; };
-    AxisDeadzones xDeadzones;
-    AxisDeadzones zDeadzones;
-    AxisDeadzones ryDeadzones;
 
     // Validation
     bool validateAxisRange(const AxisRange& range, const QString& axisName);

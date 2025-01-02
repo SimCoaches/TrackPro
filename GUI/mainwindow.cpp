@@ -223,7 +223,6 @@ void MainWindow::setupUI()
     auto createAxisGroup = [this](
                                QString &axisName,
                                QLabel *&valueLabel,
-                               QProgressBar *&rawBar,
                                QProgressBar *&calBar,
                                int axisIndex)
     {
@@ -311,18 +310,11 @@ void MainWindow::setupUI()
         layout->addLayout(valueLayout);
 
         // Progress bars
-        QLabel *rawLabel = new QLabel("Raw Input");
-        rawBar = new QProgressBar;
-        rawBar->setTextVisible(true);
-        rawBar->setStyleSheet("QProgressBar::chunk { background-color: #fd7e14; }");
-
-        QLabel *calLabel = new QLabel("Calibrated");
+        QLabel *calLabel = new QLabel("Output:");
         calBar = new QProgressBar;
         calBar->setTextVisible(true);
         calBar->setStyleSheet("QProgressBar::chunk { background-color: #228be6; }");
 
-        layout->addWidget(rawLabel);
-        layout->addWidget(rawBar);
         layout->addWidget(calLabel);
         layout->addWidget(calBar);
 
@@ -345,89 +337,14 @@ void MainWindow::setupUI()
         buttonLayout->addWidget(maxButton);
         layout->addLayout(buttonLayout);
 
-        // Deadzones
-        QGroupBox* deadzoneGroup = new QGroupBox("Deadzones");
-        deadzoneGroup->setStyleSheet(R"(
-            QGroupBox {
-                margin-top: 16px;
-                padding-top: 16px;
-                background-color: #2c2e33;
-            }
-        )");
-        QGridLayout* deadzoneLayout = new QGridLayout(deadzoneGroup);
-        deadzoneLayout->setSpacing(8);
-
-        QSpinBox* minDeadzoneSpinner = new QSpinBox();
-        minDeadzoneSpinner->setRange(0, 20);
-        minDeadzoneSpinner->setSuffix("%");
-
-        QSpinBox* maxDeadzoneSpinner = new QSpinBox();
-        maxDeadzoneSpinner->setRange(0, 20);
-        maxDeadzoneSpinner->setSuffix("%");
-
-        deadzoneLayout->addWidget(minDeadzoneSpinner, 0, 1);
-        deadzoneLayout->addWidget(maxDeadzoneSpinner, 1, 1);
-
-        QLabel* minDeadzoneLabel = new QLabel("Min Deadzone:");
-        QLabel* maxDeadzoneLabel = new QLabel("Max Deadzone:");
-        deadzoneLayout->addWidget(minDeadzoneLabel, 0, 0);
-        deadzoneLayout->addWidget(maxDeadzoneLabel, 1, 0);
-
-        connect(minDeadzoneSpinner, QOverload<int>::of(&QSpinBox::valueChanged),
-                this, [this, axisIndex](int value) {
-                    std::wstring calibrationData;
-                    switch(axisIndex) {
-                    case 0:
-                        calibrationData = L"MinX=" + std::to_wstring(xRange.min) +
-                                          L";MaxX=" + std::to_wstring(xRange.max) +
-                                          L";MinDeadzoneX=" + std::to_wstring(value) + L";";
-                        break;
-                    case 1:
-                        calibrationData = L"MinZ=" + std::to_wstring(zRange.min) +
-                                          L";MaxZ=" + std::to_wstring(zRange.max) +
-                                          L";MinDeadzoneZ=" + std::to_wstring(value) + L";";
-                        break;
-                    case 2:
-                        calibrationData = L"MinRY=" + std::to_wstring(ryRange.min) +
-                                          L";MaxRY=" + std::to_wstring(ryRange.max) +
-                                          L";MinDeadzoneRY=" + std::to_wstring(value) + L";";
-                        break;
-                    }
-                    saveCalibrationToRegistry(calibrationData, axisIndex);
-                });
-
-        connect(maxDeadzoneSpinner, QOverload<int>::of(&QSpinBox::valueChanged),
-                this, [this, axisIndex](int value) {
-                    std::wstring calibrationData;
-                    switch(axisIndex) {
-                    case 0:
-                        calibrationData = L"MinX=" + std::to_wstring(xRange.min) +
-                                          L";MaxX=" + std::to_wstring(xRange.max) +
-                                          L";MaxDeadzoneX=" + std::to_wstring(value) + L";";
-                        break;
-                    case 1:
-                        calibrationData = L"MinZ=" + std::to_wstring(zRange.min) +
-                                          L";MaxZ=" + std::to_wstring(zRange.max) +
-                                          L";MaxDeadzoneZ=" + std::to_wstring(value) + L";";
-                        break;
-                    case 2:
-                        calibrationData = L"MinRY=" + std::to_wstring(ryRange.min) +
-                                          L";MaxRY=" + std::to_wstring(ryRange.max) +
-                                          L";MaxDeadzoneRY=" + std::to_wstring(value) + L";";
-                        break;
-                    }
-                    saveCalibrationToRegistry(calibrationData, axisIndex);
-                });
-
-        layout->addWidget(deadzoneGroup);
         layout->addStretch();
         group->setLayout(layout);
         return group;
     };
 
-    axesLayout->addWidget(createAxisGroup(xAxisName, xValueLabel, xRawBar, xCalBar, 0));
-    axesLayout->addWidget(createAxisGroup(zAxisName, zValueLabel, zRawBar, zCalBar, 1));
-    axesLayout->addWidget(createAxisGroup(ryAxisName, ryValueLabel, ryRawBar, ryCalBar, 2));
+    axesLayout->addWidget(createAxisGroup(xAxisName, xValueLabel, xCalBar, 0));
+    axesLayout->addWidget(createAxisGroup(zAxisName, zValueLabel, zCalBar, 1));
+    axesLayout->addWidget(createAxisGroup(ryAxisName, ryValueLabel, ryCalBar, 2));
 
     mainLayout->addLayout(axesLayout);
     mainLayout->addStretch();
@@ -560,10 +477,9 @@ void MainWindow::updateValues()
         }
 
         // 5) Update progress bars & label
-        auto updateAxis = [](QLabel *label, QProgressBar *rawBar, QProgressBar *calBar,
+        auto updateAxis = [](QLabel *label, QProgressBar *calBar,
                              LONG raw, const AxisRange &range)
         {
-            int rawPercent = (raw * 100) / 4095;
             int calPercent = 0;
             if (raw <= range.min) {
                 calPercent = 0;
@@ -573,16 +489,18 @@ void MainWindow::updateValues()
                 calPercent = ((raw - range.min) * 100) / (range.max - range.min);
             }
 
-            label->setText(QString("%1 (%2%)").arg(raw).arg(rawPercent));
-            rawBar->setValue(rawPercent);
-            rawBar->setFormat(QString("%1%").arg(rawPercent));
+            // Update the label to show the calibrated percentage (or any text you like)
+            label->setText(QString("%1%").arg(calPercent));
+
+            // Update only the calibrated bar
             calBar->setValue(calPercent);
             calBar->setFormat(QString("%1%").arg(calPercent));
         };
 
-        updateAxis(xValueLabel, xRawBar, xCalBar, currentXRaw, xRange);
-        updateAxis(zValueLabel, zRawBar, zCalBar, currentZRaw, zRange);
-        updateAxis(ryValueLabel, ryRawBar, ryCalBar, currentRYRaw, ryRange);
+        updateAxis(xValueLabel, xCalBar, currentXRaw, xRange);
+        updateAxis(zValueLabel, zCalBar, currentZRaw, zRange);
+        updateAxis(ryValueLabel, ryCalBar, currentRYRaw, ryRange);
+
     }
 }
 
@@ -766,65 +684,4 @@ void MainWindow::setAxisMax(int axis)
         m_calibrated = true;
         break;
     }
-}
-
-void MainWindow::adjustDeadzone(int axis, bool isTop, bool increase, QLabel* valueLabel)
-{
-    DeadzoneSettings* deadzone = nullptr;
-    if (axis == 0) deadzone = &xDeadzone;
-    else if (axis == 1) deadzone = &zDeadzone;
-    else if (axis == 2) deadzone = &ryDeadzone;
-
-    if (!deadzone) {
-        qDebug() << "Invalid axis index:" << axis;
-        return;
-    }
-
-    LONG* targetDeadzone = isTop ? &deadzone->maxDeadzone : &deadzone->minDeadzone;
-    if (!targetDeadzone) {
-        qDebug() << "Invalid deadzone pointer.";
-        return;
-    }
-
-    if (increase && *targetDeadzone < 20) {
-        ++(*targetDeadzone);
-    } else if (!increase && *targetDeadzone > 0) {
-        --(*targetDeadzone);
-    } else {
-        qDebug() << "Deadzone adjustment out of range or no change.";
-        return;
-    }
-
-    *targetDeadzone = std::clamp(*targetDeadzone, 0L, 20L);
-
-    if (valueLabel) {
-        valueLabel->setText(QString::number(*targetDeadzone) + "%");
-    }
-}
-
-void MainWindow::saveDeadzoneSettings(int axis)
-{
-    std::wstring calibrationData;
-    DeadzoneSettings* deadzone = nullptr;
-
-    if (axis == 0) {
-        deadzone = &xDeadzone;
-        calibrationData = L"MinDeadzoneX=" + std::to_wstring(deadzone->minDeadzone) +
-                          L";MaxDeadzoneX=" + std::to_wstring(deadzone->maxDeadzone) + L";";
-    } else if (axis == 1) {
-        deadzone = &zDeadzone;
-        calibrationData = L"MinDeadzoneZ=" + std::to_wstring(deadzone->minDeadzone) +
-                          L";MaxDeadzoneZ=" + std::to_wstring(deadzone->maxDeadzone) + L";";
-    } else if (axis == 2) {
-        deadzone = &ryDeadzone;
-        calibrationData = L"MinDeadzoneRY=" + std::to_wstring(deadzone->minDeadzone) +
-                          L";MaxDeadzoneRY=" + std::to_wstring(deadzone->maxDeadzone) + L";";
-    }
-
-    saveCalibrationToRegistry(calibrationData, axis);
-}
-
-void MainWindow::updateDeadzoneVisuals()
-{
-    // optional
 }

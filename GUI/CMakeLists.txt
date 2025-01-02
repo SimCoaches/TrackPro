@@ -18,8 +18,8 @@ set(PROJECT_SOURCES
     mainwindow.ui
     ../src/CalibrationHandler.h
     ../src/RegistryHandler.h
-    ../src/HIDReader.cpp
-    ../src/ReadingWriting.cpp
+
+
     ../src/RegistryHandler.cpp
 )
 
@@ -29,6 +29,7 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         main.cpp
+        ../src/CalibrationHandler.h ../src/RegistryHandler.h
         # Removed advancedwindow files
     )
 else()
