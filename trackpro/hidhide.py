@@ -231,6 +231,102 @@ class HidHideClient:
         # Register the application without adding extra quotes
         return self._run_cli(["--app-reg", app_path])
     
+    def is_device_hidden(self, device_name_or_path):
+        """Check if a device is hidden by name or path."""
+        logger.info(f"Checking if device is hidden: {device_name_or_path}")
+        
+        # Get list of hidden devices
+        hidden_devices = self._run_cli(["--dev-list"], check_output=True)
+        if not hidden_devices:
+            logger.info("No devices are currently hidden")
+            return False, None
+        
+        # Check if the device is in the list by path
+        for line in hidden_devices.splitlines():
+            if device_name_or_path in line:
+                logger.info(f"Device is hidden: {line}")
+                return True, line.strip()
+        
+        # If we're looking for a device by name, we need to check all hidden devices
+        if "HID\\" not in device_name_or_path and "USB\\" not in device_name_or_path:
+            # This is a name, not a path, so we need to check device properties
+            logger.info("Checking hidden devices for matching name")
+            
+            # Get all hidden devices and check their properties
+            for line in hidden_devices.splitlines():
+                if line.strip():
+                    # Try to get device properties from registry
+                    try:
+                        # Convert HID path to registry path
+                        reg_path = line.replace("HID\\", "SYSTEM\\CurrentControlSet\\Enum\\HID\\")
+                        reg_path = reg_path.replace("USB\\", "SYSTEM\\CurrentControlSet\\Enum\\USB\\")
+                        
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_READ) as key:
+                            try:
+                                for prop_name in ["DeviceDesc", "FriendlyName"]:
+                                    try:
+                                        value = winreg.QueryValueEx(key, prop_name)[0]
+                                        if device_name_or_path in value:
+                                            logger.info(f"Found hidden device matching name: {line}")
+                                            return True, line.strip()
+                                    except WindowsError:
+                                        continue
+                            except WindowsError:
+                                pass
+                    except Exception as e:
+                        logger.debug(f"Error checking device properties: {e}")
+        
+        logger.info(f"Device is not hidden: {device_name_or_path}")
+        return False, None
+    
+    def unhide_all_matching_devices(self, device_name):
+        """Unhide all devices that match the given name."""
+        logger.info(f"Unhiding all devices matching: {device_name}")
+        
+        # Get list of hidden devices
+        hidden_devices = self._run_cli(["--dev-list"], check_output=True)
+        if not hidden_devices:
+            logger.info("No devices are currently hidden")
+            return True
+        
+        # Keep track of whether we found and unhid any devices
+        found_devices = False
+        
+        # Check each hidden device
+        for line in hidden_devices.splitlines():
+            if line.strip():
+                # Try to get device properties from registry
+                try:
+                    # Convert HID path to registry path
+                    reg_path = line.replace("HID\\", "SYSTEM\\CurrentControlSet\\Enum\\HID\\")
+                    reg_path = reg_path.replace("USB\\", "SYSTEM\\CurrentControlSet\\Enum\\USB\\")
+                    
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_READ) as key:
+                        try:
+                            for prop_name in ["DeviceDesc", "FriendlyName"]:
+                                try:
+                                    value = winreg.QueryValueEx(key, prop_name)[0]
+                                    if device_name in value:
+                                        logger.info(f"Found hidden device matching name: {line}")
+                                        # Unhide this device
+                                        if self.unhide_device(line.strip()):
+                                            logger.info(f"Successfully unhid device: {line}")
+                                            found_devices = True
+                                        else:
+                                            logger.warning(f"Failed to unhide device: {line}")
+                                        break
+                                except WindowsError:
+                                    continue
+                        except WindowsError:
+                            pass
+                except Exception as e:
+                    logger.debug(f"Error checking device properties: {e}")
+        
+        if not found_devices:
+            logger.info(f"No hidden devices found matching: {device_name}")
+        
+        return True
+    
     def hide_device(self, instance_path):
         """Hide a device by its instance path."""
         logger.info(f"Hiding device: {instance_path}")
@@ -319,7 +415,13 @@ class HidHideClient:
         try:
             logger.info(f"Looking for device instance path for: {device_name}")
             
-            # First try using HidHide's gaming devices list
+            # First check if the device is already hidden
+            is_hidden, hidden_path = self.is_device_hidden(device_name)
+            if is_hidden and hidden_path:
+                logger.info(f"Device is already hidden, using path: {hidden_path}")
+                return hidden_path
+            
+            # If not hidden, try using HidHide's gaming devices list
             gaming_devices = self._run_cli(["--dev-gaming"], check_output=True)
             if gaming_devices:
                 # Parse the JSON output
@@ -500,4 +602,102 @@ class HidHideClient:
                 return False
         except Exception as e:
             logger.error(f"Error verifying cloaking status: {e}")
-            return False 
+            return False
+    
+    def find_all_matching_devices(self, device_name):
+        """Find all devices matching a name, whether hidden or not."""
+        logger.info(f"Finding all devices matching: {device_name}")
+        
+        matching_devices = []
+        
+        # First check hidden devices
+        is_hidden, hidden_path = self.is_device_hidden(device_name)
+        if is_hidden and hidden_path:
+            matching_devices.append(hidden_path)
+        
+        # Then check gaming devices
+        gaming_devices = self._run_cli(["--dev-gaming"], check_output=True)
+        if gaming_devices:
+            # Parse the JSON output
+            import json
+            try:
+                devices = json.loads(gaming_devices)
+                # Look for our device in the list
+                for device_group in devices:
+                    if device_name in device_group.get("friendlyName", ""):
+                        # Get all devices in the group
+                        if device_group.get("devices"):
+                            for device in device_group["devices"]:
+                                path = device.get("deviceInstancePath")
+                                if path and path not in matching_devices:
+                                    matching_devices.append(path)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse HidHide JSON output: {e}")
+        
+        # Finally check registry
+        target_vids = ["1DD2"]  # Sim Coaches VID
+        
+        reg_paths = [
+            r"SYSTEM\CurrentControlSet\Enum\HID",
+            r"SYSTEM\CurrentControlSet\Enum\USB"
+        ]
+        
+        for reg_path in reg_paths:
+            logger.debug(f"Searching in registry path: {reg_path}")
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_READ) as key:
+                    i = 0
+                    while True:
+                        try:
+                            vendor_name = winreg.EnumKey(key, i)
+                            vendor_path = f"{reg_path}\\{vendor_name}"
+                            
+                            # Check if this is one of our target VIDs
+                            if any(vid in vendor_name.upper() for vid in target_vids):
+                                logger.debug(f"Found potential matching VID: {vendor_name}")
+                                
+                                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, vendor_path, 0, winreg.KEY_READ) as vendor_key:
+                                    j = 0
+                                    while True:
+                                        try:
+                                            instance_name = winreg.EnumKey(vendor_key, j)
+                                            instance_path = f"{vendor_path}\\{instance_name}"
+                                            
+                                            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, instance_path, 0, winreg.KEY_READ) as instance_key:
+                                                try:
+                                                    # Check device properties
+                                                    for prop_name in ["DeviceDesc", "FriendlyName"]:
+                                                        try:
+                                                            value = winreg.QueryValueEx(instance_key, prop_name)[0]
+                                                            logger.debug(f"Found device property {prop_name}: {value}")
+                                                            
+                                                            # If this is a game controller with our target VID, it's likely our device
+                                                            if device_name in value:
+                                                                # Format path with single backslashes and proper prefix
+                                                                path = f"HID\\{vendor_name}\\{instance_name}"
+                                                                path = path.replace('/', '\\')
+                                                                while '\\\\' in path:
+                                                                    path = path.replace('\\\\', '\\')
+                                                                
+                                                                if path not in matching_devices:
+                                                                    matching_devices.append(path)
+                                                                
+                                                        except WindowsError:
+                                                            continue
+                                                except WindowsError:
+                                                    pass
+                                            j += 1
+                                        except WindowsError:
+                                            break
+                            i += 1
+                        except WindowsError:
+                            break
+            except Exception as e:
+                logger.error(f"Error searching registry: {e}")
+        
+        if matching_devices:
+            logger.info(f"Found {len(matching_devices)} matching devices: {matching_devices}")
+        else:
+            logger.warning(f"No devices found matching: {device_name}")
+        
+        return matching_devices 

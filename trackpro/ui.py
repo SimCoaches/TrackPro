@@ -1,11 +1,13 @@
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QGroupBox, QMessageBox, QProgressBar, QToolTip,
-                           QTabWidget, QComboBox, QSpinBox)
+                           QTabWidget, QComboBox, QSpinBox, QDialog, QDialogButtonBox, QStackedWidget, QRadioButton, QButtonGroup)
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QValueAxis
 from PyQt5.QtCore import Qt, QTimer, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPalette, QMouseEvent
 import logging
 from trackpro import __version__
+import pygame
+from .calibration import CalibrationWizard
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +118,26 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
+        
+        # Add calibration wizard button at the top
+        wizard_layout = QHBoxLayout()
+        self.calibration_wizard_btn = QPushButton("Calibration Wizard")
+        self.calibration_wizard_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a82da;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #3a92ea;
+            }
+        """)
+        self.calibration_wizard_btn.clicked.connect(self.open_calibration_wizard)
+        wizard_layout.addStretch()
+        wizard_layout.addWidget(self.calibration_wizard_btn)
+        wizard_layout.addStretch()
+        layout.addLayout(wizard_layout)
         
         # Create horizontal layout for pedals
         pedals_layout = QHBoxLayout()
@@ -729,4 +751,26 @@ class MainWindow(QMainWindow):
             
         # Update the curve
         self.update_calibration_curve(pedal)
-        self.calibration_updated.emit(pedal) 
+        self.calibration_updated.emit(pedal)
+    
+    def open_calibration_wizard(self):
+        """Open the calibration wizard dialog."""
+        wizard = CalibrationWizard(self)
+        if wizard.exec_() == QDialog.Accepted:
+            # Apply the calibration results
+            for pedal in ['throttle', 'brake', 'clutch']:
+                if pedal in wizard.results:
+                    # Set the min/max values
+                    min_val = wizard.results[pedal]['min']
+                    max_val = wizard.results[pedal]['max']
+                    self.set_calibration_range(pedal, min_val, max_val)
+            
+            # Notify that calibration has been updated
+            for pedal in ['throttle', 'brake', 'clutch']:
+                self.calibration_updated.emit(pedal)
+            
+            # Call the calibration wizard completed callback if it exists
+            if hasattr(self, 'calibration_wizard_completed') and callable(self.calibration_wizard_completed):
+                self.calibration_wizard_completed(wizard.results)
+            
+            self.show_message("Calibration Complete", "Pedal calibration has been successfully updated.") 

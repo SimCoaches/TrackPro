@@ -1,4 +1,4 @@
-# TrackPro v1.0.0
+# TrackPro v1.0.1
 
 ![TrackPro Logo](docs/images/logo.png)
 
@@ -29,7 +29,7 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 ### Option 1: Installer (Recommended)
 
 1. Download the latest installer from the [Releases](https://github.com/yourusername/trackpro/releases) page
-2. Run `TrackPro_Setup_v1.0.0.exe` and follow the installation instructions
+2. Run `TrackPro_Setup_v1.0.1.exe` and follow the installation instructions
 3. The installer will automatically install vJoy and HidHide if they are not already installed
 4. A system restart may be required after installation to complete driver setup
 
@@ -38,7 +38,7 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 1. Install [vJoy Driver](https://github.com/jshafer817/vJoy/releases) manually
 2. Install [HidHide](https://github.com/ViGEm/HidHide/releases) manually
 3. Download the standalone executable from the [Releases](https://github.com/yourusername/trackpro/releases) page
-4. Run `TrackPro_v1.0.0.exe` as administrator
+4. Run `TrackPro_v1.0.1.exe` as administrator
 
 ## Quick Start Guide
 
@@ -150,8 +150,8 @@ python build.py
 ```
 
 This will create:
-- `dist/TrackPro_v1.0.0.exe`: Standalone executable
-- `TrackPro_Setup_v1.0.0.exe`: Full installer with dependencies
+- `dist/TrackPro_v1.0.1.exe`: Standalone executable
+- `TrackPro_Setup_v1.0.1.exe`: Full installer with dependencies
 
 ## Contributing
 

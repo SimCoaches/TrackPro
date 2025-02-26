@@ -39,16 +39,36 @@ class TrackProApp:
             logger.info("Initializing HidHide client...")
             self.hidhide = HidHideClient()
             
-            # Hide the original controller
+            # Define the device name we're looking for
             device_name = "Sim Coaches P1 Pro Pedals"
-            instance_path = self.hidhide.get_device_instance_path(device_name)
-            if instance_path:
+            
+            # First unhide any matching devices that might already be hidden
+            # This ensures we can find the device properly
+            logger.info("Checking for already hidden devices...")
+            self.hidhide.unhide_all_matching_devices(device_name)
+            
+            # Now find all matching devices
+            logger.info("Finding all matching devices...")
+            matching_devices = self.hidhide.find_all_matching_devices(device_name)
+            
+            if matching_devices:
+                # Use the first matching device
+                instance_path = matching_devices[0]
+                logger.info(f"Using device instance path: {instance_path}")
+                
+                # Hide the device now that we've found it
                 if self.hidhide.hide_device(instance_path):
                     logger.info(f"Successfully hid {device_name}")
                 else:
                     logger.warning(f"Failed to hide {device_name}")
             else:
-                logger.warning(f"Could not find instance path for {device_name}")
+                logger.warning(f"Could not find any devices matching {device_name}")
+                # Show a warning to the user
+                QMessageBox.warning(
+                    None, 
+                    "Device Not Found", 
+                    f"Could not find {device_name}. Make sure the device is connected and recognized by Windows."
+                )
             
             # Create and show UI
             logger.info("Creating user interface...")
@@ -57,6 +77,9 @@ class TrackProApp:
             # Connect signals
             for pedal in ['throttle', 'brake', 'clutch']:
                 self.window.calibration_updated.connect(self.on_calibration_updated)
+            
+            # Connect to the calibration wizard signal
+            self.window.calibration_wizard_completed = self.on_calibration_wizard_completed
             
             self.window.show()
             
@@ -179,17 +202,64 @@ class TrackProApp:
             
             # Unhide the original controller
             device_name = "Sim Coaches P1 Pro Pedals"
-            instance_path = self.hidhide.get_device_instance_path(device_name)
-            if instance_path:
-                if self.hidhide.unhide_device(instance_path):
+            
+            # First check if the device is hidden
+            is_hidden, hidden_path = self.hidhide.is_device_hidden(device_name)
+            
+            if is_hidden and hidden_path:
+                # Use the path we already know
+                logger.info(f"Found hidden device at path: {hidden_path}")
+                if self.hidhide.unhide_device(hidden_path):
                     logger.info(f"Successfully unhid {device_name}")
                 else:
                     logger.warning(f"Failed to unhide {device_name}")
             else:
-                logger.warning(f"Could not find instance path for {device_name}")
+                # Try to find all matching devices
+                matching_devices = self.hidhide.find_all_matching_devices(device_name)
+                
+                if matching_devices:
+                    # Unhide all matching devices to be safe
+                    for device_path in matching_devices:
+                        if self.hidhide.unhide_device(device_path):
+                            logger.info(f"Successfully unhid device: {device_path}")
+                        else:
+                            logger.warning(f"Failed to unhide device: {device_path}")
+                else:
+                    logger.warning(f"Could not find any devices matching {device_name} during cleanup")
             
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
+    
+    def on_calibration_wizard_completed(self, results):
+        """Handle calibration wizard results."""
+        logger.info(f"Calibration wizard completed with results: {results}")
+        
+        # Update axis mappings if they changed
+        for pedal in ['throttle', 'brake', 'clutch']:
+            if pedal in results and 'axis' in results[pedal]:
+                new_axis = results[pedal]['axis']
+                self.hardware.update_axis_mapping(pedal, new_axis)
+                logger.info(f"Updated {pedal} axis mapping to {new_axis}")
+        
+        # Update min/max ranges
+        for pedal in ['throttle', 'brake', 'clutch']:
+            if pedal in results:
+                min_val = results[pedal].get('min', 0)
+                max_val = results[pedal].get('max', 65535)
+                
+                # Update hardware ranges
+                self.hardware.axis_ranges[pedal] = {
+                    'min': min_val,
+                    'max': max_val
+                }
+                
+                # Save the updated ranges
+                self.hardware.save_axis_ranges()
+                
+                logger.info(f"Updated {pedal} range: min={min_val}, max={max_val}")
+        
+        # Reload calibration into UI
+        self.load_calibration()
     
     def run(self):
         """Run the application."""

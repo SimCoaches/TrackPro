@@ -29,10 +29,21 @@ class HardwareInput:
         # Load calibration data
         self.calibration = self._load_calibration()
         
-        # Axis mappings for the pedals
-        self.THROTTLE_AXIS = 0
-        self.BRAKE_AXIS = 1
-        self.CLUTCH_AXIS = 2
+        # Load axis mappings
+        self.axis_mappings = self._load_axis_mappings()
+        
+        # Default axis mappings if not loaded
+        if not self.axis_mappings:
+            self.axis_mappings = {
+                'throttle': 0,
+                'brake': 1,
+                'clutch': 2
+            }
+        
+        # Set axis properties based on mappings
+        self.THROTTLE_AXIS = self.axis_mappings['throttle']
+        self.BRAKE_AXIS = self.axis_mappings['brake']
+        self.CLUTCH_AXIS = self.axis_mappings['clutch']
         
         # Initialize last known values
         self.last_values = {
@@ -88,6 +99,10 @@ class HardwareInput:
             }
         
         # Save the ranges
+        self.save_axis_ranges()
+
+    def save_axis_ranges(self):
+        """Save axis ranges to file."""
         try:
             cal_file = self._get_calibration_file().parent / "axis_ranges.json"
             with open(cal_file, 'w') as f:
@@ -101,6 +116,12 @@ class HardwareInput:
         config_dir = Path.home() / ".trackpro"
         config_dir.mkdir(exist_ok=True)
         return config_dir / "calibration.json"
+
+    def _get_axis_mappings_file(self) -> Path:
+        """Get path to axis mappings file."""
+        config_dir = Path.home() / ".trackpro"
+        config_dir.mkdir(exist_ok=True)
+        return config_dir / "axis_mappings.json"
 
     def _load_calibration(self) -> dict:
         """Load calibration from file or return defaults."""
@@ -118,6 +139,57 @@ class HardwareInput:
             'brake': {'points': [], 'curve': 'Linear'},
             'clutch': {'points': [], 'curve': 'Linear'}
         }
+    
+    def _load_axis_mappings(self) -> dict:
+        """Load axis mappings from file or return defaults."""
+        try:
+            mappings_file = self._get_axis_mappings_file()
+            if mappings_file.exists():
+                with open(mappings_file) as f:
+                    mappings = json.load(f)
+                logger.info(f"Loaded axis mappings: {mappings}")
+                return mappings
+        except Exception as e:
+            logger.warning(f"Failed to load axis mappings: {e}")
+            
+        # Return default mappings
+        return {
+            'throttle': 0,
+            'brake': 1,
+            'clutch': 2
+        }
+    
+    def save_axis_mappings(self, mappings=None):
+        """Save axis mappings to file."""
+        if mappings is None:
+            mappings = self.axis_mappings
+        
+        try:
+            mappings_file = self._get_axis_mappings_file()
+            with open(mappings_file, 'w') as f:
+                json.dump(mappings, f)
+            logger.info(f"Saved axis mappings: {mappings}")
+        except Exception as e:
+            logger.error(f"Failed to save axis mappings: {e}")
+    
+    def update_axis_mapping(self, pedal, axis):
+        """Update the axis mapping for a pedal."""
+        if pedal in self.axis_mappings:
+            self.axis_mappings[pedal] = axis
+            
+            # Update the axis constants
+            if pedal == 'throttle':
+                self.THROTTLE_AXIS = axis
+            elif pedal == 'brake':
+                self.BRAKE_AXIS = axis
+            elif pedal == 'clutch':
+                self.CLUTCH_AXIS = axis
+            
+            # Save the updated mappings
+            self.save_axis_mappings()
+            logger.info(f"Updated {pedal} axis mapping to {axis}")
+            return True
+        return False
     
     def save_calibration(self, calibration: dict):
         """Save calibration data to file."""
