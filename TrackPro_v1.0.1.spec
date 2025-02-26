@@ -36,5 +36,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
-    manifest='M:\\TrackProV2 -  V1.0.1\\trackpro.manifest',
+    manifest='trackpro.manifest',
 )

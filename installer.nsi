@@ -57,27 +57,32 @@ Section "Prerequisites"
         SetOutPath "$TEMP\TrackPro\prerequisites"
         DetailPrint "Extracting prerequisites..."
         
-        ; Extract prerequisite installers
-        File /r "installer_temp\prerequisites\*"
+        ; Extract prerequisite installers using relative paths
+        File "installer_temp\prerequisites\vJoySetup.exe"
+        File "installer_temp\prerequisites\HidHide_1.2.98_x64.exe"
         
         ; Extract main executable to temp location
         SetOutPath "$TEMP\TrackPro\app"
         DetailPrint "Extracting main application..."
+        
+        ; Extract main executable using relative path
         File "installer_temp\dist\TrackPro_v1.0.1.exe"
         
         ; Verify the file was extracted correctly
-        IfFileExists "$TEMP\TrackPro\app\TrackPro_v1.0.1.exe" +3
+        ${IfNot} ${FileExists} "$TEMP\TrackPro\app\TrackPro_v1.0.1.exe"
             MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v1.0.1.exe to temporary directory!"
             Abort "Installation failed: Could not extract TrackPro_v1.0.1.exe"
+        ${EndIf}
         
         ; Create program directory with verification
         DetailPrint "Creating installation directory..."
         CreateDirectory "$PROGRAMFILES64\TrackPro"
         
         ; Check if directory was created successfully
-        IfFileExists "$PROGRAMFILES64\TrackPro\*.*" +3
+        ${IfNot} ${FileExists} "$PROGRAMFILES64\TrackPro"
             MessageBox MB_OK|MB_ICONSTOP "Failed to create installation directory! Please ensure you have administrator privileges."
             Abort "Installation failed: Could not create installation directory"
+        ${EndIf}
         
         ; Set working directory to program files
         SetOutPath "$PROGRAMFILES64\TrackPro"
@@ -90,23 +95,26 @@ Section "Prerequisites"
         DetailPrint $DEBUG_MSG
         
         ; Check if destination file already exists and try to remove it
-        IfFileExists "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe" 0 +3
+        ${If} ${FileExists} "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
             DetailPrint "Removing existing installation file..."
             Delete "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
+        ${EndIf}
         
         ; Clear any previous errors and copy the file
         ClearErrors
         CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v1.0.1.exe" "$PROGRAMFILES64\TrackPro"
         
         ; Check for copy errors
-        IfErrors 0 +3
+        ${If} ${Errors}
             MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v1.0.1.exe to installation directory! Please ensure you have administrator privileges and try again."
             Abort "Installation failed: Could not copy TrackPro_v1.0.1.exe"
+        ${EndIf}
         
         ; Verify TrackPro.exe exists in the destination
-        IfFileExists "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe" +3
+        ${IfNot} ${FileExists} "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
             MessageBox MB_OK|MB_ICONSTOP "Failed to verify TrackPro_v1.0.1.exe in installation directory!"
             Abort "Installation failed: Could not verify TrackPro_v1.0.1.exe"
+        ${EndIf}
             
         ; Create shortcuts with verification
         DetailPrint "Creating shortcuts..."
@@ -164,19 +172,8 @@ Section "MainApplication"
         DetailPrint "Resuming installation after reboot..."
         SetOutPath "$INSTDIR"
         
-        ; Check if the file exists in the package
-        IfFileExists "dist\TrackPro_v1.0.1.exe" +3
-            MessageBox MB_OK|MB_ICONSTOP "Could not find TrackPro_v1.0.1.exe in the installer package!"
-            Abort "Resume installation failed: Missing executable file"
-            
-        ; Copy the main executable
-        ClearErrors
-        File "dist\TrackPro_v1.0.1.exe"
-        
-        ; Check for errors
-        IfErrors 0 +3
-            MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v1.0.1.exe during resume!"
-            Abort "Resume installation failed: Could not copy executable"
+        ; Extract main executable using relative path
+        File "installer_temp\dist\TrackPro_v1.0.1.exe"
         
         ; Create shortcuts
         CreateDirectory "$SMPROGRAMS\TrackPro"
