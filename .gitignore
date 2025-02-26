@@ -66,4 +66,4 @@ installer_temp/
 TrackPro_Setup_v*.exe
 TrackPro_v*.exe
 installer.nsi
-trackpro.manifest 
+trackpro.manifest "dist/" 
