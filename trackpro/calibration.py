@@ -349,9 +349,99 @@ class CalibrationWizard(QDialog):
         layout.addWidget(summary)
         self.summary_label = summary
         
+        # Add save button
+        save_button = QPushButton("Save Calibration")
+        save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+        """)
+        save_button.clicked.connect(self.save_calibration)
+        
+        # Add some spacing
+        layout.addSpacing(20)
+        
+        # Add the save button to the layout
+        layout.addWidget(save_button, 0, Qt.AlignCenter)
+        
         # Add page to stack
         self.stack.addWidget(page)
         
+    def save_calibration(self):
+        """Save the current calibration to a file."""
+        try:
+            # Save the calibration data
+            if hasattr(self.parent, 'hardware'):
+                # Update axis ranges in hardware
+                for pedal in ['throttle', 'brake', 'clutch']:
+                    if pedal in self.results:
+                        self.parent.hardware.axis_ranges[pedal] = {
+                            'min': self.results[pedal]['min'],
+                            'max': self.results[pedal]['max']
+                        }
+                
+                # Save the updated ranges
+                self.parent.hardware.save_axis_ranges()
+                
+                # Save axis mappings if they were changed
+                for pedal in ['throttle', 'brake', 'clutch']:
+                    if pedal in self.results and 'axis' in self.results[pedal]:
+                        self.parent.hardware.update_axis_mapping(pedal, self.results[pedal]['axis'])
+                
+                # Also save the calibration curve data
+                calibration_data = self.parent.hardware.calibration
+                
+                # Make sure we're not overwriting existing curve data
+                for pedal in ['throttle', 'brake', 'clutch']:
+                    # Only update the min/max values, keep the existing curve data
+                    if pedal in calibration_data and 'points' in calibration_data[pedal]:
+                        logger.info(f"Preserving existing curve data for {pedal}")
+                    else:
+                        # If no curve data exists, create default linear curve
+                        calibration_data[pedal] = {
+                            'points': [(0, 0), (25, 25), (50, 50), (75, 75), (100, 100)],
+                            'curve': 'Linear'
+                        }
+                        logger.info(f"Created default curve data for {pedal}")
+                
+                # Save the complete calibration data
+                self.parent.hardware.save_calibration(calibration_data)
+                logger.info("Saved complete calibration data")
+                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Calibration Saved",
+                    "Calibration settings have been saved successfully."
+                )
+                
+                logger.info("Calibration saved manually by user")
+            else:
+                logger.warning("Cannot save calibration: hardware not accessible")
+                QMessageBox.warning(
+                    self,
+                    "Save Failed",
+                    "Could not save calibration: hardware interface not accessible."
+                )
+        except Exception as e:
+            logger.error(f"Failed to save calibration: {e}")
+            QMessageBox.critical(
+                self,
+                "Save Failed",
+                f"Failed to save calibration: {str(e)}"
+            )
+
     def go_next(self):
         """Go to the next page in the wizard."""
         current = self.stack.currentIndex()
@@ -517,11 +607,36 @@ class CalibrationWizard(QDialog):
         min_val = self.axis_min_values[selected_axis]
         max_val = self.axis_max_values[selected_axis]
         
-        # If min and max are too close, use defaults
-        if abs(max_val - min_val) < 1000:
-            logger.warning(f"Min and max values are too close for axis {selected_axis}, using defaults")
-            min_val = 0
-            max_val = 65535
+        # For 12-bit pedals (0-4096 range) mapped to 16-bit (0-65535), 
+        # a small range would be anything less than about 250 (which is ~4% of the 12-bit range)
+        # This is a more appropriate threshold for 12-bit hardware
+        if abs(max_val - min_val) < 250:
+            # Show warning to user
+            result = QMessageBox.warning(
+                self, 
+                "Limited Calibration Range Detected", 
+                f"The detected range for the {pedal} pedal is very small ({abs(max_val - min_val)} units).\n\n"
+                f"Your pedals use a 12-bit chip (0-4096 range), so small movements during calibration\n"
+                f"may result in limited responsiveness.\n\n"
+                "Do you want to:\n"
+                "- Use this small range anyway (Yes)\n"
+                "- Use full range defaults (No)\n"
+                "- Try calibrating again with larger pedal movement (Cancel)",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            
+            if result == QMessageBox.No:
+                # Use defaults
+                logger.warning(f"User chose to use default min/max values for axis {selected_axis}")
+                min_val = 0
+                max_val = 65535
+            elif result == QMessageBox.Cancel:
+                # Let user try again
+                logger.info(f"User chose to recalibrate {pedal}")
+                return False
+            else:
+                # Use the small range as detected
+                logger.info(f"User chose to use small range for {pedal}: {min_val}-{max_val}")
         
         # Store the results
         self.results[pedal] = {

@@ -47,14 +47,134 @@ class JOYSTICK_POSITION_V2(ctypes.Structure):
     ]
 
 class VirtualJoystick:
-    """Handles virtual joystick output using vJoy."""
+    """Virtual joystick output using vJoy."""
     
-    def __init__(self):
-        """Initialize vJoy device."""
-        # Set device name
-        self.set_device_name("Sim Coaches P1 Pro Pedals")
+    def __init__(self, test_mode=False):
+        """Initialize the virtual joystick."""
+        self.test_mode = test_mode
         
-        # Load vJoy DLL
+        if test_mode:
+            logger.info("Running in test mode - virtual joystick simulation")
+            self.vjoy_device_id = 1
+            self.vjoy_acquired = True
+            return
+            
+        # Try to set the device name
+        try:
+            # Set the device name to make it easier to identify in games
+            import win32api
+            import win32con
+            
+            # Open the registry key
+            key_path = r"SYSTEM\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_1234&PID_BEAD"
+            try:
+                key = win32api.RegOpenKeyEx(win32con.HKEY_LOCAL_MACHINE, key_path, 0, win32con.KEY_SET_VALUE)
+                win32api.RegSetValueEx(key, "OEMName", 0, win32con.REG_SZ, "TrackPro Virtual Pedals")
+                win32api.RegCloseKey(key)
+                logger.info("Set vJoy device name to 'TrackPro Virtual Pedals'")
+            except Exception as e:
+                logger.error(f"Failed to set vJoy device name: {e}")
+        except ImportError:
+            logger.warning("win32api not available, skipping device name setting")
+        
+        # Load the vJoy DLL
+        self.vjoy_dll_path = self._find_vjoy_dll()
+        if not self.vjoy_dll_path:
+            raise RuntimeError("vJoy DLL not found")
+            
+        logger.info(f"Loaded vJoy DLL from {self.vjoy_dll_path}")
+        
+        # Initialize vJoy
+        try:
+            import ctypes
+            self.vjoy_dll = ctypes.WinDLL(self.vjoy_dll_path)
+            
+            # Define function prototypes
+            self.vjoy_dll.vJoyEnabled.restype = ctypes.c_bool
+            self.vjoy_dll.vJoyEnabled.argtypes = []
+            
+            self.vjoy_dll.GetvJoyVersion.restype = ctypes.c_short
+            self.vjoy_dll.GetvJoyVersion.argtypes = []
+            
+            self.vjoy_dll.AcquireVJD.restype = ctypes.c_bool
+            self.vjoy_dll.AcquireVJD.argtypes = [ctypes.c_uint]
+            
+            self.vjoy_dll.GetVJDStatus.restype = ctypes.c_int
+            self.vjoy_dll.GetVJDStatus.argtypes = [ctypes.c_uint]
+            
+            self.vjoy_dll.SetAxis.restype = ctypes.c_bool
+            self.vjoy_dll.SetAxis.argtypes = [ctypes.c_long, ctypes.c_uint, ctypes.c_uint]
+            
+            # Check if vJoy is enabled
+            if not self.vjoy_dll.vJoyEnabled():
+                raise RuntimeError("vJoy is not enabled")
+                
+            # Get vJoy version
+            version = self.vjoy_dll.GetvJoyVersion()
+            logger.info(f"vJoy Version: {version}")
+            
+            # Acquire vJoy device
+            self.vjoy_device_id = 1  # Use first device
+            
+            # Check device status
+            status = self.vjoy_dll.GetVJDStatus(self.vjoy_device_id)
+            if status == 0:  # VJD_STAT_OWN
+                logger.info(f"vJoy Device {self.vjoy_device_id} is already owned by this feeder")
+                self.vjoy_acquired = True
+            elif status == 1:  # VJD_STAT_FREE
+                if self.vjoy_dll.AcquireVJD(self.vjoy_device_id):
+                    logger.info(f"Acquired vJoy Device {self.vjoy_device_id}")
+                    self.vjoy_acquired = True
+                else:
+                    raise RuntimeError(f"Failed to acquire vJoy Device {self.vjoy_device_id}")
+            elif status == 2:  # VJD_STAT_BUSY
+                raise RuntimeError("vJoy device is already owned by another feeder")
+            elif status == 3:  # VJD_STAT_MISS
+                raise RuntimeError("vJoy device is not installed or disabled")
+            else:
+                raise RuntimeError(f"vJoy device has unknown status: {status}")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize vJoy: {e}")
+            raise
+    
+    def update_axis(self, throttle: int, brake: int, clutch: int):
+        """Update the virtual joystick axes."""
+        if self.test_mode:
+            # In test mode, just log the values
+            logger.debug(f"Test mode - Axis values: Throttle={throttle}, Brake={brake}, Clutch={clutch}")
+            return True
+            
+        if not hasattr(self, 'vjoy_acquired') or not self.vjoy_acquired:
+            logger.error("Cannot update axes: vJoy device not acquired")
+            return False
+            
+        try:
+            # Set X axis (throttle)
+            self.vjoy_dll.SetAxis(throttle, self.vjoy_device_id, 0x30)  # HID_USAGE_X
+            
+            # Set Y axis (brake)
+            self.vjoy_dll.SetAxis(brake, self.vjoy_device_id, 0x31)  # HID_USAGE_Y
+            
+            # Set Z axis (clutch)
+            self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32)  # HID_USAGE_Z
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update vJoy axes: {e}")
+            return False
+    
+    def __del__(self):
+        """Clean up vJoy device."""
+        try:
+            if hasattr(self, 'vjoy_dll') and self.vjoy_dll:
+                self.vjoy_dll.RelinquishVJD(self.vjoy_device_id)
+                logger.info("vJoy device released")
+        except Exception as e:
+            logger.error(f"Error cleaning up vJoy device: {e}")
+
+    def _find_vjoy_dll(self):
+        """Find the path to the vJoy DLL."""
         dll_paths = [
             os.path.join(os.path.dirname(__file__), "vJoyInterface.dll"),
             r"C:\Program Files\vJoy\x64\vJoyInterface.dll",
@@ -62,108 +182,7 @@ class VirtualJoystick:
             r"C:\Windows\System32\vJoyInterface.dll"
         ]
         
-        self.vjoy = None
         for path in dll_paths:
             if os.path.exists(path):
-                try:
-                    self.vjoy = ctypes.WinDLL(path)
-                    logger.info(f"Loaded vJoy DLL from {path}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Failed to load vJoy DLL from {path}: {e}")
-        
-        if not self.vjoy:
-            raise RuntimeError("Could not find vJoy DLL")
-        
-        # Initialize vJoy
-        if not self.vjoy.vJoyEnabled():
-            raise RuntimeError("vJoy driver not enabled")
-            
-        # Get vJoy version
-        self.vjoy.GetvJoyVersion.restype = wintypes.SHORT
-        version = self.vjoy.GetvJoyVersion()
-        logger.info(f"vJoy Version: {version}")
-        
-        # Acquire device 1
-        self.rID = 1  # Device ID
-        status = self.vjoy.GetVJDStatus(self.rID)
-        
-        if status == VJD_STAT_OWN:
-            logger.info("vJoy device already owned by this feeder")
-        elif status == VJD_STAT_FREE:
-            logger.info("vJoy device is free")
-        elif status == VJD_STAT_BUSY:
-            raise RuntimeError("vJoy device is already owned by another feeder")
-        elif status == VJD_STAT_MISS:
-            raise RuntimeError("vJoy device is not installed or disabled")
-            
-        # Check if required axes are available
-        if not all([
-            self.vjoy.GetVJDAxisExist(self.rID, HID_USAGE_X),  # Throttle
-            self.vjoy.GetVJDAxisExist(self.rID, HID_USAGE_Y),  # Brake
-            self.vjoy.GetVJDAxisExist(self.rID, HID_USAGE_Z)   # Clutch
-        ]):
-            raise RuntimeError("vJoy device missing required axes")
-            
-        # Acquire the device
-        if not self.vjoy.AcquireVJD(self.rID):
-            raise RuntimeError("Failed to acquire vJoy device")
-            
-        # Reset device to default values
-        self.vjoy.ResetVJD(self.rID)
-        
-        # Create position structure
-        self.pos = JOYSTICK_POSITION_V2()
-        self.pos.bDevice = self.rID
-        
-        logger.info("Virtual joystick initialized successfully")
-        
-        # Set initial axis values to mid-point
-        self.update_axis(AXIS_MAX//2, AXIS_MAX//2, AXIS_MAX//2)
-
-    def set_device_name(self, name: str):
-        """Set the vJoy device name in Windows registry."""
-        try:
-            # Registry path for vJoy device 1
-            reg_path = r"SYSTEM\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_1234&PID_BEAD"
-            
-            # Open or create the registry key
-            key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, reg_path)
-            
-            # Set the OEMName value
-            winreg.SetValueEx(key, "OEMName", 0, winreg.REG_SZ, name)
-            
-            # Close the key
-            winreg.CloseKey(key)
-            logger.info(f"Set vJoy device name to: {name}")
-            
-        except Exception as e:
-            logger.error(f"Failed to set vJoy device name: {e}")
-    
-    def update_axis(self, throttle: int, brake: int, clutch: int):
-        """Update all axis values."""
-        try:
-            # Ensure values are within valid range
-            throttle = max(AXIS_MIN, min(AXIS_MAX, throttle))
-            brake = max(AXIS_MIN, min(AXIS_MAX, brake))
-            clutch = max(AXIS_MIN, min(AXIS_MAX, clutch))
-            
-            # Set axis values using HID usage codes
-            if not all([
-                self.vjoy.SetAxis(throttle, self.rID, HID_USAGE_X),  # Throttle
-                self.vjoy.SetAxis(brake, self.rID, HID_USAGE_Y),    # Brake
-                self.vjoy.SetAxis(clutch, self.rID, HID_USAGE_Z)    # Clutch (already inverted)
-            ]):
-                logger.error("Failed to set one or more axes")
-                
-        except Exception as e:
-            logger.error(f"Error updating axis values: {e}")
-    
-    def __del__(self):
-        """Clean up vJoy device."""
-        try:
-            if hasattr(self, 'vjoy') and self.vjoy:
-                self.vjoy.RelinquishVJD(self.rID)
-                logger.info("vJoy device released")
-        except Exception as e:
-            logger.error(f"Error cleaning up vJoy device: {e}") 
+                return path
+        return None 

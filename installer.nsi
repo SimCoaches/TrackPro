@@ -5,8 +5,8 @@
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
-Name "TrackPro v1.0.1"
-OutFile "TrackPro_Setup_v1.0.1.exe"
+Name "TrackPro v1.2.0"
+OutFile "TrackPro_Setup_v1.2.0.exe"
 InstallDir "$PROGRAMFILES64\TrackPro"
 RequestExecutionLevel admin ; Explicitly request admin rights
 
@@ -66,12 +66,12 @@ Section "Prerequisites"
         DetailPrint "Extracting main application..."
         
         ; Extract main executable using relative path
-        File "installer_temp\dist\TrackPro_v1.0.1.exe"
+        File "installer_temp\dist\TrackPro_v1.2.0.exe"
         
         ; Verify the file was extracted correctly
-        ${IfNot} ${FileExists} "$TEMP\TrackPro\app\TrackPro_v1.0.1.exe"
-            MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v1.0.1.exe to temporary directory!"
-            Abort "Installation failed: Could not extract TrackPro_v1.0.1.exe"
+        ${IfNot} ${FileExists} "$TEMP\TrackPro\app\TrackPro_v1.2.0.exe"
+            MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v1.2.0.exe to temporary directory!"
+            Abort "Installation failed: Could not extract TrackPro_v1.2.0.exe"
         ${EndIf}
         
         ; Create program directory with verification
@@ -91,36 +91,36 @@ Section "Prerequisites"
         DetailPrint "Installing TrackPro..."
         
         ; Debug message with source and destination paths
-        StrCpy $DEBUG_MSG "Copying from: $TEMP\TrackPro\app\TrackPro_v1.0.1.exe to $PROGRAMFILES64\TrackPro"
+        StrCpy $DEBUG_MSG "Copying from: $TEMP\TrackPro\app\TrackPro_v1.2.0.exe to $PROGRAMFILES64\TrackPro"
         DetailPrint $DEBUG_MSG
         
         ; Check if destination file already exists and try to remove it
-        ${If} ${FileExists} "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
+        ${If} ${FileExists} "$PROGRAMFILES64\TrackPro\TrackPro_v1.2.0.exe"
             DetailPrint "Removing existing installation file..."
-            Delete "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
+            Delete "$PROGRAMFILES64\TrackPro\TrackPro_v1.2.0.exe"
         ${EndIf}
         
         ; Clear any previous errors and copy the file
         ClearErrors
-        CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v1.0.1.exe" "$PROGRAMFILES64\TrackPro"
+        CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v1.2.0.exe" "$PROGRAMFILES64\TrackPro"
         
         ; Check for copy errors
         ${If} ${Errors}
-            MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v1.0.1.exe to installation directory! Please ensure you have administrator privileges and try again."
-            Abort "Installation failed: Could not copy TrackPro_v1.0.1.exe"
+            MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v1.2.0.exe to installation directory! Please ensure you have administrator privileges and try again."
+            Abort "Installation failed: Could not copy TrackPro_v1.2.0.exe"
         ${EndIf}
         
         ; Verify TrackPro.exe exists in the destination
-        ${IfNot} ${FileExists} "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
-            MessageBox MB_OK|MB_ICONSTOP "Failed to verify TrackPro_v1.0.1.exe in installation directory!"
-            Abort "Installation failed: Could not verify TrackPro_v1.0.1.exe"
+        ${IfNot} ${FileExists} "$PROGRAMFILES64\TrackPro\TrackPro_v1.2.0.exe"
+            MessageBox MB_OK|MB_ICONSTOP "Failed to verify TrackPro_v1.2.0.exe in installation directory!"
+            Abort "Installation failed: Could not verify TrackPro_v1.2.0.exe"
         ${EndIf}
             
         ; Create shortcuts with verification
         DetailPrint "Creating shortcuts..."
         CreateDirectory "$SMPROGRAMS\TrackPro"
-        CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v1.0.1.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
-        CreateShortCut "$DESKTOP\TrackPro v1.0.1.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe"
+        CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v1.2.0.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v1.2.0.exe"
+        CreateShortCut "$DESKTOP\TrackPro v1.2.0.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v1.2.0.exe"
         
         DetailPrint "TrackPro installation complete"
 
@@ -151,11 +151,11 @@ Section "Prerequisites"
 
         ; Show installation paths at the end
         MessageBox MB_OK|MB_ICONINFORMATION \
-            "TrackPro v1.0.1 has been installed to:$\n\
-            $PROGRAMFILES64\TrackPro\TrackPro_v1.0.1.exe$\n\n\
+            "TrackPro v1.2.0 has been installed to:$\n\
+            $PROGRAMFILES64\TrackPro\TrackPro_v1.2.0.exe$\n\n\
             Shortcuts have been created:$\n\
-            - Start Menu: $SMPROGRAMS\TrackPro\TrackPro v1.0.1.lnk$\n\
-            - Desktop: $DESKTOP\TrackPro v1.0.1.lnk$\n\n\
+            - Start Menu: $SMPROGRAMS\TrackPro\TrackPro v1.2.0.lnk$\n\
+            - Desktop: $DESKTOP\TrackPro v1.2.0.lnk$\n\n\
             Please verify these locations after installation."
             
         ; Check if we need to restart
@@ -173,12 +173,12 @@ Section "MainApplication"
         SetOutPath "$INSTDIR"
         
         ; Extract main executable using relative path
-        File "installer_temp\dist\TrackPro_v1.0.1.exe"
+        File "installer_temp\dist\TrackPro_v1.2.0.exe"
         
         ; Create shortcuts
         CreateDirectory "$SMPROGRAMS\TrackPro"
-        CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v1.0.1.lnk" "$INSTDIR\TrackPro_v1.0.1.exe"
-        CreateShortCut "$DESKTOP\TrackPro v1.0.1.lnk" "$INSTDIR\TrackPro_v1.0.1.exe"
+        CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v1.2.0.lnk" "$INSTDIR\TrackPro_v1.2.0.exe"
+        CreateShortCut "$DESKTOP\TrackPro v1.2.0.lnk" "$INSTDIR\TrackPro_v1.2.0.exe"
         
         ; Create uninstaller
         WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -192,11 +192,11 @@ SectionEnd
 
 Section "Uninstall"
     Delete "$INSTDIR\Uninstall.exe"
-    Delete "$INSTDIR\TrackPro_v1.0.1.exe"
+    Delete "$INSTDIR\TrackPro_v1.2.0.exe"
     RMDir "$INSTDIR"
     
-    Delete "$SMPROGRAMS\TrackPro\TrackPro v1.0.1.lnk"
-    Delete "$DESKTOP\TrackPro v1.0.1.lnk"
+    Delete "$SMPROGRAMS\TrackPro\TrackPro v1.2.0.lnk"
+    Delete "$DESKTOP\TrackPro v1.2.0.lnk"
     RMDir "$SMPROGRAMS\TrackPro"
     
     DetailPrint "Uninstallation complete"

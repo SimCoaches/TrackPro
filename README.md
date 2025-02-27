@@ -1,4 +1,4 @@
-# TrackPro v1.0.1
+# TrackPro v1.1.0
 
 ![TrackPro Logo](docs/images/logo.png)
 
@@ -9,6 +9,7 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 ## Features
 
 - **Custom Response Curves**: Create and fine-tune non-linear response curves for each pedal
+- **Curve Management**: Save, load, and manage multiple custom curves for each pedal
 - **Real-time Visualization**: See your pedal inputs and outputs in real-time
 - **Drag-and-Drop Calibration**: Easily adjust calibration points by dragging them on the graph
 - **Multiple Curve Types**: Choose from Linear, Exponential, Logarithmic, and S-Curve presets
@@ -29,7 +30,7 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 ### Option 1: Installer (Recommended)
 
 1. Download the latest installer from the [Releases](https://github.com/yourusername/trackpro/releases) page
-2. Run `TrackPro_Setup_v1.0.1.exe` and follow the installation instructions
+2. Run `TrackPro_Setup_v1.1.0.exe` and follow the installation instructions
 3. The installer will automatically install vJoy and HidHide if they are not already installed
 4. A system restart may be required after installation to complete driver setup
 
@@ -38,7 +39,7 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 1. Install [vJoy Driver](https://github.com/jshafer817/vJoy/releases) manually
 2. Install [HidHide](https://github.com/ViGEm/HidHide/releases) manually
 3. Download the standalone executable from the [Releases](https://github.com/yourusername/trackpro/releases) page
-4. Run `TrackPro_v1.0.1.exe` as administrator
+4. Run `TrackPro_v1.1.0.exe` as administrator
 
 ## Quick Start Guide
 
@@ -46,8 +47,9 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 2. **Launch TrackPro** from the Start Menu or Desktop shortcut
 3. **Set Min/Max values** for each pedal by pressing them fully and clicking "Set Min" and "Set Max"
 4. **Adjust the response curve** by dragging the red points on the graph
-5. **Test your settings** by pressing the pedals and observing the green dot moving along the blue line
-6. Your settings are automatically saved when you exit the application
+5. **Save your custom curve** by entering a name and clicking "Save Curve"
+6. **Test your settings** by pressing the pedals and observing the green dot moving along the blue line
+7. Your settings are automatically saved when you exit the application
 
 ## Detailed Usage
 
@@ -63,6 +65,7 @@ Each pedal has its own calibration section with the following controls:
 - **Min/Max Controls**: Set the minimum and maximum values for each pedal
 - **Reset Button**: Resets the calibration to default linear response
 - **Curve Type Selector**: Choose between different response curve types
+- **Curve Management**: Save, load, and delete custom curves
 - **Output Monitor**: Shows the processed output value sent to games
 
 ### Response Curve Types
@@ -71,6 +74,38 @@ Each pedal has its own calibration section with the following controls:
 - **Exponential**: Provides finer control at the beginning of pedal travel
 - **Logarithmic**: Provides more sensitivity at the end of pedal travel
 - **S-Curve**: Combines aspects of both exponential and logarithmic for a balanced feel
+- **Custom**: Create your own curve by dragging points to your preferred positions
+
+### Curve Management
+
+New in version 1.1.0, TrackPro allows you to save and manage multiple custom curves for each pedal:
+
+1. **Save a Custom Curve**:
+   - Adjust the curve points to your liking
+   - Enter a name in the "Curve Name" field
+   - Click "Save Curve"
+
+2. **Load a Custom Curve**:
+   - Select a saved curve from the dropdown list
+   - Click "Load"
+   - The curve will be applied immediately
+
+3. **Delete a Custom Curve**:
+   - Select a saved curve from the dropdown list
+   - Click "Delete"
+   - Confirm the deletion
+
+Each pedal has its own set of saved curves, allowing you to create specific profiles for different racing games or driving styles.
+
+### Preset Curves
+
+TrackPro comes with several preset curves for each pedal:
+
+- **Throttle**: Racing, Smooth, Aggressive
+- **Brake**: Hard Braking, Progressive, ABS Simulation
+- **Clutch**: Quick Engage, Gradual, Race Start
+
+These presets provide a good starting point for customization.
 
 ### Advanced Configuration
 
@@ -83,6 +118,7 @@ The main configuration files are:
 - `calibration.json`: Contains the calibration points and curve types
 - `axis_ranges.json`: Contains the min/max ranges for each pedal
 - `hidhide.log`: Log file for HidHide operations
+- `curves/`: Directory containing saved custom curves for each pedal
 
 ## Troubleshooting
 
@@ -106,6 +142,11 @@ The main configuration files are:
    - Run the application as administrator
    - Check the Windows Event Viewer for error details
    - Verify that both vJoy and HidHide are installed
+
+5. **Custom curves not appearing**
+   - Check if the curves directory exists at `%USERPROFILE%\.trackpro\curves\`
+   - Ensure you have write permissions to this directory
+   - Try saving a new curve to see if it creates the necessary directories
 
 ### Logs
 
@@ -150,8 +191,8 @@ python build.py
 ```
 
 This will create:
-- `dist/TrackPro_v1.0.1.exe`: Standalone executable
-- `TrackPro_Setup_v1.0.1.exe`: Full installer with dependencies
+- `dist/TrackPro_v1.1.0.exe`: Standalone executable
+- `TrackPro_Setup_v1.1.0.exe`: Full installer with dependencies
 
 ## Contributing
 

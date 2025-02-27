@@ -115,6 +115,16 @@ class HidHideClient:
         """Initialize HidHide client."""
         logger.info("Initializing HidHide client...")
         
+        # Check if HidHide is installed
+        if not self._is_hidhide_installed():
+            error_msg = (
+                "HidHide driver is not installed on this system. "
+                "Please install HidHide from https://github.com/ViGEm/HidHide/releases "
+                "and restart the application."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
         # Check HidHide service
         try:
             status = win32serviceutil.QueryServiceStatus('HidHide')
@@ -122,19 +132,54 @@ class HidHideClient:
             
             if status[1] != win32service.SERVICE_RUNNING:
                 logger.info("HidHide service not running, attempting to start...")
-                win32serviceutil.StartService('HidHide')
-                # Wait for it to start
-                for i in range(10):  # Wait up to 10 seconds
-                    status = win32serviceutil.QueryServiceStatus('HidHide')
-                    if status[1] == win32service.SERVICE_RUNNING:
-                        logger.info(f"HidHide service started after {i+1} seconds")
-                        break
-                    time.sleep(1)
-                if status[1] != win32service.SERVICE_RUNNING:
-                    raise RuntimeError("Failed to start HidHide service")
+                try:
+                    win32serviceutil.StartService('HidHide')
+                    # Wait for it to start
+                    for i in range(10):  # Wait up to 10 seconds
+                        status = win32serviceutil.QueryServiceStatus('HidHide')
+                        if status[1] == win32service.SERVICE_RUNNING:
+                            logger.info(f"HidHide service started after {i+1} seconds")
+                            break
+                        time.sleep(1)
+                    if status[1] != win32service.SERVICE_RUNNING:
+                        error_msg = (
+                            "Failed to start HidHide service. Please try to start it manually:\n"
+                            "1. Open Services (services.msc)\n"
+                            "2. Find 'HidHide' service\n"
+                            "3. Right-click and select 'Start'\n"
+                            "4. Restart this application"
+                        )
+                        logger.error(error_msg)
+                        raise RuntimeError(error_msg)
+                except win32service.error as e:
+                    if e.winerror == 5:  # Access denied
+                        error_msg = (
+                            "Access denied when trying to start HidHide service. "
+                            "Please try running the application as administrator."
+                        )
+                        logger.error(error_msg)
+                        raise RuntimeError(error_msg)
+                    else:
+                        error_msg = f"Error starting HidHide service: {e}"
+                        logger.error(error_msg)
+                        raise RuntimeError(error_msg)
+        except win32service.error as e:
+            if e.winerror == 1060:  # Service does not exist
+                error_msg = (
+                    "HidHide service is not installed. "
+                    "Please install HidHide from https://github.com/ViGEm/HidHide/releases "
+                    "and restart the application."
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            else:
+                error_msg = f"HidHide service error: {e}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
         except Exception as e:
-            logger.error(f"HidHide service error: {e}")
-            raise RuntimeError(f"HidHide service error: {e}")
+            error_msg = f"Unexpected error with HidHide service: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         logger.info("HidHide service is running")
         
@@ -148,16 +193,62 @@ class HidHideClient:
         # Find HidHideCLI.exe
         self.cli_path = self._find_cli()
         if not self.cli_path:
-            raise RuntimeError("Could not find HidHideCLI.exe")
+            error_msg = (
+                "Could not find HidHideCLI.exe. "
+                "Please make sure HidHide is properly installed."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         # Clean up old temporary registrations
-        self.cleanup_temp_registrations()
+        try:
+            self.cleanup_temp_registrations()
+        except Exception as e:
+            logger.warning(f"Failed to clean up temporary registrations: {e}")
+            # Continue anyway, this is not critical
         
         # Register our application
         app_path = os.path.abspath(sys.argv[0])
         logger.info(f"Registering application path: {app_path}")
-        if not self.register_application(app_path):
-            raise RuntimeError("Failed to register application with HidHide")
+        try:
+            if not self.register_application(app_path):
+                error_msg = (
+                    "Failed to register application with HidHide. "
+                    "Please try running the application as administrator."
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+        except Exception as e:
+            error_msg = f"Error registering application with HidHide: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+    
+    def _is_hidhide_installed(self):
+        """Check if HidHide is installed by looking for its registry keys."""
+        try:
+            # Check for HidHide registry key
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\HidHide") as key:
+                return True
+        except WindowsError:
+            return False
+        
+        # Also check for the device interface
+        try:
+            # Try to open the device
+            device_path = r"\\.\HidHide"
+            handle = win32file.CreateFile(
+                device_path,
+                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+                None,
+                win32con.OPEN_EXISTING,
+                0,
+                None
+            )
+            win32file.CloseHandle(handle)
+            return True
+        except Exception:
+            return False
     
     def _find_cli(self):
         """Find the HidHideCLI.exe executable."""
