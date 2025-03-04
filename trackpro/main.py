@@ -12,6 +12,7 @@ from .hardware_input import HardwareInput
 from .output import VirtualJoystick
 from .ui import MainWindow
 from .hidhide import HidHideClient
+from .updater import Updater
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -227,6 +228,10 @@ class TrackProApp:
         self.test_mode = test_mode
         
         try:
+            # Initialize updater
+            logger.info("Initializing auto-updater...")
+            self.updater = Updater()
+            
             # Initialize hardware input
             logger.info("Checking for input devices...")
             self.hardware = HardwareInput(test_mode=test_mode)
@@ -410,20 +415,11 @@ class TrackProApp:
                 # Apply calibration
                 output = self.hardware.apply_calibration(pedal, raw_value)
                 
-                # For clutch, we need to show the non-inverted value in the UI
-                # but send the inverted value to the virtual joystick
-                if pedal == 'clutch':
-                    processed_values[pedal] = {
-                        'raw': raw_value,  # Store the raw, unmodified value
-                        'output_vjoy': 65535 - output,  # Inverted for vJoy
-                        'output_ui': output             # Non-inverted for UI
-                    }
-                else:
-                    processed_values[pedal] = {
-                        'raw': raw_value,  # Store the raw, unmodified value
-                        'output_vjoy': output,  # Same for vJoy
-                        'output_ui': output     # Same for UI
-                    }
+                processed_values[pedal] = {
+                    'raw': raw_value,
+                    'output_vjoy': output,
+                    'output_ui': output
+                }
             
             # Update virtual joystick first (minimize output lag)
             # Check if each axis is available before sending values
@@ -516,6 +512,15 @@ class TrackProApp:
     
     def run(self):
         """Run the application."""
+        # Check for updates on startup
+        if not self.test_mode:
+            self.updater.check_for_updates()
+            
+        # Create update check timer (check every 24 hours)
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.updater.check_for_updates)
+        self.update_timer.start(24 * 60 * 60 * 1000)  # 24 hours in milliseconds
+        
         return self.app.exec_()
 
 def main():

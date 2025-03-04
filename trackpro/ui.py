@@ -423,10 +423,14 @@ class MainWindow(QMainWindow):
         max_layout.addWidget(set_max_btn)
         controls_layout.addLayout(max_layout)
         
-        # Add reset button
+        # Add reset button in a vertical layout for alignment
+        reset_layout = QVBoxLayout()
+        reset_label = QLabel("Reset Curve")
         reset_btn = QPushButton("Reset")
         reset_btn.clicked.connect(lambda: self.reset_calibration(pedal_key))
-        controls_layout.addWidget(reset_btn)
+        reset_layout.addWidget(reset_label)
+        reset_layout.addWidget(reset_btn)
+        controls_layout.addLayout(reset_layout)
         
         # Store the calibration controls
         data['min_label'] = min_label
@@ -437,12 +441,16 @@ class MainWindow(QMainWindow):
         # Add spacer
         controls_layout.addStretch()
         
-        # Response curve selector
+        # Response curve selector in a vertical layout for alignment
+        curve_layout = QVBoxLayout()
+        curve_label = QLabel("Curve Type")
         curve_selector = QComboBox()
         curve_selector.addItems(["Linear", "Exponential", "Logarithmic", "S-Curve"])
         curve_selector.setCurrentText(data['curve_type'])
         curve_selector.currentTextChanged.connect(lambda t: self.on_curve_selector_changed(pedal_key, t))
-        controls_layout.addWidget(curve_selector)
+        curve_layout.addWidget(curve_label)
+        curve_layout.addWidget(curve_selector)
+        controls_layout.addLayout(curve_layout)
         
         # Store the curve selector for later access
         data['curve_selector'] = curve_selector
