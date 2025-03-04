@@ -9,6 +9,7 @@ from trackpro import __version__
 import pygame
 from .calibration import CalibrationWizard
 import math
+from PyQt5.QtWidgets import QAction
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,9 @@ class MainWindow(QMainWindow):
         # Set dark theme
         self.setup_dark_theme()
         
+        # Create menu bar
+        self.create_menu_bar()
+        
         # Create the main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -187,6 +191,21 @@ class MainWindow(QMainWindow):
         pedals_layout.setStretch(0, 1)
         pedals_layout.setStretch(1, 1)
         pedals_layout.setStretch(2, 1)
+        
+        # Add update notification label at the bottom
+        self.update_notification = QLabel("")
+        self.update_notification.setStyleSheet("""
+            QLabel {
+                color: #4CAF50;
+                font-weight: bold;
+                padding: 5px;
+                border: 2px solid #4CAF50;
+                border-radius: 5px;
+                background-color: rgba(76, 175, 80, 0.1);
+            }
+        """)
+        self.update_notification.setVisible(False)
+        layout.addWidget(self.update_notification, 0, Qt.AlignLeft)
         
     def _init_pedal_data(self):
         """Initialize data structures for all pedals."""
@@ -1419,4 +1438,67 @@ class MainWindow(QMainWindow):
             return
             
         # Now delete the custom curve
-        self.delete_custom_curve(pedal, curve_name) 
+        self.delete_custom_curve(pedal, curve_name)
+
+    def create_menu_bar(self):
+        """Create the menu bar with File menu."""
+        # Create menu bar
+        menu_bar = self.menuBar()
+        
+        # Create File menu
+        file_menu = menu_bar.addMenu("File")
+        
+        # Add Check for Updates action
+        check_updates_action = QAction("Check for Updates", self)
+        check_updates_action.triggered.connect(self.check_for_updates)
+        file_menu.addAction(check_updates_action)
+        
+        # Add separator
+        file_menu.addSeparator()
+        
+        # Add Exit action
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Style the menu bar for dark theme
+        menu_bar.setStyleSheet("""
+            QMenuBar {
+                background-color: #353535;
+                color: #ffffff;
+            }
+            QMenuBar::item {
+                background-color: #353535;
+                color: #ffffff;
+            }
+            QMenuBar::item:selected {
+                background-color: #2a82da;
+            }
+            QMenu {
+                background-color: #353535;
+                color: #ffffff;
+                border: 1px solid #555555;
+            }
+            QMenu::item:selected {
+                background-color: #2a82da;
+            }
+        """)
+    
+    def check_for_updates(self):
+        """Manually check for updates."""
+        if hasattr(self, 'updater'):
+            self.updater.check_for_updates(silent=False, manual_check=True)
+        else:
+            from .updater import Updater
+            updater = Updater(self)
+            updater.check_for_updates(silent=False, manual_check=True)
+            self.updater = updater
+
+    def show_update_notification(self, version):
+        """Show a notification that an update is available."""
+        self.update_notification.setText(f"Update Available: v{version} - Click File > Check for Updates")
+        self.update_notification.setVisible(True)
+        
+    def hide_update_notification(self):
+        """Hide the update notification."""
+        self.update_notification.setVisible(False) 

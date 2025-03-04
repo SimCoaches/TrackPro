@@ -297,12 +297,14 @@ class TrackProApp:
             # Set hardware reference in the window
             self.window.set_hardware(self.hardware)
             
+            # Set updater reference in the window
+            self.window.updater = self.updater
+            
             # Add debug button to the window
             self.window.add_debug_button(self.show_debug_window)
             
             # Connect signals
-            for pedal in ['throttle', 'brake', 'clutch']:
-                self.window.calibration_updated.connect(self.on_calibration_updated)
+            self.window.calibration_updated.connect(self.on_calibration_updated)
             
             # Connect to the calibration wizard signal
             self.window.calibration_wizard_completed = self.on_calibration_wizard_completed
@@ -312,24 +314,18 @@ class TrackProApp:
             # Load calibration into UI
             self.load_calibration()
             
-            # Setup update timer for reading inputs
-            self.input_timer = QTimer()
-            self.input_timer.timeout.connect(self.process_input)
-            self.input_timer.start(16)  # ~60Hz update rate
+            # Setup input timer
+            self.timer = QTimer()
+            self.timer.timeout.connect(self.process_input)
             
             # Setup cleanup on exit
             self.app.aboutToQuit.connect(self.cleanup)
             
+            logger.info("Application initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize: {str(e)}")
+            logger.error(f"Error initializing application: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            
-            # Show debug window with detailed information
-            debug_window = DebugWindow()
-            debug_window.exec_()
-            
-            QMessageBox.critical(None, "Initialization Error", str(e))
-            sys.exit(1)
+            raise
     
     def show_debug_window(self):
         """Show the debug window."""
@@ -444,40 +440,29 @@ class TrackProApp:
     
     def cleanup(self):
         """Clean up resources before exit."""
-        logger.info("Cleaning up...")
-        try:
-            # Save calibration
-            self.hardware.save_calibration(self.hardware.calibration)
-            
-            # Unhide the original controller
-            device_name = "Sim Coaches P1 Pro Pedals"
-            
-            # First check if the device is hidden
-            is_hidden, hidden_path = self.hidhide.is_device_hidden(device_name)
-            
-            if is_hidden and hidden_path:
-                # Use the path we already know
-                logger.info(f"Found hidden device at path: {hidden_path}")
-                if self.hidhide.unhide_device(hidden_path):
-                    logger.info(f"Successfully unhid {device_name}")
-                else:
-                    logger.warning(f"Failed to unhide {device_name}")
-            else:
-                # Try to find all matching devices
-                matching_devices = self.hidhide.find_all_matching_devices(device_name)
-                
-                if matching_devices:
-                    # Unhide all matching devices to be safe
-                    for device_path in matching_devices:
-                        if self.hidhide.unhide_device(device_path):
-                            logger.info(f"Successfully unhid device: {device_path}")
-                        else:
-                            logger.warning(f"Failed to unhide device: {device_path}")
-                else:
-                    logger.warning(f"Could not find any devices matching {device_name} during cleanup")
-            
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        logger.info("Cleaning up resources...")
+        
+        # Stop the timer
+        if hasattr(self, 'timer'):
+            self.timer.stop()
+        
+        # Unhide devices
+        if hasattr(self, 'hidhide'):
+            try:
+                logger.info("Unhiding devices...")
+                self.hidhide.unhide_all_matching_devices("Sim Coaches P1 Pro Pedals")
+            except Exception as e:
+                logger.error(f"Error unhiding devices: {e}")
+        
+        # Save calibration
+        if hasattr(self, 'hardware'):
+            try:
+                logger.info("Saving calibration...")
+                self.hardware.save_calibration(self.hardware.calibration)
+            except Exception as e:
+                logger.error(f"Error saving calibration: {e}")
+        
+        logger.info("Cleanup completed")
     
     def on_calibration_wizard_completed(self, results):
         """Handle calibration wizard results."""
@@ -512,16 +497,27 @@ class TrackProApp:
     
     def run(self):
         """Run the application."""
-        # Check for updates on startup
-        if not self.test_mode:
-            self.updater.check_for_updates()
+        try:
+            # Show the main window
+            self.window.show()
             
-        # Create update check timer (check every 24 hours)
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.updater.check_for_updates)
-        self.update_timer.start(24 * 60 * 60 * 1000)  # 24 hours in milliseconds
-        
-        return self.app.exec_()
+            # Check for updates silently on startup
+            self.updater.check_for_updates(silent=True, manual_check=False)
+            
+            # Start the input processing timer
+            self.timer.start(10)  # 10ms interval for ~100Hz update rate
+            
+            # Load saved calibration
+            self.load_calibration()
+            
+            # Run the application
+            return self.app.exec_()
+        except Exception as e:
+            logger.error(f"Error running application: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return 1
+        finally:
+            self.cleanup()
 
 def main():
     """Main application entry point."""

@@ -2,19 +2,37 @@
 
 All notable changes to TrackPro will be documented in this file.
 
-## [1.2.2] - 2025-03-02
+## [1.2.4] - 2025-03-03
+
+### Added
+- Added File menu with "Exit" and "Check for Updates" options
+- Added manual update check functionality
+- Added non-intrusive update notification indicator at the bottom left
+
+### Changed
+- Improved auto-updater to allow manual update checks
+- Changed update behavior to show notification instead of automatic prompt
+
+## [1.2.3] - 2025-03-03
 
 ### Fixed
 - Fixed clutch axis inversion issue - clutch now behaves consistently with throttle and brake axes
 - Removed unnecessary axis inversion logic for more predictable behavior
 
-## [1.2.1] - 2025-02-27
+## [1.2.2] - 2025-02-27
 
 ### Fixed
 - Improved UI alignment of Reset and Linear buttons to be on the same plane as Set Min/Max buttons
 - Added labels above Reset and Linear controls for better visual consistency
 
-## [1.2.0] - 2025-02-26
+## [1.2.1] - 2025-02-15
+
+### Fixed
+- Fixed issue with calibration not persisting after application restart
+- Improved error handling for device detection
+- Fixed UI layout issues on high DPI displays
+
+## [1.2.0] - 2025-02-01
 
 ### Added
 - Support for multiple controller inputs

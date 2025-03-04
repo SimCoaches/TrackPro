@@ -1,6 +1,6 @@
 """TrackPro - Racing Pedal Calibration Software"""
 
-__version__ = "1.2.2"
+__version__ = "1.2.4"
 __author__ = "Lawrence Thomas"
 
 # Import main components
