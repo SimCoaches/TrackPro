@@ -1,17 +1,44 @@
 import sys
 import os
 import traceback
+import ctypes
+import subprocess
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from trackpro.main import main
 
+def is_admin():
+    """Check if the current process has admin privileges."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin(args=None):
+    """Re-run the script with admin privileges."""
+    if not is_admin():
+        if args is None:
+            args = sys.argv[:]
+        
+        # Quote the arguments to handle spaces
+        args = [f'"{arg}"' if ' ' in arg and not arg.startswith('"') else arg for arg in args]
+        args_str = ' '.join(args)
+        
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args_str, None, 1)
+        return True
+    return False
+
 def show_error_dialog(message):
     """Show an error dialog that works in windowed mode."""
     try:
         from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QDialog, QPushButton, QHBoxLayout
-        app = QApplication([])
+        
+        # Create QApplication instance if it doesn't exist
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication(sys.argv)
         
         # For HidHide errors, show a more detailed dialog
         if "HidHide" in message:
@@ -146,6 +173,108 @@ def get_hidhide_info():
     return "\n".join(info)
 
 if __name__ == "__main__":
+    # Check for update mode
+    if "/update" in sys.argv:
+        # When running in update mode, we need admin privileges
+        if not is_admin() and run_as_admin():
+            sys.exit(0)
+        
+        # Get the batch path from command line arguments
+        batch_path = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "/update" and i + 1 < len(sys.argv):
+                batch_path = sys.argv[i + 1].strip('"')
+                break
+        
+        if batch_path and os.path.exists(batch_path):
+            print(f"Running update batch file with admin privileges: {batch_path}")
+            
+            # Show a message to confirm admin privileges are active
+            try:
+                from PyQt5.QtWidgets import QApplication, QMessageBox
+                # Create QApplication instance if it doesn't exist
+                app = QApplication.instance()
+                if app is None:
+                    app = QApplication(sys.argv)
+                
+                QMessageBox.information(
+                    None,
+                    "TrackPro Update - Admin Mode",
+                    "TrackPro is now running with administrator privileges.\n\n"
+                    "The update will be installed in the same location as your current version.\n\n"
+                    f"Installation directory: {os.path.dirname(os.path.abspath(__file__))}\n\n"
+                    "Please wait while the update is being installed..."
+                )
+            except Exception as e:
+                print(f"Could not show admin confirmation dialog: {e}")
+            
+            # Run the batch file
+            subprocess.Popen(['cmd', '/c', batch_path], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            sys.exit(0)
+        else:
+            print(f"Error: Update batch file not found or invalid: {batch_path}")
+            try:
+                from PyQt5.QtWidgets import QApplication, QMessageBox
+                # Create QApplication instance if it doesn't exist
+                app = QApplication.instance()
+                if app is None:
+                    app = QApplication(sys.argv)
+                
+                QMessageBox.critical(
+                    None,
+                    "TrackPro Update Error",
+                    f"The update batch file was not found or is invalid:\n{batch_path}\n\n"
+                    "Please try updating again or download the latest version manually from:\n"
+                    "https://github.com/TrackPro/releases/latest"
+                )
+            except Exception:
+                pass
+            sys.exit(1)
+    
+    # Try to ensure HidHide cloaking is disabled before starting - PRIORITIZE CLI --cloak-off
+    try:
+        print("Disabling HidHide cloaking before startup using CLI --cloak-off...")
+        # Try to import and initialize HidHide
+        from trackpro.hidhide import HidHideClient
+        hidhide = HidHideClient()
+        
+        # Use CLI as primary method - most reliable
+        cli_result = hidhide._run_cli(["--cloak-off"])
+        print(f"Cloak disabled via CLI before startup: {cli_result}")
+        
+        # Also try to unhide specific devices as a backup
+        device_name = "Sim Coaches P1 Pro Pedals"
+        matching_devices = hidhide.find_all_matching_devices(device_name)
+        for device_path in matching_devices:
+            try:
+                unhide_result = hidhide._run_cli(["--unhide-by-id", device_path])
+                print(f"Unhid device via CLI before startup: {unhide_result}")
+            except Exception as e2:
+                print(f"Error unhiding device via CLI before startup: {e2}")
+        
+        # Try API method as backup
+        hidhide.set_cloak_state(False)
+        print("Disabled HidHide cloaking via API before startup")
+    except Exception as e:
+        print(f"Could not disable HidHide cloaking before startup: {e}")
+        # Try direct CLI execution as last resort
+        try:
+            print("Attempting to run HidHideCLI directly before startup...")
+            # Check common locations
+            possible_paths = [
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "trackpro", "HidHideCLI.exe"),
+                r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe",
+                r"C:\Program Files (x86)\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    subprocess.run([path, "--cloak-off"], check=True)
+                    print(f"Successfully ran {path} --cloak-off directly before startup")
+                    break
+        except Exception as e2:
+            print(f"Failed to run HidHideCLI directly before startup: {e2}")
+            # Continue anyway, as the main app will try to initialize HidHide properly
+    
     # Check for test mode
     test_mode = "--test" in sys.argv
     
@@ -175,6 +304,19 @@ if __name__ == "__main__":
                 "3. You don't have administrator privileges\n"
                 "4. HidHideCLI.exe is missing or inaccessible\n\n"
                 "See the detailed information below for diagnostics and troubleshooting steps."
+            )
+        elif "Could not find Sim Coaches P1 Pro Pedals" in error_message:
+            error_message = (
+                "Could not find Sim Coaches P1 Pro Pedals\n\n"
+                "This error occurs when TrackPro cannot detect your pedals. This may happen if:\n\n"
+                "1. The pedals are not connected properly\n"
+                "2. The pedals are still hidden by HidHide from a previous session\n"
+                "3. The pedals are not recognized by Windows\n\n"
+                "Troubleshooting steps:\n"
+                "1. Make sure the pedals are properly connected\n"
+                "2. Try unplugging and reconnecting the pedals\n"
+                "3. Restart your computer to reset HidHide cloaking\n"
+                "4. Check Device Manager to ensure the pedals are recognized by Windows"
             )
         else:
             error_message = f"Error running TrackPro: {error_message}"

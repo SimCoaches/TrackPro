@@ -288,7 +288,13 @@ class HidHideClient:
         try:
             cmd = [self.cli_path] + args
             logger.debug(f"Running command: {cmd}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            # Use CREATE_NO_WINDOW flag to hide console window on Windows
+            if os.name == 'nt':  # Check if running on Windows
+                CREATE_NO_WINDOW = 0x08000000
+                result = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+            else:
+                result = subprocess.run(cmd, capture_output=True, text=True)
             
             # Log output regardless of success
             if result.stdout:
@@ -791,4 +797,59 @@ class HidHideClient:
         else:
             logger.warning(f"No devices found matching: {device_name}")
         
-        return matching_devices 
+        return matching_devices
+    
+    def set_cloak_state(self, active):
+        """Set the global cloaking state of HidHide.
+        
+        Args:
+            active (bool): True to enable cloaking, False to disable it.
+        
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        logger.info(f"Setting HidHide cloak state to: {'active' if active else 'inactive'}")
+        
+        try:
+            # Open the HidHide device
+            device_path = r"\\.\HidHide"
+            handle = win32file.CreateFile(
+                device_path,
+                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+                None,
+                win32con.OPEN_EXISTING,
+                0,
+                None
+            )
+            
+            if handle == win32file.INVALID_HANDLE_VALUE:
+                error = win32api.GetLastError()
+                logger.error(f"Failed to open HidHide device: error {error}")
+                return False
+            
+            try:
+                # Prepare the input buffer (1 byte boolean)
+                input_buffer = bytearray(1)
+                input_buffer[0] = 1 if active else 0
+                
+                # Send the IOCTL
+                result = win32file.DeviceIoControl(
+                    handle,
+                    IOCTL_SET_ACTIVE,
+                    input_buffer,
+                    None,
+                    None
+                )
+                
+                logger.info(f"Set cloak state result: {result}")
+                return True
+            except Exception as e:
+                logger.error(f"Error setting cloak state: {e}")
+                return False
+            finally:
+                # Always close the handle
+                win32file.CloseHandle(handle)
+        except Exception as e:
+            logger.error(f"Exception in set_cloak_state: {e}")
+            return False 

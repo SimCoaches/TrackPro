@@ -1486,19 +1486,33 @@ class MainWindow(QMainWindow):
     
     def check_for_updates(self):
         """Manually check for updates."""
+        logger.info("Manual update check requested")
+        
+        # Show a message that we're checking for updates
+        QMessageBox.information(
+            self,
+            "Checking for Updates",
+            "TrackPro is checking for updates. You will be notified when the check is complete."
+        )
+        
         if hasattr(self, 'updater'):
+            logger.info("Using existing updater instance")
             self.updater.check_for_updates(silent=False, manual_check=True)
         else:
+            logger.info("Creating new updater instance")
             from .updater import Updater
             updater = Updater(self)
             updater.check_for_updates(silent=False, manual_check=True)
             self.updater = updater
+            logger.info("Updater instance created and stored")
 
     def show_update_notification(self, version):
         """Show a notification that an update is available."""
+        logger.info(f"Showing update notification for version: {version}")
         self.update_notification.setText(f"Update Available: v{version} - Click File > Check for Updates")
         self.update_notification.setVisible(True)
         
     def hide_update_notification(self):
         """Hide the update notification."""
+        logger.info("Hiding update notification")
         self.update_notification.setVisible(False) 

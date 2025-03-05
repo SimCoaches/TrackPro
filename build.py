@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import PyInstaller.__main__
 import sys
 import os
@@ -8,6 +9,7 @@ import winreg
 from urllib.parse import urlparse
 import stat
 from trackpro import __version__
+from pathlib import Path
 
 class InstallerBuilder:
     VJOY_URL = "https://github.com/jshafer817/vJoy/releases/download/v2.1.9.1/vJoySetup.exe"
@@ -17,6 +19,7 @@ class InstallerBuilder:
         self.temp_dir = "installer_temp"
         self.dist_dir = "dist"
         self.version = __version__
+        self.cwd = Path.cwd()
         
     def download_file(self, url, dest_folder):
         """Download a file and return its path."""
