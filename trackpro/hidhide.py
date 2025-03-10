@@ -23,20 +23,14 @@ logger.setLevel(logging.DEBUG)
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.DEBUG)
 
-# Create file handler which logs even debug messages
-log_file = Path.home() / ".trackpro" / "hidhide.log"
-log_file.parent.mkdir(exist_ok=True)
-file_handler = logging.FileHandler(str(log_file))
-file_handler.setLevel(logging.DEBUG)
+# File logging has been removed
 
-# Create formatters and add them to the handlers
+# Create formatter and add it to the handler
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
-file_handler.setFormatter(formatter)
 
-# Add the handlers to the logger
+# Add the handler to the logger
 logger.addHandler(console_handler)
-logger.addHandler(file_handler)
 
 # HidHide Control Device IOCTLs
 IOCTL_GET_BLACKLIST = 0x80002000
@@ -115,134 +109,85 @@ class HidHideClient:
         """Initialize HidHide client.
         
         Args:
-            fail_silently (bool): If True, errors will not raise exceptions but will
-                                 log warnings and continue with limited functionality.
+            fail_silently: If True, don't raise exceptions for errors
         """
-        logger.info("Initializing HidHide client...")
-        
-        # Set fail_silently flag
-        self.fail_silently = fail_silently
+        logger.info("Initializing HidHide client")
         self.cli_path = None
-        self.functioning = True
         self.error_context = None
-        
-        # Store configuration file path
-        self.config_file = Path.home() / ".trackpro" / "hidhide_config.json"
-        self.config_file.parent.mkdir(exist_ok=True)
-        
-        # Load or create configuration
-        self.load_config()
+        self.functioning = True
+        self.fail_silently = fail_silently
         
         try:
             # Check if HidHide is installed
             if not self._is_hidhide_installed():
-                error_msg = (
+                self._handle_error(
                     "HidHide driver is not installed on this system. "
                     "Please install HidHide from https://github.com/ViGEm/HidHide/releases "
-                    "and restart the application."
+                    "and restart the application.",
+                    "driver_not_installed"
                 )
-                logger.error(error_msg)
-                self.error_context = "driver_not_installed"
-                if fail_silently:
-                    self.functioning = False
-                    return
-                raise RuntimeError(error_msg)
+                return
             
             # Check HidHide service
             try:
                 status = win32serviceutil.QueryServiceStatus('HidHide')
                 logger.info(f"HidHide service status: {status[1]}")
                 
+                # Check if service is running
                 if status[1] != win32service.SERVICE_RUNNING:
-                    logger.info("HidHide service not running, attempting to start...")
-                    try:
-                        win32serviceutil.StartService('HidHide')
-                        # Wait for it to start
-                        for i in range(10):  # Wait up to 10 seconds
-                            status = win32serviceutil.QueryServiceStatus('HidHide')
-                            if status[1] == win32service.SERVICE_RUNNING:
-                                logger.info(f"HidHide service started after {i+1} seconds")
-                                break
-                            time.sleep(1)
-                        if status[1] != win32service.SERVICE_RUNNING:
-                            error_msg = (
-                                "Failed to start HidHide service. Please try to start it manually:\n"
-                                "1. Open Services (services.msc)\n"
-                                "2. Find 'HidHide' service\n"
-                                "3. Right-click and select 'Start'\n"
-                                "4. Restart this application"
-                            )
-                            logger.error(error_msg)
-                            self.error_context = "service_start_failed"
-                            if fail_silently:
-                                self.functioning = False
-                                return
-                            raise RuntimeError(error_msg)
-                    except win32service.error as e:
-                        if e.winerror == 5:  # Access denied
-                            error_msg = (
-                                "Access denied when trying to start HidHide service. "
-                                "Please try running the application as administrator."
-                            )
-                            logger.error(error_msg)
-                            self.error_context = "access_denied_service"
-                            if fail_silently:
-                                self.functioning = False
-                                return
-                            raise RuntimeError(error_msg)
-                        else:
-                            error_msg = f"Error starting HidHide service: {e}"
-                            logger.error(error_msg)
-                            self.error_context = "service_start_error"
-                            if fail_silently:
-                                self.functioning = False
-                                return
-                            raise RuntimeError(error_msg)
+                    # Try to start the service
+                    logger.info("HidHide service is not running. Attempting to start...")
+                    win32serviceutil.StartService('HidHide')
+                    
+                    # Wait for service to start
+                    for _ in range(5):  # 5 attempts
+                        time.sleep(1)  # Wait 1 second between checks
+                        status = win32serviceutil.QueryServiceStatus('HidHide')
+                        if status[1] == win32service.SERVICE_RUNNING:
+                            logger.info("Successfully started HidHide service")
+                            break
+                    
+                    # If still not running after attempts, fail
+                    if status[1] != win32service.SERVICE_RUNNING:
+                        self._handle_error(
+                            "Failed to start HidHide service. "
+                            "Please try reinstalling HidHide or restart your computer.",
+                            "service_start_failed"
+                        )
+                        return
             except win32service.error as e:
                 if e.winerror == 1060:  # Service does not exist
-                    error_msg = (
+                    self._handle_error(
                         "HidHide service is not installed. "
                         "Please install HidHide from https://github.com/ViGEm/HidHide/releases "
-                        "and restart the application."
+                        "and restart the application.",
+                        "service_not_installed"
                     )
-                    logger.error(error_msg)
-                    self.error_context = "service_not_installed"
-                    if fail_silently:
-                        self.functioning = False
-                        return
-                    raise RuntimeError(error_msg)
-                else:
-                    error_msg = f"HidHide service error: {e}"
-                    logger.error(error_msg)
-                    self.error_context = "service_error"
-                    if fail_silently:
-                        self.functioning = False
-                        return
-                    raise RuntimeError(error_msg)
-            except Exception as e:
-                error_msg = f"Unexpected error with HidHide service: {e}"
-                logger.error(error_msg)
-                self.error_context = "service_unexpected_error"
-                if fail_silently:
-                    self.functioning = False
                     return
-                raise RuntimeError(error_msg)
+                else:
+                    self._handle_error(
+                        f"HidHide service error: {e}",
+                        "service_error"
+                    )
+                    return
+            except Exception as e:
+                self._handle_error(
+                    f"Unexpected error with HidHide service: {e}",
+                    "service_unexpected_error"
+                )
+                return
             
             logger.info("HidHide service is running")
             
             # Find HidHideCLI.exe
             self.cli_path = self._find_cli()
             if not self.cli_path:
-                error_msg = (
+                self._handle_error(
                     "Could not find HidHideCLI.exe. "
-                    "Please make sure HidHide is properly installed."
+                    "Please make sure HidHide is properly installed.",
+                    "cli_not_found"
                 )
-                logger.error(error_msg)
-                self.error_context = "cli_not_found"
-                if fail_silently:
-                    self.functioning = False
-                    return
-                raise RuntimeError(error_msg)
+                return
             
             # Clean up old temporary registrations
             try:
@@ -256,24 +201,18 @@ class HidHideClient:
             logger.info(f"Registering application path: {app_path}")
             try:
                 if not self.register_application(app_path):
-                    error_msg = (
+                    self._handle_error(
                         "Failed to register application with HidHide. "
-                        "Please try running the application as administrator."
+                        "Please try running the application as administrator.",
+                        "app_registration_failed",
+                        raise_error=not self.fail_silently
                     )
-                    logger.error(error_msg)
-                    
-                    # Don't fail here, just log and continue with limited functionality
-                    self.error_context = "app_registration_failed"
-                    if not self.fail_silently:
-                        raise RuntimeError(error_msg)
             except Exception as e:
-                error_msg = f"Error registering application with HidHide: {e}"
-                logger.error(error_msg)
-                
-                # Don't fail here, just log and continue with limited functionality
-                self.error_context = "app_registration_error"
-                if not self.fail_silently:
-                    raise RuntimeError(error_msg)
+                self._handle_error(
+                    f"Error registering application with HidHide: {e}",
+                    "app_registration_error",
+                    raise_error=not self.fail_silently
+                )
             
         except Exception as e:
             if fail_silently:
@@ -281,6 +220,24 @@ class HidHideClient:
                 self.functioning = False
                 return
             raise  # Re-raise the exception if we're not failing silently
+    
+    def _handle_error(self, error_msg, error_context, raise_error=True):
+        """Handle errors consistently in the HidHide client.
+        
+        Args:
+            error_msg: Error message to log
+            error_context: Error context to set
+            raise_error: Whether to raise a RuntimeError (if not failing silently)
+        """
+        logger.error(error_msg)
+        self.error_context = error_context
+        
+        if self.fail_silently:
+            self.functioning = False
+            return
+        
+        if raise_error:
+            raise RuntimeError(error_msg)
     
     def _is_hidhide_installed(self):
         """Check if HidHide is installed by looking for its registry keys."""
@@ -361,36 +318,12 @@ class HidHideClient:
                 cmd = [self.cli_path] + args
                 logger.debug(f"Running command: {cmd}")
                 
-                # Always hide windows using the proper flags for the platform
-                if os.name == 'nt':  # Windows
-                    CREATE_NO_WINDOW = 0x08000000
-                    # Use both DETACHED_PROCESS and CREATE_NO_WINDOW for maximum hiding
-                    creationflags = CREATE_NO_WINDOW | 0x00000008  # DETACHED_PROCESS
-                    result = subprocess.run(
-                        cmd, 
-                        capture_output=True, 
-                        text=True, 
-                        creationflags=creationflags,
-                        stdin=subprocess.DEVNULL,  # Prevent any stdin interaction
-                        timeout=5  # Add timeout to prevent hanging
-                    )
-                else:
-                    # For non-Windows, use DEVNULL to prevent terminal interaction
-                    result = subprocess.run(
-                        cmd, 
-                        capture_output=True, 
-                        text=True,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=5  # Add timeout to prevent hanging
-                    )
-                
-                # Log output regardless of success
-                if result.stdout:
-                    logger.debug(f"CLI stdout: {result.stdout}")
-                if result.stderr:
-                    logger.debug(f"CLI stderr: {result.stderr}")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
                 
                 if result.returncode != 0:
                     logger.error(f"CLI command failed with code {result.returncode}")
@@ -414,20 +347,16 @@ class HidHideClient:
                 
                 return result.stdout if check_output else True
                 
-            except subprocess.TimeoutExpired:
-                logger.error(f"CLI command timed out after 5 seconds")
-                if retry_count > 0:
-                    logger.info(f"Retrying command (attempts left: {retry_count})...")
-                    retry_count -= 1
-                    continue
-                return None if check_output else False
+            except (subprocess.TimeoutExpired, Exception) as e:
+                error_type = "timeout" if isinstance(e, subprocess.TimeoutExpired) else "error"
+                logger.error(f"CLI command {error_type}: {e}")
                 
-            except Exception as e:
-                logger.error(f"Error running CLI command: {e}")
                 if retry_count > 0:
                     logger.info(f"Retrying command (attempts left: {retry_count})...")
                     retry_count -= 1
+                    time.sleep(0.5)  # Add a short delay between retries
                     continue
+                
                 return None if check_output else False
         
         # If we reach here, all retries have failed

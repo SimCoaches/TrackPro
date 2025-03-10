@@ -47,38 +47,31 @@ class HardwareInput:
         # Default axis mappings if not loaded
         if not self.axis_mappings:
             self.axis_mappings = {
-                'Throttle': 0,
-                'Brake': 1,
-                'Clutch': 2
+                'throttle': 0,
+                'brake': 1,
+                'clutch': 2
             }
         
         # Validate axis mappings against available axes
         self._validate_axis_mappings()
         
         # Set axis properties based on mappings
-        self.THROTTLE_AXIS = self.axis_mappings.get('Throttle', -1)
-        self.BRAKE_AXIS = self.axis_mappings.get('Brake', -1)
-        self.CLUTCH_AXIS = self.axis_mappings.get('Clutch', -1)
+        self.THROTTLE_AXIS = self.axis_mappings.get('throttle', -1)
+        self.BRAKE_AXIS = self.axis_mappings.get('brake', -1)
+        self.CLUTCH_AXIS = self.axis_mappings.get('clutch', -1)
         
         # Initialize last known values
         self.last_values = {
-            'Throttle': 0,
-            'Brake': 0,
-            'Clutch': 0
-        }
-        
-        # Initialize pedal values
-        self.pedal_values = {
-            'Throttle': 0,
-            'Brake': 0,
-            'Clutch': 0
+            'throttle': 0,
+            'brake': 0,
+            'clutch': 0
         }
         
         # Initialize axis ranges (will be calibrated)
         self.axis_ranges = {
-            'Throttle': {'min': 0, 'max': 65535},
-            'Brake': {'min': 0, 'max': 65535},
-            'Clutch': {'min': 0, 'max': 65535}
+            'throttle': {'min': 0, 'max': 65535},
+            'brake': {'min': 0, 'max': 65535},
+            'clutch': {'min': 0, 'max': 65535}
         }
         
         # Load or calibrate axis ranges
@@ -123,7 +116,7 @@ class HardwareInput:
         """Calibrate the axis ranges by reading current values."""
         if not self.pedals_connected:
             # If pedals not connected, use default ranges
-            for axis_name in ['Throttle', 'Brake', 'Clutch']:
+            for axis_name in ['throttle', 'brake', 'clutch']:
                 self.axis_ranges[axis_name] = {
                     'min': 0,
                     'max': 65535,
@@ -152,7 +145,7 @@ class HardwareInput:
                     scaled_value = int((value + 1) * 32767)
                     
                     # If this is a new axis in axis_ranges, initialize it
-                    for axis_name in ['Throttle', 'Brake', 'Clutch']:
+                    for axis_name in ['throttle', 'brake', 'clutch']:
                         axis_idx = self.axis_mappings.get(axis_name, -1)
                         if axis_idx == i:
                             if axis_name not in self.axis_ranges:
@@ -178,7 +171,7 @@ class HardwareInput:
                 # pygame.time.wait(50) # Commented out to make initialization faster
                 
             # Ensure all pedals have range data
-            for axis_name in ['Throttle', 'Brake', 'Clutch']:
+            for axis_name in ['throttle', 'brake', 'clutch']:
                 if axis_name not in self.axis_ranges:
                     self.axis_ranges[axis_name] = {
                         'min': 0,
@@ -193,7 +186,7 @@ class HardwareInput:
         except Exception as e:
             logger.error(f"Error during calibration: {e}")
             # If error occurs, set default ranges
-            for axis_name in ['Throttle', 'Brake', 'Clutch']:
+            for axis_name in ['throttle', 'brake', 'clutch']:
                 self.axis_ranges[axis_name] = {
                     'min': 0,
                     'max': 65535,
@@ -224,7 +217,7 @@ class HardwareInput:
         config_dir.mkdir(exist_ok=True)
         
         # Create subdirectories for each pedal
-        for pedal in ['Throttle', 'Brake', 'Clutch']:
+        for pedal in ['throttle', 'brake', 'clutch']:
             pedal_dir = config_dir / pedal
             pedal_dir.mkdir(exist_ok=True)
         
@@ -243,7 +236,7 @@ class HardwareInput:
             # Ensure the directory exists
             if not curves_dir.exists():
                 logger.warning(f"Curves directory does not exist: {curves_dir}")
-                curves_dir.mkdir(exist_ok=True, parents=True)
+                curves_dir.mkdir(exist_ok=True)
                 logger.info(f"Created curves directory: {curves_dir}")
                 return []
             
@@ -324,86 +317,48 @@ class HardwareInput:
             return []
 
     def save_custom_curve(self, pedal: str, name: str, points: list, curve_type: str = "Custom") -> bool:
-        """Save a custom curve for a specific pedal."""
+        """Save a custom curve for a pedal.
+        
+        Args:
+            pedal: Pedal name ('throttle', 'brake', 'clutch')
+            name: Curve name
+            points: List of points as [(x1, y1), (x2, y2), ...]
+            curve_type: Type of curve ('Custom', 'Linear', etc.)
+            
+        Returns:
+            True if successful, False otherwise
+        """
         try:
-            # Sanitize the name to be a valid filename
-            safe_name = "".join(c for c in name if c.isalnum() or c in " _-").strip()
-            if not safe_name:
-                safe_name = "Unnamed"
-                logger.warning(f"Invalid curve name '{name}', using '{safe_name}' instead")
-            
+            # Ensure the curves directory exists
             curves_dir = self.get_pedal_curves_directory(pedal)
-            logger.info(f"Saving curve '{name}' to directory: {curves_dir}")
+            curves_dir.mkdir(parents=True, exist_ok=True)
             
-            # Ensure the directory exists
-            if not curves_dir.exists():
-                logger.warning(f"Curves directory does not exist: {curves_dir}")
-                curves_dir.mkdir(exist_ok=True, parents=True)
-                logger.info(f"Created curves directory: {curves_dir}")
+            # Create curve file path
+            curve_file = curves_dir / f"{name}.json"
             
-            curve_file = curves_dir / f"{safe_name}.json"
-            logger.info(f"Curve will be saved to: {curve_file}")
-            
-            # Validate points data
-            if not isinstance(points, list) or len(points) < 2:
-                logger.error(f"Invalid points data for curve '{name}': {points}")
-                return False
-            
-            # Ensure all points are valid (x,y) pairs
-            valid_points = []
-            for point in points:
-                if isinstance(point, (list, tuple)) and len(point) == 2:
-                    x, y = point
-                    try:
-                        # Convert to float to ensure they're numeric
-                        x_float = float(x)
-                        y_float = float(y)
-                        valid_points.append([x_float, y_float])
-                    except (ValueError, TypeError):
-                        logger.warning(f"Skipping invalid point in curve '{name}': {point}")
-                else:
-                    logger.warning(f"Skipping invalid point format in curve '{name}': {point}")
-            
-            if len(valid_points) < 2:
-                logger.error(f"Not enough valid points for curve '{name}' after validation")
-                return False
-            
-            # Create curve data
+            # Format curve data
             curve_data = {
                 "name": name,
-                "points": valid_points,
-                "curve_type": curve_type
+                "pedal": pedal,
+                "curve_type": curve_type,
+                "points": points,
+                "created": datetime.now().isoformat(),
+                "version": "1.0"
             }
             
-            # Save to file - use a temporary file first to avoid corruption
-            temp_file = curves_dir / f"{safe_name}.tmp.json"
-            try:
-                with open(temp_file, 'w') as f:
-                    json.dump(curve_data, f, indent=2)
-                
-                # If successful, rename to the final filename
-                if temp_file.exists():
-                    # Remove existing file if it exists
-                    if curve_file.exists():
-                        curve_file.unlink()
-                    temp_file.rename(curve_file)
-            except Exception as e:
-                logger.error(f"Error writing curve file: {e}")
-                if temp_file.exists():
-                    temp_file.unlink()  # Clean up temp file
-                return False
+            # Write to file
+            with open(curve_file, 'w') as f:
+                json.dump(curve_data, f, indent=2)
             
-            # Verify the file was created
+            logger.info(f"Saved custom curve '{name}' for {pedal} with {len(points)} points")
+            
+            # Verify the saved file
             if curve_file.exists():
-                file_size = curve_file.stat().st_size
-                logger.info(f"Successfully saved curve '{name}' to {curve_file} ({file_size} bytes)")
-                
-                # Verify the file can be read back
                 try:
-                    with open(curve_file) as f:
-                        test_data = json.load(f)
-                    if 'points' in test_data and len(test_data['points']) == len(valid_points):
-                        logger.info(f"Verified curve file '{name}' can be read back successfully")
+                    verify_data = self._handle_curve_file_json(curve_file)
+                    if verify_data and 'points' in verify_data and len(verify_data['points']) == len(points):
+                        logger.info(f"Successfully verified curve file: {curve_file}")
+                        return True
                     else:
                         logger.warning(f"Curve file '{name}' was saved but verification failed")
                 except Exception as verify_error:
@@ -417,6 +372,54 @@ class HardwareInput:
             logger.error(f"Failed to save custom curve: {e}", exc_info=True)
             return False
 
+    def _handle_curve_file_json(self, curve_file, operation="read"):
+        """Handle JSON file operations for curve files with error handling.
+        
+        Args:
+            curve_file: Path to the curve file
+            operation: Either "read" or "verify" to determine the operation
+            
+        Returns:
+            The parsed JSON data or None if an error occurred
+        """
+        try:
+            with open(curve_file) as f:
+                file_content = f.read()
+                
+                # Check for duplicate JSON objects (corrupted file)
+                if file_content.count('"name"') > 1:
+                    logger.warning(f"Detected corrupted curve file with multiple JSON objects: {curve_file}")
+                    
+                    # Try to extract just the first valid JSON object
+                    try:
+                        # Find the first complete JSON object
+                        first_brace = file_content.find('{')
+                        if first_brace >= 0:
+                            # Find the matching closing brace
+                            brace_count = 0
+                            for i, char in enumerate(file_content[first_brace:]):
+                                if char == '{':
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        # We found the end of the first complete JSON object
+                                        valid_json = file_content[first_brace:first_brace+i+1]
+                                        return json.loads(valid_json)
+                    except Exception as e:
+                        logger.error(f"Failed to extract valid JSON from corrupted file: {e}")
+                        return None
+                
+                try:
+                    return json.loads(file_content)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in curve file {curve_file}: {e}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error handling curve file {curve_file}: {e}")
+            return None
+    
     def load_custom_curve(self, pedal: str, name: str) -> dict:
         """Load a custom curve for a specific pedal."""
         try:
@@ -429,64 +432,16 @@ class HardwareInput:
                 logger.warning(f"Custom curve '{name}' not found for {pedal}")
                 return None
             
-            try:
-                with open(curve_file) as f:
-                    file_content = f.read()
-                    
-                    # Check for duplicate JSON objects (corrupted file)
-                    if file_content.count('"name"') > 1:
-                        logger.warning(f"Detected corrupted curve file with multiple JSON objects: {curve_file}")
-                        
-                        # Try to extract just the first valid JSON object
-                        try:
-                            # Find the first complete JSON object
-                            first_brace = file_content.find('{')
-                            if first_brace >= 0:
-                                # Find the matching closing brace
-                                brace_count = 0
-                                for i, char in enumerate(file_content[first_brace:]):
-                                    if char == '{':
-                                        brace_count += 1
-                                    elif char == '}':
-                                        brace_count -= 1
-                                        if brace_count == 0:
-                                            # We found the end of the first complete JSON object
-                                            valid_json = file_content[first_brace:first_brace+i+1]
-                                            curve_data = json.loads(valid_json)
-                                            
-                                            # Save the fixed file
-                                            with open(curve_file, 'w') as fix_file:
-                                                json.dump(curve_data, fix_file, indent=2)
-                                            
-                                            logger.info(f"Fixed corrupted curve file: {curve_file}")
-                                            break
-                        except Exception as fix_error:
-                            logger.error(f"Failed to fix corrupted curve file: {fix_error}")
-                            return None
-                    else:
-                        # Normal case - parse the JSON directly
-                        curve_data = json.loads(file_content)
-            except json.JSONDecodeError as json_error:
-                logger.error(f"Invalid JSON in curve file {curve_file}: {json_error}")
-                return None
+            curve_data = self._handle_curve_file_json(curve_file)
+            if curve_data:
+                logger.info(f"Successfully loaded curve '{name}' for {pedal}")
+                return curve_data
             
-            # Validate the curve data
-            if not isinstance(curve_data, dict):
-                logger.error(f"Invalid curve data format in {curve_file}: not a dictionary")
-                return None
+            logger.warning(f"Failed to load curve '{name}' for {pedal}")
+            return None
             
-            if 'points' not in curve_data:
-                logger.error(f"Invalid curve data in {curve_file}: missing 'points' key")
-                return None
-            
-            if not isinstance(curve_data['points'], list):
-                logger.error(f"Invalid curve data in {curve_file}: 'points' is not a list")
-                return None
-            
-            logger.info(f"Loaded custom curve '{name}' for {pedal}: {len(curve_data.get('points', []))} points, type: {curve_data.get('curve_type', 'Unknown')}")
-            return curve_data
         except Exception as e:
-            logger.error(f"Failed to load custom curve: {e}", exc_info=True)
+            logger.error(f"Error loading custom curve: {e}")
             return None
 
     def delete_custom_curve(self, pedal: str, name: str) -> bool:
@@ -512,7 +467,7 @@ class HardwareInput:
         """Apply a custom curve to the current calibration.
         
         Args:
-            pedal: The pedal name ('Throttle', 'Brake', 'Clutch')
+            pedal: The pedal name ('throttle', 'brake', 'clutch')
             curve_name: The name of the custom curve
             
         Returns:
@@ -545,37 +500,20 @@ class HardwareInput:
         return config_dir / "axis_mappings.json"
 
     def _load_calibration(self) -> dict:
-        """Load calibration data from file or return defaults."""
+        """Load calibration from file or return defaults."""
         try:
             cal_file = self._get_calibration_file()
             if cal_file.exists():
                 with open(cal_file) as f:
-                    calibration = json.load(f)
-                
-                # Handle transition from lowercase to capitalized pedal names
-                updated_calibration = {}
-                for key, value in calibration.items():
-                    # Convert lowercase keys to capitalized
-                    if key in ['throttle', 'brake', 'clutch']:
-                        updated_key = key.capitalize()
-                        updated_calibration[updated_key] = value
-                    else:
-                        updated_calibration[key] = value
-                
-                # If we made changes, save the updated calibration
-                if updated_calibration != calibration:
-                    self.save_calibration(updated_calibration)
-                    calibration = updated_calibration
-                
-                return calibration
+                    return json.load(f)
         except Exception as e:
             logger.warning(f"Failed to load calibration: {e}")
             
         # Return default calibration
         return {
-            'Throttle': {'points': [], 'curve': 'Linear'},
-            'Brake': {'points': [], 'curve': 'Linear'},
-            'Clutch': {'points': [], 'curve': 'Linear'}
+            'throttle': {'points': [], 'curve': 'Linear'},
+            'brake': {'points': [], 'curve': 'Linear'},
+            'clutch': {'points': [], 'curve': 'Linear'}
         }
     
     def _load_axis_mappings(self) -> dict:
@@ -585,22 +523,6 @@ class HardwareInput:
             if mappings_file.exists():
                 with open(mappings_file) as f:
                     mappings = json.load(f)
-                
-                # Handle transition from lowercase to capitalized pedal names
-                updated_mappings = {}
-                for key, value in mappings.items():
-                    # Convert lowercase keys to capitalized
-                    if key in ['throttle', 'brake', 'clutch']:
-                        updated_key = key.capitalize()
-                        updated_mappings[updated_key] = value
-                    else:
-                        updated_mappings[key] = value
-                
-                # If we made changes, save the updated mappings
-                if updated_mappings != mappings:
-                    self.save_axis_mappings(updated_mappings)
-                    mappings = updated_mappings
-                
                 logger.info(f"Loaded axis mappings: {mappings}")
                 return mappings
         except Exception as e:
@@ -608,9 +530,9 @@ class HardwareInput:
             
         # Return default mappings
         return {
-            'Throttle': 0,
-            'Brake': 1,
-            'Clutch': 2
+            'throttle': 0,
+            'brake': 1,
+            'clutch': 2
         }
     
     def save_axis_mappings(self, mappings=None):
@@ -637,11 +559,11 @@ class HardwareInput:
             self.axis_mappings[pedal] = axis
             
             # Update the axis constants
-            if pedal == 'Throttle':
+            if pedal == 'throttle':
                 self.THROTTLE_AXIS = axis
-            elif pedal == 'Brake':
+            elif pedal == 'brake':
                 self.BRAKE_AXIS = axis
-            elif pedal == 'Clutch':
+            elif pedal == 'clutch':
                 self.CLUTCH_AXIS = axis
             
             # Save the updated mappings
@@ -668,17 +590,12 @@ class HardwareInput:
             pygame.event.pump()
         
         try:
-            values = {
-                'Throttle': 0,  # Initialize with defaults for all pedals
-                'Brake': 0,
-                'Clutch': 0
-            }
-            
+            values = {}
             # Read and scale each axis
             for axis_name, axis_num in [
-                ('Throttle', self.THROTTLE_AXIS),
-                ('Brake', self.BRAKE_AXIS),
-                ('Clutch', self.CLUTCH_AXIS)
+                ('throttle', self.THROTTLE_AXIS),
+                ('brake', self.BRAKE_AXIS),
+                ('clutch', self.CLUTCH_AXIS)
             ]:
                 # Skip unavailable axes
                 if axis_num < 0 or axis_num >= self.available_axes:
@@ -716,9 +633,9 @@ class HardwareInput:
             # If last_values is empty or not initialized, create default values
             if not hasattr(self, 'last_values') or not self.last_values:
                 self.last_values = {
-                    'Throttle': 0,
-                    'Brake': 0,
-                    'Clutch': 0
+                    'throttle': 0,
+                    'brake': 0,
+                    'clutch': 0
                 }
             return self.last_values  # Return last known values on error
     
@@ -729,20 +646,10 @@ class HardwareInput:
         points = cal.get('points', [])
         curve_type = cal.get('curve', 'Linear')
         
-        # Get min/max range with defensive checks
-        if pedal not in self.axis_ranges:
-            # If pedal not in axis_ranges, initialize with default values
-            self.axis_ranges[pedal] = {
-                'min': 0,
-                'max': 65535,
-                'min_deadzone': 0,
-                'max_deadzone': 0
-            }
-            logger.warning(f"Missing axis range for {pedal}, using defaults")
-            
+        # Get min/max range
         axis_range = self.axis_ranges[pedal]
-        input_min = axis_range.get('min', 0)
-        input_max = axis_range.get('max', 65535)
+        input_min = axis_range['min']
+        input_max = axis_range['max']
         
         # Get deadzone values (default to 0 if not present for backward compatibility)
         min_deadzone = axis_range.get('min_deadzone', 0)
@@ -752,7 +659,7 @@ class HardwareInput:
         range_size = input_max - input_min
         
         # Normalize input value to 0-100 range (percentage)
-        if input_max > input_min and range_size != 0:
+        if input_max > input_min:
             # Standard linear normalization - maintain linearity regardless of range size
             normalized = ((raw_value - input_min) / range_size) * 100
         else:
@@ -817,7 +724,7 @@ class HardwareInput:
         try:
             # Define default presets for each pedal
             default_presets = {
-                'Throttle': [
+                'throttle': [
                     {
                         'name': 'Racing',
                         'points': [(0, 0), (25, 10), (50, 30), (75, 60), (100, 100)],
@@ -854,7 +761,7 @@ class HardwareInput:
                         'curve_type': 'Rain Mode'
                     }
                 ],
-                'Brake': [
+                'brake': [
                     {
                         'name': 'Hard Braking',
                         'points': [(0, 0), (25, 40), (50, 70), (75, 90), (100, 100)],
@@ -891,7 +798,7 @@ class HardwareInput:
                         'curve_type': 'Initial Bite'
                     }
                 ],
-                'Clutch': [
+                'clutch': [
                     {
                         'name': 'Quick Engage',
                         'points': [(0, 0), (25, 60), (50, 85), (75, 95), (100, 100)],

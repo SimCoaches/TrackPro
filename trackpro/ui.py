@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QGroupBox, QMessageBox, QProgressBar, QToolTip,
                            QTabWidget, QComboBox, QSpinBox, QDialog, QDialogButtonBox, QStackedWidget, QRadioButton, QButtonGroup, QLineEdit, QStatusBar, QGridLayout, QAction)
-from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QValueAxis, QAreaSeries
+from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 from PyQt5.QtCore import Qt, QTimer, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPalette, QMouseEvent, QFont, QBrush
 import logging
@@ -433,32 +433,8 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        # Set window properties
         self.setWindowTitle(f"TrackPro Configuration v{__version__}")
-        self.resize(1200, 800)  # Increased default size
-        
-        # Create main widget
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        
-        # Create main layout
-        layout = QVBoxLayout(self.central_widget)
-        
-        # Create menu bar if it doesn't exist
-        if self.menuBar().isNativeMenuBar():
-            self.menuBar().setNativeMenuBar(False)  # Ensure menu bar is visible on all platforms
-        
-        # File menu will be created on demand by create_menu_action
-        
-        # Create tab buttons bar
-        tab_buttons_widget = QWidget()
-        self.tab_buttons_layout = QHBoxLayout(tab_buttons_widget)
-        self.tab_buttons_layout.setContentsMargins(5, 5, 5, 5)
-        self.tab_buttons_layout.setSpacing(5)
-        layout.addWidget(tab_buttons_widget)
-        
-        # Initialize tab buttons dictionary
-        self.tab_buttons = {}
+        self.setMinimumSize(1200, 800)
         
         # Set dark theme
         self.setup_dark_theme()
@@ -525,17 +501,17 @@ class MainWindow(QMainWindow):
         self._init_pedal_data()
         
         # Create a widget for each pedal
-        for pedal in ['Throttle', 'Brake', 'Clutch']:
+        for pedal in ['throttle', 'brake', 'clutch']:
             pedal_widget = QWidget()
             pedal_widget.setObjectName(f"{pedal}_widget")
             pedal_layout = QVBoxLayout(pedal_widget)
             pedal_layout.setContentsMargins(5, 5, 5, 5)
             
-            # Remove pedal name headers to save space on small screens
-            # header = QLabel(pedal)
-            # header.setStyleSheet("font-size: 16px; font-weight: bold;")
-            # header.setAlignment(Qt.AlignCenter)
-            # pedal_layout.addWidget(header)
+            # Add pedal name as header
+            header = QLabel(pedal)
+            header.setStyleSheet("font-size: 16px; font-weight: bold;")
+            header.setAlignment(Qt.AlignCenter)
+            pedal_layout.addWidget(header)
             
             self.create_pedal_controls(pedal, pedal_layout)
             pedals_section_layout.addWidget(pedal_widget)
@@ -587,7 +563,7 @@ class MainWindow(QMainWindow):
     def _init_pedal_data(self):
         """Initialize data structures for all pedals."""
         self._pedal_data = {}
-        for pedal in ['Throttle', 'Brake', 'Clutch']:
+        for pedal in ['throttle', 'brake', 'clutch']:
             self._pedal_data[pedal] = {
                 'input_value': 0,
                 'output_value': 0,
@@ -670,7 +646,7 @@ class MainWindow(QMainWindow):
                 background-color: #444444;
                 border: 1px solid #555555;
                 border-radius: 3px;
-                padding: 5px;
+                padding: 5px 10px;
                 color: white;
             }
             QComboBox::drop-down {
@@ -683,6 +659,8 @@ class MainWindow(QMainWindow):
             QComboBox QAbstractItemView {
                 background-color: #444444;
                 selection-background-color: #2a82da;
+                min-width: 200px;
+                padding: 5px;
             }
             QLabel {
                 color: white;
@@ -691,8 +669,7 @@ class MainWindow(QMainWindow):
     
     def create_pedal_controls(self, pedal_name, parent_layout):
         """Create controls for a single pedal."""
-        # Capitalize the first letter to match our new convention
-        pedal_key = pedal_name.capitalize()
+        pedal_key = pedal_name.lower()
         data = self._pedal_data[pedal_key]
         
         # Input Monitor
@@ -767,11 +744,16 @@ class MainWindow(QMainWindow):
         curve_selector = QComboBox()
         curve_selector.addItems(["Linear", "Exponential", "Logarithmic", "S-Curve"])
         curve_selector.setCurrentText("Linear")
-        curve_selector.setMinimumWidth(150)  # Set a minimum width to prevent text truncation
-        
-        # Make the dropdown popup wider as well
-        curve_selector.view().setMinimumWidth(225)  # Set the dropdown list to be even wider
-        
+        curve_selector.setMinimumWidth(180) 
+        curve_selector.setStyleSheet("""
+            QComboBox {
+                padding: 5px 10px;
+            }
+            QComboBox QAbstractItemView {
+                min-width: 220px;
+                padding: 5px;
+            }
+        """)
         curve_selector.currentTextChanged.connect(lambda text: self.on_curve_selector_changed(pedal_key, text))
         curve_layout.addWidget(curve_label)
         curve_layout.addWidget(curve_selector)
@@ -801,14 +783,14 @@ class MainWindow(QMainWindow):
         min_deadzone_layout.addWidget(min_deadzone_value)
         
         min_deadzone_minus = QPushButton("-")
-        min_deadzone_minus.setFixedWidth(40)  # Increased from 30 to 40
-        min_deadzone_minus.setStyleSheet("padding: 5px;")
+        min_deadzone_minus.setFixedWidth(30)
+        min_deadzone_minus.setStyleSheet("padding: 2px 5px;")
         min_deadzone_minus.clicked.connect(lambda: self.adjust_min_deadzone(pedal_key, -1))
         min_deadzone_layout.addWidget(min_deadzone_minus)
         
         min_deadzone_plus = QPushButton("+")
-        min_deadzone_plus.setFixedWidth(40)  # Increased from 30 to 40
-        min_deadzone_plus.setStyleSheet("padding: 5px;")
+        min_deadzone_plus.setFixedWidth(30)
+        min_deadzone_plus.setStyleSheet("padding: 2px 5px;")
         min_deadzone_plus.clicked.connect(lambda: self.adjust_min_deadzone(pedal_key, 1))
         min_deadzone_layout.addWidget(min_deadzone_plus)
         
@@ -824,14 +806,14 @@ class MainWindow(QMainWindow):
         max_deadzone_layout.addWidget(max_deadzone_value)
         
         max_deadzone_minus = QPushButton("-")
-        max_deadzone_minus.setFixedWidth(40)  # Increased from 30 to 40
-        max_deadzone_minus.setStyleSheet("padding: 5px;")
+        max_deadzone_minus.setFixedWidth(30)
+        max_deadzone_minus.setStyleSheet("padding: 2px 5px;")
         max_deadzone_minus.clicked.connect(lambda: self.adjust_max_deadzone(pedal_key, -1))
         max_deadzone_layout.addWidget(max_deadzone_minus)
         
         max_deadzone_plus = QPushButton("+")
-        max_deadzone_plus.setFixedWidth(40)  # Increased from 30 to 40
-        max_deadzone_plus.setStyleSheet("padding: 5px;")
+        max_deadzone_plus.setFixedWidth(30)
+        max_deadzone_plus.setStyleSheet("padding: 2px 5px;")
         max_deadzone_plus.clicked.connect(lambda: self.adjust_max_deadzone(pedal_key, 1))
         max_deadzone_layout.addWidget(max_deadzone_plus)
         
@@ -888,7 +870,16 @@ class MainWindow(QMainWindow):
         manager_layout.addWidget(selector_label, 1, 0)
         
         curve_list = QComboBox()
-        curve_list.setMinimumWidth(150)
+        curve_list.setMinimumWidth(180)
+        curve_list.setStyleSheet("""
+            QComboBox {
+                padding: 5px 10px;
+            }
+            QComboBox QAbstractItemView {
+                min-width: 220px;
+                padding: 5px;
+            }
+        """)
         manager_layout.addWidget(curve_list, 1, 1)
         
         # Load Button
@@ -918,55 +909,40 @@ class MainWindow(QMainWindow):
     
     def set_input_value(self, pedal: str, value: int):
         """Set the input value for a pedal."""
-        try:
-            # Check if pedal exists in _pedal_data
-            if pedal not in self._pedal_data:
-                # Try with capitalized version
-                capitalized_pedal = pedal.capitalize()
-                if capitalized_pedal in self._pedal_data:
-                    pedal = capitalized_pedal
-                else:
-                    # Log available keys for debugging
-                    available_keys = list(self._pedal_data.keys())
-                    logger.error(f"Pedal '{pedal}' not found in _pedal_data. Available keys: {available_keys}")
-                    return
-            
-            data = self._pedal_data[pedal]
-            data['input_value'] = value
-            data['input_progress'].setValue(value)
-            data['input_label'].setText(f"Raw Input: {value}")
-            
-            # Calculate input percentage based on calibration range
-            min_val = data['min_value']
-            max_val = data['max_value']
-            
-            # Map the raw input value to a percentage based on calibration range
-            if max_val > min_val:
-                if value <= min_val:
-                    input_percentage = 0
-                elif value >= max_val:
-                    input_percentage = 100
-                else:
-                    input_percentage = ((value - min_val) / (max_val - min_val)) * 100
-            else:
+        data = self._pedal_data[pedal]
+        data['input_value'] = value
+        data['input_progress'].setValue(value)
+        data['input_label'].setText(f"Raw Input: {value}")
+        
+        # Calculate input percentage based on calibration range
+        min_val = data['min_value']
+        max_val = data['max_value']
+        
+        # Map the raw input value to a percentage based on calibration range
+        if max_val > min_val:
+            if value <= min_val:
                 input_percentage = 0
+            elif value >= max_val:
+                input_percentage = 100
+            else:
+                input_percentage = ((value - min_val) / (max_val - min_val)) * 100
+        else:
+            input_percentage = 0
             
-            input_percentage = max(0, min(100, input_percentage))  # Clamp to 0-100
-            
-            # Update the integrated chart with the new input position
-            # This handles the green dot position and output calculation in one step
-            calibration_chart = data['calibration_chart']
-            calibration_chart.update_input_position(input_percentage)
-            
-            # Get the output value directly from the chart
-            output_value = calibration_chart.get_output_value()
-            
-            # Update output display
-            data['output_value'] = output_value
-            data['output_progress'].setValue(output_value)
-            data['output_label'].setText(f"Mapped Output: {output_value}")
-        except Exception as e:
-            logger.error(f"Error in set_input_value for pedal '{pedal}': {e}")
+        input_percentage = max(0, min(100, input_percentage))  # Clamp to 0-100
+        
+        # Update the integrated chart with the new input position
+        # This handles the green dot position and output calculation in one step
+        calibration_chart = data['calibration_chart']
+        calibration_chart.update_input_position(input_percentage)
+        
+        # Get the output value directly from the chart
+        output_value = calibration_chart.get_output_value()
+        
+        # Update output display
+        data['output_value'] = output_value
+        data['output_progress'].setValue(output_value)
+        data['output_label'].setText(f"Mapped Output: {output_value}")
     
     def set_output_value(self, pedal: str, value: int):
         """
@@ -1261,7 +1237,7 @@ class MainWindow(QMainWindow):
         """Handle loading of calibration data."""
         if hasattr(self, 'hardware'):
             # For each pedal, load calibration data
-            for pedal_key in ['Throttle', 'Brake', 'Clutch']:
+            for pedal_key in ['throttle', 'brake', 'clutch']:
                 pedal_data = self._pedal_data[pedal_key]
                 if pedal_key in self.hardware.axis_ranges:
                     axis_range = self.hardware.axis_ranges[pedal_key]
@@ -1333,7 +1309,7 @@ class MainWindow(QMainWindow):
         pedal_config_action.triggered.connect(self.open_pedal_config)
         menu_bar.addAction(pedal_config_action)
         
-        # Add Race Coach button to menu bar (not in the File menu)
+        # Add Race Coach button to menu bar
         race_coach_action = QAction("Race Coach", self)
         race_coach_action.triggered.connect(self.open_race_coach)
         menu_bar.addAction(race_coach_action)
@@ -1592,7 +1568,7 @@ class MainWindow(QMainWindow):
         wizard = CalibrationWizard(self)
         if wizard.exec_() == QDialog.Accepted:
             # Apply the calibration results
-            for pedal in ['Throttle', 'Brake', 'Clutch']:
+            for pedal in ['throttle', 'brake', 'clutch']:
                 if pedal in wizard.results:
                     # Set the min/max values
                     min_val = wizard.results[pedal]['min']
@@ -1600,7 +1576,7 @@ class MainWindow(QMainWindow):
                     self.set_calibration_range(pedal, min_val, max_val)
             
             # Notify that calibration has been updated
-            for pedal in ['Throttle', 'Brake', 'Clutch']:
+            for pedal in ['throttle', 'brake', 'clutch']:
                 self.calibration_updated.emit(pedal)
             
             # Call the calibration wizard completed callback if it exists
@@ -1613,7 +1589,7 @@ class MainWindow(QMainWindow):
         """Save the current calibration settings."""
         try:
             # Emit calibration updated signals for all pedals to ensure latest data is saved
-            for pedal in ['Throttle', 'Brake', 'Clutch']:
+            for pedal in ['throttle', 'brake', 'clutch']:
                 self.calibration_updated.emit(pedal)
                 
                 # Explicitly save the axis ranges to ensure they're persisted
@@ -1696,7 +1672,7 @@ class MainWindow(QMainWindow):
         
         # Initialize UI with hardware state if available
         if hardware:
-            for pedal in ['Throttle', 'Brake', 'Clutch']:
+            for pedal in ['throttle', 'brake', 'clutch']:
                 if pedal in hardware.axis_ranges:
                     # Update UI with hardware values
                     if hasattr(self, '_pedal_data') and pedal in self._pedal_data:
@@ -1725,10 +1701,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"Error scheduling curve list refresh: {e}")
     
-    def show_message(self, title: str, message: str):
-        """Show a message box with the given title and message."""
-        QMessageBox.information(self, title, message)
-        
     def refresh_curve_lists(self):
         """Refresh the curve selection lists for all pedals with available curves."""
         if not hasattr(self, 'hardware') or not self.hardware:
@@ -1742,7 +1714,7 @@ class MainWindow(QMainWindow):
         self._is_populating_curves = True
         
         # Refresh curve lists for each pedal
-        for pedal in ['Throttle', 'Brake', 'Clutch']:
+        for pedal in ['throttle', 'brake', 'clutch']:
             if pedal in self._pedal_data:
                 # Get available curves for this pedal
                 try:
@@ -1976,72 +1948,3 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error saving curve {name}: {e}")
             self.show_message("Error", f"Failed to save curve: {e}") 
-
-    def update_iracing_connection_status(self, connected):
-        """Update the iRacing connection status in the UI.
-        This is a stub method that doesn't do anything in the main window,
-        as the iRacing status is only shown in the Race Coach tab.
-        """
-        pass
-
-    def addTab(self, widget, name):
-        """Add a new tab to the stacked widget."""
-        # Add the widget to the stacked widget
-        index = self.stacked_widget.addWidget(widget)
-        
-        # Create a button for this tab in the tab bar
-        tab_button = QPushButton(name)
-        tab_button.setCheckable(True)
-        tab_button.setObjectName(f"tab_{name.lower().replace(' ', '_')}")
-        tab_button.clicked.connect(lambda: self.setCurrentWidget(widget))
-        
-        # Add to the tab bar layout
-        self.tab_buttons_layout.addWidget(tab_button)
-        
-        # Store the button in our tab buttons dictionary
-        if not hasattr(self, 'tab_buttons'):
-            self.tab_buttons = {}
-        self.tab_buttons[name] = tab_button
-        
-        # If this is the first tab, make it active
-        if len(self.tab_buttons) == 1:
-            tab_button.setChecked(True)
-        
-        return index
-    
-    def setCurrentWidget(self, widget):
-        """Switch to the specified widget/tab."""
-        # Find the widget in the stacked widget
-        index = self.stacked_widget.indexOf(widget)
-        if index >= 0:
-            # Switch to that widget
-            self.stacked_widget.setCurrentIndex(index)
-            
-            # Update the tab buttons
-            for name, button in self.tab_buttons.items():
-                button.setChecked(widget == self.stacked_widget.widget(index))
-        
-        # Return if successful
-        return index >= 0
-
-    def create_menu_action(self, menu_name, action_name, status_tip, callback):
-        """Create a menu action in the specified menu."""
-        # Find or create the menu
-        menu = None
-        for action in self.menuBar().actions():
-            if action.text() == menu_name:
-                menu = action.menu()
-                break
-                
-        if menu is None:
-            menu = self.menuBar().addMenu(menu_name)
-            
-        # Create the action
-        action = QAction(action_name, self)
-        action.setStatusTip(status_tip)
-        action.triggered.connect(callback)
-        
-        # Add the action to the menu
-        menu.addAction(action)
-        
-        return action

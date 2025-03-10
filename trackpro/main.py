@@ -225,6 +225,17 @@ class TrackProApp:
     def __init__(self, test_mode=False):
         """Initialize the application."""
         self.app = QApplication(sys.argv)
+        
+        # Suppress any version or build information dialogs at startup
+        if os.environ.get('TRACKPRO_DISABLE_VERSION_DIALOG') == '1':
+            # Override any default QMessageBox behavior at startup by setting a timer
+            # to close any message boxes that might appear within 100ms of startup
+            def close_startup_dialogs():
+                for widget in self.app.topLevelWidgets():
+                    if isinstance(widget, QMessageBox) and "v3" in widget.text():
+                        widget.close()
+            QTimer.singleShot(100, close_startup_dialogs)
+            
         self.window = MainWindow()
         
         # Setup debug log handler for debug window
@@ -258,7 +269,6 @@ class TrackProApp:
             QMessageBox.critical(self.window, "Hardware Initialization Error", str(e))
             # Continue but in a limited mode
             self.hardware = None
-            self.output = None
         
         # Create HidHide client for device management with fail_silently=True
         # This allows the app to run even if HidHide has issues
@@ -387,28 +397,17 @@ class TrackProApp:
             
             # Update virtual joystick first (minimize output lag)
             # Check if each axis is available before sending values
-            # Add defensive checks to prevent KeyErrors when keys are missing
-            throttle_value = processed_values.get('Throttle', {}).get('output_vjoy', 0) if self.hardware.THROTTLE_AXIS >= 0 else 0
-            brake_value = processed_values.get('Brake', {}).get('output_vjoy', 0) if self.hardware.BRAKE_AXIS >= 0 else 0
-            clutch_value = processed_values.get('Clutch', {}).get('output_vjoy', 0) if self.hardware.CLUTCH_AXIS >= 0 else 0
+            throttle_value = processed_values['throttle']['output_vjoy'] if self.hardware.THROTTLE_AXIS >= 0 else 0
+            brake_value = processed_values['brake']['output_vjoy'] if self.hardware.BRAKE_AXIS >= 0 else 0
+            clutch_value = processed_values['clutch']['output_vjoy'] if self.hardware.CLUTCH_AXIS >= 0 else 0
             
             self.output.update_axis(throttle_value, brake_value, clutch_value)
             
             # Update UI with the fresh values
             # With our new integrated chart system, just setting the input is sufficient
-            try:
-                for pedal, values in processed_values.items():
-                    try:
-                        self.window.set_input_value(pedal, values['raw'])
-                    except KeyError as ke:
-                        logger.error(f"KeyError accessing pedal data for {pedal}: {ke}")
-                    except Exception as e:
-                        logger.error(f"Error updating UI for {pedal}: {e}")
-            except Exception as e:
-                logger.error(f"Error updating UI with processed values: {e}")
+            for pedal, values in processed_values.items():
+                self.window.set_input_value(pedal, values['raw'])
             
-        except KeyError as ke:
-            logger.error(f"KeyError in process_input: {ke}")
         except Exception as e:
             logger.error(f"Error processing input: {e}")
     
@@ -629,104 +628,18 @@ class TrackProApp:
             # Run initial pedal value update
             self.process_input()
         
-        # Remove automatic Race Coach tab creation to maintain password protection
-        # self.open_race_coach()
-        
         # Check for updates silently
         self.updater.check_for_updates(silent=True)
         
-        # Set up additional timers for UI updates and status checks
-        self.setup_timers()
-        
         # Run the application event loop
         return self.app.exec_()
-
-    def setup_timers(self):
-        """Set up timers for periodic tasks."""
-        # Timer for animation updates
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_animation)
-        self.update_timer.start(33)  # ~30 FPS
-        
-        # Timer for checking pedal connection
-        self.pedal_check_timer = QTimer()
-        self.pedal_check_timer.timeout.connect(self.check_pedal_connection)
-        self.pedal_check_timer.start(2000)  # Check every 2 seconds
-        
-        # Timer for checking iRacing connection
-        self.iracing_check_timer = QTimer()
-        self.iracing_check_timer.timeout.connect(self.check_iracing_connection)
-        self.iracing_check_timer.start(3000)  # Check every 3 seconds
-
-    def check_iracing_connection(self):
-        """Check if iRacing is running and update UI if status changed."""
-        if hasattr(self, 'race_coach') and self.race_coach:
-            try:
-                # Get the iRacing API from the race coach
-                iracing_api = self.race_coach.iracing_api
-                
-                # Check if iRacing is actually running
-                is_running = iracing_api.is_iracing_running()
-                
-                # If connected but iRacing is not running, disconnect
-                if iracing_api.connected and not is_running:
-                    logger.info("iRacing not running, disconnecting")
-                    iracing_api.disconnect()
-                
-                # No need to update main window status bar anymore
-                # The Race Coach UI will be updated automatically via its callbacks
-                
-            except Exception as e:
-                logger.error(f"Error checking iRacing connection: {e}")
-
-    def open_race_coach(self):
-        """Open the Race Coach tab."""
-        logger.info("Opening Race Coach tab")
-        
-        try:
-            # Import Race Coach components
-            from .race_coach.ui import RaceCoachWidget
-            
-            # Create Race Coach widget if it doesn't exist yet
-            if not hasattr(self, 'race_coach') or not self.race_coach:
-                self.race_coach = RaceCoachWidget()
-                
-                # Add as a tab to the main window
-                self.window.addTab(self.race_coach, "Race Coach")
-                
-                # Make sure the Race Coach API knows the connection status
-                if hasattr(self.window, 'update_iracing_connection_status'):
-                    self.window.update_iracing_connection_status(self.race_coach.iracing_api.connected)
-                
-                # Start checking iRacing connection status periodically
-                self.check_iracing_connection()
-                
-                logger.info("Race Coach tab added")
-            else:
-                # Just switch to the Race Coach tab
-                self.window.setCurrentWidget(self.race_coach)
-                logger.info("Switched to Race Coach tab")
-                
-        except Exception as e:
-            logger.error(f"Error opening Race Coach: {e}")
-            # Show error message to user
-            QMessageBox.critical(
-                self.window,
-                "Race Coach Error",
-                f"Error opening Race Coach: {str(e)}",
-                QMessageBox.Ok
-            )
-
-    def update_animation(self):
-        """Update animations and UI elements."""
-        # Update UI elements that require periodic refresh
-        # No need to update iRacing status in the main window anymore
-        pass
 
 def main():
     """Main application entry point."""
     # Check for test mode
     test_mode = "--test" in sys.argv
+    # Set environment variable to disable startup version dialogs
+    os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
     
     # Create QApplication instance first to ensure it exists
     app_instance = QApplication.instance() or QApplication(sys.argv)

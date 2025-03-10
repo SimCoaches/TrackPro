@@ -4,6 +4,36 @@ import traceback
 import ctypes
 import subprocess
 import time
+import logging
+from datetime import datetime
+
+# Disable any startup version dialogs or build information popups
+os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
+os.environ['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output
+
+# Try to patch the MessageBox function to suppress specific dialogs
+try:
+    original_messagebox = ctypes.windll.user32.MessageBoxW
+    def patched_messagebox(hwnd, text, caption, type):
+        # Check if this is the "Built: v3 release" dialog
+        if text and "Built: v3" in str(text):
+            return 1  # Return as if user clicked OK
+        return original_messagebox(hwnd, text, caption, type)
+    ctypes.windll.user32.MessageBoxW = patched_messagebox
+except Exception:
+    pass  # If patching fails, continue anyway
+
+# Set up logging
+# File logging has been removed
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logger = logging.getLogger("TrackPro_Run")
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +44,8 @@ def is_admin():
     """Check if the current process has admin privileges."""
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+    except Exception as e:
+        logger.error(f"Error checking admin status: {e}")
         return False
 
 def run_as_admin(args=None):
@@ -27,9 +58,61 @@ def run_as_admin(args=None):
         args = [f'"{arg}"' if ' ' in arg and not arg.startswith('"') else arg for arg in args]
         args_str = ' '.join(args)
         
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args_str, None, 1)
-        return True
-    return False
+        logger.info(f"Requesting admin privileges with command: {sys.executable} {args_str}")
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args_str, None, 1)
+        
+        if ret <= 32:  # ShellExecute returns a value <= 32 on error
+            logger.error(f"Admin elevation failed with return code: {ret}")
+            
+        return ret
+
+def write_error_to_desktop(error_msg):
+    """Write error message to desktop so user can see it"""
+    try:
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        error_file = os.path.join(desktop, "TrackPro_Error.txt")
+        
+        with open(error_file, 'w') as f:
+            f.write(f"TrackPro Error: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(error_msg)
+            f.write("\n\nPlease report this error to the TrackPro support team.")
+        
+        logger.info(f"Error details written to {error_file}")
+    except Exception as e:
+        logger.error(f"Could not write error file: {e}")
+
+def check_environment():
+    """Check environment for potential issues"""
+    logger.info("Checking environment...")
+    
+    # Check Python version
+    logger.info(f"Python version: {sys.version}")
+    
+    # Check working directory
+    logger.info(f"Current working directory: {os.getcwd()}")
+    
+    # Check if trackpro module directory exists
+    trackpro_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trackpro")
+    if os.path.exists(trackpro_dir):
+        logger.info(f"TrackPro module directory exists: {trackpro_dir}")
+    else:
+        logger.error(f"TrackPro module directory missing: {trackpro_dir}")
+    
+    # Check if vJoy DLL exists
+    vjoy_dll = r"C:\Program Files\vJoy\x64\vJoyInterface.dll"
+    if os.path.exists(vjoy_dll):
+        logger.info(f"vJoy DLL found: {vjoy_dll}")
+    else:
+        logger.error(f"vJoy DLL not found: {vjoy_dll}")
+    
+    # Check if running from PyInstaller bundle
+    is_frozen = getattr(sys, 'frozen', False)
+    logger.info(f"Running from frozen application: {is_frozen}")
+    
+    if is_frozen:
+        logger.info(f"Executable path: {sys.executable}")
+        
+    return True
 
 def check_single_instance():
     """Check if another instance of TrackPro is already running.
@@ -163,15 +246,12 @@ def get_hidhide_info():
         import win32serviceutil
         import win32service
         status = win32serviceutil.QueryServiceStatus('HidHide')
-        status_text = "Unknown"
-        if status[1] == win32service.SERVICE_RUNNING:
-            status_text = "Running"
-        elif status[1] == win32service.SERVICE_STOPPED:
-            status_text = "Stopped"
-        elif status[1] == win32service.SERVICE_START_PENDING:
-            status_text = "Starting"
-        elif status[1] == win32service.SERVICE_STOP_PENDING:
-            status_text = "Stopping"
+        status_text = {
+            win32service.SERVICE_RUNNING: "Running",
+            win32service.SERVICE_STOPPED: "Stopped",
+            win32service.SERVICE_START_PENDING: "Starting",
+            win32service.SERVICE_STOP_PENDING: "Stopping"
+        }.get(status[1], f"Unknown ({status[1]})")
         info.append(f"HidHide Service: {status_text}")
     except Exception as e:
         info.append(f"HidHide Service: Error - {str(e)}")
@@ -244,199 +324,136 @@ def get_hidhide_info():
     
     return "\n".join(info)
 
+def update_trackpro(update_path):
+    """Update TrackPro by replacing files."""
+    logger.info(f"Updating TrackPro from {update_path}")
+    
+    try:
+        import shutil
+        import tempfile
+        
+        # Current executable path
+        current_exe = os.path.abspath(sys.executable if hasattr(sys, 'frozen') else sys.argv[0])
+        logger.info(f"Current executable: {current_exe}")
+        
+        # Current directory
+        current_dir = os.path.dirname(current_exe)
+        logger.info(f"Current directory: {current_dir}")
+        
+        # Create a temporary batch file that will:
+        # 1. Wait for our process to exit
+        # 2. Copy the update file over the existing file
+        # 3. Start the new version
+        
+        temp_batch = os.path.join(tempfile.gettempdir(), "trackpro_update.bat")
+        
+        with open(temp_batch, "w") as f:
+            f.write("@echo off\n")
+            f.write("echo TrackPro Updater\n")
+            f.write(f"echo Waiting for process to exit (PID: {os.getpid()})...\n")
+            f.write(f"timeout /t 2 /nobreak > nul\n")  # Small initial delay
+            f.write(f"taskkill /f /pid {os.getpid()} 2>nul\n")  # Try to force kill the process
+            f.write(f"echo Copying update file...\n")
+            f.write(f"copy /Y \"{update_path}\" \"{current_exe}\"\n")
+            f.write(f"echo Starting new version...\n")
+            f.write(f"start \"\" \"{current_exe}\"\n")
+            f.write(f"echo Cleanup...\n")
+            f.write(f"del \"{update_path}\"\n")
+            f.write(f"del \"%~f0\"\n")  # Delete this batch file
+        
+        logger.info(f"Created update batch file: {temp_batch}")
+        
+        # Run the batch file with hidden window
+        subprocess.Popen(
+            ["cmd", "/c", temp_batch],
+            shell=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        
+        logger.info("Update batch file launched successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Update failed: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
 if __name__ == "__main__":
+    logger.info(f"Starting TrackPro run script at {datetime.now()}")
+    
+    # Log initial information
+    logger.info(f"Arguments: {sys.argv}")
+    logger.info(f"Running as admin: {is_admin()}")
+    
     # Check for update mode
     if "/update" in sys.argv:
-        # When running in update mode, we need admin privileges
-        if not is_admin() and run_as_admin():
-            sys.exit(0)
-        
-        # Get the batch path from command line arguments
-        batch_path = None
-        for i, arg in enumerate(sys.argv):
-            if arg == "/update" and i + 1 < len(sys.argv):
-                batch_path = sys.argv[i + 1].strip('"')
-                break
-        
-        if batch_path and os.path.exists(batch_path):
-            print(f"Running update batch file with admin privileges: {batch_path}")
-            
-            # Show a message to confirm admin privileges are active
-            try:
-                from PyQt5.QtWidgets import QApplication, QMessageBox
-                # Create QApplication instance if it doesn't exist
-                app = QApplication.instance()
-                if app is None:
-                    app = QApplication(sys.argv)
-                
-                QMessageBox.information(
-                    None,
-                    "TrackPro Update - Admin Mode",
-                    "TrackPro is now running with administrator privileges.\n\n"
-                    "The update will be installed in the same location as your current version.\n\n"
-                    f"Installation directory: {os.path.dirname(os.path.abspath(__file__))}\n\n"
-                    "Please wait while the update is being installed..."
-                )
-            except Exception as e:
-                print(f"Could not show admin confirmation dialog: {e}")
-            
-            # Run the batch file
-            subprocess.Popen(['cmd', '/c', batch_path], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            sys.exit(0)
-        else:
-            print(f"Error: Update batch file not found or invalid: {batch_path}")
-            try:
-                from PyQt5.QtWidgets import QApplication, QMessageBox
-                # Create QApplication instance if it doesn't exist
-                app = QApplication.instance()
-                if app is None:
-                    app = QApplication(sys.argv)
-                
-                QMessageBox.critical(
-                    None,
-                    "TrackPro Update Error",
-                    f"The update batch file was not found or is invalid:\n{batch_path}\n\n"
-                    "Please try updating again or download the latest version manually from:\n"
-                    "https://github.com/TrackPro/releases/latest"
-                )
-            except Exception:
-                pass
-            sys.exit(1)
-    
-    # Try to ensure HidHide cloaking is disabled before starting
-    try:
-        print("Initializing HidHide to disable cloaking before startup...")
-        # Try to import and initialize HidHide
-        from trackpro.hidhide import HidHideClient
-        
-        # Initialize with fail_silently=True so the app can continue even if HidHide fails
-        hidhide = HidHideClient(fail_silently=True)
-        
-        # Try multiple approaches to ensure cloaking is disabled
-        if hidhide.functioning:
-            # Try CLI first (most reliable)
-            cli_result = hidhide._run_cli(["--cloak-off"], retry_count=3)
-            print(f"Cloak disabled via CLI before startup: {cli_result}")
-            
-            # Try API method as backup
-            api_result = hidhide.set_cloak_state(False)
-            print(f"Cloak disabled via API before startup: {api_result}")
-            
-            # If device name is known, try to unhide specific devices
-            if hasattr(hidhide, 'config') and hidhide.config.get('device_name'):
-                device_name = hidhide.config.get('device_name')
-            else:
-                # Fallback to common device names
-                device_name = "Sim Coaches P1 Pro Pedals"
-            
-            print(f"Finding all devices matching: {device_name}")
-            matching_devices = hidhide.find_all_matching_devices(device_name)
-            if matching_devices:
-                for device_path in matching_devices:
-                    try:
-                        # Try unhide by instance path
-                        unhide_result = hidhide.unhide_device(device_path)
-                        print(f"Unhid device '{device_path}' via API: {unhide_result}")
-                    except Exception as e:
-                        print(f"Error unhiding device via API: {e}")
-                        
-                        # Fallback to CLI if available
-                        try:
-                            unhide_cmd_result = hidhide._run_cli(["--dev-unhide", device_path])
-                            print(f"Unhid device via CLI: {unhide_cmd_result}")
-                        except Exception as e2:
-                            print(f"Error unhiding device via CLI: {e2}")
-        else:
-            print(f"HidHide not functioning, skipping pre-startup cloaking control. Error context: {hidhide.error_context}")
-        
-    except Exception as e:
-        print(f"Error during HidHide pre-startup: {e}")
-        # Try direct CLI execution as last resort
         try:
-            # Try to find the CLI executable
-            cli_path = None
-            possible_paths = [
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "trackpro", "HidHideCLI.exe"),
-                r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe",
-                r"C:\Program Files (x86)\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
-            ]
-            for path in possible_paths:
-                if os.path.exists(path):
-                    cli_path = path
-                    break
+            logger.info("Running in update mode...")
+            update_path = sys.argv[sys.argv.index("/update") + 1]
+            logger.info(f"Update path: {update_path}")
             
-            if cli_path:
-                # Use CREATE_NO_WINDOW flag to hide console window
-                CREATE_NO_WINDOW = 0x08000000
-                # Also use DETACHED_PROCESS for maximum hiding
-                creationflags = CREATE_NO_WINDOW | 0x00000008  # DETACHED_PROCESS
+            # Replace the executable
+            if os.path.exists(update_path):
+                update_trackpro(update_path)
+            else:
+                logger.error(f"Update file not found: {update_path}")
                 
-                # Try to disable cloaking and unhide devices
-                subprocess.run([cli_path, "--cloak-off"], creationflags=creationflags, timeout=5)
-                print("Disabled HidHide cloaking via direct CLI execution")
-                
-                # Try to find and unhide specific devices
-                try:
-                    dev_list_result = subprocess.run(
-                        [cli_path, "--dev-list"],
-                        creationflags=creationflags,
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if dev_list_result.returncode == 0 and dev_list_result.stdout:
-                        for line in dev_list_result.stdout.splitlines():
-                            if "VID_1DD2" in line and "PID_2735" in line:  # Match Sim Coaches P1 Pro Pedals
-                                device_id = line.split('"')[1] if '"' in line else line.strip()
-                                subprocess.run(
-                                    [cli_path, "--dev-unhide", device_id],
-                                    creationflags=creationflags,
-                                    timeout=5
-                                )
-                                print(f"Unhid device via direct CLI: {device_id}")
-                except Exception as e2:
-                    print(f"Error unhiding devices via direct CLI: {e2}")
-        except Exception as e2:
-            print(f"Failed to run HidHideCLI directly before startup: {e2}")
-            # Continue anyway, as the main app will try to initialize HidHide properly
-
-    # Check for test mode
-    test_mode = "--test" in sys.argv
+            sys.exit(0)
+        except Exception as e:
+            error_msg = f"Update failed: {e}\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            write_error_to_desktop(error_msg)
+            sys.exit(1)
+            
+    # Check if we need to elevate privileges
+    if not is_admin():
+        logger.info("Not running as admin, requesting elevation...")
+        run_as_admin()
+        sys.exit(0)
+    
+    # If we get here, we have admin rights
+    logger.info("Running with admin privileges")
+    
+    # Verify the environment
+    check_environment()
     
     # Check if another instance is already running
-    if not check_single_instance() and "--force" not in sys.argv:
-        # Show a message about the existing instance
-        try:
+    if not check_single_instance():
+        logger.warning("Another instance of TrackPro is already running")
+        if "TrackPro_v" in sys.executable:  # Only show message if running from EXE
             from PyQt5.QtWidgets import QApplication, QMessageBox
-            # Create QApplication instance if it doesn't exist
-            app = QApplication.instance()
-            if app is None:
-                app = QApplication(sys.argv)
-            
-            result = QMessageBox.question(
-                None, 
-                "TrackPro Already Running",
-                "Another instance of TrackPro is already running.\n\n"
-                "Running multiple instances can cause conflicts with vJoy devices.\n\n"
-                "Do you want to continue anyway?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if result == QMessageBox.No:
-                sys.exit(0)
-                
-        except Exception as e:
-            print(f"Error showing instance warning: {e}")
-            # Just print a message and exit
-            print("Another instance of TrackPro is already running. Exiting.")
-            sys.exit(0)
+            app = QApplication([])
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Warning)
+            msg.setText("TrackPro is already running")
+            msg.setInformativeText("Another instance of TrackPro is already running. Please close it first.")
+            msg.setWindowTitle("TrackPro")
+            msg.exec_()
+        sys.exit(0)
     
     try:
-        # Run the main application
-        sys.exit(main())
+        logger.info("Importing trackpro.main module...")
+        from trackpro.main import main
+        
+        logger.info("Starting TrackPro main function...")
+        main()
+        
+        logger.info("TrackPro main function completed normally")
+    except ImportError as e:
+        error_msg = f"Failed to import TrackPro modules: {e}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        write_error_to_desktop(error_msg)
     except Exception as e:
-        error_message = f"Unhandled error: {str(e)}\n\n{traceback.format_exc()}"
-        print(error_message)
-        show_error_dialog(error_message)
-        sys.exit(1) 
+        error_msg = f"Unhandled exception: {e}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        write_error_to_desktop(error_msg)
+    
+    logger.info("TrackPro run script exiting")
+    # Keep the window open if we're in a console
+    try:
+        if hasattr(sys, 'frozen') and sys.frozen and 'console' in sys.argv:
+            input("Press Enter to exit...")
+        elif os.isatty(sys.stdout.fileno()):
+            input("Press Enter to exit...")
+    except:
+        pass  # Not a console 
