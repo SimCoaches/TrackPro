@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 from PyQt5.QtWidgets import QMessageBox
-import datetime
+from datetime import datetime as dt
+import ctypes
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +344,7 @@ class HardwareInput:
                 "pedal": pedal,
                 "curve_type": curve_type,
                 "points": points,
-                "created": datetime.now().isoformat(),
+                "created": dt.now().isoformat(),
                 "version": "1.0"
             }
             

@@ -11,6 +11,14 @@ from datetime import datetime
 os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
 os.environ['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output
 
+# Prevent NVIDIA GeForce Experience from detecting this app as a game
+os.environ['__NV_PRIME_RENDER_OFFLOAD'] = '0'
+os.environ['__GL_THREADED_OPTIMIZATIONS'] = '0'
+os.environ['__GL_SHADER_DISK_CACHE'] = '0'
+os.environ['__GL_SHADER_DISK_CACHE_SKIP_CLEANUP'] = '0'
+os.environ['__GL_YIELD'] = 'NOTHING'
+os.environ['NVIDIA_VISIBLE_DEVICES'] = 'none'
+
 # Try to patch the MessageBox function to suppress specific dialogs
 try:
     original_messagebox = ctypes.windll.user32.MessageBoxW
@@ -54,17 +62,28 @@ def run_as_admin(args=None):
         if args is None:
             args = sys.argv[:]
         
-        # Quote the arguments to handle spaces
-        args = [f'"{arg}"' if ' ' in arg and not arg.startswith('"') else arg for arg in args]
-        args_str = ' '.join(args)
-        
-        logger.info(f"Requesting admin privileges with command: {sys.executable} {args_str}")
-        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args_str, None, 1)
-        
-        if ret <= 32:  # ShellExecute returns a value <= 32 on error
-            logger.error(f"Admin elevation failed with return code: {ret}")
+        # Windows-specific elevation
+        if sys.platform == 'win32':
+            # Quote the arguments to handle spaces
+            args = [f'"{arg}"' if ' ' in arg and not arg.startswith('"') else arg for arg in args]
+            args_str = ' '.join(args)
             
-        return ret
+            logger.info(f"Requesting admin privileges with command: {sys.executable} {args_str}")
+            
+            # Use SW_HIDE (0) instead of SW_SHOWNORMAL (1) to hide the command window
+            # This prevents the command window from appearing during privilege elevation
+            ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args_str, None, 0)
+            
+            if ret <= 32:  # ShellExecute returns a value <= 32 on error
+                logger.error(f"Admin elevation failed with return code: {ret}")
+                
+            return ret
+        else:
+            # Unix-like systems would use sudo or equivalent
+            logger.warning("Admin elevation requested on non-Windows platform - not supported")
+            return 0
+    
+    return 1  # Already admin
 
 def write_error_to_desktop(error_msg):
     """Write error message to desktop so user can see it"""
@@ -405,14 +424,15 @@ if __name__ == "__main__":
             write_error_to_desktop(error_msg)
             sys.exit(1)
             
-    # Check if we need to elevate privileges
-    if not is_admin():
-        logger.info("Not running as admin, requesting elevation...")
-        run_as_admin()
-        sys.exit(0)
+    # Check if we need to elevate privileges - always require admin
+    # Commenting out admin check to allow running without admin privileges
+    # if not is_admin():
+    #     logger.info("Not running as admin, requesting elevation...")
+    #     run_as_admin()
+    #     sys.exit(0)
     
-    # If we get here, we have admin rights
-    logger.info("Running with admin privileges")
+    # If we get here, we have admin rights or we're skipping the check
+    logger.info("Running the application")
     
     # Verify the environment
     check_environment()

@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QGroupBox, QMessageBox, QProgressBar, QToolTip,
-                           QTabWidget, QComboBox, QSpinBox, QDialog, QDialogButtonBox, QStackedWidget, QRadioButton, QButtonGroup, QLineEdit, QStatusBar, QGridLayout, QAction)
+                           QTabWidget, QComboBox, QSpinBox, QDialog, QDialogButtonBox, QStackedWidget, QRadioButton, QButtonGroup, QLineEdit, QStatusBar, QGridLayout, QAction, QProgressDialog)
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 from PyQt5.QtCore import Qt, QTimer, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPalette, QMouseEvent, QFont, QBrush
@@ -9,6 +9,10 @@ from trackpro import __version__
 import pygame
 from .calibration import CalibrationWizard
 import math
+import traceback
+import time
+import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -1305,14 +1309,18 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
         
         # Add Pedal Config button to menu bar
-        pedal_config_action = QAction("Pedal Config", self)
-        pedal_config_action.triggered.connect(self.open_pedal_config)
-        menu_bar.addAction(pedal_config_action)
+        self.pedal_config_action = QAction("Pedal Config", self)
+        self.pedal_config_action.triggered.connect(self.open_pedal_config)
+        self.pedal_config_action.setCheckable(True)
+        self.pedal_config_action.setChecked(True)  # Default active section
+        menu_bar.addAction(self.pedal_config_action)
         
         # Add Race Coach button to menu bar
-        race_coach_action = QAction("Race Coach", self)
-        race_coach_action.triggered.connect(self.open_race_coach)
-        menu_bar.addAction(race_coach_action)
+        self.race_coach_action = QAction("Race Coach", self)
+        self.race_coach_action.triggered.connect(self.open_race_coach)
+        self.race_coach_action.setCheckable(True)
+        self.race_coach_action.setChecked(False)
+        menu_bar.addAction(self.race_coach_action)
         
         # Style the menu bar for dark theme
         menu_bar.setStyleSheet("""
@@ -1334,6 +1342,10 @@ class MainWindow(QMainWindow):
             }
             QMenu::item:selected {
                 background-color: #2a82da;
+            }
+            QAction:checked {
+                background-color: #2a82da;
+                font-weight: bold;
             }
         """)
     
@@ -1370,6 +1382,132 @@ class MainWindow(QMainWindow):
         logger.info("Hiding update notification")
         self.update_notification.setVisible(False)
         
+    def open_pedal_config(self):
+        """Open the Pedal Configuration screen."""
+        logger.info("Opening Pedal Config")
+        
+        # If we're in the Race Coach view, switch back to the main configuration screen
+        if self.stacked_widget.count() > 1 and self.stacked_widget.currentIndex() > 0:
+            logger.info("Switching from Race Coach back to Pedal Config")
+            self.stacked_widget.setCurrentIndex(0)
+            # Update menu action states
+            self.pedal_config_action.setChecked(True)
+            self.race_coach_action.setChecked(False)
+        else:
+            # If we're already in the main config screen or there's an issue,
+            # show a temporary message until fully implemented
+            QMessageBox.information(self, "Pedal Configuration", 
+                                  "Pedal Configuration feature is under development.")
+        
+    def open_calibration_wizard(self):
+        """Open the calibration wizard dialog."""
+        logger.info("Opening Calibration Wizard")
+        try:
+            # Create an instance of the CalibrationWizard
+            wizard = CalibrationWizard(parent=self)
+            
+            # Connect signal to handle when wizard is completed
+            # The on_calibration_wizard_completed method should be in the TrackProApp class
+            if hasattr(self, "on_calibration_wizard_completed"):
+                wizard.calibration_complete.connect(self.on_calibration_wizard_completed)
+                
+            # Show the wizard dialog - it's modal so it will block until closed
+            result = wizard.exec_()
+            
+            # Handle the result
+            if result == QDialog.Accepted:
+                logger.info("Calibration wizard completed successfully")
+                # Refresh the UI with the new calibration
+                self.refresh_curve_lists()
+            else:
+                logger.info("Calibration wizard cancelled")
+        except Exception as e:
+            logger.error(f"Error opening calibration wizard: {e}")
+            QMessageBox.warning(self, "Calibration Error", 
+                               f"There was an error opening the calibration wizard: {str(e)}")
+        
+    def save_calibration(self):
+        """Save the current calibration to a file."""
+        logger.info("Saving calibration data manually")
+        try:
+            if hasattr(self, "hardware") and self.hardware is not None:
+                # Get current calibration data from the hardware
+                calibration_data = self.hardware.calibration
+                
+                # Save the calibration
+                self.hardware.save_calibration(calibration_data)
+                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Calibration Saved",
+                    "Calibration settings have been saved successfully."
+                )
+                logger.info("Calibration saved manually by user")
+            else:
+                logger.warning("Cannot save calibration: hardware not accessible")
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    "Could not save calibration: hardware interface not accessible."
+                )
+        except Exception as e:
+            logger.error(f"Failed to save calibration: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save calibration: {str(e)}"
+            )
+        
+    def reset_calibration(self, pedal: str):
+        """Reset calibration for the specified pedal to default values."""
+        logger.info(f"Resetting calibration for pedal: {pedal}")
+        try:
+            # Reset the calibration points to a linear curve
+            if pedal in self.pedal_charts:
+                self.pedal_charts[pedal].reset_to_linear()
+                self.refresh_curve_lists()
+                self.on_point_moved(pedal)
+                
+                # Update the UI
+                QMessageBox.information(
+                    self,
+                    "Calibration Reset",
+                    f"Calibration for {pedal} has been reset to linear response."
+                )
+                logger.info(f"Calibration for {pedal} reset successfully")
+            else:
+                logger.warning(f"Cannot reset calibration: pedal {pedal} not found")
+        except Exception as e:
+            logger.error(f"Failed to reset calibration for {pedal}: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to reset calibration for {pedal}: {str(e)}"
+            )
+        
+    def set_pedal_available(self, pedal: str, available: bool):
+        """Set whether a pedal is available (connected)."""
+        logger.info(f"Setting pedal {pedal} availability to {available}")
+        try:
+            # Find the pedal group in the UI
+            if hasattr(self, "pedal_groups") and pedal in self.pedal_groups:
+                # Update UI elements to reflect availability
+                self.pedal_groups[pedal].setEnabled(available)
+                
+                # If there's a status indicator for the pedal, update it
+                if hasattr(self, "pedal_status") and pedal in self.pedal_status:
+                    status_label = self.pedal_status.get(pedal)
+                    if status_label:
+                        if available:
+                            status_label.setText("Connected")
+                            status_label.setStyleSheet("color: green;")
+                        else:
+                            status_label.setText("Disconnected")
+                            status_label.setStyleSheet("color: red;")
+        except Exception as e:
+            logger.error(f"Error setting pedal availability for {pedal}: {e}")
+        
     def open_race_coach(self):
         """Open the Race Coach screen with password protection."""
         try:
@@ -1393,258 +1531,92 @@ class MainWindow(QMainWindow):
                 logger.info("Race Coach access cancelled by user")
                 return
             
-            # Import Race Coach components
-            from .race_coach import RaceCoachWidget
-            
-            logger.info("Imported Race Coach modules successfully")
-            
-            # Check if Race Coach widget already exists in stacked widget
-            if self.stacked_widget.count() > 1:
-                logger.info("Race Coach screen already exists, switching to it")
-                self.stacked_widget.setCurrentIndex(1)
-                return
-            
-            # Create and add the Race Coach widget
+            # Try to import and initialize the Race Coach module
             try:
+                # First verify that numpy is available
+                try:
+                    import numpy
+                    logger.info(f"Found numpy version: {numpy.__version__}")
+                except ImportError as e:
+                    logger.error(f"Missing numpy dependency: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "Missing Dependency",
+                        "The Race Coach feature requires numpy which is not installed or is missing.\n\n"
+                        "Error details: " + str(e) + "\n\n"
+                        "Please reinstall the application to fix this issue."
+                    )
+                    return
+
+                # Try to verify the race_coach.db exists
+                db_path = "race_coach.db"
+                if not os.path.exists(db_path):
+                    alternative_paths = [
+                        os.path.join(os.path.dirname(sys.executable), "race_coach.db"),
+                        os.path.expanduser("~/Documents/TrackPro/race_coach.db")
+                    ]
+                    
+                    found = False
+                    for alt_path in alternative_paths:
+                        if os.path.exists(alt_path):
+                            logger.info(f"Found race_coach.db at alternative location: {alt_path}")
+                            db_path = alt_path
+                            found = True
+                            break
+                    
+                    if not found:
+                        logger.warning("race_coach.db not found, will attempt to create it")
+                
+                # Import Race Coach components
+                from .race_coach import RaceCoachWidget
+                logger.info("Imported Race Coach modules successfully")
+                
+                # Check if Race Coach widget already exists in stacked widget
+                race_coach_index = -1
+                for i in range(self.stacked_widget.count()):
+                    widget = self.stacked_widget.widget(i)
+                    if isinstance(widget, RaceCoachWidget):
+                        race_coach_index = i
+                        break
+                
+                if race_coach_index >= 0:
+                    logger.info(f"Race Coach screen already exists at index {race_coach_index}, switching to it")
+                    self.stacked_widget.setCurrentIndex(race_coach_index)
+                    # Update menu action states
+                    self.race_coach_action.setChecked(True)
+                    self.pedal_config_action.setChecked(False)
+                    return
+                
+                # Create and add the Race Coach widget if it doesn't exist
                 race_coach_widget = RaceCoachWidget(self)
                 self.stacked_widget.addWidget(race_coach_widget)
                 # Switch to the Race Coach screen
                 self.stacked_widget.setCurrentIndex(1)
+                # Update menu action states
+                self.race_coach_action.setChecked(True)
+                self.pedal_config_action.setChecked(False)
                 logger.info("Race Coach screen added and switched to")
                 
-            except Exception as component_error:
-                logger.error(f"Error creating Race Coach components: {component_error}")
+            except ImportError as import_error:
+                logger.error(f"Failed to import Race Coach modules: {import_error}")
+                # Provide more detailed error message to help troubleshoot
+                error_module = str(import_error).split("'")[-2] if "'" in str(import_error) else str(import_error)
                 QMessageBox.critical(
                     self,
-                    "Component Error",
-                    f"Failed to initialize Race Coach components: {str(component_error)}",
-                    QMessageBox.Ok
+                    "Missing Dependency",
+                    f"The Race Coach feature requires dependencies that are missing.\n\n"
+                    f"Missing module: {error_module}\n\n"
+                    "Please reinstall the application to ensure all components are included."
                 )
+            except Exception as e:
+                logger.error(f"Error initializing Race Coach: {e}")
+                logger.error(traceback.format_exc())
+                QMessageBox.critical(self, "Component Error", f"Failed to initialize Race Coach: {str(e)}")
                 
-        except ImportError as import_error:
-            logger.error(f"Error importing Race Coach modules: {import_error}")
-            QMessageBox.critical(
-                self,
-                "Import Error",
-                f"Failed to import Race Coach modules: {str(import_error)}",
-                QMessageBox.Ok
-            )
         except Exception as e:
             logger.error(f"Error opening Race Coach: {e}")
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to open Race Coach: {str(e)}",
-                QMessageBox.Ok
-            )
-
-    def open_pedal_config(self):
-        """Switch to the pedal configuration screen."""
-        # Switch to the pedal config screen (index 0)
-        self.stacked_widget.setCurrentIndex(0)
-        logger.info("Switched to Pedal Config screen")
-    
-    def reset_calibration(self, pedal: str):
-        """Reset calibration to a linear curve."""
-        data = self._pedal_data[pedal]
-        
-        # Reset the calibration chart to linear
-        calibration_chart = data['calibration_chart']
-        calibration_chart.reset_to_linear()
-        
-        # Get the updated points for storage
-        data['points'] = calibration_chart.get_points()
-        
-        # Set curve type back to linear
-        data['curve_type'] = 'Linear'
-        
-        # Update UI to match
-        if 'curve_type_selector' in data:
-            data['curve_type_selector'].setCurrentText("Linear")
-        
-        # Signal that calibration has changed
-        self.calibration_updated.emit(pedal)
-    
-    def set_pedal_available(self, pedal: str, available: bool):
-        """Enable or disable UI elements for a pedal based on availability."""
-        if pedal in self._pedal_data:
-            # Get all UI elements for this pedal
-            elements = self._pedal_data[pedal]
-            
-            # Set enabled state for all interactive elements
-            for key, element in elements.items():
-                # Skip non-widget elements like 'min_value', 'max_value', 'points', 'curve_type', etc.
-                if key in ['min_value', 'max_value', 'points', 'curve_type', 'line_series', 'scatter_series',
-                           'min_deadzone', 'max_deadzone']:
-                    continue
-                
-                # Skip labels but update their appearance
-                if key.endswith('_label'):
-                    if not available:
-                        element.setStyleSheet("color: #777777;")
-                    else:
-                        element.setStyleSheet("")
-                    continue
-                
-                # Enable/disable interactive elements
-                if hasattr(element, 'setEnabled'):
-                    element.setEnabled(available)
-            
-            # Update progress bars with a visual indicator
-            if 'input_progress' in elements:
-                if not available:
-                    elements['input_progress'].setStyleSheet("""
-                        QProgressBar {
-                            border: 1px solid #555555;
-                            border-radius: 2px;
-                            text-align: center;
-                            background-color: #2d2d2d;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #555555;
-                        }
-                    """)
-                else:
-                    elements['input_progress'].setStyleSheet("")
-            
-            if 'output_progress' in elements:
-                if not available:
-                    elements['output_progress'].setStyleSheet("""
-                        QProgressBar {
-                            border: 1px solid #555555;
-                            border-radius: 2px;
-                            text-align: center;
-                            background-color: #2d2d2d;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #555555;
-                        }
-                    """)
-                else:
-                    elements['output_progress'].setStyleSheet("")
-            
-            # Update the chart appearance
-            if 'chart_view' in elements:
-                chart_view = elements['chart_view']
-                if not available:
-                    chart_view.setEnabled(False)
-                    chart_view.setOpacity(0.5)
-                else:
-                    chart_view.setEnabled(True)
-                    chart_view.setOpacity(1.0)
-            
-            # Add a "Not Available" label if the pedal is not available
-            if not available:
-                if 'not_available_label' not in elements:
-                    not_available_label = QLabel("Axis Not Available")
-                    not_available_label.setStyleSheet("""
-                        color: #ff5555;
-                        font-weight: bold;
-                        background-color: rgba(255, 85, 85, 0.1);
-                        padding: 5px;
-                        border-radius: 3px;
-                    """)
-                    not_available_label.setAlignment(Qt.AlignCenter)
-                    
-                    # Add to the layout
-                    if 'group_box' in elements and hasattr(elements['group_box'], 'layout'):
-                        elements['group_box'].layout().addWidget(not_available_label)
-                    
-                    # Store the label
-                    self._pedal_data[pedal]['not_available_label'] = not_available_label
-            else:
-                # Remove the "Not Available" label if it exists
-                if 'not_available_label' in elements:
-                    elements['not_available_label'].deleteLater()
-                    del self._pedal_data[pedal]['not_available_label']
-    
-    def update_monitor_display(self):
-        """Update the monitor display to reflect the loaded calibration."""
-        # Implement the logic to update the monitor display
-        pass
-
-    def open_calibration_wizard(self):
-        """Open the calibration wizard dialog."""
-        wizard = CalibrationWizard(self)
-        if wizard.exec_() == QDialog.Accepted:
-            # Apply the calibration results
-            for pedal in ['throttle', 'brake', 'clutch']:
-                if pedal in wizard.results:
-                    # Set the min/max values
-                    min_val = wizard.results[pedal]['min']
-                    max_val = wizard.results[pedal]['max']
-                    self.set_calibration_range(pedal, min_val, max_val)
-            
-            # Notify that calibration has been updated
-            for pedal in ['throttle', 'brake', 'clutch']:
-                self.calibration_updated.emit(pedal)
-            
-            # Call the calibration wizard completed callback if it exists
-            if hasattr(self, 'calibration_wizard_completed') and callable(self.calibration_wizard_completed):
-                self.calibration_wizard_completed(wizard.results)
-            
-            self.show_message("Calibration Complete", "Pedal calibration has been successfully updated.")
-    
-    def save_calibration(self):
-        """Save the current calibration settings."""
-        try:
-            # Emit calibration updated signals for all pedals to ensure latest data is saved
-            for pedal in ['throttle', 'brake', 'clutch']:
-                self.calibration_updated.emit(pedal)
-                
-                # Explicitly save the axis ranges to ensure they're persisted
-                if hasattr(self, 'hardware'):
-                    # Get the current min/max values
-                    min_val, max_val = self.get_calibration_range(pedal)
-                    
-                    # Get current deadzone values
-                    min_deadzone = self._pedal_data[pedal].get('min_deadzone', 0)
-                    max_deadzone = self._pedal_data[pedal].get('max_deadzone', 0)
-                    
-                    # Update hardware ranges
-                    self.hardware.axis_ranges[pedal] = {
-                        'min': min_val,
-                        'max': max_val,
-                        'min_deadzone': min_deadzone,
-                        'max_deadzone': max_deadzone
-                    }
-                    
-                    # Save the updated ranges
-                    self.hardware.save_axis_ranges()
-                    
-                    # Get calibration points and curve type
-                    points = self.get_calibration_points(pedal)
-                    curve_type = self.get_curve_type(pedal)
-                    
-                    # Convert QPointF objects to tuples
-                    point_tuples = [(p.x(), p.y()) for p in points]
-                    
-                    # Update hardware calibration
-                    self.hardware.calibration[pedal] = {
-                        'points': point_tuples,
-                        'curve': curve_type
-                    }
-                    
-                    # Save the calibration
-                    self.hardware.save_calibration(self.hardware.calibration)
-                    
-                    logger.info(f"Saved {pedal} calibration: min={min_val}, max={max_val}, min_deadzone={min_deadzone}%, max_deadzone={max_deadzone}%, points={len(point_tuples)}, curve={curve_type}")
-            
-            # Show success message
-            QMessageBox.information(
-                self,
-                "Calibration Saved",
-                "Calibration settings have been saved successfully."
-            )
-            
-            logger.info("Calibration saved manually by user from main UI")
-        except Exception as e:
-            logger.error(f"Failed to save calibration: {e}")
-            QMessageBox.critical(
-                self,
-                "Save Failed",
-                f"Failed to save calibration: {str(e)}"
-            )
+            logger.error(traceback.format_exc())
+            QMessageBox.critical(self, "Error", f"An unexpected error occurred: {str(e)}")
 
     def add_debug_button(self, callback):
         """Add a debug button to the window."""

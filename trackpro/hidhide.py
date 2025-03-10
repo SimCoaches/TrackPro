@@ -15,22 +15,16 @@ import win32security
 import time
 import subprocess
 
-# Set up detailed logging
+# Set up logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
-# Create console handler with a higher debug level
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-
-# File logging has been removed
-
-# Create formatter and add it to the handler
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-
-# Add the handler to the logger
-logger.addHandler(console_handler)
+# Only add handlers if none exist to prevent duplicate logging
+if not logger.handlers and not logging.getLogger().handlers:
+    logger.setLevel(logging.DEBUG)
+    # Create console handler with a higher debug level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    logger.addHandler(console_handler)
 
 # HidHide Control Device IOCTLs
 IOCTL_GET_BLACKLIST = 0x80002000
@@ -318,12 +312,20 @@ class HidHideClient:
                 cmd = [self.cli_path] + args
                 logger.debug(f"Running command: {cmd}")
                 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
+                # Set up subprocess run parameters
+                run_kwargs = {
+                    'capture_output': True,
+                    'text': True,
+                    'timeout': 5
+                }
+                
+                # Add creationflags only on Windows
+                if sys.platform == 'win32':
+                    # Use CREATE_NO_WINDOW to hide command windows
+                    CREATE_NO_WINDOW = 0x08000000
+                    run_kwargs['creationflags'] = CREATE_NO_WINDOW
+                
+                result = subprocess.run(cmd, **run_kwargs)
                 
                 if result.returncode != 0:
                     logger.error(f"CLI command failed with code {result.returncode}")

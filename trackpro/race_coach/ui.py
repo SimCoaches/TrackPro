@@ -1,7 +1,7 @@
 import logging
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                            QPushButton, QLabel, QTabWidget, QGroupBox,
-                           QSplitter, QComboBox, QStatusBar, QMainWindow, QMessageBox)
+                           QSplitter, QComboBox, QStatusBar, QMainWindow, QMessageBox, QApplication)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
 

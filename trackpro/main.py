@@ -270,24 +270,27 @@ class TrackProApp:
             # Continue but in a limited mode
             self.hardware = None
         
-        # Create HidHide client for device management with fail_silently=True
-        # This allows the app to run even if HidHide has issues
-        try:
-            self.hidhide = HidHideClient(fail_silently=True)
-            
-            if self.hidhide.functioning:
-                logger.info("HidHide client initialized successfully")
-            else:
-                logger.warning(f"HidHide initialized with limited functionality. Error context: {self.hidhide.error_context}")
-                
-                # Show a non-blocking warning to the user
-                self.show_hidhide_warning(self.hidhide.error_context)
-        except Exception as e:
-            logger.error(f"Error initializing HidHide client: {e}")
-            self.hidhide = None
-            
         # Connect window signals
         self.window.calibration_updated.connect(self.on_calibration_updated)
+        
+        # Create HidHide client for device management with fail_silently=True
+        # This allows the app to run even if HidHide has issues
+        # Skip if we already have a HidHide client
+        if not hasattr(self, 'hidhide') or self.hidhide is None:
+            try:
+                # Use a more concise way to initialize HidHide
+                self.hidhide = HidHideClient(fail_silently=True)
+                
+                # Only log if it's functioning or if there's an error
+                if hasattr(self.hidhide, 'functioning') and self.hidhide.functioning:
+                    logger.info("HidHide client initialized successfully")
+                elif hasattr(self.hidhide, 'error_context') and self.hidhide.error_context:
+                    logger.warning(f"HidHide initialized with limited functionality: {self.hidhide.error_context}")
+                    # Show a non-blocking warning to the user
+                    self.show_hidhide_warning(self.hidhide.error_context)
+            except Exception as e:
+                logger.error(f"Error initializing HidHide client: {e}")
+                self.hidhide = None
         
         # Setup timer for input polling
         self.timer = QTimer()
@@ -597,7 +600,8 @@ class TrackProApp:
             "access_denied_service": "Access denied when accessing HidHide. Try running as administrator.",
             "cli_not_found": "HidHideCLI.exe not found. Some features may not work properly.",
             "app_registration_failed": "Failed to register application with HidHide. Try running as administrator.",
-            "cli_access_denied": "Access denied when using HidHide CLI. Try running as administrator."
+            "cli_access_denied": "Access denied when using HidHide CLI. Try running as administrator.",
+            "no_admin_rights": "TrackPro requires administrator privileges to function properly. Please close TrackPro and run it as administrator."
         }
         
         message = error_messages.get(error_context, "HidHide issues detected. Some features may not work properly.")
@@ -646,49 +650,50 @@ def main():
     
     # Try to ensure HidHide cloaking is disabled before starting
     # Use fail_silently=True to continue even if HidHide has issues
+    hidhide_client = None
     try:
         logger.info("Initializing HidHide to disable cloaking before startup...")
-        from .hidhide import HidHideClient
+        # No need to import again, it's already imported at module level
         
         # Initialize with fail_silently=True so the app can continue even if HidHide fails
-        hidhide = HidHideClient(fail_silently=True)
+        hidhide_client = HidHideClient(fail_silently=True)
         
         # Try multiple approaches to ensure cloaking is disabled
-        if hidhide.functioning:
+        if hidhide_client.functioning:
             # Try CLI first (most reliable)
-            cli_result = hidhide._run_cli(["--cloak-off"], retry_count=3)
+            cli_result = hidhide_client._run_cli(["--cloak-off"], retry_count=3)
             logger.info(f"Cloak disabled via CLI before startup: {cli_result}")
             
             # Try API method as backup
-            api_result = hidhide.set_cloak_state(False)
+            api_result = hidhide_client.set_cloak_state(False)
             logger.info(f"Cloak disabled via API before startup: {api_result}")
             
             # If device name is known, try to unhide specific devices
-            if hasattr(hidhide, 'config') and hidhide.config.get('device_name'):
-                device_name = hidhide.config.get('device_name')
+            if hasattr(hidhide_client, 'config') and hidhide_client.config.get('device_name'):
+                device_name = hidhide_client.config.get('device_name')
             else:
                 # Fallback to common device names
                 device_name = "Sim Coaches P1 Pro Pedals"
             
             logger.info(f"Finding all devices matching: {device_name}")
-            matching_devices = hidhide.find_all_matching_devices(device_name)
+            matching_devices = hidhide_client.find_all_matching_devices(device_name)
             if matching_devices:
                 for device_path in matching_devices:
                     try:
                         # Try unhide by instance path
-                        unhide_result = hidhide.unhide_device(device_path)
+                        unhide_result = hidhide_client.unhide_device(device_path)
                         logger.info(f"Unhid device '{device_path}' via API: {unhide_result}")
                     except Exception as e:
                         logger.warning(f"Error unhiding device via API: {e}")
                         
                         # Fallback to CLI if available
                         try:
-                            unhide_cmd_result = hidhide._run_cli(["--dev-unhide", device_path])
+                            unhide_cmd_result = hidhide_client._run_cli(["--dev-unhide", device_path])
                             logger.info(f"Unhid device via CLI: {unhide_cmd_result}")
                         except Exception as e2:
                             logger.error(f"Error unhiding device via CLI: {e2}")
         else:
-            logger.warning(f"HidHide not functioning, skipping pre-startup cloaking control. Error context: {hidhide.error_context}")
+            logger.warning(f"HidHide not functioning, skipping pre-startup cloaking control. Error context: {hidhide_client.error_context}")
             
     except Exception as e:
         logger.error(f"Error during HidHide pre-startup: {e}")
@@ -697,6 +702,12 @@ def main():
     try:
         # Create and run the application
         app = TrackProApp(test_mode)
+        
+        # Pass the already initialized HidHide client to the app
+        if hidhide_client is not None:
+            app.hidhide = hidhide_client
+            logger.info("Using pre-initialized HidHide client")
+        
         return app.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")

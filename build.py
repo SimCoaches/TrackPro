@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import stat
 from trackpro import __version__
 from pathlib import Path
+import importlib
 
 class InstallerBuilder:
     VJOY_URL = "https://github.com/jshafer817/vJoy/releases/download/v2.1.9.1/vJoySetup.exe"
@@ -691,6 +692,84 @@ SectionEnd
         print(f"✓ Created manifest file at: {manifest_path}")
         return manifest_path
 
+    def collect_race_coach_modules(self):
+        """Collect all Race Coach modules and their dependencies."""
+        print("\nCollecting Race Coach modules and dependencies...")
+        
+        modules = []
+        data_files = []
+        
+        # Add Race Coach modules and submodules
+        race_coach_modules = [
+            "trackpro.race_coach",
+            "trackpro.race_coach.ui",
+            "trackpro.race_coach.model",
+            "trackpro.race_coach.data_manager",
+            "trackpro.race_coach.iracing_api",
+            "trackpro.race_coach.analysis",
+            "trackpro.race_coach.superlap"
+        ]
+        
+        # Add numpy and its submodules - expanded list to ensure all parts are included
+        numpy_modules = [
+            "numpy",
+            "numpy.core",
+            "numpy.core.multiarray",
+            "numpy.core.numeric",
+            "numpy.core.umath",
+            "numpy.lib",
+            "numpy.linalg",
+            "numpy.fft",
+            "numpy.polynomial",
+            "numpy.random",
+            "numpy.distutils",
+            "numpy.ma"
+        ]
+        
+        # Additional dependencies that might be required
+        additional_modules = [
+            "sqlite3",
+            "matplotlib.backends.backend_qt5agg",
+            "matplotlib",
+            "matplotlib.pyplot"
+        ]
+        
+        all_modules = race_coach_modules + numpy_modules + additional_modules
+        
+        for module in all_modules:
+            modules.append(f"--hidden-import={module}")
+            
+        # Add numpy as a direct copy to ensure all necessary files are included
+        try:
+            import numpy
+            numpy_path = os.path.dirname(numpy.__file__)
+            print(f"Adding numpy from path: {numpy_path}")
+            data_files.append(f"--add-data={numpy_path};numpy")
+            
+            # Try to import matplotlib and add it if available
+            try:
+                import matplotlib
+                matplotlib_path = os.path.dirname(matplotlib.__file__)
+                print(f"Adding matplotlib from path: {matplotlib_path}")
+                data_files.append(f"--add-data={matplotlib_path};matplotlib")
+            except ImportError:
+                print("! Warning: matplotlib not available. Some Race Coach features may not work properly.")
+            
+        except ImportError:
+            print("! Warning: numpy not available during build. Race Coach may not work properly.")
+            print("! Please ensure numpy is installed with: pip install numpy")
+        
+        # Add race_coach.db explicitly
+        if os.path.exists("race_coach.db"):
+            print("Adding race_coach.db to the package")
+            data_files.append("--add-data=race_coach.db;.")
+        else:
+            print("! Warning: race_coach.db not found in workspace")
+        
+        print(f"✓ Added {len(modules)} Race Coach related modules to PyInstaller imports")
+        print(f"✓ Added {len(data_files)} data file specifications")
+        return modules, data_files
+        
     def build_exe(self):
         """Build the main executable."""
         print("\nBuilding TrackPro executable...")
@@ -705,6 +784,9 @@ SectionEnd
         # Create a directory for the build if it doesn't exist
         if not os.path.exists("build"):
             os.makedirs("build")
+        
+        # Collect Race Coach modules
+        race_coach_imports, race_coach_data = self.collect_race_coach_modules()
         
         # Define PyInstaller options
         opts = [
@@ -731,6 +813,12 @@ SectionEnd
             '--add-data=trackpro;trackpro',
             '--add-data=trackpro.manifest;.'  # Include manifest in the package
         ]
+        
+        # Add Race Coach modules
+        opts.extend(race_coach_imports)
+        
+        # Add Race Coach data files
+        opts.extend(race_coach_data)
         
         # Check for vJoy DLL in different possible locations
         vjoy_dll_paths = [
@@ -834,7 +922,118 @@ SectionEnd
             raise Exception(f"Failed to build TrackPro_v{self.version}.exe - file not found at {exe_path}")
 
     def check_prerequisites(self):
-        """Check if the prerequisites directory exists and has the required files."""
+        """Check and install prerequisites."""
+        print("\nChecking prerequisites...")
+        
+        # First check Python package dependencies
+        # Check for required Python packages
+        required_packages = {
+            "PyQt5": "PyQt5>=5.15.0",
+            "pygame": "pygame>=2.0.0",
+            "pywin32": "pywin32>=300",
+            "requests": "requests>=2.25.0",
+            "PyInstaller": "PyInstaller>=6.0.0",
+            "numpy": "numpy>=1.19.0",  # This is essential for Race Coach
+            "psutil": "psutil>=5.9.0"
+        }
+        
+        # Try to add matplotlib if it's needed
+        try:
+            # Check if matplotlib is already imported in the race_coach module
+            needs_matplotlib = False
+            race_coach_files = [
+                "trackpro/race_coach/ui.py",
+                "trackpro/race_coach/analysis.py",
+                "trackpro/race_coach/model.py"
+            ]
+            
+            for file_path in race_coach_files:
+                if os.path.exists(file_path):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        if "matplotlib" in content or "pyplot" in content:
+                            needs_matplotlib = True
+                            break
+            
+            if needs_matplotlib:
+                required_packages["matplotlib"] = "matplotlib>=3.3.0"
+                print("Detected matplotlib usage in Race Coach - adding to requirements")
+        except Exception as e:
+            print(f"Warning: Error checking for matplotlib usage: {e}")
+        
+        missing_packages = []
+        
+        for package, requirement in required_packages.items():
+            try:
+                module = importlib.import_module(package)
+                print(f"✓ Found {package} {getattr(module, '__version__', 'unknown version')}")
+                
+                # Special check for numpy to ensure it's working correctly
+                if package == "numpy":
+                    try:
+                        # Try a basic numpy operation to ensure it's functioning
+                        import numpy as np
+                        test_array = np.array([1, 2, 3])
+                        test_result = np.sum(test_array)
+                        print(f"✓ Numpy test successful: {test_result}")
+                    except Exception as e:
+                        print(f"✗ Numpy test failed: {e}")
+                        print("Reinstalling numpy...")
+                        subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", requirement])
+                        print("Numpy reinstalled. Testing again...")
+                        # Test again after reinstall
+                        import numpy as np
+                        test_array = np.array([1, 2, 3])
+                        test_result = np.sum(test_array)
+                        print(f"✓ Numpy test successful after reinstall: {test_result}")
+                
+            except ImportError:
+                print(f"✗ Missing {package} - installing...")
+                missing_packages.append(requirement)
+        
+        if missing_packages:
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
+                print("✓ Installed missing packages")
+                
+                # Verify numpy was installed correctly
+                try:
+                    import numpy as np
+                    test_array = np.array([1, 2, 3])
+                    test_result = np.sum(test_array)
+                    print(f"✓ Verified numpy installation: {test_result}")
+                except Exception as e:
+                    print(f"✗ Numpy verification failed: {e}")
+                    return False
+                
+            except subprocess.CalledProcessError as e:
+                print(f"✗ Failed to install packages: {e}")
+                return False
+        
+        # Make sure race_coach.db exists
+        if not os.path.exists("race_coach.db"):
+            print("Creating initial race_coach.db file...")
+            try:
+                # Try importing the data_manager to create the DB
+                from trackpro.race_coach.data_manager import DataManager
+                dm = DataManager(db_path="race_coach.db")
+                print("✓ Created race_coach.db")
+            except Exception as e:
+                print(f"✗ Failed to create race_coach.db: {e}")
+                # Create a minimal SQLite database as fallback
+                try:
+                    import sqlite3
+                    conn = sqlite3.connect("race_coach.db")
+                    cursor = conn.cursor()
+                    cursor.execute("CREATE TABLE IF NOT EXISTS version (id INTEGER PRIMARY KEY, version TEXT)")
+                    cursor.execute("INSERT INTO version (version) VALUES (?)", ("1.0.0",))
+                    conn.commit()
+                    conn.close()
+                    print("✓ Created minimal race_coach.db as fallback")
+                except Exception as e2:
+                    print(f"✗ Failed to create minimal race_coach.db: {e2}")
+        
+        # Now check the prerequisites directory
         print("\nChecking prerequisites directory...")
         prereq_dir = os.path.join(self.temp_dir, "prerequisites")
         
