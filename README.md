@@ -1,4 +1,4 @@
-# TrackPro v1.3.5
+# TrackPro v1.3.6
 
 ![TrackPro Logo](docs/images/logo.png)
 
@@ -30,16 +30,16 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 ### Standard Installation (Recommended)
 
 1. Download the latest installer from [GitHub Releases](https://github.com/SimCoaches/TrackPro/releases/latest)
-2. Run `TrackPro_Setup_v1.3.5.exe` and follow the installation instructions
+2. Run `TrackPro_Setup_v1.3.6.exe` and follow the installation instructions
 3. If prompted, install any required dependencies
-4. Run `TrackPro_v1.3.5.exe` as administrator
+4. Run `TrackPro_v1.3.6.exe` as administrator
 
 ### Portable Installation (Advanced)
 
 1. Download the portable version from [GitHub Releases](https://github.com/SimCoaches/TrackPro/releases/latest) 
 2. Extract the ZIP file to a location of your choice
 3. Install vJoy if not already installed
-4. Run `TrackPro_v1.3.5.exe` as administrator
+4. Run `TrackPro_v1.3.6.exe` as administrator
 
 ## Quick Start Guide
 

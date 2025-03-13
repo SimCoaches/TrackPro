@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.6 - 2025-03-20
+- Updated to version 1.3.6
+- Bug fixes and performance improvements
+
 ## 1.3.5 - 2025-03-15
 - Updated to version 1.3.5
 - Bug fixes and performance improvements
