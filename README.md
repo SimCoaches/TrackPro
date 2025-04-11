@@ -1,4 +1,4 @@
-# TrackPro v1.3.6
+# TrackPro v1.4.1
 
 ![TrackPro Logo](docs/images/logo.png)
 
@@ -10,6 +10,7 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 
 - **Custom Response Curves**: Create and fine-tune non-linear response curves for each pedal
 - **Curve Management**: Save, load, and manage multiple custom curves for each pedal
+- **Cloud Sync Profiles**: Save your pedal profiles online and access them from any computer
 - **Real-time Visualization**: See your pedal inputs and outputs in real-time
 - **Drag-and-Drop Calibration**: Easily adjust calibration points by dragging them on the graph
 - **Multiple Curve Types**: Choose from Linear, Exponential, Logarithmic, and S-Curve presets
@@ -30,16 +31,22 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 ### Standard Installation (Recommended)
 
 1. Download the latest installer from [GitHub Releases](https://github.com/SimCoaches/TrackPro/releases/latest)
-2. Run `TrackPro_Setup_v1.3.6.exe` and follow the installation instructions
+2. Run `TrackPro_Setup_v1.4.1.exe` and follow the installation instructions
 3. If prompted, install any required dependencies
-4. Run `TrackPro_v1.3.6.exe` as administrator
+4. Run `TrackPro_v1.4.1.exe` as administrator
 
 ### Portable Installation (Advanced)
 
 1. Download the portable version from [GitHub Releases](https://github.com/SimCoaches/TrackPro/releases/latest) 
 2. Extract the ZIP file to a location of your choice
 3. Install vJoy if not already installed
-4. Run `TrackPro_v1.3.6.exe` as administrator
+4. Run `TrackPro_v1.4.1.exe` as administrator
+
+## Technical Notes
+
+### Race Coach Module Refactoring
+
+The Race Coach module has been refactored to improve maintainability. The module has been split from a single large file into multiple smaller files with specific responsibilities. See [Race Coach Refactoring Documentation](docs/race_coach_refactoring.md) for details.
 
 ## Quick Start Guide
 
@@ -96,6 +103,30 @@ New in version 1.1.0, TrackPro allows you to save and manage multiple custom cur
    - Confirm the deletion
 
 Each pedal has its own set of saved curves, allowing you to create specific profiles for different racing games or driving styles.
+
+### Cloud Pedal Profiles
+
+New in version 1.4.1, TrackPro now supports cloud-synced pedal profiles:
+
+1. **Save Pedal Profiles to the Cloud**:
+   - Create an account or sign in via the "Login" option
+   - Configure your pedals with your preferred settings
+   - Go to File > Pedal Profiles > Save Current Settings as Profile
+   - Enter a name and description for your profile
+   - Your profile will be saved to your account
+
+2. **Manage Profiles**:
+   - Go to File > Pedal Profiles > Manage Profiles
+   - View, load, update, or delete your saved profiles
+   - Your profiles are accessible from any computer with TrackPro installed
+
+3. **Load a Profile**:
+   - Open the Manage Profiles dialog
+   - Select the profile you want to load
+   - Click "Load Selected Profile"
+   - Your pedal settings will be updated immediately
+
+This feature allows you to maintain consistent pedal response across different computers and easily switch between different setups for different games or tracks.
 
 ### Preset Curves
 

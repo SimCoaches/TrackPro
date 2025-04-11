@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Get the GitHub repository from environment variable or use a default
 GITHUB_REPO = "SimCoaches/TrackPro"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CURRENT_VERSION = "1.3.6"
+CURRENT_VERSION = "1.4.1"
 
 class UpdateChecker(QThread):
     update_available = pyqtSignal(str, str)  # version, download_url
@@ -32,8 +32,19 @@ class UpdateChecker(QThread):
             logger.info(f"Checking for updates from: {UPDATE_CHECK_URL}")
             logger.info(f"Current version: {CURRENT_VERSION}")
             
-            response = requests.get(UPDATE_CHECK_URL)
-            response.raise_for_status()
+            # Add timeout and error handling for network request
+            try:
+                response = requests.get(UPDATE_CHECK_URL, timeout=5)  # 5 second timeout
+                response.raise_for_status()
+            except requests.Timeout:
+                logger.warning("Update check timed out")
+                self.error_occurred.emit("Update check timed out")
+                return
+            except requests.RequestException as e:
+                logger.warning(f"Network error during update check: {e}")
+                self.error_occurred.emit("Network error during update check")
+                return
+            
             latest_release = response.json()
             
             # Log the full release information for debugging
@@ -42,7 +53,7 @@ class UpdateChecker(QThread):
             # Check if this is a valid release with a tag
             if 'tag_name' not in latest_release:
                 logger.error("Invalid GitHub release format: no tag_name found")
-                self.error_occurred.emit("Invalid GitHub release format: no tag_name found")
+                self.error_occurred.emit("Invalid GitHub release format")
                 return
                 
             latest_version = latest_release['tag_name'].replace('v', '')
@@ -51,9 +62,9 @@ class UpdateChecker(QThread):
             # Check if there are assets
             if 'assets' not in latest_release or not latest_release['assets']:
                 logger.warning("No assets found in the latest release")
-            else:
-                logger.info(f"Found {len(latest_release['assets'])} assets in the release")
-                
+                self.error_occurred.emit("No update assets found")
+                return
+            
             if self._is_newer_version(latest_version, CURRENT_VERSION):
                 logger.info(f"New version available: {latest_version}")
                 # Get the .exe asset URL
@@ -68,14 +79,14 @@ class UpdateChecker(QThread):
                     self.update_available.emit(latest_version, download_url)
                 else:
                     logger.error("No .exe asset found in the release")
-                    self.error_occurred.emit("No .exe asset found in the release")
+                    self.error_occurred.emit("No installer found for update")
             else:
                 # No update available
                 logger.info("No update available")
                 self.no_update_available.emit()
         except Exception as e:
             logger.error(f"Error checking for updates: {str(e)}")
-            self.error_occurred.emit(str(e))
+            self.error_occurred.emit(f"Update check failed: {str(e)}")
 
     def _is_newer_version(self, latest, current):
         try:
@@ -136,7 +147,8 @@ class Updater:
         self.check_silent = silent
         self.check_manual = manual_check
         
-        # Start the update check thread
+        # Start the update check thread with a delay to not block startup
+        QThread.msleep(100)  # Small delay to ensure UI is responsive
         self.checker.start()
     
     def _on_update_available(self, version, download_url):
@@ -202,15 +214,16 @@ class Updater:
             )
     
     def _on_error(self, error_message):
+        """Handle errors during update check."""
         self.is_checking = False
         logger.error(f"Update check error: {error_message}")
         
-        # Only show the error message if this was a manual check
+        # Only show error message if this was a manual check
         if self.check_manual and not self.check_silent and self.parent:
             QMessageBox.warning(
                 self.parent,
                 "Update Check Failed",
-                f"Failed to check for updates: {error_message}"
+                f"Could not check for updates:\n{error_message}"
             )
 
     def _download_and_install_update(self, download_url):

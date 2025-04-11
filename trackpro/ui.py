@@ -1,23 +1,42 @@
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                           QPushButton, QLabel, QGroupBox, QMessageBox, QProgressBar, QToolTip,
-                           QTabWidget, QComboBox, QSpinBox, QDialog, QDialogButtonBox, QStackedWidget, QRadioButton, QButtonGroup, QLineEdit, QStatusBar, QGridLayout, QAction, QProgressDialog)
-from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
-from PyQt5.QtCore import Qt, QTimer, QPointF, pyqtSignal
-from PyQt5.QtGui import QPainter, QPen, QColor, QPalette, QMouseEvent, QFont, QBrush
-import logging
-from trackpro import __version__
+"""Main application UI module."""
+
 import os
-# Import pygame with environment variables to prevent game detection
-os.environ['SDL_VIDEODRIVER'] = 'dummy'  # Don't initialize video driver
-os.environ['SDL_AUDIODRIVER'] = 'dummy'  # Don't initialize audio driver
-import pygame
-from .calibration import CalibrationWizard
-import math
+import sys
+import logging
 import traceback
 import time
-import sys
+import math
 
+# Version information - hardcoded to avoid cyclic imports
+__version__ = "1.4.1"
+
+from PyQt5.QtWidgets import (
+    QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
+    QHBoxLayout, QFrame, QSplitter, QWidget, QMessageBox, 
+    QSlider, QComboBox, QSpinBox, QCheckBox, QProgressBar,
+    QDialog, QFileDialog, QFormLayout, QLineEdit, QAction,
+    QMenu, QApplication, QStyleFactory, QGridLayout, QTextEdit,
+    QMenuBar, QMenu, QDialogButtonBox, QStackedWidget, QRadioButton, 
+    QButtonGroup, QGroupBox, QStatusBar, QProgressDialog
+)
+from PyQt5.QtCore import (
+    Qt, QPointF, QTimer, pyqtSignal, QSettings, QThread, 
+    pyqtSlot, QSize, QRectF
+)
+from PyQt5.QtGui import (
+    QPalette, QColor, QIcon, QPen, QBrush, QPainterPath, QFont,
+    QPainter, QLinearGradient, QMouseEvent
+)
+from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
+import pyqtgraph as pg
+from .calibration_chart import CalibrationChart
+from .config import config
+
+# Set up logging
 logger = logging.getLogger(__name__)
+
+# Default curve types
+DEFAULT_CURVE_TYPES = ["Linear", "S-Curve", "Aggressive", "Progressive", "Custom"]
 
 class DraggableChartView(QChartView):
     """Custom chart view that supports point dragging."""
@@ -592,17 +611,28 @@ class PasswordDialog(QDialog):
         """Get the entered password."""
         return self.password_input.text()
 
+from .auth import LoginDialog, SignupDialog
+from .database import supabase, user_manager
+
 class MainWindow(QMainWindow):
     """Main application window."""
     
     # Signals
     calibration_updated = pyqtSignal(str)  # Emits pedal name when calibration changes
+    auth_state_changed = pyqtSignal(bool)  # Emits when authentication state changes
     
-    def __init__(self):
+    def __init__(self, oauth_handler=None):
+        """Initialize the main window."""
         super().__init__()
-        self.setWindowTitle(f"TrackPro Configuration v{__version__}")
-        # Increase window size for better graph visibility
-        self.setMinimumSize(1300, 920)
+        self.setWindowTitle("TrackPro Configuration v1.4.1")
+        self.setMinimumSize(1000, 800)
+        self.setWindowIcon(QIcon(':/icons/app_icon.png'))
+
+        # Store the shared OAuth handler
+        self.oauth_handler = oauth_handler
+
+        # Attributes for calibration data
+        self.pedal_data = {}
         
         # Set dark theme
         self.setup_dark_theme()
@@ -615,7 +645,71 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # Add calibration wizard button at the top
+        # Add authentication controls at the top
+        auth_layout = QHBoxLayout()
+        
+        # Add user info label
+        self.user_label = QLabel("Not logged in")
+        self.user_label.setStyleSheet("color: #888;")
+        auth_layout.addWidget(self.user_label)
+        
+        # Add cloud sync label
+        self.cloud_sync_label = QLabel("☁️ Sign in to enable cloud sync")
+        self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer;")
+        auth_layout.addWidget(self.cloud_sync_label)
+        
+        # Add login/signup buttons
+        self.login_btn = QPushButton("Login")
+        self.login_btn.clicked.connect(self.show_login_dialog)
+        self.login_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a82da;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #3a92ea;
+            }
+        """)
+        
+        self.signup_btn = QPushButton("Sign Up")
+        self.signup_btn.clicked.connect(self.show_signup_dialog)
+        self.signup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #37be70;
+            }
+        """)
+        
+        self.logout_btn = QPushButton("Logout")
+        self.logout_btn.clicked.connect(self.handle_logout)
+        self.logout_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c0392b;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #d0493b;
+            }
+        """)
+        self.logout_btn.hide()
+        
+        auth_layout.addStretch()
+        auth_layout.addWidget(self.login_btn)
+        auth_layout.addWidget(self.signup_btn)
+        auth_layout.addWidget(self.logout_btn)
+        
+        layout.addLayout(auth_layout)
+        
+        # Add calibration wizard button
         wizard_layout = QHBoxLayout()
         self.calibration_wizard_btn = QPushButton("Calibration Wizard")
         self.calibration_wizard_btn.setStyleSheet("""
@@ -689,6 +783,9 @@ class MainWindow(QMainWindow):
         
         # Add the pedals screen to the stacked widget
         self.stacked_widget.addWidget(pedals_screen)
+        
+        # Connect stacked widget's currentChanged signal to handle visibility of calibration buttons
+        self.stacked_widget.currentChanged.connect(self._on_tab_changed)
         
         # Add update notification label at the bottom
         self.update_notification = QLabel("")
@@ -1505,11 +1602,62 @@ class MainWindow(QMainWindow):
         self.update_monitor_display()
 
     def create_menu_bar(self):
-        """Create the menu bar with file options."""
-        menu_bar = self.menuBar()
+        """Create the menu bar."""
+        menubar = self.menuBar()
         
-        # Create File menu
-        file_menu = menu_bar.addMenu("File")
+        # File menu
+        file_menu = menubar.addMenu("File")
+        
+        # Add Supabase configuration submenu
+        supabase_menu = file_menu.addMenu("Supabase Configuration")
+        
+        # Add enable/disable action
+        self.supabase_enabled_action = QAction("Enable Cloud Sync", self)
+        self.supabase_enabled_action.setCheckable(True)
+        self.supabase_enabled_action.setChecked(config.supabase_enabled)
+        self.supabase_enabled_action.triggered.connect(self.toggle_supabase)
+        supabase_menu.addAction(self.supabase_enabled_action)
+        
+        # Add configure action
+        configure_supabase_action = QAction("Configure Credentials...", self)
+        configure_supabase_action.triggered.connect(self.configure_supabase)
+        supabase_menu.addAction(configure_supabase_action)
+        
+        file_menu.addSeparator()
+        
+        # Add authentication-related actions
+        self.login_action = file_menu.addAction("Login")
+        self.login_action.triggered.connect(self.show_login_dialog)
+        self.login_action.setEnabled(config.supabase_enabled)
+        
+        self.signup_action = file_menu.addAction("Sign Up")
+        self.signup_action.triggered.connect(self.show_signup_dialog)
+        self.signup_action.setEnabled(config.supabase_enabled)
+        
+        self.logout_action = file_menu.addAction("Logout")
+        self.logout_action.triggered.connect(self.handle_logout)
+        self.logout_action.setVisible(False)
+
+        # Add Refresh Login State option
+        self.refresh_login_action = file_menu.addAction("Refresh Login State")
+        self.refresh_login_action.triggered.connect(self.force_refresh_login_state)
+        
+        file_menu.addSeparator()
+        
+        # Add Pedal Profiles menu
+        pedal_profiles_menu = file_menu.addMenu("Pedal Profiles")
+        
+        # Manage profiles action
+        manage_profiles_action = QAction("Manage Profiles...", self)
+        manage_profiles_action.triggered.connect(self.show_profile_manager)
+        pedal_profiles_menu.addAction(manage_profiles_action)
+        
+        # Save current profile action
+        save_profile_action = QAction("Save Current Settings as Profile...", self)
+        save_profile_action.triggered.connect(self.save_current_profile)
+        pedal_profiles_menu.addAction(save_profile_action)
+        
+        file_menu.addSeparator()
         
         # Add Check for Updates option
         update_action = QAction("Check for Updates", self)
@@ -1529,17 +1677,17 @@ class MainWindow(QMainWindow):
         self.pedal_config_action.triggered.connect(self.open_pedal_config)
         self.pedal_config_action.setCheckable(True)
         self.pedal_config_action.setChecked(True)  # Default active section
-        menu_bar.addAction(self.pedal_config_action)
+        menubar.addAction(self.pedal_config_action)
         
         # Add Race Coach button to menu bar
         self.race_coach_action = QAction("Race Coach", self)
         self.race_coach_action.triggered.connect(self.open_race_coach)
         self.race_coach_action.setCheckable(True)
         self.race_coach_action.setChecked(False)
-        menu_bar.addAction(self.race_coach_action)
+        menubar.addAction(self.race_coach_action)
         
         # Style the menu bar for dark theme
-        menu_bar.setStyleSheet("""
+        menubar.setStyleSheet("""
             QMenuBar {
                 background-color: #353535;
                 color: #ffffff;
@@ -1564,6 +1712,46 @@ class MainWindow(QMainWindow):
                 font-weight: bold;
             }
         """)
+
+    # Add a new method to force refresh the login state
+    def force_refresh_login_state(self):
+        """Force a refresh of the authentication state."""
+        logger.info("Manually refreshing authentication state")
+        
+        # Restore session from file first to ensure we have the latest data
+        if hasattr(supabase, '_restore_session'):
+            supabase._restore_session()
+            
+        # Force processEvents to update the UI
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
+        
+        # Update the authentication state
+        self.update_auth_state()
+        
+        # Force processEvents again to ensure UI updates
+        QApplication.processEvents()
+        
+        # Get the current user for a message
+        user = supabase.get_user()
+        if user and ((hasattr(user, 'user') and user.user) or hasattr(user, 'email')):
+            user_email = None
+            if hasattr(user, 'email'):
+                user_email = user.email
+            elif hasattr(user, 'user') and hasattr(user.user, 'email'):
+                user_email = user.user.email
+                
+            QMessageBox.information(
+                self,
+                "Authentication Refreshed",
+                f"You are logged in as {user_email or 'User'}." 
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Authentication Refreshed",
+                "You are not currently logged in."
+            )
     
     def check_for_updates(self):
         """Manually check for updates."""
@@ -1599,22 +1787,19 @@ class MainWindow(QMainWindow):
         self.update_notification.setVisible(False)
         
     def open_pedal_config(self):
-        """Open the Pedal Configuration screen."""
-        logger.info("Opening Pedal Config")
+        """Open the pedal configuration screen."""
+        self.stacked_widget.setCurrentIndex(0)
+        # Update menu action states
+        self.pedal_config_action.setChecked(True)
+        self.race_coach_action.setChecked(False)
         
-        # If we're in the Race Coach view, switch back to the main configuration screen
-        if self.stacked_widget.count() > 1 and self.stacked_widget.currentIndex() > 0:
-            logger.info("Switching from Race Coach back to Pedal Config")
-            self.stacked_widget.setCurrentIndex(0)
-            # Update menu action states
-            self.pedal_config_action.setChecked(True)
-            self.race_coach_action.setChecked(False)
-        else:
-            # If we're already in the main config screen or there's an issue,
-            # show a temporary message until fully implemented
-            QMessageBox.information(self, "Pedal Configuration", 
-                                  "Pedal Configuration feature is under development.")
+        # Show calibration buttons
+        self.calibration_wizard_btn.setVisible(True)
+        self.save_calibration_btn.setVisible(True)
         
+        # Log that we're switching to pedal config
+        logger.info("Switched to pedal configuration screen")
+    
     def open_calibration_wizard(self):
         """Open the calibration wizard dialog."""
         logger.info("Opening Calibration Wizard")
@@ -1758,7 +1943,7 @@ class MainWindow(QMainWindow):
                     import numpy
                     logger.info(f"Found numpy version: {numpy.__version__}")
                 except ImportError as e:
-                    logger.error(f"Missing numpy dependency: {e}")
+                    logger.error(f"Race Coach requires numpy but it's not available: {e}")
                     QMessageBox.critical(
                         self,
                         "Missing Dependency",
@@ -1788,7 +1973,7 @@ class MainWindow(QMainWindow):
                         logger.warning("race_coach.db not found, will attempt to create it")
                 
                 # Import Race Coach components
-                from .race_coach import RaceCoachWidget
+                from trackpro.race_coach import RaceCoachWidget
                 logger.info("Imported Race Coach modules successfully")
                 
                 # Check if Race Coach widget already exists in stacked widget
@@ -1805,6 +1990,9 @@ class MainWindow(QMainWindow):
                     # Update menu action states
                     self.race_coach_action.setChecked(True)
                     self.pedal_config_action.setChecked(False)
+                    # Hide calibration buttons
+                    self.calibration_wizard_btn.setVisible(False)
+                    self.save_calibration_btn.setVisible(False)
                     return
                 
                 # Create and add the Race Coach widget if it doesn't exist
@@ -1815,6 +2003,9 @@ class MainWindow(QMainWindow):
                 # Update menu action states
                 self.race_coach_action.setChecked(True)
                 self.pedal_config_action.setChecked(False)
+                # Hide calibration buttons
+                self.calibration_wizard_btn.setVisible(False)
+                self.save_calibration_btn.setVisible(False)
                 logger.info("Race Coach screen added and switched to")
                 
             except ImportError as import_error:
@@ -1834,10 +2025,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Component Error", f"Failed to initialize Race Coach: {str(e)}")
                 
         except Exception as e:
-            logger.error(f"Error opening Race Coach: {e}")
+            logger.error(f"Unexpected error opening Race Coach: {e}")
             logger.error(traceback.format_exc())
-            QMessageBox.critical(self, "Error", f"An unexpected error occurred: {str(e)}")
-
+            QMessageBox.critical(self, "Error", f"Unexpected error: {str(e)}")
+            
     def add_debug_button(self, callback):
         """Add a debug button to the window."""
         # Create a button at the bottom of the window
@@ -2153,3 +2344,308 @@ class MainWindow(QMainWindow):
     def update_force_connected_button(self, is_forced):
         """Removed - this is a no-op stub for compatibility."""
         pass
+
+    def _on_tab_changed(self, index):
+        # Update menu action states based on the current tab
+        if index == 0:  # Pedal Config tab
+            self.pedal_config_action.setChecked(True)
+            self.race_coach_action.setChecked(False)
+            self.calibration_wizard_btn.setVisible(True)
+            self.save_calibration_btn.setVisible(True)
+        elif index == 1:  # Race Coach tab
+            self.pedal_config_action.setChecked(False)
+            self.race_coach_action.setChecked(True)
+            self.calibration_wizard_btn.setVisible(False)
+            self.save_calibration_btn.setVisible(False)
+
+    def show_login_dialog(self):
+        """Show the login dialog."""
+        # Pass the stored oauth_handler to the dialog
+        dialog = LoginDialog(self, oauth_handler=self.oauth_handler)
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_auth_state()
+    
+    def show_signup_dialog(self):
+        """Show the signup dialog."""
+        # Pass the stored oauth_handler to the dialog
+        dialog = SignupDialog(self, oauth_handler=self.oauth_handler)
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_auth_state()
+    
+    def handle_logout(self):
+        """Handle user logout."""
+        try:
+            supabase.sign_out()
+            self.update_auth_state()
+            QMessageBox.information(self, "Success", "Logged out successfully")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to logout: {str(e)}")
+            logger.error(f"Logout error: {e}")
+    
+    def update_auth_state(self):
+        """Update the UI based on authentication state."""
+        is_authenticated = supabase.is_authenticated()
+        
+        # Update user label
+        if is_authenticated:
+            user = supabase.get_user()
+            if user:
+                try:
+                    # Get user metadata through user_manager which now has better handling
+                    metadata = user_manager.get_user_metadata(user)
+                    user_email = None
+                    
+                    # Try to get email from different response structures
+                    if hasattr(user, 'email'):
+                        user_email = user.email
+                    elif hasattr(user, 'user') and hasattr(user.user, 'email'):
+                        user_email = user.user.email
+                        
+                    display_name = metadata.get('display_name', user_email or 'User')
+                    self.user_label.setText(f"Logged in as: {display_name}")
+                    self.user_label.setStyleSheet("color: #2ecc71;")
+                except Exception as e:
+                    logger.error(f"Error updating user label: {e}")
+                    self.user_label.setText("Logged in")
+                    self.user_label.setStyleSheet("color: #2ecc71;")
+        else:
+            self.user_label.setText("Not logged in | Click to sign in")
+            self.user_label.setStyleSheet("color: #3498db; text-decoration: underline; cursor: pointer;")
+            # Make the label clickable to open login dialog
+            self.user_label.mousePressEvent = lambda e: self.show_login_dialog()
+        
+        # Update button visibility
+        self.login_btn.setVisible(not is_authenticated)
+        self.signup_btn.setVisible(not is_authenticated)
+        self.logout_btn.setVisible(is_authenticated)
+        
+        # Update menu actions
+        self.login_action.setVisible(not is_authenticated)
+        self.signup_action.setVisible(not is_authenticated)
+        self.logout_action.setVisible(is_authenticated)
+        
+        # Update cloud sync status in menu if the label exists
+        if hasattr(self, 'cloud_sync_label'):
+            if is_authenticated:
+                self.cloud_sync_label.setText("🔄 Cloud Sync Enabled")
+                self.cloud_sync_label.setStyleSheet("color: #2ecc71;")
+            else:
+                self.cloud_sync_label.setText("☁️ Sign in to enable cloud sync")
+                self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer;")
+                # Make the label clickable to open login dialog
+                self.cloud_sync_label.mousePressEvent = lambda e: self.show_login_dialog()
+        
+        # Emit auth state changed signal
+        self.auth_state_changed.emit(is_authenticated)
+        
+        # Update protected features
+        self.update_protected_features(is_authenticated)
+    
+    def update_protected_features(self, is_authenticated: bool):
+        """Update the state of protected features based on authentication.
+        
+        Args:
+            is_authenticated: Whether the user is authenticated
+        """
+        # Example: Protect the Race Coach feature
+        if hasattr(self, 'race_coach_action'):
+            self.race_coach_action.setEnabled(is_authenticated)
+            if not is_authenticated:
+                self.race_coach_action.setToolTip("Please log in to access Race Coach")
+            else:
+                self.race_coach_action.setToolTip("")
+    
+    def toggle_supabase(self, enabled: bool):
+        """Toggle Supabase integration on/off."""
+        if enabled:
+            # Show configuration dialog if credentials not set
+            if not config.supabase_url or not config.supabase_key:
+                self.configure_supabase()
+                # Check if user cancelled or didn't set credentials
+                if not config.supabase_url or not config.supabase_key:
+                    self.supabase_enabled_action.setChecked(False)
+                    return
+            
+            # Try to enable Supabase
+            if supabase.enable():
+                self.login_action.setEnabled(True)
+                self.signup_action.setEnabled(True)
+                QMessageBox.information(self, "Success", "Cloud sync enabled")
+            else:
+                self.supabase_enabled_action.setChecked(False)
+                QMessageBox.warning(
+                    self, 
+                    "Error",
+                    "Could not enable cloud sync. Please check your credentials."
+                )
+        else:
+            # Confirm with user if they're logged in
+            if supabase.is_authenticated():
+                confirm = QMessageBox.question(
+                    self,
+                    "Confirm Disable",
+                    "Disabling cloud sync will log you out. Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if confirm != QMessageBox.Yes:
+                    self.supabase_enabled_action.setChecked(True)
+                    return
+            
+            # Disable Supabase
+            supabase.disable()
+            self.login_action.setEnabled(False)
+            self.signup_action.setEnabled(False)
+            self.update_auth_state()
+            QMessageBox.information(self, "Success", "Cloud sync disabled")
+    
+    def configure_supabase(self):
+        """Configure Supabase credentials."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configure Supabase")
+        layout = QVBoxLayout(dialog)
+        
+        # URL input
+        url_label = QLabel("Supabase URL:")
+        url_input = QLineEdit()
+        url_input.setText(config.supabase_url)
+        layout.addWidget(url_label)
+        layout.addWidget(url_input)
+        
+        # Key input
+        key_label = QLabel("Supabase Key:")
+        key_input = QLineEdit()
+        key_input.setText(config.supabase_key)
+        layout.addWidget(key_label)
+        layout.addWidget(key_input)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            # Save new credentials
+            config.set('supabase.url', url_input.text())
+            config.set('supabase.key', key_input.text())
+            
+            # If Supabase is enabled, try to reconnect
+            if config.supabase_enabled:
+                if not supabase.enable():
+                    QMessageBox.warning(
+                        self,
+                        "Error",
+                        "Could not connect with new credentials. Please check them and try again."
+                    )
+                    # Disable Supabase if connection failed
+                    self.supabase_enabled_action.setChecked(False)
+                    supabase.disable()
+                else:
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        "Successfully connected with new credentials!"
+                    )
+    
+    def show_profile_manager(self):
+        """Show the pedal profile manager dialog."""
+        try:
+            # Check if profile_dialog module is imported
+            try:
+                from .pedals.profile_dialog import PedalProfileDialog
+            except ImportError:
+                # Fallback to absolute import
+                from trackpro.pedals.profile_dialog import PedalProfileDialog
+            
+            # Get current calibration data
+            calibration_data = {}
+            for pedal in ['throttle', 'brake', 'clutch']:
+                pedal_data = {}
+                
+                # Get curve type
+                if hasattr(self, 'get_curve_type'):
+                    pedal_data['curve'] = self.get_curve_type(pedal)
+                
+                # Get calibration points
+                if hasattr(self, 'get_calibration_points'):
+                    points = self.get_calibration_points(pedal)
+                    # Convert QPointF to tuples
+                    pedal_data['points'] = [(p.x(), p.y()) for p in points]
+                
+                # Get calibration range
+                if hasattr(self, 'get_calibration_range'):
+                    min_val, max_val = self.get_calibration_range(pedal)
+                    pedal_data['min'] = min_val
+                    pedal_data['max'] = max_val
+                
+                # Add to collection
+                calibration_data[pedal] = pedal_data
+            
+            # Create and show the dialog
+            dialog = PedalProfileDialog(self, calibration_data)
+            
+            # Connect the profile_selected signal
+            dialog.profile_selected.connect(self.apply_profile)
+            
+            # Show the dialog
+            dialog.exec_()
+            
+        except Exception as e:
+            logger.error(f"Error showing profile manager: {e}")
+            self.show_message("Error", f"Could not open profile manager: {str(e)}")
+    
+    def save_current_profile(self):
+        """Save current settings as a profile."""
+        # This is a shortcut to open profile manager with current settings
+        self.show_profile_manager()
+    
+    def apply_profile(self, profile):
+        """Apply a selected pedal profile.
+        
+        Args:
+            profile: The profile data dictionary
+        """
+        try:
+            # Convert JSON strings to dictionaries if needed
+            throttle_calibration = profile.get('throttle_calibration', {})
+            brake_calibration = profile.get('brake_calibration', {})
+            clutch_calibration = profile.get('clutch_calibration', {})
+            
+            # Apply to each pedal
+            for pedal, data in [
+                ('throttle', throttle_calibration),
+                ('brake', brake_calibration),
+                ('clutch', clutch_calibration)
+            ]:
+                if not data:
+                    logger.warning(f"No calibration data for {pedal} in profile")
+                    continue
+                
+                # Apply curve type
+                if 'curve' in data and hasattr(self, 'set_curve_type'):
+                    self.set_curve_type(pedal, data['curve'])
+                
+                # Apply calibration points
+                if 'points' in data and hasattr(self, 'set_calibration_points'):
+                    # Convert tuples to QPointF
+                    points = [QPointF(x, y) for x, y in data['points']]
+                    self.set_calibration_points(pedal, points)
+                
+                # Apply calibration range
+                if 'min' in data and 'max' in data and hasattr(self, 'set_calibration_range'):
+                    self.set_calibration_range(pedal, data['min'], data['max'])
+                
+                # Emit calibration updated signal
+                if hasattr(self, 'calibration_updated'):
+                    self.calibration_updated.emit(pedal)
+            
+            # Show confirmation
+            profile_name = profile.get('name', 'Selected profile')
+            self.show_message("Profile Applied", f"{profile_name} has been applied to your pedals.")
+            
+        except Exception as e:
+            logger.error(f"Error applying profile: {e}")
+            self.show_message("Error", f"Could not apply profile: {str(e)}")

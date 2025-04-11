@@ -139,6 +139,11 @@ def check_single_instance():
     Returns:
         bool: True if this is the only instance, False if another instance is running
     """
+    # For development purposes, always allow multiple instances
+    if "--dev" in sys.argv or "--force" in sys.argv:
+        logger.info("Development mode: Skipping single instance check")
+        return True
+        
     import win32event
     import win32api
     import winerror

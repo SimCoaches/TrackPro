@@ -21,6 +21,7 @@ try:
     from .model import RacingModel
     from .analysis import LapAnalysis
     from .superlap import SuperLap
+    from .telemetry_saver import TelemetrySaver  # Import the new telemetry saver
     
     # Apply patch to ensure compatibility functions are defined
     try:
@@ -123,6 +124,15 @@ try:
                 logger.info("Attempting to initialize SimpleIRacingAPI...")
                 iracing_api = SimpleIRacingAPI()  # Try the simpler implementation first
                 logger.info("SimpleIRacingAPI initialized successfully")
+                
+                # Connect the data manager to the API for telemetry saving
+                if data_manager is not None:
+                    try:
+                        iracing_api.set_data_manager(data_manager)
+                        logger.info("Connected data manager to SimpleIRacingAPI for telemetry saving")
+                    except Exception as connect_error:
+                        logger.error(f"Error connecting data manager to SimpleIRacingAPI: {connect_error}")
+                
             except Exception as simple_api_error:
                 logger.error(f"Error initializing SimpleIRacingAPI: {simple_api_error}")
                 import traceback
@@ -167,4 +177,4 @@ except ImportError as e:
         return None
     
 __all__ = ['RaceCoachWidget', 'IRacingAPI', 'SimpleIRacingAPI', 'DataManager', 'RacingModel', 
-           'LapAnalysis', 'SuperLap', 'create_race_coach_widget'] 
+           'LapAnalysis', 'SuperLap', 'TelemetrySaver', 'create_race_coach_widget'] 

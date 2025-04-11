@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1 - 2025-06-15
+- Updated version to 1.4.1
+- [Insert other changes here]
+
+## 1.3.8 - 2025-04-05
+- Updated version to 1.3.8
+- Added new image to README.md
+
 ## 1.3.6 - 2025-03-20
 - Updated to version 1.3.6
 - Bug fixes and performance improvements

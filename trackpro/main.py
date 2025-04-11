@@ -1,19 +1,22 @@
 import sys
 import time
 import subprocess
-from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QLabel, QCheckBox
+from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QLabel, QCheckBox, QProgressBar, QSplashScreen
 from PyQt5.QtCore import QTimer, QPointF, Qt
+from PyQt5.QtGui import QPixmap
 import logging
 import pygame
 import os
 import traceback
 import re
 
-from .hardware_input import HardwareInput
-from .output import VirtualJoystick
+from .pedals.hardware_input import HardwareInput
+from .pedals.output import VirtualJoystick
 from .ui import MainWindow
-from .hidhide import HidHideClient
+from .pedals.hidhide import HidHideClient
 from .updater import Updater
+from .database import supabase
+from .auth import LoginDialog, oauth_handler
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -104,6 +107,24 @@ class DebugWindow(QDialog):
         self.refresh_timer.timeout.connect(self.refresh_logs)
         self.refresh_timer.start(1000)  # Refresh every second
     
+    def closeEvent(self, event):
+        """Stop timer when window is closed."""
+        if hasattr(self, 'refresh_timer'):
+            self.refresh_timer.stop()
+        super().closeEvent(event)
+    
+    def accept(self):
+        """Stop timer when dialog is accepted."""
+        if hasattr(self, 'refresh_timer'):
+            self.refresh_timer.stop()
+        super().accept()
+    
+    def reject(self):
+        """Stop timer when dialog is rejected."""
+        if hasattr(self, 'refresh_timer'):
+            self.refresh_timer.stop()
+        super().reject()
+        
     def get_system_info(self):
         """Get system information."""
         info = {}
@@ -225,32 +246,57 @@ class TrackProApp:
     
     def __init__(self, test_mode=False):
         """Initialize the application."""
-        self.app = QApplication(sys.argv)
+        # Ensure QApplication is properly initialized first
+        self.app = QApplication.instance()
+        if not self.app:
+            self.app = QApplication(sys.argv)
         
-        # Suppress any version or build information dialogs at startup
-        if os.environ.get('TRACKPRO_DISABLE_VERSION_DIALOG') == '1':
-            # Override any default QMessageBox behavior at startup by setting a timer
-            # to close any message boxes that might appear within 100ms of startup
-            def close_startup_dialogs():
-                for widget in self.app.topLevelWidgets():
-                    if isinstance(widget, QMessageBox) and "v3" in widget.text():
-                        widget.close()
-            QTimer.singleShot(100, close_startup_dialogs)
+        # Initialize attributes that will be used later
+        self.hardware = None
+        self.output = None
+        self.hidhide = None
+        self.timer = None
+        self.updater = None
+        self.reconnecting = False
+        self.startup_complete = False
+        self.oauth_callback_server = None
         
-        self.window = MainWindow()
+        # Set up OAuth handler
+        self.setup_oauth_handler()
         
-        # Setup debug log handler for debug window
-        self.debug_window = None
+        # Create and show a splash screen with progress bar
+        self.create_startup_progress()
         
-        # Add button to open debug window
-        self.window.add_debug_button(self.show_debug_window)
-        
-        # Setup hardware input and output
         try:
+            # Update progress 10%
+            self.update_progress(10, "Initializing interface...")
+            self.window = MainWindow(oauth_handler=self.oauth_handler)
+            
+            # Connect auth state changed signal
+            if hasattr(self.window, 'auth_state_changed'):
+                self.window.auth_state_changed.connect(self.handle_auth_state_change)
+            
+            # Setup UI connections between window and app methods
+            self.setup_ui_connections()
+            
+            # Setup debug log handler for debug window
+            self.debug_window = None
+            
+            # Add button to open debug window
+            self.window.add_debug_button(self.show_debug_window)
+            
+            # Update progress 20%
+            self.update_progress(20, "Setting up hardware input...")
+            
+            # Setup hardware input and output
             self.hardware = HardwareInput(test_mode)
+            
+            # Update progress 30%
+            self.update_progress(30, "Initializing virtual joystick...")
             self.output = VirtualJoystick()
             
             # Create default curve presets if they don't exist
+            self.update_progress(35, "Creating presets...")
             if hasattr(self.hardware, '_create_default_curve_presets'):
                 try:
                     self.hardware._create_default_curve_presets()
@@ -258,55 +304,228 @@ class TrackProApp:
                     logger.error(f"Error creating default curve presets: {e}")
             
             # Set a reference to the hardware in the UI
-            self.window.set_hardware(self.hardware)
+            if hasattr(self.window, 'set_hardware'):
+                self.window.set_hardware(self.hardware)
             
-            # Load calibration from file
+            # Update progress 40%
+            self.update_progress(40, "Connecting signals...")
+            
+            # Connect window signals if they exist
+            if hasattr(self.window, 'output_changed'):
+                self.window.output_changed.connect(self.output.on_output_changed)
+            if hasattr(self.window, 'calibration_updated'):
+                self.window.calibration_updated.connect(self.on_calibration_updated)
+            if hasattr(self.window, 'calibration_wizard_completed'):
+                self.window.calibration_wizard_completed.connect(self.on_calibration_wizard_completed)
+            
+            # Setup HidHide
+            self.update_progress(50, "Setting up HidHide...")
+            if not hasattr(self, 'hidhide') or self.hidhide is None:
+                try:
+                    self.hidhide = HidHideClient(fail_silently=True)
+                    if hasattr(self.hidhide, 'functioning') and self.hidhide.functioning:
+                        logger.info("HidHide client initialized successfully")
+                    elif hasattr(self.hidhide, 'error_context') and self.hidhide.error_context:
+                        logger.warning(f"HidHide initialized with limited functionality: {self.hidhide.error_context}")
+                        self.show_hidhide_warning(self.hidhide.error_context)
+                except Exception as e:
+                    logger.error(f"Error initializing HidHide client: {e}")
+                    self.hidhide = None
+            
+            # Update progress 60%
+            self.update_progress(60, "Setting up input processing...")
+            # Initialize timer but don't start it yet
+            self.timer = QTimer()
+            self.timer.timeout.connect(self.process_input)
+            self.timer.setInterval(8)  # ~120Hz input polling rate
+            
+            # Load calibration
+            self.update_progress(70, "Loading calibration data...")
             self.load_calibration()
             
-            # Make sure to refresh the curve lists after everything is loaded
-            QTimer.singleShot(1000, self.window.refresh_curve_lists)
+            # Setup updater
+            self.update_progress(80, "Initializing update checker...")
+            self.updater = Updater(self.window)
+            
+            # Update progress to 90%
+            self.update_progress(90, "Finalizing startup...")
+            
+            # Mark startup as complete
+            self.startup_complete = True
+            
+            # Start the input processing timer after startup is complete
+            self.timer.start()
+            
+            # Start update check in background after a delay
+            QTimer.singleShot(2000, lambda: self.updater.check_for_updates(silent=True))
+            
+            # Update progress to 100% and close splash screen
+            self.update_progress(100, "Startup complete")
+            QTimer.singleShot(500, self.startup_dialog.close)
+            
         except Exception as e:
-            logger.error(f"Error initializing hardware: {e}")
-            QMessageBox.critical(self.window, "Hardware Initialization Error", str(e))
-            # Continue but in a limited mode
-            self.hardware = None
+            logger.error(f"Error during initialization: {e}")
+            logger.error(traceback.format_exc())
+            
+            self.update_progress(100, "Error during initialization")
+            QMessageBox.critical(None, "Initialization Error", 
+                               f"Error during startup: {str(e)}\n\nTrackPro may not function correctly.")
         
-        # Connect window signals
-        self.window.calibration_updated.connect(self.on_calibration_updated)
-        
-        # Create HidHide client for device management with fail_silently=True
-        # This allows the app to run even if HidHide has issues
-        # Skip if we already have a HidHide client
-        if not hasattr(self, 'hidhide') or self.hidhide is None:
-            try:
-                # Use a more concise way to initialize HidHide
-                self.hidhide = HidHideClient(fail_silently=True)
-                
-                # Only log if it's functioning or if there's an error
-                if hasattr(self.hidhide, 'functioning') and self.hidhide.functioning:
-                    logger.info("HidHide client initialized successfully")
-                elif hasattr(self.hidhide, 'error_context') and self.hidhide.error_context:
-                    logger.warning(f"HidHide initialized with limited functionality: {self.hidhide.error_context}")
-                    # Show a non-blocking warning to the user
-                    self.show_hidhide_warning(self.hidhide.error_context)
-            except Exception as e:
-                logger.error(f"Error initializing HidHide client: {e}")
-                self.hidhide = None
-        
-        # Setup timer for input polling
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.process_input)
-        self.timer.setInterval(8)  # ~120Hz input polling rate (was 16ms ~60Hz)
-        
-        # Remove connection check timer - we'll handle connection status in process_input
-        # Flag to track if we're in the middle of a reconnection attempt
-        self.reconnecting = False
-        
-        # Create updater
-        self.updater = Updater(self.window)
-        
-        # Setup cleanup on exit
+        # Connect quit handler
         self.app.aboutToQuit.connect(self.cleanup)
+    
+    def create_startup_progress(self):
+        """Create and show a startup progress dialog."""
+        try:
+            # Create the progress dialog
+            self.startup_dialog = QDialog(None, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+            self.startup_dialog.setWindowTitle("TrackPro Starting")
+            self.startup_dialog.setFixedSize(450, 180)
+            
+            # Center dialog on screen
+            screen_geometry = self.app.desktop().screenGeometry()
+            x = (screen_geometry.width() - self.startup_dialog.width()) // 2
+            y = (screen_geometry.height() - self.startup_dialog.height()) // 2
+            self.startup_dialog.move(x, y)
+            
+            # Set up the layout
+            layout = QVBoxLayout(self.startup_dialog)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(15)
+            
+            # Add title label with version
+            title_label = QLabel("TrackPro")
+            title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #2c3e50;")
+            title_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(title_label)
+            
+            # Add version label
+            version_label = QLabel("Racing Telemetry System")
+            version_label.setStyleSheet("font-size: 12px; color: #7f8c8d;")
+            version_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(version_label)
+            
+            # Add status label
+            self.status_label = QLabel("Starting...")
+            self.status_label.setAlignment(Qt.AlignCenter)
+            self.status_label.setStyleSheet("font-size: 14px; color: #34495e;")
+            layout.addWidget(self.status_label)
+            
+            # Add progress bar
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setTextVisible(True)
+            self.progress_bar.setFormat("%p%")
+            layout.addWidget(self.progress_bar)
+            
+            # Set dialog style
+            self.startup_dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #f8f9fa;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                }
+                QProgressBar {
+                    border: 1px solid #bdc3c7;
+                    border-radius: 5px;
+                    text-align: center;
+                    height: 20px;
+                    background-color: #ecf0f1;
+                    color: #2c3e50;
+                    font-weight: bold;
+                }
+                QProgressBar::chunk {
+                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3498db, stop:1 #2980b9);
+                    border-radius: 5px;
+                }
+            """)
+            
+            # Create a pulsating animation effect for the progress bar when it's at 0%
+            self.pulse_timer = QTimer()
+            self.pulse_timer.setInterval(30)
+            self.pulse_direction = 1
+            self.pulse_value = 0
+            
+            def pulse_progress():
+                try:
+                    if not hasattr(self, 'progress_bar') or not self.progress_bar:
+                        # Progress bar no longer exists, stop the timer
+                        if hasattr(self, 'pulse_timer') and self.pulse_timer:
+                            self.pulse_timer.stop()
+                        return
+                        
+                    if self.progress_bar.value() > 0:
+                        # Stop pulsing once real progress starts
+                        self.pulse_timer.stop()
+                        return
+                        
+                    self.pulse_value += self.pulse_direction
+                    if self.pulse_value >= 100:
+                        self.pulse_direction = -1
+                    elif self.pulse_value <= 0:
+                        self.pulse_direction = 1
+                        
+                    # Apply a style with gradient offset based on pulse value
+                    self.progress_bar.setStyleSheet(f"""
+                        QProgressBar::chunk {{
+                            background-color: qlineargradient(x1:{self.pulse_value/100}, y1:0, x2:{(self.pulse_value/100)+0.5}, y2:0, 
+                                                            stop:0 #3498db, stop:1 #2980b9);
+                            border-radius: 5px;
+                        }}
+                    """)
+                except Exception as e:
+                    # If there's an error in the pulse timer, just stop it
+                    logger.error(f"Error in pulse timer: {e}")
+                    if hasattr(self, 'pulse_timer') and self.pulse_timer:
+                        self.pulse_timer.stop()
+            
+            self.pulse_timer.timeout.connect(pulse_progress)
+            self.pulse_timer.start()
+            
+            # Show the dialog
+            self.startup_dialog.show()
+            
+            # Process events to make sure dialog is displayed
+            self.app.processEvents()
+            
+            logger.info("Startup progress dialog created successfully")
+        except Exception as e:
+            # If there's an error creating the dialog, log it and continue without a progress bar
+            logger.error(f"Error creating startup progress dialog: {e}")
+            logger.error(traceback.format_exc())
+            # Ensure pulse_timer is None to avoid further errors
+            self.pulse_timer = None
+            self.startup_dialog = None
+    
+    def update_progress(self, value, status_text):
+        """Update the progress bar value and status text."""
+        try:
+            if hasattr(self, 'progress_bar') and self.progress_bar and hasattr(self, 'status_label') and self.status_label:
+                # If this is the first real progress update, stop the pulse animation
+                if value > 0 and hasattr(self, 'pulse_timer') and self.pulse_timer and self.pulse_timer.isActive():
+                    self.pulse_timer.stop()
+                    # Restore normal progress bar style
+                    self.progress_bar.setStyleSheet("""
+                        QProgressBar::chunk {
+                            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3498db, stop:1 #2980b9);
+                            border-radius: 5px;
+                        }
+                    """)
+                
+                self.progress_bar.setValue(value)
+                self.status_label.setText(status_text)
+                
+                # Log progress updates
+                logger.debug(f"Progress update: {value}% - {status_text}")
+                
+                # Process events to update UI
+                if hasattr(self, 'app') and self.app:
+                    self.app.processEvents()
+        except Exception as e:
+            # Don't let progress bar errors crash the application
+            logger.error(f"Error updating progress: {e}")
+            # Continue anyway
     
     def show_debug_window(self):
         """Show the debug window."""
@@ -315,6 +534,14 @@ class TrackProApp:
     
     def load_calibration(self):
         """Load calibration data into UI."""
+        if not hasattr(self, 'hardware') or not self.hardware or not hasattr(self, 'window'):
+            logger.warning("Cannot load calibration - hardware or window not available")
+            return
+            
+        if not hasattr(self.hardware, 'calibration'):
+            logger.warning("Hardware has no calibration data")
+            return
+            
         cal = self.hardware.calibration
         for pedal in ['throttle', 'brake', 'clutch']:
             if pedal in cal:
@@ -323,37 +550,58 @@ class TrackProApp:
                 
                 # Convert points to QPointF objects
                 qpoints = [QPointF(x, y) for x, y in points]
-                self.window.set_calibration_points(pedal, qpoints)
-                self.window.set_curve_type(pedal, curve_type)
                 
-                # Set min/max range
-                axis_range = self.hardware.axis_ranges[pedal]
-                self.window.set_calibration_range(pedal, axis_range['min'], axis_range['max'])
+                # Check if the required methods exist
+                if hasattr(self.window, 'set_calibration_points'):
+                    self.window.set_calibration_points(pedal, qpoints)
+                else:
+                    logger.warning(f"MainWindow does not have set_calibration_points method, skipping for {pedal}")
+                    
+                if hasattr(self.window, 'set_curve_type'):
+                    self.window.set_curve_type(pedal, curve_type)
+                else:
+                    logger.warning(f"MainWindow does not have set_curve_type method, skipping for {pedal}")
+                
+                # Set min/max range if available
+                if hasattr(self.hardware, 'axis_ranges') and pedal in self.hardware.axis_ranges:
+                    axis_range = self.hardware.axis_ranges[pedal]
+                    if hasattr(self.window, 'set_calibration_range'):
+                        self.window.set_calibration_range(pedal, axis_range['min'], axis_range['max'])
+                    else:
+                        logger.warning(f"MainWindow does not have set_calibration_range method, skipping for {pedal}")
                 
                 # Check if this axis is available
                 axis_num = getattr(self.hardware, f"{pedal.upper()}_AXIS", -1)
                 
-                # Special handling for clutch pedal - show it as available if the pedals are connected
-                if pedal == 'clutch' and self.hardware.pedals_connected:
-                    # Enable clutch UI if pedals are connected, even if no specific axis is assigned
-                    self.window.set_pedal_available(pedal, True)
-                elif axis_num < 0 or axis_num >= self.hardware.available_axes:
-                    # Disable UI elements for unavailable pedals
-                    self.window.set_pedal_available(pedal, False)
+                # Only proceed if the set_pedal_available method exists
+                if hasattr(self.window, 'set_pedal_available'):
+                    # Special handling for clutch pedal - show it as available if the pedals are connected
+                    if pedal == 'clutch' and self.hardware.pedals_connected:
+                        # Enable clutch UI if pedals are connected, even if no specific axis is assigned
+                        self.window.set_pedal_available(pedal, True)
+                    elif axis_num < 0 or axis_num >= self.hardware.available_axes:
+                        # Disable UI elements for unavailable pedals
+                        self.window.set_pedal_available(pedal, False)
+                    else:
+                        self.window.set_pedal_available(pedal, True)
                 else:
-                    self.window.set_pedal_available(pedal, True)
+                    logger.warning(f"MainWindow does not have set_pedal_available method, skipping for {pedal}")
                 
-                # Update curve selector if it's a custom curve
+                # Update curve selector if it's a custom curve and the required attributes exist
                 if curve_type not in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
-                    selector = self.window._pedal_data[pedal].get('curve_selector')
-                    if selector:
-                        # Add the custom curve type if it's not already in the list
-                        if selector.findText(curve_type) == -1:
-                            selector.addItem(curve_type)
-                        selector.setCurrentText(curve_type)
+                    if hasattr(self.window, '_pedal_data') and pedal in self.window._pedal_data:
+                        selector = self.window._pedal_data[pedal].get('curve_selector')
+                        if selector:
+                            # Add the custom curve type if it's not already in the list
+                            if selector.findText(curve_type) == -1:
+                                selector.addItem(curve_type)
+                            selector.setCurrentText(curve_type)
         
-        # Refresh the curve lists
-        self.window.refresh_curve_lists()
+        # Refresh the curve lists if the method exists
+        if hasattr(self.window, 'refresh_curve_lists'):
+            self.window.refresh_curve_lists()
+        else:
+            logger.warning("MainWindow does not have refresh_curve_lists method, skipping refresh")
     
     def on_calibration_updated(self, pedal: str):
         """Handle calibration updates from UI."""
@@ -385,10 +633,11 @@ class TrackProApp:
         self.process_input()
     
     def process_input(self):
-        """Process input from hardware and update UI."""
+        """Process input from hardware and apply to output."""
+        # Check if hardware is available
         if not self.hardware:
             return
-            
+        
         try:
             # If we're in the middle of a reconnection attempt, use last known values to avoid jumps
             if self.reconnecting and hasattr(self.hardware, 'last_values'):
@@ -439,7 +688,7 @@ class TrackProApp:
             # With our new integrated chart system, just setting the input is sufficient
             for pedal, values in processed_values.items():
                 self.window.set_input_value(pedal, values['raw'])
-            
+                
         except Exception as e:
             logger.error(f"Error processing input: {e}")
             # If we encounter an error processing input, attempt reconnection on next cycle
@@ -448,13 +697,168 @@ class TrackProApp:
                 self.hardware.pedals_connected = False
                 self.reconnecting = True
     
+    def update_deadzones(self, pedal, min_deadzone, max_deadzone):
+        """Update the deadzones for a pedal.
+        
+        Args:
+            pedal: 'throttle', 'brake', or 'clutch'
+            min_deadzone: Minimum deadzone percentage (0-100)
+            max_deadzone: Maximum deadzone percentage (0-100)
+        """
+        # Apply deadzone to hardware
+        if self.hardware and pedal in self.hardware.axis_ranges:
+            self.hardware.axis_ranges[pedal]['min_deadzone'] = min_deadzone
+            self.hardware.axis_ranges[pedal]['max_deadzone'] = max_deadzone
+            self.hardware.save_axis_ranges()
+        
+        # Immediately reprocess current input to apply the new deadzones
+        self.process_input()
+    
+    def show_profile_manager(self):
+        """Show the pedal profile manager dialog."""
+        try:
+            # Import the profile dialog
+            from .pedals.profile_dialog import PedalProfileDialog
+            
+            # Get current calibration data
+            calibration_data = {}
+            if hasattr(self, 'hardware') and hasattr(self.hardware, 'calibration'):
+                for pedal in ['throttle', 'brake', 'clutch']:
+                    if pedal in self.hardware.calibration:
+                        calibration_data[pedal] = self.hardware.calibration[pedal]
+            
+            # Create and show dialog
+            dialog = PedalProfileDialog(self.window, calibration_data)
+            
+            # Connect profile selected signal
+            dialog.profile_selected.connect(self.apply_profile)
+            
+            # Show dialog
+            dialog.exec_()
+            
+        except Exception as e:
+            logger.error(f"Error showing profile manager: {e}")
+            if hasattr(self, 'window'):
+                QMessageBox.critical(
+                    self.window, 
+                    "Error", 
+                    f"Could not open profile manager: {str(e)}"
+                )
+    
+    def apply_profile(self, profile):
+        """Apply a selected pedal profile.
+        
+        Args:
+            profile: The profile data dictionary
+        """
+        try:
+            # Get calibration data from profile
+            throttle_calibration = profile.get('throttle_calibration', {})
+            brake_calibration = profile.get('brake_calibration', {})
+            clutch_calibration = profile.get('clutch_calibration', {})
+            
+            # Update hardware calibration
+            if hasattr(self, 'hardware'):
+                # Update calibration for each pedal
+                for pedal, data in [
+                    ('throttle', throttle_calibration),
+                    ('brake', brake_calibration),
+                    ('clutch', clutch_calibration)
+                ]:
+                    if not data:
+                        continue
+                    
+                    # Update calibration data in hardware
+                    self.hardware.calibration[pedal] = data
+                
+                # Save the updated calibration
+                self.hardware.save_calibration(self.hardware.calibration)
+                
+                # Update UI if available
+                if hasattr(self, 'window'):
+                    self.load_calibration()
+            
+            # Show confirmation
+            profile_name = profile.get('name', 'Selected profile')
+            if hasattr(self, 'window'):
+                QMessageBox.information(
+                    self.window,
+                    "Profile Applied",
+                    f"{profile_name} has been applied to your pedals."
+                )
+            
+        except Exception as e:
+            logger.error(f"Error applying profile: {e}")
+            if hasattr(self, 'window'):
+                QMessageBox.critical(
+                    self.window,
+                    "Error",
+                    f"Could not apply profile: {str(e)}"
+                )
+    
+    def setup_oauth_handler(self):
+        """Set up OAuth callback handling for social logins."""
+        try:
+            # Create OAuth handler
+            self.oauth_handler = oauth_handler.OAuthHandler()
+            
+            # Connect the auth_completed signal to our auth state change handler
+            self.oauth_handler.auth_completed.connect(self.handle_auth_state_change)
+            
+            # Start callback server for OAuth login callbacks
+            self.oauth_callback_server = self.oauth_handler.setup_callback_server()
+            
+            logger.info("OAuth handler initialized successfully")
+        except Exception as e:
+            logger.error(f"Error setting up OAuth handler: {e}")
+            logger.error(traceback.format_exc())
+    
     def cleanup(self, force_unhide=True):
-        """Clean up resources before exit."""
+        """Clean up resources before application closes."""
         logger.info("Cleaning up resources...")
         
+        # Stop debug window timers first if it exists
+        if hasattr(self, 'debug_window') and self.debug_window:
+            try:
+                logger.info("Stopping debug window timers...")
+                if hasattr(self.debug_window, 'refresh_timer'):
+                    self.debug_window.refresh_timer.stop()
+            except Exception as e:
+                logger.error(f"Error stopping debug window timers: {e}")
+        
         # Stop the timer
-        if hasattr(self, 'timer'):
+        if hasattr(self, 'timer') and self.timer:
+            logger.info("Stopping main input timer...")
             self.timer.stop()
+        
+        # Disconnect all signals
+        try:
+            logger.info("Disconnecting signals...")
+            if hasattr(self.window, 'calibration_updated'):
+                try:
+                    self.window.calibration_updated.disconnect()
+                except TypeError:
+                    pass  # Already disconnected
+            
+            if hasattr(self.window, 'output_changed'):
+                try: 
+                    self.window.output_changed.disconnect()
+                except TypeError:
+                    pass  # Already disconnected
+                    
+            if hasattr(self.window, 'calibration_wizard_completed'):
+                try:
+                    self.window.calibration_wizard_completed.disconnect()
+                except TypeError:
+                    pass  # Already disconnected
+                    
+            # Disconnect aboutToQuit signal
+            try:
+                self.app.aboutToQuit.disconnect()
+            except TypeError:
+                pass  # Already disconnected
+        except Exception as e:
+            logger.error(f"Error disconnecting signals: {e}")
         
         # Clean up output resources (vJoy)
         if hasattr(self, 'output') and self.output:
@@ -467,8 +871,16 @@ class TrackProApp:
             except Exception as e:
                 logger.error(f"Error releasing vJoy device: {e}")
         
+        # Save calibration before changing HidHide settings
+        if hasattr(self, 'hardware') and self.hardware:
+            try:
+                logger.info("Saving calibration...")
+                self.hardware.save_calibration(self.hardware.calibration)
+            except Exception as e:
+                logger.error(f"Error saving calibration: {e}")
+        
         # Disable HidHide cloaking - PRIORITIZE CLI --cloak-off approach
-        if hasattr(self, 'hidhide'):
+        if hasattr(self, 'hidhide') and self.hidhide:
             logger.info("Disabling HidHide cloaking using CLI --cloak-off command...")
             try:
                 # Use CLI as primary method - most reliable
@@ -545,15 +957,34 @@ class TrackProApp:
             except Exception as e:
                 logger.error(f"Error disabling HidHide cloaking via hardware CLI: {e}")
         
-        # Save calibration
-        if hasattr(self, 'hardware'):
+        # Shutdown OAuth callback server
+        if hasattr(self, 'oauth_callback_server') and self.oauth_callback_server:
             try:
-                logger.info("Saving calibration...")
-                self.hardware.save_calibration(self.hardware.calibration)
+                logger.info("Shutting down OAuth callback server...")
+                if hasattr(self, 'oauth_handler'):
+                    self.oauth_handler.shutdown_callback_server(self.oauth_callback_server)
             except Exception as e:
-                logger.error(f"Error saving calibration: {e}")
+                logger.error(f"Error shutting down OAuth callback server: {e}")
+        
+        # Clean up pygame resources
+        if hasattr(self, 'hardware') and hasattr(self.hardware, 'pedals_connected') and self.hardware.pedals_connected:
+            try:
+                logger.info("Cleaning up pygame resources...")
+                # Release the joystick object first
+                if hasattr(self.hardware, 'joystick') and self.hardware.joystick:
+                    try:
+                        self.hardware.joystick.quit()
+                    except:
+                        pass
+                    self.hardware.joystick = None
+                pygame.joystick.quit()
+            except Exception as e:
+                logger.error(f"Error cleaning up pygame resources: {e}")
         
         logger.info("Cleanup completed")
+        
+        # Process any remaining events to avoid threading issues on exit
+        QApplication.processEvents()
     
     def on_calibration_wizard_completed(self, results):
         """Handle calibration wizard results."""
@@ -617,31 +1048,71 @@ class TrackProApp:
         warning.setWindowModality(Qt.NonModal)
         warning.show()
     
+    def handle_auth_state_change(self, is_authenticated):
+        """Handle changes in authentication state.
+        
+        This is called when the user logs in or out.
+        
+        Args:
+            is_authenticated: Whether the user is now authenticated
+        """
+        try:
+            logger.info(f"Authentication state changed: {is_authenticated}")
+            
+            # Check if we need to sync any cloud data
+            if is_authenticated:
+                # Example: check for online settings
+                pass
+        except Exception as e:
+            logger.error(f"Error handling auth state change: {e}")
+    
     def run(self):
         """Run the application."""
-        # Show the main window
-        self.window.show()
-        
-        # Set flag for initial startup - we'll allow one UI update at startup
-        self.startup_complete = False
-        
-        # Start the input polling timer
-        if self.hardware and self.output:
-            # Initial pedal detection at startup - now done via process_input
-            logger.info("Running initial pedal detection at startup")
-            self.process_input()
+        try:
+            # Start in offline mode by default if not already authenticated
+            if not supabase.is_authenticated():
+                logger.info("Starting in offline mode by default")
+                # Don't disable Supabase completely, just don't force login
+                # This allows the user to login later if they want
             
-            # Start timer - no longer using connection check timer
-            self.timer.start()
+            # Show the main window immediately
+            self.window.show()
             
-            # Mark startup as complete - future UI updates are minimized
-            self.startup_complete = True
+            # Start the event loop
+            exit_code = self.app.exec_()
+            
+            # Process any remaining events before we return
+            QApplication.processEvents()
+            
+            # Ensure cleanup
+            try:
+                if hasattr(self, 'cleanup'):
+                    self.cleanup()
+            except:
+                logger.warning("Error during cleanup on exit")
+                
+            return exit_code
+        except Exception as e:
+            logger.error(f"Error running application: {e}")
+            logger.error(traceback.format_exc())
+            return 1
+
+    def setup_ui_connections(self):
+        """Set up connections between UI signals and app methods."""
+        if not hasattr(self, 'window'):
+            logger.warning("Window not available to set up connections")
+            return
+            
+        # Connect the calibration updated signal to our handler
+        if hasattr(self.window, 'calibration_updated'):
+            self.window.calibration_updated.connect(self.on_calibration_updated)
         
-        # Check for updates silently
-        self.updater.check_for_updates(silent=True)
+        # Connect UI buttons to app methods
+        if hasattr(self.window, 'save_current_profile'):
+            self.window.save_current_profile = self.show_profile_manager
         
-        # Run the application event loop
-        return self.app.exec_()
+        if hasattr(self.window, 'show_profile_manager'):
+            self.window.show_profile_manager = self.show_profile_manager
 
 def main():
     """Main application entry point."""
@@ -651,7 +1122,10 @@ def main():
     os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
     
     # Create QApplication instance first to ensure it exists
-    app_instance = QApplication.instance() or QApplication(sys.argv)
+    # Use a single instance pattern
+    app_instance = QApplication.instance()
+    if not app_instance:
+        app_instance = QApplication(sys.argv)
     
     # Try to ensure HidHide cloaking is disabled before starting
     # Use fail_silently=True to continue even if HidHide has issues
@@ -713,11 +1187,25 @@ def main():
             app.hidhide = hidhide_client
             logger.info("Using pre-initialized HidHide client")
         
+        # Make sure app_instance and app.app point to the same QApplication
+        app.app = app_instance
+        
+        # Set up explicit clean shutdown when Python is exiting
+        import atexit
+        atexit.register(app.cleanup)
+        
+        # Run the app
         return app.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         logger.error(traceback.format_exc())
         
+        # Clean up pygame as a last resort
+        try:
+            pygame.quit()
+        except:
+            pass
+            
         # Display error in message box
         error_box = QMessageBox()
         error_box.setIcon(QMessageBox.Critical)

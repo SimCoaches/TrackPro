@@ -1,6 +1,9 @@
 import irsdk
 import time
 import logging
+import math
+from pathlib import Path
+from .telemetry_saver import TelemetrySaver
 
 logger = logging.getLogger(__name__)
 
@@ -13,15 +16,21 @@ class SimpleIRacingAPI:
     """A simpler implementation of iRacing API based on the pyirsdk example."""
     
     def __init__(self):
+        """Initialize the API."""
         self.ir = irsdk.IRSDK()
         self.state = State()
-        self._connection_callbacks = []
-        self._telemetry_callbacks = []
-        self._session_info_callbacks = []
         self._is_connected = False
+        self._connection_callbacks = []
+        self._session_info_callbacks = []
+        self._telemetry_callbacks = []
         self._session_info = {}
-        self._session_info_timer = None
-        logger.info("Simple iRacing API initialized")
+        self._last_driver_inputs_log = 0
+        
+        # Initialize telemetry saver
+        self.telemetry_saver = TelemetrySaver()
+        self._current_session_id = None
+        
+        logger.info("SimpleIRacingAPI initialized")
     
     def connect(self, on_connected=None, on_disconnected=None, on_session_info_changed=None, on_telemetry_update=None):
         """Connect to iRacing."""
@@ -69,6 +78,11 @@ class SimpleIRacingAPI:
             self.ir.shutdown()
             logger.info('irsdk disconnected')
             self._is_connected = False
+            
+            # End telemetry saving session
+            if hasattr(self, 'telemetry_saver'):
+                self.telemetry_saver.end_session()
+            
             # Notify callbacks about disconnect
             for callback in self._connection_callbacks:
                 try:
@@ -81,34 +95,28 @@ class SimpleIRacingAPI:
             logger.info('irsdk connected')
             self._is_connected = True
             
-            # Update session info immediately
-            success = self._update_session_info()
-            if success:
-                logger.info("Successfully updated session info on connection")
-            else:
-                logger.warning("Failed to update session info on initial connection")
-                
-                # Try getting some basic info directly
-                try:
-                    # Directly get WeekendInfo and see what's there
-                    weekend_info = self.ir['WeekendInfo']
-                    if weekend_info:
-                        logger.info(f"Available WeekendInfo fields: {list(weekend_info.keys())}")
-                except Exception as e:
-                    logger.error(f"Error getting WeekendInfo: {e}")
+            # Update session info
+            self._update_session_info()
             
-            # Start a timer thread to process telemetry data
+            # Start telemetry timer
             self._start_telemetry_timer()
             
-            # Notify about connection
+            # Start session info update timer
+            self._start_session_info_timer()
+            
+            # Start a new telemetry saving session
+            track_name = self.get_current_track()
+            car_name = self.get_current_car()
+            self.telemetry_saver.start_session(None, track_name, car_name)
+            
+            # Notify callbacks about successful connect
             for callback in self._connection_callbacks:
                 try:
                     callback(True, self._session_info)
                 except Exception as e:
-                    logger.error(f"Error in connection callback: {e}")
-            
+                    logger.error(f"Error in connection callback on connect: {e}")
             return True
-        return self.state.ir_connected
+        return False
     
     def _start_telemetry_timer(self):
         """Start a timer to process telemetry data periodically."""
@@ -198,7 +206,7 @@ class SimpleIRacingAPI:
             if not car_name:
                 logger.info("Falling back to session info parsing for car name")
                 try:
-                    session_info = self.ir.get_session_info()
+                    session_info = self.ir._get_session_info()
                     if session_info and 'DriverInfo' in session_info:
                         driver_info = session_info['DriverInfo']
                         if 'Drivers' in driver_info and driver_info['Drivers']:
@@ -219,7 +227,7 @@ class SimpleIRacingAPI:
             
             # Update track name (keeping original logic)
             try:
-                session_info = self.ir.get_session_info()
+                session_info = self.ir._get_session_info()
                 if session_info and 'WeekendInfo' in session_info:
                     weekend_info = session_info['WeekendInfo']
                     for track_field in ['TrackDisplayName', 'TrackName']:
@@ -354,6 +362,13 @@ class SimpleIRacingAPI:
                     telemetry['clutch'] = clutch  # Value between 0-1
                     break
             
+            # Steering wheel angle input
+            for steering_field in ['SteeringWheelAngle', 'steeringWheelAngle']:
+                steering = self.ir[steering_field]
+                if steering is not None:
+                    telemetry['steering'] = steering  # Value in radians
+                    break
+            
             # Only log telemetry occasionally to avoid flooding logs
             if not hasattr(self, '_telemetry_log_counter'):
                 self._telemetry_log_counter = 0
@@ -379,6 +394,25 @@ class SimpleIRacingAPI:
                     logger.info(f"Brake input: {telemetry['brake']:.2f}")
                 if 'clutch' in telemetry:
                     logger.info(f"Clutch input: {telemetry['clutch']:.2f}")
+                if 'steering' in telemetry:
+                    # Convert radians to degrees for more readable logs
+                    steering_degrees = telemetry['steering'] * 180 / math.pi
+                    logger.info(f"Steering angle: {steering_degrees:.2f}° ({telemetry['steering']:.2f} rad)")
+            
+            # Process telemetry with the telemetry saver
+            if hasattr(self, 'telemetry_saver') and telemetry and 'track_position' in telemetry:
+                lap_result = self.telemetry_saver.process_telemetry(telemetry)
+                if lap_result:
+                    # New lap detected
+                    is_new_lap, lap_number, lap_time = lap_result
+                    logger.info(f"New lap completed: Lap {lap_number}, Time: {lap_time:.3f}s")
+                    
+                    # Update telemetry with the manually calculated lap time if it's better
+                    if 'best_lap_time' in telemetry:
+                        if telemetry['best_lap_time'] <= 0 or lap_time < telemetry['best_lap_time']:
+                            telemetry['best_lap_time'] = lap_time
+                    else:
+                        telemetry['best_lap_time'] = lap_time
             
             # Notify callbacks if we have at least some data
             if telemetry and len(telemetry) > 0:
@@ -438,19 +472,16 @@ class SimpleIRacingAPI:
     
     def disconnect(self):
         """Disconnect from iRacing."""
-        if self.ir:
-            logger.info("Disconnecting from iRacing")
+        if self.state.ir_connected:
+            # End telemetry saving session
+            if hasattr(self, 'telemetry_saver'):
+                session_folder = self.telemetry_saver.end_session()
+                logger.info(f"Saved telemetry data to {session_folder}")
+            
             self.ir.shutdown()
             self.state.ir_connected = False
             self._is_connected = False
-            
-            # Notify callbacks
-            for callback in self._connection_callbacks:
-                try:
-                    callback(False, None)
-                except Exception as e:
-                    logger.error(f"Error in connection callback on disconnect: {e}")
-            
+            logger.info("Disconnected from iRacing")
             return True
         return False
     
@@ -519,8 +550,8 @@ class SimpleIRacingAPI:
                     logger.info(f"Found PlayerInfo with {len(player_info)} fields")
             
             # Get session info structure
-            if hasattr(self.ir, 'get_session_info'):
-                session_info = self.ir.get_session_info()
+            if hasattr(self.ir, '_get_session_info'):
+                session_info = self.ir._get_session_info()
                 if session_info:
                     # Just capture the keys to avoid huge data
                     result["session_info"]["SessionInfo"] = {"keys": list(session_info.keys())}
@@ -541,4 +572,16 @@ class SimpleIRacingAPI:
             logger.error(f"Error exploring telemetry variables: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return {"error": str(e)} 
+            return {"error": str(e)}
+    
+    def set_data_manager(self, data_manager):
+        """Set the data manager to use for storing telemetry data.
+        
+        Args:
+            data_manager: The data manager instance
+        """
+        if hasattr(self, 'telemetry_saver'):
+            self.telemetry_saver.data_manager = data_manager
+            logger.info("Data manager set for telemetry saver")
+        else:
+            logger.warning("Telemetry saver not initialized, cannot set data manager") 
