@@ -2,6 +2,10 @@
 
 import logging
 
+# Set higher logging level for noisy HTTP and Supabase libraries
+for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:
+    logging.getLogger(library).setLevel(logging.WARNING)
+
 # Set up logging
 logging.basicConfig(
     level=logging.DEBUG,
@@ -22,6 +26,7 @@ try:
     from .analysis import LapAnalysis
     from .superlap import SuperLap
     from .telemetry_saver import TelemetrySaver  # Import the new telemetry saver
+    from .iracing_lap_saver import IRacingLapSaver  # Import the Supabase lap saver
     
     # Apply patch to ensure compatibility functions are defined
     try:
@@ -117,6 +122,31 @@ try:
             except Exception as superlap_error:
                 logger.error(f"Error initializing SuperLap: {superlap_error}")
                 super_lap = None
+                
+            # Create TelemetrySaver for local saving
+            try:
+                from .telemetry_saver import TelemetrySaver
+                telemetry_saver = TelemetrySaver(data_manager=data_manager)
+                logger.info("TelemetrySaver initialized successfully")
+            except Exception as telemetry_error:
+                logger.error(f"Error initializing TelemetrySaver: {telemetry_error}")
+                telemetry_saver = None
+                
+            # Create a Supabase client for lap saving
+            try:
+                from ..database.supabase_client import get_supabase_client
+                supabase_client = get_supabase_client()
+                if supabase_client:
+                    logger.info("Created Supabase client for lap saving")
+                else:
+                    logger.warning("Failed to create Supabase client")
+                    
+                from .iracing_lap_saver import IRacingLapSaver
+                iracing_lap_saver = IRacingLapSaver(supabase_client=supabase_client)
+                logger.info("IRacingLapSaver initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize IRacingLapSaver: {e}")
+                iracing_lap_saver = None
             
             # Create IRacingAPI
             iracing_api = None  # Initialize to None for safety
@@ -133,6 +163,68 @@ try:
                     except Exception as connect_error:
                         logger.error(f"Error connecting data manager to SimpleIRacingAPI: {connect_error}")
                 
+                # Connect the telemetry saver to the API
+                if telemetry_saver is not None:
+                    try:
+                        iracing_api.set_telemetry_saver(telemetry_saver)
+                        logger.info("Connected telemetry saver to SimpleIRacingAPI")
+                    except Exception as ts_error:
+                        logger.error(f"Error connecting telemetry saver to SimpleIRacingAPI: {ts_error}")
+                
+                # Connect the Supabase lap saver to the API
+                if iracing_lap_saver is not None:
+                    # Explicitly set user ID if available from the application context
+                    try:
+                        from ..auth.user_manager import get_current_user
+                        user = get_current_user()
+                        if user and hasattr(user, 'id') and user.is_authenticated:
+                            user_id = user.id
+                            iracing_lap_saver.set_user_id(user_id)
+                            logger.info(f"Set user ID for lap saver: {user_id}")
+                            
+                            # Also set user ID in session info so it can be accessed later
+                            if hasattr(iracing_api, '_session_info'):
+                                iracing_api._session_info['user_id'] = user_id
+                                logger.debug(f"Added user_id to session_info: {user_id}")
+                        else:
+                            logger.warning("No authenticated user available from auth module")
+                    except Exception as user_error:
+                        logger.error(f"Error getting current user for lap saver: {user_error}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                    
+                    try:
+                        # IMPORTANT FIX: Always use the set_lap_saver method if available 
+                        if hasattr(iracing_api, 'set_lap_saver'):
+                            result = iracing_api.set_lap_saver(iracing_lap_saver)
+                            if result:
+                                logger.info("Successfully connected Supabase lap saver to SimpleIRacingAPI")
+                            else:
+                                logger.error("Failed to connect lap saver to SimpleIRacingAPI")
+                        else:
+                            # Legacy callback approach as fallback
+                            def process_telemetry_with_supabase(telemetry_data):
+                                try:
+                                    result = iracing_lap_saver.process_telemetry(telemetry_data)
+                                    if result:
+                                        is_new_lap, lap_number, lap_time = result
+                                        logger.info(f"New lap detected by Supabase saver: Lap {lap_number}, Time: {lap_time:.3f}s")
+                                except Exception as e:
+                                    logger.error(f"Error processing telemetry with Supabase: {e}")
+                                    import traceback
+                                    logger.error(traceback.format_exc())
+                            
+                            # Add the callback to the API if it supports it
+                            if hasattr(iracing_api, 'add_telemetry_callback'):
+                                iracing_api.add_telemetry_callback(process_telemetry_with_supabase)
+                                logger.info("Added Supabase telemetry processing callback to SimpleIRacingAPI")
+                            else:
+                                logger.warning("SimpleIRacingAPI does not support telemetry callbacks, Supabase integration limited")
+                    except Exception as ls_error:
+                        logger.error(f"Error connecting Supabase lap saver to SimpleIRacingAPI: {ls_error}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                
             except Exception as simple_api_error:
                 logger.error(f"Error initializing SimpleIRacingAPI: {simple_api_error}")
                 import traceback
@@ -144,6 +236,40 @@ try:
                     from .iracing_api import IRacingAPI
                     iracing_api = IRacingAPI()
                     logger.info("IRacingAPI initialized successfully")
+                    
+                    # Connect the Supabase lap saver to the original IRacingAPI as well
+                    if iracing_lap_saver is not None:
+                        try:
+                            # Similar approach as with SimpleIRacingAPI
+                            # Explicitly set user ID if available from the application context
+                            try:
+                                from ..auth.user_manager import get_current_user
+                                user = get_current_user()
+                                if user and hasattr(user, 'id') and user.is_authenticated:
+                                    iracing_lap_saver.set_user_id(user.id)
+                                    logger.info(f"Set user ID for lap saver with fallback IRacingAPI: {user.id}")
+                                else:
+                                    logger.warning("No authenticated user available from auth module for fallback IRacingAPI")
+                            except Exception as user_error:
+                                logger.error(f"Error getting current user for lap saver with fallback IRacingAPI: {user_error}")
+                                
+                            if hasattr(iracing_api, 'set_lap_saver'):
+                                iracing_api.set_lap_saver(iracing_lap_saver)
+                            elif hasattr(iracing_api, 'add_telemetry_callback'):
+                                def process_telemetry_with_supabase(telemetry_data):
+                                    try:
+                                        result = iracing_lap_saver.process_telemetry(telemetry_data)
+                                        if result:
+                                            is_new_lap, lap_number, lap_time = result
+                                            logger.info(f"New lap detected by Supabase saver (fallback): Lap {lap_number}, Time: {lap_time:.3f}s")
+                                    except Exception as e:
+                                        logger.error(f"Error processing telemetry with Supabase: {e}")
+                                        
+                                iracing_api.add_telemetry_callback(process_telemetry_with_supabase)
+                                logger.info("Added Supabase telemetry processing callback to IRacingAPI")
+                        except Exception as ls_error:
+                            logger.error(f"Error connecting Supabase lap saver to IRacingAPI: {ls_error}")
+                            
                 except Exception as api_error:
                     logger.error(f"Error initializing IRacingAPI: {api_error}")
                     import traceback
@@ -160,6 +286,12 @@ try:
             
             # Create the widget with the API instance
             widget = RaceCoachWidget(parent=parent, iracing_api=iracing_api)
+            
+            # Store references to important components in the widget for access
+            widget.data_manager = data_manager
+            widget.telemetry_saver = telemetry_saver
+            widget.iracing_lap_saver = iracing_lap_saver
+            
             return widget
             
         except Exception as e:
@@ -177,4 +309,4 @@ except ImportError as e:
         return None
     
 __all__ = ['RaceCoachWidget', 'IRacingAPI', 'SimpleIRacingAPI', 'DataManager', 'RacingModel', 
-           'LapAnalysis', 'SuperLap', 'TelemetrySaver', 'create_race_coach_widget'] 
+           'LapAnalysis', 'SuperLap', 'TelemetrySaver', 'IRacingLapSaver', 'create_race_coach_widget'] 

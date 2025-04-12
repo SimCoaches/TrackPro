@@ -30,6 +30,9 @@ class SimpleIRacingAPI:
         self.telemetry_saver = TelemetrySaver()
         self._current_session_id = None
         
+        # Add lap saver reference
+        self.lap_saver = None
+        
         logger.info("SimpleIRacingAPI initialized")
     
     def connect(self, on_connected=None, on_disconnected=None, on_session_info_changed=None, on_telemetry_update=None):
@@ -206,7 +209,31 @@ class SimpleIRacingAPI:
             if not car_name:
                 logger.info("Falling back to session info parsing for car name")
                 try:
-                    session_info = self.ir._get_session_info()
+                    # This is a critical fix - for iRacing API version compatibility:
+                    # The _get_session_info method requires a key parameter in some versions
+                    # Let's handle this by creating helper function
+                    def get_session_info_safe(key=None):
+                        try:
+                            if hasattr(self.ir, '_get_session_info'):
+                                # Pass the key if the method requires it
+                                if key is not None:
+                                    return self.ir._get_session_info(key)
+                                else:
+                                    # Try calling with no arguments
+                                    try:
+                                        return self.ir._get_session_info()
+                                    except TypeError:
+                                        # If that fails, try with an empty string key
+                                        return self.ir._get_session_info('')
+                            elif hasattr(self.ir, 'session_info'):
+                                # Direct access if available
+                                return self.ir.session_info
+                        except Exception as e:
+                            logger.error(f"Error accessing session info: {e}")
+                            return None
+                    
+                    # Try to get driver info from session info
+                    session_info = get_session_info_safe()
                     if session_info and 'DriverInfo' in session_info:
                         driver_info = session_info['DriverInfo']
                         if 'Drivers' in driver_info and driver_info['Drivers']:
@@ -225,9 +252,9 @@ class SimpleIRacingAPI:
                 car_name = "iRacing Vehicle"
                 logger.warning("No car name found; using default: iRacing Vehicle")
             
-            # Update track name (keeping original logic)
+            # Update track name using the same session info helper
             try:
-                session_info = self.ir._get_session_info()
+                session_info = get_session_info_safe()
                 if session_info and 'WeekendInfo' in session_info:
                     weekend_info = session_info['WeekendInfo']
                     for track_field in ['TrackDisplayName', 'TrackName']:
@@ -241,6 +268,18 @@ class SimpleIRacingAPI:
             # Update session info dictionary
             self._session_info['current_track'] = track_name if track_name else "Brands Hatch Circuit"  # Fallback
             self._session_info['current_car'] = car_name
+            
+            # IMPORTANT FIX: Make sure we start a Supabase session if we have car and track info
+            if self.lap_saver and track_name and car_name:
+                # Check if we need to start a new session
+                if not getattr(self.lap_saver, '_current_session_id', None):
+                    logger.info(f"Starting Supabase session for {track_name} with {car_name}")
+                    session_type = self.get_session_type()
+                    session_id = self.lap_saver.start_session(track_name, car_name, session_type)
+                    if session_id:
+                        logger.info(f"Started Supabase session with ID: {session_id}")
+                    else:
+                        logger.error("Failed to start Supabase session")
             
             logger.info(f"Final session info: Track={self._session_info['current_track']}, Car={self._session_info['current_car']}")
             
@@ -414,6 +453,28 @@ class SimpleIRacingAPI:
                     else:
                         telemetry['best_lap_time'] = lap_time
             
+            # Process telemetry with IRacingLapSaver for Supabase
+            if self.lap_saver is not None and telemetry and 'track_position' in telemetry:
+                # Add track and car name to telemetry for auto-session creation if needed
+                if 'track_name' not in telemetry:
+                    telemetry['track_name'] = self.get_current_track()
+                if 'car_name' not in telemetry:
+                    telemetry['car_name'] = self.get_current_car()
+                
+                # Process telemetry with lap saver
+                try:
+                    # Log once every 10 seconds to avoid spam
+                    if self._telemetry_log_counter % 600 == 0:
+                        logger.debug(f"Sending telemetry to Supabase lap saver: track_pos={telemetry.get('track_position', 'N/A')}")
+                    
+                    lap_result = self.lap_saver.process_telemetry(telemetry)
+                    if lap_result:
+                        # New lap detected in Supabase
+                        is_new_lap, lap_number, lap_time = lap_result
+                        logger.info(f"New lap completed in Supabase: Lap {lap_number}, Time: {lap_time:.3f}s")
+                except Exception as e:
+                    logger.error(f"Error processing telemetry with Supabase lap saver: {e}")
+            
             # Notify callbacks if we have at least some data
             if telemetry and len(telemetry) > 0:
                 # Update session info with lap times if they exist
@@ -477,6 +538,14 @@ class SimpleIRacingAPI:
             if hasattr(self, 'telemetry_saver'):
                 session_folder = self.telemetry_saver.end_session()
                 logger.info(f"Saved telemetry data to {session_folder}")
+            
+            # Close Supabase session if lap saver exists
+            if self.lap_saver is not None:
+                try:
+                    self.lap_saver.close_session()
+                    logger.info("Closed Supabase lap session")
+                except Exception as e:
+                    logger.error(f"Error closing Supabase lap session: {e}")
             
             self.ir.shutdown()
             self.state.ir_connected = False
@@ -584,4 +653,50 @@ class SimpleIRacingAPI:
             self.telemetry_saver.data_manager = data_manager
             logger.info("Data manager set for telemetry saver")
         else:
-            logger.warning("Telemetry saver not initialized, cannot set data manager") 
+            logger.warning("Telemetry saver not initialized, cannot set data manager")
+
+    def set_lap_saver(self, lap_saver):
+        """Set the lap saver to use for storing lap data in Supabase.
+        
+        Args:
+            lap_saver: The IRacingLapSaver instance
+        """
+        self.lap_saver = lap_saver
+        
+        # First check if user_id is in session info
+        user_id = None
+        if self._session_info and 'user_id' in self._session_info:
+            user_id = self._session_info['user_id']
+            
+        # If not found in session info, try to get from user_manager
+        if not user_id:
+            try:
+                from ..auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and hasattr(user, 'id'):
+                    user_id = user.id
+                    # Store it in session info for future use
+                    if not self._session_info:
+                        self._session_info = {}
+                    self._session_info['user_id'] = user_id
+            except Exception as e:
+                logger.error(f"Error getting current user: {e}")
+        
+        # Set the user ID if we have it
+        if user_id:
+            lap_saver.set_user_id(user_id)
+            logger.info(f"Set user ID for lap saver: {user_id}")
+        else:
+            logger.warning("No user ID available to set for lap saver")
+            
+        # Start a session if we're already connected
+        if self.state.ir_connected:
+            track_name = self.get_current_track()
+            car_name = self.get_current_car()
+            session_type = self.get_session_type()
+            session_id = lap_saver.start_session(track_name, car_name, session_type)
+            logger.info(f"Started Supabase session with ID: {session_id}")
+        
+        logger.info("Lap saver set for telemetry processing")
+        
+        return True 

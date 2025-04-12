@@ -21,7 +21,7 @@ from .auth import LoginDialog, oauth_handler
 # Configure logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
@@ -625,8 +625,18 @@ class TrackProApp:
             'max': max_val
         }
         
-        # Save calibration
-        self.hardware.save_calibration(self.hardware.calibration)
+        # Save calibration - use a single timer to defer save during multiple rapid changes
+        if not hasattr(self, '_save_calibration_timer'):
+            self._save_calibration_timer = QTimer()
+            self._save_calibration_timer.setSingleShot(True)
+            self._save_calibration_timer.timeout.connect(lambda: self.hardware.save_calibration(self.hardware.calibration))
+        
+        # If timer is active, stop it and restart with new timeout
+        if self._save_calibration_timer.isActive():
+            self._save_calibration_timer.stop()
+        
+        # Schedule a save after a short delay (500ms)
+        self._save_calibration_timer.start(500)
         
         # Immediately reprocess current input to apply the new calibration
         # This ensures changes to the curve are reflected in real-time
@@ -684,10 +694,21 @@ class TrackProApp:
             
             self.output.update_axis(throttle_value, brake_value, clutch_value)
             
-            # Update UI with the fresh values
-            # With our new integrated chart system, just setting the input is sufficient
-            for pedal, values in processed_values.items():
-                self.window.set_input_value(pedal, values['raw'])
+            # Throttle UI updates to reduce lag during calibration
+            # Only update UI every other frame during calibration changes
+            current_time = time.time() * 1000
+            should_update_ui = True
+            
+            if hasattr(self, '_last_ui_update_time'):
+                # Apply throttling - only update UI at ~30fps
+                if current_time - self._last_ui_update_time < 33:  # ~30fps
+                    should_update_ui = False
+            
+            if should_update_ui:
+                # Update UI with the fresh values
+                for pedal, values in processed_values.items():
+                    self.window.set_input_value(pedal, values['raw'])
+                self._last_ui_update_time = current_time
                 
         except Exception as e:
             logger.error(f"Error processing input: {e}")

@@ -12,7 +12,7 @@ class UserManager(DatabaseManager):
     
     def __init__(self):
         """Initialize the user manager."""
-        super().__init__("auth.users")
+        super().__init__("user_details")
     
     def get_current_user(self) -> Optional[Dict[str, Any]]:
         """Get the currently authenticated user's data.
@@ -31,7 +31,7 @@ class UserManager(DatabaseManager):
                 logger.error(f"Could not extract user ID from response: {user}")
                 return None
                 
-            response = self.client.from_("auth.users").select("*").eq("id", user_id).single().execute()
+            response = self.client.from_("user_details").select("*").eq("id", user_id).single().execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting current user data: {e}")
@@ -70,7 +70,7 @@ class UserManager(DatabaseManager):
             The user data if found, None otherwise
         """
         try:
-            response = self.client.from_("auth.users").select("*").eq("email", email).single().execute()
+            response = self.client.from_("user_details").select("*").eq("email", email).single().execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting user by email: {e}")
@@ -94,26 +94,23 @@ class UserManager(DatabaseManager):
                     return {}
             
             try:
-                response = self.client.from_("auth.users").select("raw_user_meta_data").eq("id", user_id).single().execute()
-                return response.data.get("raw_user_meta_data", {}) if response.data else {}
+                # Get metadata from user_details table instead of auth.users
+                response = self.client.from_("user_details").select("metadata").eq("id", user_id).single().execute()
+                return response.data.get("metadata", {}) if response.data else {}
             except Exception as e:
-                # Check if this is a missing table error
-                error_str = str(e)
-                if "relation" in error_str and "does not exist" in error_str:
-                    logger.warning("Table 'auth.users' does not exist, attempting alternate approach")
-                    # Try to get metadata directly from the user object
-                    user = supabase.get_user()
-                    if user:
-                        if hasattr(user, 'user_metadata'):
-                            return user.user_metadata or {}
-                        elif hasattr(user, 'user') and hasattr(user.user, 'user_metadata'):
-                            return user.user.user_metadata or {}
-                        elif isinstance(user, dict) and 'user_metadata' in user:
-                            return user['user_metadata'] or {}
-                        elif isinstance(user, dict) and 'user' in user and isinstance(user['user'], dict) and 'user_metadata' in user['user']:
-                            return user['user']['user_metadata'] or {}
-                # Rethrow other errors
-                raise
+                # Get metadata directly from the user object as fallback
+                logger.warning(f"Could not get metadata from user_details table: {e}")
+                user = supabase.get_user()
+                if user:
+                    if hasattr(user, 'user_metadata'):
+                        return user.user_metadata or {}
+                    elif hasattr(user, 'user') and hasattr(user.user, 'user_metadata'):
+                        return user.user.user_metadata or {}
+                    elif isinstance(user, dict) and 'user_metadata' in user:
+                        return user['user_metadata'] or {}
+                    elif isinstance(user, dict) and 'user' in user and isinstance(user['user'], dict) and 'user_metadata' in user['user']:
+                        return user['user']['user_metadata'] or {}
+                return {}
         except Exception as e:
             logger.error(f"Error getting user metadata: {e}")
             return {}
@@ -135,13 +132,10 @@ class UserManager(DatabaseManager):
             # Merge with new metadata
             updated_metadata = {**current_metadata, **metadata}
             
-            # Update via auth API
-            response = self.client.auth.admin.update_user_by_id(
-                user_id,
-                {"raw_user_meta_data": updated_metadata}
-            )
+            # Update in user_details table instead of auth.users
+            response = self.client.from_("user_details").update({"metadata": updated_metadata}).eq("id", user_id).execute()
             
-            success = bool(response)
+            success = bool(response.data)
             if success:
                 logger.info(f"Updated metadata for user {user_id}")
             else:
@@ -236,7 +230,7 @@ class UserManager(DatabaseManager):
             return False
     
     def get_complete_user_profile(self) -> Optional[Dict[str, Any]]:
-        """Get a complete user profile combining auth.users, user_profiles, and user_details.
+        """Get a complete user profile combining user profiles and user details.
         
         Returns:
             The complete user profile if found, None otherwise

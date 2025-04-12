@@ -10,6 +10,10 @@ import os
 import sys
 from pathlib import Path
 
+# Set higher logging level for noisy HTTP and Supabase libraries
+for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:
+    logging.getLogger(library).setLevel(logging.WARNING)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

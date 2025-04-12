@@ -18,6 +18,8 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 - **Persistent Settings**: Your calibration settings are saved between sessions
 - **Low Latency**: Designed for minimal input lag, critical for racing applications
 - **Admin Mode**: Runs with administrator privileges to ensure proper device access
+- **iRacing Lap Time Tracking**: Save and analyze your lap times from iRacing in a Supabase database
+- **Telemetry Analysis**: Compare your driving inputs across different laps to improve your racing lines
 
 ## Requirements
 
@@ -127,6 +129,39 @@ New in version 1.4.1, TrackPro now supports cloud-synced pedal profiles:
    - Your pedal settings will be updated immediately
 
 This feature allows you to maintain consistent pedal response across different computers and easily switch between different setups for different games or tracks.
+
+### iRacing Lap Time Tracking
+
+New in version 1.4.1, TrackPro includes a powerful lap time tracking system for iRacing:
+
+1. **Automatic Lap Detection**:
+   - TrackPro automatically detects and records laps while you're racing in iRacing
+   - All lap data is saved to a Supabase database for easy access and analysis
+   - Includes lap times, sector times, and validity status
+
+2. **Detailed Telemetry Recording**:
+   - Full telemetry data is captured for each lap including:
+     - Speed, RPM, and gear at each track position
+     - Throttle, brake, and clutch inputs throughout the lap
+     - Steering angle data for analyzing racing lines
+   - Telemetry points are stored at multiple points around the track for detailed analysis
+
+3. **View and Compare Lap Data**:
+   - Compare your best laps to see where you can improve
+   - Analyze throttle, brake, and steering inputs to optimize your driving technique
+   - Track your progress over time as you improve your skills
+
+4. **Access Your Data Anywhere**:
+   - All lap data is stored in the cloud via Supabase
+   - Access your lap history from any computer with TrackPro installed
+   - Share your lap data with teammates or coaches for feedback
+
+5. **Track and Car Database**:
+   - Automatically organizes your lap data by track and car
+   - Easily filter and find your best laps for specific track/car combinations
+   - Compare performance across different cars on the same track
+
+To use this feature, simply race in iRacing while TrackPro is running. Lap data will be automatically saved to your Supabase account. Access your lap history through the Race Coach tab in TrackPro.
 
 ### Preset Curves
 

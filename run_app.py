@@ -7,6 +7,10 @@ import time
 import logging
 from datetime import datetime
 
+# Set higher logging level for noisy HTTP and Supabase libraries
+for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager', 'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 'supafunc']:
+    logging.getLogger(library).setLevel(logging.CRITICAL)
+
 # Disable any startup version dialogs or build information popups
 os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
 os.environ['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output
@@ -34,7 +38,7 @@ except Exception:
 # Set up logging
 # File logging has been removed
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout)

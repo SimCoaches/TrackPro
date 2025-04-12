@@ -10,9 +10,16 @@ logger = logging.getLogger(__name__)
 class CalibrationManager(DatabaseManager):
     """Manages calibration-related database operations."""
     
-    def __init__(self):
-        """Initialize the calibration manager."""
-        super().__init__("user_calibrations")
+    def __init__(self, client=None):
+        """Initialize the calibration manager.
+        
+        Args:
+            client: The Supabase client
+        """
+        super().__init__(client)
+        self.table_name = "user_calibrations"
+        self._pending_saves = {}  # Track pending calibration saves by user/name
+        self._save_timers = {}    # Track save timers by user/name
     
     def get_user_calibrations(self, user_id: str) -> List[Dict[str, Any]]:
         """Get all calibrations for a user.
@@ -41,6 +48,52 @@ class CalibrationManager(DatabaseManager):
         Returns:
             The saved calibration record
         """
+        # Create a unique key for this calibration
+        save_key = f"{user_id}_{name}"
+        
+        # Store the pending data
+        self._pending_saves[save_key] = {
+            "user_id": user_id,
+            "name": name,
+            "data": data
+        }
+        
+        # If there's already a timer for this calibration, cancel it
+        if save_key in self._save_timers and self._save_timers[save_key]:
+            try:
+                self._save_timers[save_key].cancel()
+            except:
+                pass
+        
+        # Schedule the actual save after a delay of 60 seconds (1 minute)
+        import threading
+        timer = threading.Timer(60.0, self._perform_save, args=[save_key])
+        timer.daemon = True
+        self._save_timers[save_key] = timer
+        timer.start()
+        
+        # Return empty dict for now - actual save happens later
+        return {}
+    
+    def _perform_save(self, save_key: str):
+        """Actually perform the save operation after debounce period.
+        
+        Args:
+            save_key: The key identifying which calibration to save
+        """
+        if save_key not in self._pending_saves:
+            return
+            
+        # Get the pending save data
+        pending = self._pending_saves.pop(save_key)
+        user_id = pending["user_id"]
+        name = pending["name"]
+        data = pending["data"]
+        
+        # Clear the timer reference
+        if save_key in self._save_timers:
+            self._save_timers[save_key] = None
+        
         try:
             calibration_data = {
                 "user": user_id,

@@ -704,6 +704,36 @@ class HardwareInput:
             self._save_calibration_to_file(calibration)
             logger.info("Calibration saved locally")
             
+            # Create or reset the cloud upload timer
+            if hasattr(self, '_cloud_save_timer') and self._cloud_save_timer:
+                try:
+                    self._cloud_save_timer.cancel()
+                except:
+                    pass
+            
+            # Store the calibration data for delayed upload
+            self._pending_cloud_calibration = calibration.copy()
+            
+            # Create a new timer for cloud upload with 1 minute delay
+            import threading
+            self._cloud_save_timer = threading.Timer(60.0, self._delayed_cloud_save)
+            self._cloud_save_timer.daemon = True
+            self._cloud_save_timer.start()
+            logger.info("Cloud save scheduled in 60 seconds")
+        except Exception as e:
+            logger.error(f"Failed to save calibration: {e}")
+            raise
+    
+    def _delayed_cloud_save(self):
+        """Save calibration to cloud after delay period."""
+        try:
+            # Only proceed if we have pending calibration data
+            if not hasattr(self, '_pending_cloud_calibration') or not self._pending_cloud_calibration:
+                return
+                
+            # Get the pending calibration
+            calibration = self._pending_cloud_calibration
+                
             # Save to cloud if authenticated
             if supabase.is_authenticated():
                 user = supabase.get_user()
@@ -723,9 +753,8 @@ class HardwareInput:
                         )
                     logger.info("Calibration saved to cloud")
         except Exception as e:
-            logger.error(f"Failed to save calibration: {e}")
-            raise
-    
+            logger.error(f"Failed to save calibration to cloud: {e}")
+
     def read_pedals(self):
         """Read current pedal values."""
         # Process events to get fresh values if pedals are connected

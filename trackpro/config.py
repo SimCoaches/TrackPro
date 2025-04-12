@@ -11,7 +11,8 @@ DEFAULT_CONFIG = {
     'supabase': {
         'enabled': True,  # Start with cloud sync enabled by default
         'url': 'https://xbfotxwpntqplvvsffrr.supabase.co',
-        'key': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhiZm90eHdwbnRxcGx2dnNmZnJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTM5NjUsImV4cCI6MjA1OTg4OTk2NX0.AwLUhaxQQn9xnpTwgOrRIdWQYsVI9-ikC2Qb-6SR2h8'
+        'key': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhiZm90eHdwbnRxcGx2dnNmZnJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTM5NjUsImV4cCI6MjA1OTg4OTk2NX0.AwLUhaxQQn9xnpTwgOrRIdWQYsVI9-ikC2Qb-6SR2h8',
+        'debug_mode': False  # Set to True for additional diagnostic logging
     }
 }
 
@@ -111,8 +112,23 @@ class Config:
     def supabase_enabled(self) -> bool:
         """Check if Supabase integration is enabled."""
         enabled = self.get('supabase.enabled', True)  # Default to True
+        
+        # Force enable for debugging if needed
+        if os.getenv('TRACKPRO_FORCE_SUPABASE', '').lower() == 'true':
+            logger.info("Supabase forcibly enabled by environment variable")
+            self.set('supabase.enabled', True)
+            return True
+        
         logger.info(f"Supabase enabled: {enabled}")
         return enabled
+    
+    @property
+    def supabase_debug(self) -> bool:
+        """Check if Supabase debug mode is enabled."""
+        debug = self.get('supabase.debug_mode', False)
+        if os.getenv('TRACKPRO_SUPABASE_DEBUG', '').lower() == 'true':
+            debug = True
+        return debug
 
 # Create global config instance
 config = Config() 

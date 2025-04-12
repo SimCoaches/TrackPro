@@ -47,16 +47,19 @@ class DraggableChartView(QChartView):
         super().__init__(chart, parent)
         self.setRenderHint(QPainter.Antialiasing)
         self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setViewportUpdateMode(QChartView.SmartViewportUpdate)
+        self.setViewportUpdateMode(QChartView.MinimalViewportUpdate)  # Use minimal updates for better performance
         self.setMouseTracking(True)
         self.dragging_point = None
         self.scatter_series = None
         self.line_series = None
         self.original_points = []  # Store original point order
+        self.dragging_active = False  # Flag to track active dragging state
         
         # Add mouse move throttling for better performance
         self.last_move_time = 0
-        self.move_interval = 8  # More responsive (~120fps) while still preventing excessive updates
+        self.move_interval = 16  # More responsive (~60fps) while still preventing excessive updates
+        self.pending_update = False
+        self.current_drag_pos = None  # Store current drag position
     
     def set_scatter_series(self, series, line_series=None):
         """Set the scatter series and line series for dragging points."""
@@ -83,6 +86,10 @@ class DraggableChartView(QChartView):
             
             if closest_point is not None:
                 self.dragging_point = closest_point
+                self.dragging_active = True
+                # Store original points before drag starts
+                self.original_points = [self.scatter_series.at(i) for i in range(self.scatter_series.count())]
+                self.current_drag_pos = event.pos()
                 event.accept()
                 return
                 
@@ -90,58 +97,78 @@ class DraggableChartView(QChartView):
     
     def mouseMoveEvent(self, event: QMouseEvent):
         """Handle point dragging."""
-        if self.dragging_point is not None and self.scatter_series:
+        if self.dragging_point is not None and self.scatter_series and self.dragging_active:
+            # Store current drag position
+            self.current_drag_pos = event.pos()
+            
             # Add throttling to prevent excessive updates, but keep it responsive
             current_time = int(time.time() * 1000)
             if current_time - self.last_move_time < self.move_interval:
+                # Schedule an update if we don't have one already
+                if not self.pending_update:
+                    QTimer.singleShot(self.move_interval, self.process_pending_drag)
+                    self.pending_update = True
                 return
             
             self.last_move_time = current_time
-            value = self.chart().mapToValue(event.pos())
-            
-            # Get current points while maintaining order
-            points = [self.scatter_series.at(i) for i in range(self.scatter_series.count())]
-            
-            # Calculate allowed x range for this point
-            min_x = 0 if self.dragging_point == 0 else points[self.dragging_point - 1].x() + 1
-            max_x = 100 if self.dragging_point == len(points) - 1 else points[self.dragging_point + 1].x() - 1
-            
-            # Constrain to valid range
-            x = max(min_x, min(max_x, value.x()))
-            y = max(0, min(100, value.y()))
-            
-            # Only update if value actually changed significantly
-            current_point = points[self.dragging_point]
-            if abs(current_point.x() - x) < 0.1 and abs(current_point.y() - y) < 0.1:
-                return  # Skip insignificant changes
-            
-            # Update only the dragged point
-            points[self.dragging_point] = QPointF(x, y)
-            
-            # Update scatter series
-            self.scatter_series.clear()
-            for point in points:
-                self.scatter_series.append(point)
-            
-            # Update line series
-            if self.line_series:
-                self.line_series.clear()
-                for point in points:
-                    self.line_series.append(point)
-            
-            self.point_moved.emit()
+            self.pending_update = False
+            self.update_drag_position(self.current_drag_pos)
             event.accept()
             return
             
         super().mouseMoveEvent(event)
     
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        """Handle end of point drag."""
-        if self.dragging_point is not None:
-            self.dragging_point = None
-            event.accept()
+    def process_pending_drag(self):
+        """Process any pending drag updates."""
+        self.pending_update = False
+        if self.dragging_active and self.current_drag_pos:
+            self.update_drag_position(self.current_drag_pos)
+    
+    def update_drag_position(self, pos):
+        """Update the dragged point position with the given mouse position."""
+        if self.dragging_point is None or not self.scatter_series or not self.dragging_active:
             return
             
+        value = self.chart().mapToValue(pos)
+        
+        # Get current points while maintaining order
+        points = self.original_points.copy()
+        
+        # Calculate allowed x range for this point
+        min_x = 0 if self.dragging_point == 0 else points[self.dragging_point - 1].x() + 1
+        max_x = 100 if self.dragging_point == len(points) - 1 else points[self.dragging_point + 1].x() - 1
+        
+        # Constrain to valid range
+        x = max(min_x, min(max_x, value.x()))
+        y = max(0, min(100, value.y()))
+        
+        # Update only the dragged point
+        points[self.dragging_point] = QPointF(x, y)
+        
+        # Update scatter series - clear and reload all points to avoid flickering
+        self.scatter_series.clear()
+        for point in points:
+            self.scatter_series.append(point)
+        
+        # Update line series
+        if self.line_series:
+            self.line_series.clear()
+            for point in points:
+                self.line_series.append(point)
+        
+        # Update our stored points
+        self.original_points = points
+        
+        self.point_moved.emit()
+    
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Handle mouse release to end point dragging."""
+        if event.button() == Qt.LeftButton and self.dragging_point is not None:
+            self.dragging_active = False
+            self.dragging_point = None
+            self.current_drag_pos = None
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
 # Completely new implementation for the plot graph system
@@ -158,7 +185,8 @@ class IntegratedCalibrationChart:
         self.min_deadzone = 0  # Minimum deadzone percentage
         self.max_deadzone = 0  # Maximum deadzone percentage
         self.last_update_time = 0  # Timestamp of last update
-        self.update_interval = 16  # Minimum milliseconds between updates (approx 60fps)
+        self.update_interval = 33  # Increased to ~30fps for better performance
+        self.update_scheduled = False  # Track whether an update is already scheduled
         
         # Create chart with dark theme
         self.chart = QChart()
@@ -175,13 +203,13 @@ class IntegratedCalibrationChart:
         # Create persistent line series for deadzone visualization
         self.min_deadzone_lower_series = QLineSeries()
         self.min_deadzone_upper_series = QLineSeries()
-        self.min_deadzone_lower_series.setUseOpenGL(True)
-        self.min_deadzone_upper_series.setUseOpenGL(True)
+        self.min_deadzone_lower_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        self.min_deadzone_upper_series.setUseOpenGL(False)  # Disable OpenGL for better performance
         
         self.max_deadzone_lower_series = QLineSeries()
         self.max_deadzone_upper_series = QLineSeries()
-        self.max_deadzone_lower_series.setUseOpenGL(True)
-        self.max_deadzone_upper_series.setUseOpenGL(True)
+        self.max_deadzone_lower_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        self.max_deadzone_upper_series.setUseOpenGL(False)  # Disable OpenGL for better performance
         
         # Create axes with grid
         self.axis_x = QValueAxis()
@@ -214,7 +242,7 @@ class IntegratedCalibrationChart:
         # This is key to ensuring the dot stays on the line
         self.curve_series = QLineSeries()
         self.curve_series.setPen(QPen(QColor(0, 120, 255), 3))
-        self.curve_series.setUseOpenGL(True)  # Enable OpenGL
+        self.curve_series.setUseOpenGL(False)  # Disable OpenGL for better performance with frequent updates
         self.chart.addSeries(self.curve_series)
         
         # Create a separate series for the draggable control points
@@ -222,7 +250,7 @@ class IntegratedCalibrationChart:
         self.control_points_series.setMarkerSize(12)
         self.control_points_series.setColor(QColor(255, 0, 0))
         self.control_points_series.setBorderColor(QColor(255, 255, 255))
-        self.control_points_series.setUseOpenGL(False)  # Disable OpenGL for control points to enable proper interaction
+        self.control_points_series.setUseOpenGL(False)  # Keep disabled for interaction
         self.chart.addSeries(self.control_points_series)
         
         # Create series for deadzone visualization
@@ -231,7 +259,7 @@ class IntegratedCalibrationChart:
         self.min_deadzone_pen.setWidth(1)
         self.min_deadzone_series.setPen(self.min_deadzone_pen)
         self.min_deadzone_series.setBrush(QBrush(QColor(230, 100, 0, 80)))
-        self.min_deadzone_series.setUseOpenGL(True)  # Enable OpenGL
+        self.min_deadzone_series.setUseOpenGL(False)  # Disable OpenGL for better performance
         self.chart.addSeries(self.min_deadzone_series)
         
         self.max_deadzone_series = QAreaSeries()
@@ -239,7 +267,7 @@ class IntegratedCalibrationChart:
         self.max_deadzone_pen.setWidth(1)
         self.max_deadzone_series.setPen(self.max_deadzone_pen)
         self.max_deadzone_series.setBrush(QBrush(QColor(230, 100, 0, 80)))
-        self.max_deadzone_series.setUseOpenGL(True)  # Enable OpenGL
+        self.max_deadzone_series.setUseOpenGL(False)  # Disable OpenGL for better performance
         self.chart.addSeries(self.max_deadzone_series)
         
         # Create a separate series for the indicator dot that will be precisely positioned
@@ -247,7 +275,7 @@ class IntegratedCalibrationChart:
         self.indicator_series.setMarkerSize(10)
         self.indicator_series.setColor(QColor(0, 255, 0))
         self.indicator_series.setBorderColor(QColor(255, 255, 255))
-        self.indicator_series.setUseOpenGL(True)  # Enable OpenGL
+        self.indicator_series.setUseOpenGL(False)  # Disable OpenGL for better performance
         self.chart.addSeries(self.indicator_series)
         
         # Attach axes
@@ -267,9 +295,15 @@ class IntegratedCalibrationChart:
         # Create the chart view
         self.chart_view = DraggableChartView(self.chart)
         self.chart_view.setRenderHint(QPainter.Antialiasing)
-        self.chart_view.setViewportUpdateMode(QChartView.SmartViewportUpdate)  # Balance between performance and interaction accuracy
+        self.chart_view.setViewportUpdateMode(QChartView.MinimalViewportUpdate)
         self.chart_view.set_scatter_series(self.control_points_series, self.curve_series)
         self.chart_view.point_moved.connect(self.on_control_point_moved)
+        
+        # Debounce for control point updates
+        self.point_move_timer = QTimer()
+        self.point_move_timer.setSingleShot(True)
+        self.point_move_timer.timeout.connect(self._delayed_control_point_moved)
+        self.pending_update = False
         
         # Set minimum height for better visibility
         self.chart_view.setMinimumHeight(270)
@@ -323,9 +357,14 @@ class IntegratedCalibrationChart:
         # Only update visual indicator with throttling
         current_time = int(time.time() * 1000)  # Current time in milliseconds
         if current_time - self.last_update_time < self.update_interval:
-            return  # Skip visual update if not enough time has passed
+            if not self.update_scheduled:
+                # Schedule a single update after the throttle period
+                QTimer.singleShot(self.update_interval, self.update_indicator)
+                self.update_scheduled = True
+            return  # Skip immediate visual update if not enough time has passed
             
         self.last_update_time = current_time
+        self.update_scheduled = False
         self.update_indicator()
     
     def update_indicator(self):
@@ -414,6 +453,14 @@ class IntegratedCalibrationChart:
     
     def update_chart(self):
         """Update the chart with current calibration points and deadzones."""
+        # This is a complete redraw - it should be called much less frequently than update_indicator
+        
+        # Set updating flag to avoid re-entrancy
+        if hasattr(self, '_updating_chart') and self._updating_chart:
+            return
+            
+        self._updating_chart = True
+        
         # Clear series
         self.curve_series.clear()
         self.control_points_series.clear()
@@ -479,8 +526,11 @@ class IntegratedCalibrationChart:
         # Update deadzone visualization
         self._update_deadzone_visualization()
         
-        # Update the indicator to ensure it stays on the curve
+        # Update the indicator position
         self.update_indicator()
+        
+        # Clear the updating flag
+        self._updating_chart = False
     
     def _update_deadzone_visualization(self):
         """Update the visualization of min and max deadzones."""
@@ -533,10 +583,15 @@ class IntegratedCalibrationChart:
         # Update our internal points list
         self.points = updated_points
         
-        # Update the curve without modifying the control points
+        # Update the curve without modifying the control points - this ensures visual feedback is smooth
         self._update_curve_without_control_points()
         
-        # Notify parent about the change
+        # Debounce the callback
+        if not self.point_move_timer.isActive():
+            self.point_move_timer.start(300)  # 300ms debounce for notifying parent
+    
+    def _delayed_control_point_moved(self):
+        """Called after debounce period for control point movement."""
         if self.on_curve_changed:
             self.on_curve_changed()
     
@@ -1973,7 +2028,7 @@ class MainWindow(QMainWindow):
                         logger.warning("race_coach.db not found, will attempt to create it")
                 
                 # Import Race Coach components
-                from trackpro.race_coach import RaceCoachWidget
+                from trackpro.race_coach import RaceCoachWidget, create_race_coach_widget
                 logger.info("Imported Race Coach modules successfully")
                 
                 # Check if Race Coach widget already exists in stacked widget
@@ -1996,17 +2051,28 @@ class MainWindow(QMainWindow):
                     return
                 
                 # Create and add the Race Coach widget if it doesn't exist
-                race_coach_widget = RaceCoachWidget(self)
-                self.stacked_widget.addWidget(race_coach_widget)
+                # Use the factory function for better error handling
+                race_coach_widget = create_race_coach_widget(self)
+                if race_coach_widget is None:
+                    logger.error("Failed to create the Race Coach widget")
+                    QMessageBox.critical(
+                        self,
+                        "Component Error",
+                        "Failed to initialize the Race Coach component. Check logs for more details."
+                    )
+                    return
+                    
+                # Add to stacked widget and switch to it
+                race_coach_index = self.stacked_widget.addWidget(race_coach_widget)
                 # Switch to the Race Coach screen
-                self.stacked_widget.setCurrentIndex(1)
+                self.stacked_widget.setCurrentIndex(race_coach_index)
                 # Update menu action states
                 self.race_coach_action.setChecked(True)
                 self.pedal_config_action.setChecked(False)
                 # Hide calibration buttons
                 self.calibration_wizard_btn.setVisible(False)
                 self.save_calibration_btn.setVisible(False)
-                logger.info("Race Coach screen added and switched to")
+                logger.info(f"Race Coach screen added at index {race_coach_index} and switched to")
                 
             except ImportError as import_error:
                 logger.error(f"Failed to import Race Coach modules: {import_error}")

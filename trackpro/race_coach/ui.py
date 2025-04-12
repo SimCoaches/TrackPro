@@ -24,43 +24,55 @@ except ImportError:
     class QPointF:
         """Simple replacement for QPointF when not available."""
         def __init__(self, x, y):
-            self.x = x
-            self.y = y
+            self._x = x
+            self._y = y
+            
+        def x(self):
+            return self._x
+            
+        def y(self):
+            return self._y
             
     class QRectF:
         """Simple replacement for QRectF when not available."""
         def __init__(self, *args):
             if len(args) == 4:  # (x, y, width, height)
-                self.x = args[0]
-                self.y = args[1]
-                self.w = args[2]
-                self.h = args[3]
+                self._x = args[0]
+                self._y = args[1]
+                self._width = args[2]
+                self._height = args[3]
             elif len(args) == 2:  # (QPointF, QSizeF)
                 point, size = args
-                self.x = point.x
-                self.y = point.y
-                self.w = size.width
-                self.h = size.height
+                self._x = point.x() if hasattr(point, 'x') and callable(point.x) else point.x
+                self._y = point.y() if hasattr(point, 'y') and callable(point.y) else point.y
+                self._width = size.width() if hasattr(size, 'width') and callable(size.width) else size.width
+                self._height = size.height() if hasattr(size, 'height') and callable(size.height) else size.height
             else:
                 raise TypeError("QRectF requires either (x, y, width, height) or (QPointF, QSizeF)")
             
         def left(self):
-            return self.x
+            return self._x
             
         def top(self):
-            return self.y
+            return self._y
             
         def width(self):
-            return self.w
+            return self._width
             
         def height(self):
-            return self.h
+            return self._height
     
     class QSizeF:
         """Simple replacement for QSizeF when not available."""
         def __init__(self, width, height):
-            self.width = width
-            self.height = height
+            self._width = width
+            self._height = height
+            
+        def width(self):
+            return self._width
+            
+        def height(self):
+            return self._height
 
 # Try to import QPainterPath
 try:
@@ -70,17 +82,52 @@ except ImportError:
     class QPainterPath:
         """Simple replacement for QPainterPath - limited functionality."""
         def __init__(self):
-            self.points = []
+            self._points = []
+            self._current_point = (0, 0)
             
-        def moveTo(self, x, y):
-            self.points = [(x, y)]
+        def moveTo(self, x, y=None):
+            """Move to position without drawing a line."""
+            if y is None and isinstance(x, (QPointF, tuple)):
+                # Handle QPointF or tuple
+                if isinstance(x, QPointF):
+                    x_val = x.x() if callable(x.x) else x.x
+                    y_val = x.y() if callable(x.y) else x.y
+                else:
+                    x_val, y_val = x
+            else:
+                x_val, y_val = x, y
+                
+            self._current_point = (x_val, y_val)
+            self._points = [self._current_point]
             
-        def lineTo(self, x, y):
-            self.points.append((x, y))
+        def lineTo(self, x, y=None):
+            """Draw line from current position to specified point."""
+            if y is None and isinstance(x, (QPointF, tuple)):
+                # Handle QPointF or tuple
+                if isinstance(x, QPointF):
+                    x_val = x.x() if callable(x.x) else x.x
+                    y_val = x.y() if callable(x.y) else x.y
+                else:
+                    x_val, y_val = x
+            else:
+                x_val, y_val = x, y
+                
+            self._current_point = (x_val, y_val)
+            self._points.append(self._current_point)
             
         def closeSubpath(self):
-            if self.points and len(self.points) > 0:
-                self.points.append(self.points[0])
+            """Close the current subpath by drawing a line to the beginning point."""
+            if self._points and len(self._points) > 0:
+                self._points.append(self._points[0])
+                self._current_point = self._points[0]
+                
+        def isEmpty(self):
+            """Return True if the path contains no elements."""
+            return len(self._points) == 0
+            
+        def elementCount(self):
+            """Return the number of path elements."""
+            return len(self._points)
 
 logger = logging.getLogger(__name__)
 
@@ -138,10 +185,38 @@ class SpeedGauge(GaugeBase):
         width = self.width()
         height = self.height()
         
+        # Enforce minimum size for proper rendering
+        if width < 100 or height < 50:
+            # Draw a simplified version for very small sizes
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(self.background_color))
+            painter.drawRect(0, 0, width, height)
+            
+            # Draw a simple horizontal bar for speed
+            normalized = self.get_normalized_value()
+            if normalized > 0:
+                fill_width = int(normalized * width)
+                
+                # Simple gradient from blue to red
+                gradient = QLinearGradient(0, 0, width, 0)
+                gradient.setColorAt(0, self.low_speed_color)
+                gradient.setColorAt(1, self.high_speed_color)
+                
+                painter.setBrush(QBrush(gradient))
+                painter.drawRect(0, 0, fill_width, height)
+            
+            # Add basic speed text if there's enough room
+            if width >= 40 and height >= 20:
+                painter.setPen(QPen(self.text_color))
+                painter.drawText(0, 0, width, height, Qt.AlignCenter, f"{self.value:.0f}")
+            
+            return
+        
+        # Regular rendering for normal sizes
         # Calculate dimensions
-        padding = 10
+        padding = max(5, min(10, width / 20))  # Adaptive padding
         gauge_width = width - (padding * 2)
-        gauge_height = 30
+        gauge_height = max(10, min(30, height / 5))  # Adaptive height
         
         # Draw gauge background
         painter.setPen(Qt.NoPen)
@@ -162,43 +237,45 @@ class SpeedGauge(GaugeBase):
             painter.drawRoundedRect(padding, height - gauge_height - padding, 
                                    fill_width, gauge_height, 5, 5)
         
-        # Draw title
-        title_font = painter.font()
-        title_font.setPointSize(12)
-        title_font.setBold(True)
-        painter.setFont(title_font)
-        painter.setPen(QPen(self.text_color))
-        painter.drawText(padding, padding, gauge_width, 30, 
-                        Qt.AlignLeft | Qt.AlignVCenter, self.title)
+        # Draw title if there's enough room
+        if height >= 80:
+            title_font = painter.font()
+            title_font.setPointSize(max(8, min(12, width / 20)))  # Adaptive font size
+            title_font.setBold(True)
+            painter.setFont(title_font)
+            painter.setPen(QPen(self.text_color))
+            painter.drawText(padding, padding, gauge_width, 30, 
+                            Qt.AlignLeft | Qt.AlignVCenter, self.title)
         
-        # Draw value
+        # Draw value with adaptive font size
         value_font = painter.font()
-        value_font.setPointSize(22)
+        value_font.setPointSize(max(10, min(22, width / 10)))  # Adaptive font size
         value_font.setBold(True)
         painter.setFont(value_font)
         value_text = f"{self.value:.1f} {self.units}"
         painter.drawText(padding, 40, gauge_width, 50, 
                         Qt.AlignCenter, value_text)
         
-        # Draw tick marks
-        painter.setPen(QPen(self.text_color.lighter(150), 1))
-        tick_y = height - gauge_height - padding - 5
-        
-        # Major ticks every 50 km/h
-        for speed in range(0, int(self.max_value) + 1, 50):
-            tick_x = padding + (speed / self.max_value) * gauge_width
-            painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 10)
+        # Only draw tick marks if there's enough room
+        if width >= 200 and height >= 100:
+            painter.setPen(QPen(self.text_color.lighter(150), 1))
+            tick_y = height - gauge_height - padding - 5
             
-            # Draw tick label
-            painter.drawText(int(tick_x) - 15, tick_y - 15, 30, 20, 
-                            Qt.AlignCenter, str(speed))
-        
-        # Minor ticks every 10 km/h
-        painter.setPen(QPen(self.text_color.lighter(120), 0.5))
-        for speed in range(0, int(self.max_value) + 1, 10):
-            if speed % 50 != 0:  # Skip major ticks
+            # Major ticks every 50 km/h
+            for speed in range(0, int(self.max_value) + 1, 50):
                 tick_x = padding + (speed / self.max_value) * gauge_width
-                painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 5)
+                painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 10)
+                
+                # Draw tick label
+                painter.drawText(int(tick_x) - 15, tick_y - 15, 30, 20, 
+                                Qt.AlignCenter, str(speed))
+            
+            # Minor ticks every 10 km/h
+            painter.setPen(QPen(self.text_color.lighter(120), 0.5))
+            for speed in range(0, int(self.max_value) + 1, 10):
+                if speed % 50 != 0:  # Skip major ticks
+                    tick_x = padding + (speed / self.max_value) * gauge_width
+                    painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 5)
         
 class RPMGauge(GaugeBase):
     """Custom gauge widget for displaying engine RPM."""
@@ -221,8 +298,52 @@ class RPMGauge(GaugeBase):
         width = self.width()
         height = self.height()
         
+        # Enforce minimum size for proper rendering
+        if width < 100 or height < 100:
+            # Draw a simplified version for very small sizes
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(self.background_color))
+            painter.drawRect(0, 0, width, height)
+            
+            # Draw a simple arc for RPM if possible
+            if width >= 40 and height >= 40:
+                center_x = width / 2
+                center_y = height / 2
+                radius = min(width, height) / 2 - 2
+                
+                # Draw background arc
+                arc_rect = QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2)
+                painter.setPen(QPen(self.text_color.darker(120), 2))
+                painter.drawArc(arc_rect, 135 * 16, 270 * 16)
+                
+                # Draw filled arc for current RPM
+                normalized = self.get_normalized_value()
+                if normalized > 0:
+                    redline_normalized = (self.redline - self.min_value) / (self.max_value - self.min_value)
+                    
+                    # Determine color based on whether RPM is approaching redline
+                    if normalized < redline_normalized * 0.8:
+                        gauge_color = QColor(0, 150, 200)  # Blue for normal operation
+                    elif normalized < redline_normalized:
+                        gauge_color = QColor(255, 150, 0)  # Orange for approaching redline
+                    else:
+                        gauge_color = QColor(255, 50, 50)  # Red for at/beyond redline
+                        
+                    # Draw filled arc
+                    painter.setPen(QPen(gauge_color, 2, Qt.SolidLine, Qt.RoundCap))
+                    span = normalized * 270
+                    painter.drawArc(arc_rect, 135 * 16, int(span * 16))
+            
+            # Add basic RPM text
+            painter.setPen(QPen(self.text_color))
+            rpm_text = f"{self.value/1000:.1f}k"
+            painter.drawText(0, 0, width, height, Qt.AlignCenter, rpm_text)
+            
+            return
+        
+        # Regular rendering for normal sizes
         # Calculate dimensions and center point
-        margin = 10
+        margin = max(5, min(10, width / 20))  # Adaptive margin
         center_x = width / 2
         center_y = height / 2
         radius = min(width, height) / 2 - margin
@@ -251,7 +372,8 @@ class RPMGauge(GaugeBase):
                 gauge_color = QColor(255, 50, 50)  # Red for at/beyond redline
                 
             # Draw filled arc
-            painter.setPen(QPen(gauge_color, 10, Qt.SolidLine, Qt.RoundCap))
+            pen_width = max(5, min(10, width / 30))  # Adaptive pen width
+            painter.setPen(QPen(gauge_color, pen_width, Qt.SolidLine, Qt.RoundCap))
             span = normalized * span_angle
             painter.drawArc(arc_rect, start_angle * 16, int(span * 16))
         
@@ -550,10 +672,10 @@ class TelemetryComparisonWidget(QWidget):
         """)
         
         self.left_driver_lastname = QLabel("LECLERC")
-        self.left_driver_lastname.setStyleSheet(f"""
+        self.left_driver_lastname.setStyleSheet("""
             font-size: 18px;
             font-weight: bold;
-            color: rgb(255, 0, 0);
+            color: #FF0000;
         """)
         
         self.left_driver_team = QLabel("FERRARI")
@@ -617,7 +739,7 @@ class TelemetryComparisonWidget(QWidget):
                 border-radius: 5px;
             }
             QProgressBar::chunk {
-                background-color: rgb(255, 0, 0);
+                background-color: #FF0000;
                 border-radius: 5px;
             }
         """)
@@ -645,7 +767,7 @@ class TelemetryComparisonWidget(QWidget):
                 border-radius: 5px;
             }
             QProgressBar::chunk {
-                background-color: rgb(255, 0, 0);
+                background-color: #FF0000;
                 border-radius: 5px;
             }
         """)
@@ -673,7 +795,7 @@ class TelemetryComparisonWidget(QWidget):
                 border-radius: 5px;
             }
             QProgressBar::chunk {
-                background-color: rgb(255, 0, 0);
+                background-color: #FF0000;
                 border-radius: 5px;
             }
         """)
@@ -727,10 +849,10 @@ class TelemetryComparisonWidget(QWidget):
         """)
         
         self.right_driver_lastname = QLabel("SAINZ")
-        self.right_driver_lastname.setStyleSheet(f"""
+        self.right_driver_lastname.setStyleSheet("""
             font-size: 18px;
             font-weight: bold;
-            color: rgb(255, 215, 0);
+            color: #FFD700;
         """)
         
         self.right_driver_team = QLabel("FERRARI")
@@ -797,7 +919,7 @@ class TelemetryComparisonWidget(QWidget):
                 border-radius: 5px;
             }
             QProgressBar::chunk {
-                background-color: rgb(255, 215, 0);
+                background-color: #FFD700;
                 border-radius: 5px;
             }
         """)
@@ -825,7 +947,7 @@ class TelemetryComparisonWidget(QWidget):
                 border-radius: 5px;
             }
             QProgressBar::chunk {
-                background-color: rgb(255, 215, 0);
+                background-color: #FFD700;
                 border-radius: 5px;
             }
         """)
@@ -853,7 +975,7 @@ class TelemetryComparisonWidget(QWidget):
                 border-radius: 5px;
             }
             QProgressBar::chunk {
-                background-color: rgb(255, 215, 0);
+                background-color: #FFD700;
                 border-radius: 5px;
             }
         """)
@@ -1101,9 +1223,7 @@ class TelemetryComparisonWidget(QWidget):
             self.left_driver_team.setText(driver["team"].upper())
             
             # Format lap time as M:SS.MMM
-            minutes = int(driver["lap_time"] / 60)
-            seconds = driver["lap_time"] % 60
-            self.left_lap_time.setText(f"{minutes}:{seconds:.3f}")
+            self.left_lap_time.setText(self._format_time(driver["lap_time"]))
             
             # Format gap
             if driver["gap"] <= 0:
@@ -1123,9 +1243,7 @@ class TelemetryComparisonWidget(QWidget):
             self.right_driver_team.setText(driver["team"].upper())
             
             # Format lap time as M:SS.MMM
-            minutes = int(driver["lap_time"] / 60)
-            seconds = driver["lap_time"] % 60
-            self.right_lap_time.setText(f"{minutes}:{seconds:.3f}")
+            self.right_lap_time.setText(self._format_time(driver["lap_time"]))
             
             # Format gap
             if driver["gap"] <= 0:
@@ -1927,86 +2045,112 @@ class TelemetryComparisonWidget(QWidget):
         # Force update
         self.update()
 
+    def _format_time(self, seconds):
+        """Format time in seconds to MM:SS.mmm format."""
+        if seconds is None or seconds <= 0:
+            return "--:--.---" 
+            
+        minutes = int(seconds / 60)
+        seconds_remainder = seconds % 60
+        
+        return f"{minutes}:{seconds_remainder:06.3f}"
+
 class RaceCoachWidget(QWidget):
     """Main widget for the Race Coach feature that can be embedded as a tab."""
     
     # Add signal for telemetry updates from background thread
-    telemetry_update_signal = pyqtSignal(dict)
+    # Define signal at class level with correct parameter type
+    telemetry_update_signal = pyqtSignal(object)
     
-    def __init__(self, parent=None, iracing_api=None, data_manager=None, model=None, lap_analysis=None, super_lap=None):
-        """Initialize the Race Coach widget.
+    def __init__(self, parent=None, iracing_api=None):
+        """
+        Initialize the Race Coach Widget.
         
         Args:
             parent: Parent widget
-            iracing_api: Instance of IRacingAPI class
-            data_manager: Instance of DataManager class
-            model: Instance of RacingModel class
-            lap_analysis: Instance of LapAnalysis class
-            super_lap: Instance of SuperLap class
+            iracing_api: Instance of iRacing API for telemetry access
         """
         super().__init__(parent)
         
-        try:
-            # Flag to indicate if the widget is being destroyed
-            self._is_destroying = False
-            
-            # Store component references - use provided iracing_api
-            if iracing_api is None:
-                # Import our SimpleIRacingAPI instead of using a mock
-                try:
-                    from trackpro.race_coach.simple_iracing import SimpleIRacingAPI
-                    self.iracing_api = SimpleIRacingAPI()
-                    logger.info("Created SimpleIRacingAPI for direct iRacing connection")
-                except ImportError as e:
-                    logger.error(f"Cannot import SimpleIRacingAPI: {e}")
-                    # Only as a last resort, use IRacingAPI from the module
-                    try:
-                        from trackpro.race_coach.iracing_api import IRacingAPI
-                        self.iracing_api = IRacingAPI()
-                        logger.info("Created IRacingAPI as alternative for direct iRacing connection")
-                    except ImportError as e2:
-                        logger.error(f"Cannot import IRacingAPI: {e2}")
-                        # We really don't want to end up here
-                        raise RuntimeError("Failed to create any iRacing API connection")
-            else:
-                self.iracing_api = iracing_api
-                logger.info(f"Using provided iracing_api: {type(self.iracing_api).__name__}")
-                
-            self.data_manager = data_manager
-            self.model = model
-            self.lap_analysis = lap_analysis
-            self.super_lap = super_lap
-            
-            # Connect the telemetry update signal to the slot
-            self.telemetry_update_signal.connect(self._on_telemetry_update_main_thread)
-            
-            # Initialize state
-            self._is_connected = False
-            self._current_track = "Unknown"
-            self._current_car = "Unknown"
-            self._driver_id = None
-            self._session_type = "Practice"
-            self._latest_telemetry = {}
-            
-            # Set up UI
-            self.setup_ui()
-            
-            # Set up a monitoring timer to regularly log pedal values
-            self._setup_monitoring_timer()
-            
-            # Get API class name for better logging
-            api_class_name = self.iracing_api.__class__.__name__
-            logger.info(f"Registering callbacks with IRacingAPI instance: {api_class_name}")
-            
-            # Register callbacks with iRacing API
+        # Set up internal state
+        self._is_destroying = False
+        self._is_connected = False  # Initialize connection status
+        self.telemetry_data = {}
+        self.previous_telemetry = {}
+        self.last_speed = 0
+        self.last_rpm = 0
+        self.lap_start_time = None
+        self.current_lap_time = 0
+        self.last_lap_time = 0
+        self.best_lap_time = 0
+        self.current_lap = 0
+        self.in_pit_lane = False
+        self.lap_valid = True
+        self.is_braking = False
+        self.prev_brake_value = 0
+        self.prev_throttle_value = 0
+        self.throttle_history = []
+        self.brake_history = []
+        self.clutch_history = []
+        self.steering_history = []
+        self.speed_history = []
+        self.rpm_history = []
+        self.gear_history = []
+        
+        # Connect the telemetry update signal to the handler method
+        # Make sure signal is connected properly with instance method
+        self.telemetry_update_signal.connect(self._on_telemetry_update_main_thread)
+        
+        # If API is provided, use it
+        if iracing_api:
+            logger.info(f"Using provided iracing_api: {type(iracing_api).__name__}")
+            self.iracing_api = iracing_api
+        else:
+            logger.info("No iRacing API provided, creating new SimpleIRacingAPI")
             try:
-                self.iracing_api.register_on_connection_changed(self._on_iracing_connected)
-                self.iracing_api.register_on_session_info_changed(self._on_session_info_update)
+                from .simple_iracing import SimpleIRacingAPI
+                self.iracing_api = SimpleIRacingAPI()
+            except Exception as e:
+                logger.error(f"Failed to create SimpleIRacingAPI: {e}")
+                self.iracing_api = None
                 
-                # Create a safe callback that won't access a deleted widget
-                # We need to keep a reference to this function to be able to unregister it later
-                self._safe_telemetry_callback = self._create_safe_telemetry_callback()
-                self.iracing_api.register_on_telemetry_data(self._safe_telemetry_callback)
+        # Create a Supabase lap saver for the widget
+        try:
+            logger.info("Creating IRacingLapSaver in widget initialization")
+            from .iracing_lap_saver import IRacingLapSaver
+            self.lap_saver = IRacingLapSaver()
+            
+            # Set user ID for lap saver if we have it
+            try:
+                from ..auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and hasattr(user, 'id'):
+                    user_id = user.id
+                    logger.info(f"Set user ID for widget's lap saver: {user_id}")
+                    self.lap_saver.set_user_id(user_id)
+            except Exception as e:
+                logger.error(f"Failed to set user ID for lap saver: {e}")
+                
+            # Connect lap saver to the API
+            if self.iracing_api:
+                logger.info("Connected lap saver to iRacing API in widget initialization")
+                self.iracing_api.set_lap_saver(self.lap_saver)
+        except Exception as e:
+            logger.error(f"Failed to create or connect lap saver: {e}")
+            self.lap_saver = None
+                
+        # Create a safe telemetry callback to register with the API
+        self._safe_telemetry_callback = self._create_safe_telemetry_callback()
+        
+        # Connect to the API if available
+        if self.iracing_api:
+            try:
+                # Check if the API has the on_telemetry_data method
+                if hasattr(self.iracing_api, 'register_on_telemetry_data'):
+                    logger.info("Registering widget's telemetry callback with iRacing API")
+                    self.iracing_api.register_on_telemetry_data(self._safe_telemetry_callback)
+                else:
+                    logger.warning("API does not have register_on_telemetry_data method")
             except Exception as e:
                 logger.error(f"Error registering callbacks with iRacing API: {e}")
                 
@@ -2015,6 +2159,8 @@ class RaceCoachWidget(QWidget):
             self.connection_check_timer.timeout.connect(self._check_iracing_connection)
             self.connection_check_timer.start(1000)  # Check every 1 second
                 
+        try:
+            self.setup_ui()
         except Exception as e:
             logger.error(f"Error in RaceCoachWidget initialization: {e}")
             import traceback
@@ -2025,7 +2171,6 @@ class RaceCoachWidget(QWidget):
             error_label = QLabel(f"Failed to initialize Race Coach component: {str(e)}")
             error_label.setStyleSheet("color: red; font-weight: bold;")
             layout.addWidget(error_label)
-
     def setup_ui(self):
         """Set up the UI components."""
         # Create main layout
@@ -3159,7 +3304,7 @@ class RaceCoachWidget(QWidget):
         try:
             self.monitor_timer = QTimer()
             self.monitor_timer.timeout.connect(self._log_pedal_values)
-            self.monitor_timer.start(5000)  # Log every 5 seconds
+            self.monitor_timer.start(30000)  # Log every 30 seconds instead of 5 seconds
             logger.info("Started pedal values monitoring timer")
         except Exception as e:
             logger.error(f"Error setting up monitoring timer: {e}")
@@ -3183,13 +3328,13 @@ class RaceCoachWidget(QWidget):
                     brake_str = f"{brake:.2f}" if brake is not None else "N/A"
                     clutch_str = f"{clutch:.2f}" if clutch is not None else "N/A"
                     
-                    logger.info(f"MONITORING - Current pedal values: Throttle={throttle_str}, "
+                    logger.debug(f"MONITORING - Current pedal values: Throttle={throttle_str}, "
                               f"Brake={brake_str}, "
                               f"Clutch={clutch_str}")
                 else:
-                    logger.warning("MONITORING - No pedal values found in latest telemetry")
+                    logger.debug("MONITORING - No pedal values found in latest telemetry")
             else:
-                logger.warning("MONITORING - No telemetry data available")
+                logger.debug("MONITORING - No telemetry data available")
         except Exception as e:
             logger.error(f"Error in pedal monitoring: {e}")
             # Don't let monitoring errors crash the app
@@ -3207,7 +3352,9 @@ class RaceCoachWidget(QWidget):
                 # We lost the connection
                 logger.warning("Lost connection to iRacing")
                 self._is_connected = False
-                self.connect_button.setText("Connect")
+                # Only try to update button if it exists
+                if hasattr(self, 'connect_button'):
+                    self.connect_button.setText("Connect")
                 self._update_iracing_status(False)
             return
             
@@ -3217,9 +3364,12 @@ class RaceCoachWidget(QWidget):
                 is_connected = self.iracing_api.check_iracing()
                 if is_connected:
                     self._is_connected = True
-                    self.connect_button.setText("Disconnect")
+                    # Only try to update button if it exists
+                    if hasattr(self, 'connect_button'):
+                        self.connect_button.setText("Disconnect")
                     self._update_iracing_status(True)
-                    self.status_message.setText("Successfully connected to iRacing")
+                    if hasattr(self, 'status_message'):
+                        self.status_message.setText("Successfully connected to iRacing")
                     logger.info("Automatically connected to iRacing")
             except Exception as e:
                 logger.error(f"Error checking iRacing connection: {e}")
@@ -3388,73 +3538,31 @@ class RaceCoachWidget(QWidget):
         logger.info("Successfully updated UI with session info")
     
     def _on_telemetry_update(self, telemetry_data):
-        """Handle telemetry data updates from iRacing by emitting a signal to the main thread.
+        """Handle raw telemetry updates.
+        
+        This method is called by the API on a background thread.
+        To prevent threading issues, it emits a signal to handle the update on the main thread.
         
         Args:
             telemetry_data (dict): Telemetry data from iRacing
         """
         try:
-            # Check if widget is being destroyed
-            if hasattr(self, '_is_destroying') and self._is_destroying:
-                logger.debug("Widget is being destroyed, ignoring telemetry update")
+            # Skip if widget is being destroyed
+            if self._is_destroying:
                 return
                 
-            if not telemetry_data:
-                logger.warning("Received empty telemetry data")
-                return
-                
-            # Log telemetry data occasionally
-            if not hasattr(self, '_telemetry_log_counter'):
-                self._telemetry_log_counter = 0
-            
-            self._telemetry_log_counter += 1
-            if self._telemetry_log_counter % 100 == 0:  # Log every ~10 seconds
-                # Create a sanitized version for logging (only key values)
-                log_data = {
-                    'speed': telemetry_data.get('speed', 0),
-                    'rpm': telemetry_data.get('rpm', 0),
-                    'gear': telemetry_data.get('gear', 0),
-                    'throttle': telemetry_data.get('throttle', 0),
-                    'brake': telemetry_data.get('brake', 0),
-                    'lap_time': telemetry_data.get('lap_time', 0),
-                    'last_lap_time': telemetry_data.get('last_lap_time', 0),
-                    'best_lap_time': telemetry_data.get('best_lap_time', 0),
-                }
-                logger.debug(f"Telemetry update: {log_data}")
-            
-            # Make a defensive copy of the telemetry data
-            telemetry_copy = telemetry_data.copy() if isinstance(telemetry_data, dict) else telemetry_data
-            
-            # CRITICAL SAFETY CHECK: Use try-except to catch the case where the widget is deleted
-            # This is a more robust way to handle the case where the C++ object is deleted
-            try:
-                # Double-check that the widget is still valid by accessing a Qt property
-                # This will raise an exception if the C++ object is deleted
-                _ = self.objectName()
-                
-                # Only emit signal if widget still exists and is not being destroyed
-                if not self._is_destroying:
-                    self.telemetry_update_signal.emit(telemetry_copy)
-            except RuntimeError as e:
-                # If we get here, the Qt C++ object has been deleted
-                if "has been deleted" in str(e):
-                    # Use a class variable to only log this message once
-                    if not hasattr(RaceCoachWidget, '_widget_deleted_logged'):
-                        logger.debug("Qt widget already deleted, skipping telemetry update (subsequent similar messages suppressed)")
-                        # Set class variable to indicate we've logged this message
-                        RaceCoachWidget._widget_deleted_logged = True
-                else:
-                    # Re-raise other runtime errors
-                    raise
-            
+            # Emit signal to handle telemetry on main thread
+            self.telemetry_update_signal.emit(telemetry_data)
         except Exception as e:
-            logger.error(f"Error in telemetry update handler: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            # Don't re-raise the exception - we want to keep the telemetry handler running
-
+            logger.error(f"Error in telemetry update background handler: {e}")
+    
     def _update_iracing_status(self, connected):
         """Update iRacing connection status in UI."""
+        # Skip if iracing_status label doesn't exist
+        if not hasattr(self, 'iracing_status'):
+            logger.debug("Cannot update iRacing status - UI element not found")
+            return
+            
         if connected:
             self.iracing_status.setText("iRacing: Connected")
             self.iracing_status.setStyleSheet("""
@@ -3503,8 +3611,9 @@ class RaceCoachWidget(QWidget):
             
             # Log when we're actually updating the display (for debugging)
             has_speed = 'speed' in telemetry_data and telemetry_data['speed'] > 0
-            if has_speed and (not hasattr(self, '_last_display_update') or time.time() - self._last_display_update > 5):
-                logger.info(f"Updating telemetry display with speed: {telemetry_data.get('speed', 0):.1f} km/h")
+            if has_speed and (not hasattr(self, '_last_display_update') or time.time() - self._last_display_update > 30):
+                # Reduced from 5 to 30 seconds
+                logger.debug(f"Updating telemetry display with speed: {telemetry_data.get('speed', 0):.1f} km/h")
                 self._last_display_update = time.time()
                 
             # Update speed value directly in labels
@@ -3513,7 +3622,7 @@ class RaceCoachWidget(QWidget):
                 # Update speed value text
                 if hasattr(self, 'speed_value'):
                     self.speed_value.setText(f"{speed:.1f} km/h")
-                    logger.debug(f"Updated speed label to {speed:.1f} km/h")
+                    # Removed debug log
                 
                 # Also update speed gauge if it exists
                 if hasattr(self, 'speed_gauge'):
@@ -3525,7 +3634,7 @@ class RaceCoachWidget(QWidget):
                 # Update RPM value text
                 if hasattr(self, 'rpm_value'):
                     self.rpm_value.setText(f"{rpm:.0f}")
-                    logger.debug(f"Updated RPM label to {rpm:.0f}")
+                    # Removed debug log
                 
                 # Also update RPM gauge if it exists
                 if hasattr(self, 'rpm_gauge'):
@@ -3545,7 +3654,7 @@ class RaceCoachWidget(QWidget):
                 # Update gear display text
                 if hasattr(self, 'gear_value'):
                     self.gear_value.setText(gear_display)
-                    logger.debug(f"Updated gear display to {gear_display}")
+                    # Removed debug log
             
             # Update driver input displays - Throttle, Brake, Clutch
             # Extract input values with defaults
@@ -3558,7 +3667,7 @@ class RaceCoachWidget(QWidget):
             if isinstance(throttle, (int, float)) and isinstance(brake, (int, float)) and isinstance(clutch, (int, float)):
                 # Update input trace widget if it exists
                 if hasattr(self, 'input_trace'):
-                    logger.debug(f"Adding data points to input trace: T={throttle:.2f}, B={brake:.2f}, C={clutch:.2f}")
+                    # Removed debug log
                     self.input_trace.add_data_point(throttle, brake, clutch)
                     # No need to force repaint - the widget handles this safely now
                 
@@ -3567,7 +3676,7 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self, 'throttle_value'):
                     self.throttle_value.setText(f"{throttle_pct}%")
                     # No need for forced repaint
-                    logger.debug(f"Updated throttle display to {throttle_pct}%")
+                    # Removed debug log
                 if hasattr(self, 'throttle_bar'):
                     self.throttle_bar.setValue(throttle_pct)
                     # No need for forced repaint
@@ -3577,7 +3686,7 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self, 'brake_value'):
                     self.brake_value.setText(f"{brake_pct}%")
                     # No need for forced repaint
-                    logger.debug(f"Updated brake display to {brake_pct}%")
+                    # Removed debug log
                 if hasattr(self, 'brake_bar'):
                     self.brake_bar.setValue(brake_pct)
                     # No need for forced repaint
@@ -3587,7 +3696,7 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self, 'clutch_value'):
                     self.clutch_value.setText(f"{clutch_pct}%")
                     # No need for forced repaint
-                    logger.debug(f"Updated clutch display to {clutch_pct}%")
+                    # Removed debug log
                 if hasattr(self, 'clutch_bar'):
                     self.clutch_bar.setValue(clutch_pct)
                     # No need for forced repaint
@@ -3600,7 +3709,7 @@ class RaceCoachWidget(QWidget):
                     # Update the text value display
                     if hasattr(self, 'steering_value'):
                         self.steering_value.setText(f"{steering_degrees:.1f}°")
-                        logger.debug(f"Updated steering display to {steering_degrees:.1f}°")
+                        # Removed debug log
                     
                     # Update the progress bar - scale to percentage for display (-100 to 100)
                     # Assuming typical max steering angle is ±90 degrees
@@ -3620,7 +3729,15 @@ class RaceCoachWidget(QWidget):
                 formatted_time = self._format_time(lap_time)
                 if hasattr(self, 'lap_time_value'):
                     self.lap_time_value.setText(formatted_time)
-                    logger.debug(f"Updated current lap time to {formatted_time}")
+                    # Removed debug log
+            
+            # Update last lap time information
+            lap_time = telemetry_data.get('lap_time', 0)
+            if lap_time and lap_time > 0:
+                formatted_time = self._format_time(lap_time)
+                if hasattr(self, 'lap_time_value'):
+                    self.lap_time_value.setText(formatted_time)
+                    # Removed debug log
             
             # Update last lap time information
             last_lap_time = telemetry_data.get('last_lap_time', 0)
@@ -3629,7 +3746,7 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self, 'last_lap_value'):
                     self.last_lap_value.setText(formatted_time)
                     if not hasattr(self, '_last_displayed_lap_time') or self._last_displayed_lap_time != last_lap_time:
-                        logger.info(f"Updated last lap time to {formatted_time}")
+                        logger.debug(f"Updated last lap time to {formatted_time}")
                         self._last_displayed_lap_time = last_lap_time
             
             # Update best lap time information
@@ -3639,7 +3756,7 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self, 'best_lap_value'):
                     self.best_lap_value.setText(formatted_time)
                     if not hasattr(self, '_best_displayed_lap_time') or self._best_displayed_lap_time != best_lap_time:
-                        logger.info(f"Updated best lap time to {formatted_time}")
+                        logger.debug(f"Updated best lap time to {formatted_time}")
                         self._best_displayed_lap_time = best_lap_time
             
             # Update lap count if available
@@ -3648,7 +3765,7 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self, 'lap_info'):
                     self.lap_info.setText(str(lap_count))
                     if not hasattr(self, '_last_displayed_lap_count') or self._last_displayed_lap_count != lap_count:
-                        logger.info(f"Updated lap count to {lap_count}")
+                        logger.debug(f"Updated lap count to {lap_count}")
                         self._last_displayed_lap_count = lap_count
             
             # Update status message occasionally
@@ -4104,7 +4221,7 @@ class RaceCoachWidget(QWidget):
     def _format_time(self, seconds):
         """Format time in seconds to MM:SS.mmm format."""
         if seconds is None or seconds <= 0:
-            return "--:--.--.---" 
+            return "--:--.---" 
             
         minutes = int(seconds / 60)
         seconds_remainder = seconds % 60
@@ -4253,8 +4370,8 @@ class RaceCoachWidget(QWidget):
         except Exception as e:
             logger.error(f"Error in telemetry update main thread handler: {e}")
             import traceback
-            logger.error(traceback.format_exc())
-
+            logger.error(traceback.format_exc())    
+            
     def closeEvent(self, event):
         """Override closeEvent to properly handle widget destruction."""
         logger.info("RaceCoachWidget closing, performing cleanup...")
@@ -4465,3 +4582,55 @@ class RaceCoachWidget(QWidget):
         
         # Force update
         self.update()
+
+    def _update_gear_display(self, gear_value):
+        """Update the gear display."""
+        try:
+            if gear_value == 0:
+                gear_text = "N"
+            elif gear_value == -1:
+                gear_text = "R"
+            else:
+                gear_text = str(gear_value)
+                
+            self.gear_value.setText(gear_text)
+            logger.debug(f"Updated gear display to {gear_text}")
+        except Exception as e:
+            logger.error(f"Error updating gear display: {e}")
+            
+    def _update_pedal_displays(self, throttle, brake, clutch, steering):
+        """Update the pedal input displays."""
+        try:
+            # Update throttle display
+            if throttle is not None:
+                throttle_pct = int(throttle * 100)
+                self.throttle_value.setText(f"{throttle_pct}%")
+                self.throttle_bar.setValue(throttle_pct)
+                logger.debug(f"Updated throttle display to {throttle_pct}%")
+            
+            # Update brake display
+            if brake is not None:
+                brake_pct = int(brake * 100)
+                self.brake_value.setText(f"{brake_pct}%")
+                self.brake_bar.setValue(brake_pct)
+                logger.debug(f"Updated brake display to {brake_pct}%")
+            
+            # Update clutch display
+            if clutch is not None:
+                clutch_pct = int(clutch * 100)
+                self.clutch_value.setText(f"{clutch_pct}%")
+                self.clutch_bar.setValue(clutch_pct)
+                logger.debug(f"Updated clutch display to {clutch_pct}%")
+            
+            # Update steering display
+            if steering is not None:
+                # Convert to degrees with 1 decimal place
+                steering_deg = round(steering * 450, 1)  # Assuming 450 degrees lock-to-lock
+                self.steering_value.setText(f"{steering_deg}°")
+                logger.debug(f"Updated steering display to {steering_deg}°")
+                
+        except Exception as e:
+            logger.error(f"Error updating pedal displays: {e}")
+
+
+

@@ -71,4 +71,129 @@ BEGIN
   ) THEN
     RAISE NOTICE 'No users exist. Sign up a test user to verify authentication is working.';
   END IF;
-END $$; 
+END $$;
+
+-- iRacing Database Schema
+-- Tracks table to store information about racing tracks
+CREATE TABLE public.tracks (
+    id SERIAL PRIMARY KEY,
+    iracing_id INTEGER UNIQUE,
+    name TEXT NOT NULL,
+    config TEXT,
+    location TEXT,
+    length_km NUMERIC(10, 3),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+);
+
+-- Cars table to store information about racing cars
+CREATE TABLE public.cars (
+    id SERIAL PRIMARY KEY,
+    iracing_id INTEGER UNIQUE,
+    name TEXT NOT NULL,
+    class TEXT,
+    year INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+);
+
+-- Sessions table to store information about racing sessions
+CREATE TABLE public.sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id),
+    track_id INTEGER REFERENCES public.tracks(id),
+    car_id INTEGER REFERENCES public.cars(id),
+    session_type TEXT, -- Qualifying, Race, Practice, etc.
+    weather_conditions JSONB,
+    session_date TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+);
+
+-- Laps table to store lap time information
+CREATE TABLE public.laps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id),
+    lap_number INTEGER NOT NULL,
+    lap_time NUMERIC(10, 3) NOT NULL, -- in seconds
+    sector1_time NUMERIC(10, 3),
+    sector2_time NUMERIC(10, 3),
+    sector3_time NUMERIC(10, 3),
+    is_valid BOOLEAN DEFAULT true,
+    is_personal_best BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb -- Additional metadata like fuel, tires, etc.
+);
+
+-- Telemetry data points table (for detailed lap analysis)
+CREATE TABLE public.telemetry_points (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lap_id UUID REFERENCES public.laps(id) ON DELETE CASCADE,
+    track_position NUMERIC(5, 4) NOT NULL, -- 0.0000 to 1.0000 around the track
+    speed NUMERIC(10, 2), -- km/h
+    rpm NUMERIC(10, 2),
+    gear INTEGER,
+    throttle NUMERIC(5, 4), -- 0.0000 to 1.0000
+    brake NUMERIC(5, 4), -- 0.0000 to 1.0000
+    clutch NUMERIC(5, 4), -- 0.0000 to 1.0000
+    steering NUMERIC(10, 6), -- Steering angle in radians
+    timestamp NUMERIC(15, 3), -- Timestamp relative to lap start in seconds
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+);
+
+-- Index for faster queries
+CREATE INDEX idx_laps_session_id ON public.laps(session_id);
+CREATE INDEX idx_laps_user_id ON public.laps(user_id);
+CREATE INDEX idx_telemetry_lap_id ON public.telemetry_points(lap_id);
+CREATE INDEX idx_telemetry_track_position ON public.telemetry_points(track_position);
+
+-- Enable Row Level Security on the new tables
+ALTER TABLE public.tracks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cars ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.laps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.telemetry_points ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policies
+-- Tracks and Cars are read-only for all authenticated users
+CREATE POLICY "Allow read access to tracks" ON public.tracks FOR SELECT USING (true);
+CREATE POLICY "Allow read access to cars" ON public.cars FOR SELECT USING (true);
+
+-- Allow authenticated users to read any session
+CREATE POLICY "Allow read access to all sessions" ON public.sessions FOR SELECT USING (auth.role() = 'authenticated');
+
+-- Allow users to insert, update and delete their own sessions
+CREATE POLICY "Allow insert of own sessions" ON public.sessions FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Allow update of own sessions" ON public.sessions FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Allow delete of own sessions" ON public.sessions FOR DELETE USING (auth.uid() = user_id);
+
+-- Allow authenticated users to read any lap
+CREATE POLICY "Allow read access to all laps" ON public.laps FOR SELECT USING (auth.role() = 'authenticated');
+
+-- Allow users to insert, update and delete their own laps
+CREATE POLICY "Allow insert of own laps" ON public.laps FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Allow update of own laps" ON public.laps FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Allow delete of own laps" ON public.laps FOR DELETE USING (auth.uid() = user_id);
+
+-- Telemetry points are accessible based on the lap's ownership
+CREATE POLICY "Allow read access to telemetry of accessible laps" 
+ON public.telemetry_points FOR SELECT 
+USING (EXISTS (
+    SELECT 1 FROM public.laps 
+    WHERE public.laps.id = public.telemetry_points.lap_id 
+    AND auth.role() = 'authenticated'
+));
+
+CREATE POLICY "Allow insert of telemetry for own laps" 
+ON public.telemetry_points FOR INSERT 
+WITH CHECK (EXISTS (
+    SELECT 1 FROM public.laps 
+    WHERE public.laps.id = public.telemetry_points.lap_id 
+    AND auth.uid() = public.laps.user_id
+));
+
+CREATE POLICY "Allow delete of telemetry for own laps" 
+ON public.telemetry_points FOR DELETE 
+USING (EXISTS (
+    SELECT 1 FROM public.laps 
+    WHERE public.laps.id = public.telemetry_points.lap_id 
+    AND auth.uid() = public.laps.user_id
+)); 

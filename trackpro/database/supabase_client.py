@@ -14,6 +14,29 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Global instance of SupabaseManager
+_supabase_manager = None
+
+def get_supabase_client():
+    """Get the global Supabase client instance.
+    
+    Returns:
+        Client: The Supabase client instance, or None if not initialized.
+    """
+    global _supabase_manager
+    
+    try:
+        # Initialize the manager if it doesn't exist
+        if _supabase_manager is None:
+            logger.info("Initializing Supabase manager for the first time")
+            _supabase_manager = SupabaseManager()
+        
+        # Return the client
+        return _supabase_manager.client
+    except Exception as e:
+        logger.error(f"Error getting Supabase client: {e}")
+        return None
+
 # DNS cache to avoid repeated lookups
 DNS_CACHE = {}
 DNS_CACHE_LOCK = threading.Lock()
@@ -219,15 +242,14 @@ class SupabaseManager:
                                 'access_token': self._saved_auth.get('access_token'),
                                 'refresh_token': self._saved_auth.get('refresh_token')
                             })
+                            logger.info("Session restored successfully using access and refresh tokens")
                         else:
-                            # Fallback for older versions that don't require refresh token
-                            try:
-                                self._client.auth.set_auth(self._saved_auth.get('access_token'))
-                            except AttributeError:
-                                # Try newer method format
-                                self._client.auth.set_session(self._saved_auth.get('access_token'))
-                                
-                        logger.info("Session restored successfully")
+                            # Refresh token is missing, cannot restore session reliably
+                            logger.warning("Cannot restore session: Refresh token is missing from saved authentication data.")
+                            # Do not attempt to set session without refresh token
+                            # Let the subsequent get_session() call handle the state
+
+                        # logger.info("Session restored successfully") # This log is now conditional
                     except Exception as e:
                         logger.warning(f"Failed to restore session: {e}")
                 
