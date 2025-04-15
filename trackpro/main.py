@@ -5,18 +5,20 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, Q
 from PyQt5.QtCore import QTimer, QPointF, Qt
 from PyQt5.QtGui import QPixmap
 import logging
-import pygame
+# Defer pygame import
+# import pygame
 import os
 import traceback
 import re
 
-from .pedals.hardware_input import HardwareInput
-from .pedals.output import VirtualJoystick
-from .ui import MainWindow
-from .pedals.hidhide import HidHideClient
-from .updater import Updater
-from .database import supabase
-from .auth import LoginDialog, oauth_handler
+# Defer local imports until needed in __init__ or other methods
+# from .pedals.hardware_input import HardwareInput
+# from .pedals.output import VirtualJoystick
+from .ui import MainWindow # Needed early for window creation
+# from .pedals.hidhide import HidHideClient
+# from .updater import Updater
+from .database import supabase # Potentially needed early depending on auth flow
+from .auth import LoginDialog, oauth_handler # Needed early for auth handler
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -244,8 +246,11 @@ class DebugWindow(QDialog):
 class TrackProApp:
     """Main application class."""
     
-    def __init__(self, test_mode=False):
+    def __init__(self, test_mode=False, start_time=None):
         """Initialize the application."""
+        # Store start time if provided
+        self.start_time = start_time
+
         # Ensure QApplication is properly initialized first
         self.app = QApplication.instance()
         if not self.app:
@@ -263,7 +268,14 @@ class TrackProApp:
         
         # Set up OAuth handler
         self.setup_oauth_handler()
-        
+
+        # Log time taken before creating splash screen
+        if self.start_time:
+            time_before_splash = time.time() - self.start_time
+            logger.info(f"Time before splash screen creation: {time_before_splash:.4f} seconds")
+            # Reset start_time to avoid logging again if init is somehow called twice
+            self.start_time = None
+
         # Create and show a splash screen with progress bar
         self.create_startup_progress()
         
@@ -288,11 +300,15 @@ class TrackProApp:
             # Update progress 20%
             self.update_progress(20, "Setting up hardware input...")
             
+            # Import HardwareInput just before use
+            from .pedals.hardware_input import HardwareInput
             # Setup hardware input and output
             self.hardware = HardwareInput(test_mode)
             
             # Update progress 30%
             self.update_progress(30, "Initializing virtual joystick...")
+            # Import VirtualJoystick just before use
+            from .pedals.output import VirtualJoystick
             self.output = VirtualJoystick()
             
             # Create default curve presets if they don't exist
@@ -322,6 +338,8 @@ class TrackProApp:
             self.update_progress(50, "Setting up HidHide...")
             if not hasattr(self, 'hidhide') or self.hidhide is None:
                 try:
+                    # Import HidHideClient just before use
+                    from .pedals.hidhide import HidHideClient
                     self.hidhide = HidHideClient(fail_silently=True)
                     if hasattr(self.hidhide, 'functioning') and self.hidhide.functioning:
                         logger.info("HidHide client initialized successfully")
@@ -345,6 +363,8 @@ class TrackProApp:
             
             # Setup updater
             self.update_progress(80, "Initializing update checker...")
+            # Import Updater just before use
+            from .updater import Updater
             self.updater = Updater(self.window)
             
             # Update progress to 90%
@@ -648,6 +668,22 @@ class TrackProApp:
         if not self.hardware:
             return
         
+        # Ensure pygame is initialized if not already (might be needed by hardware.read_pedals)
+        try:
+            import pygame
+            if not pygame.get_init():
+                pygame.init()
+            if not pygame.joystick.get_init():
+                 pygame.joystick.init()
+        except ImportError:
+            logger.error("Pygame import failed in process_input")
+            return # Cannot process input without pygame
+        except Exception as e:
+            logger.error(f"Error initializing pygame in process_input: {e}")
+            # Optionally return or try to continue if pygame isn't strictly necessary
+            # For now, we assume it is necessary for hardware.read_pedals
+            return
+        
         try:
             # If we're in the middle of a reconnection attempt, use last known values to avoid jumps
             if self.reconnecting and hasattr(self.hardware, 'last_values'):
@@ -838,6 +874,23 @@ class TrackProApp:
         """Clean up resources before application closes."""
         logger.info("Cleaning up resources...")
         
+        # Clean up Race Coach resources if it exists
+        if hasattr(self, 'window') and hasattr(self.window, 'stacked_widget'):
+            try:
+                logger.info("Looking for Race Coach widget to clean up...")
+                # Find and clean up Race Coach widget if it exists
+                for i in range(self.window.stacked_widget.count()):
+                    widget = self.window.stacked_widget.widget(i)
+                    if widget and hasattr(widget, 'iracing_api') and widget.iracing_api:
+                        logger.info("Found Race Coach widget, disconnecting iRacing API...")
+                        try:
+                            widget.iracing_api.disconnect()
+                            logger.info("Successfully disconnected iRacing API")
+                        except Exception as e:
+                            logger.error(f"Error disconnecting iRacing API: {e}")
+            except Exception as e:
+                logger.error(f"Error cleaning up Race Coach resources: {e}")
+        
         # Stop debug window timers first if it exists
         if hasattr(self, 'debug_window') and self.debug_window:
             try:
@@ -990,6 +1043,8 @@ class TrackProApp:
         # Clean up pygame resources
         if hasattr(self, 'hardware') and hasattr(self.hardware, 'pedals_connected') and self.hardware.pedals_connected:
             try:
+                # Ensure pygame is imported for cleanup
+                import pygame
                 logger.info("Cleaning up pygame resources...")
                 # Release the joystick object first
                 if hasattr(self.hardware, 'joystick') and self.hardware.joystick:
@@ -1136,105 +1191,46 @@ class TrackProApp:
             self.window.show_profile_manager = self.show_profile_manager
 
 def main():
-    """Main application entry point."""
-    # Check for test mode
-    test_mode = "--test" in sys.argv
-    # Set environment variable to disable startup version dialogs
-    os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
-    
-    # Create QApplication instance first to ensure it exists
-    # Use a single instance pattern
-    app_instance = QApplication.instance()
-    if not app_instance:
-        app_instance = QApplication(sys.argv)
-    
-    # Try to ensure HidHide cloaking is disabled before starting
-    # Use fail_silently=True to continue even if HidHide has issues
-    hidhide_client = None
-    try:
-        logger.info("Initializing HidHide to disable cloaking before startup...")
-        # No need to import again, it's already imported at module level
-        
-        # Initialize with fail_silently=True so the app can continue even if HidHide fails
-        hidhide_client = HidHideClient(fail_silently=True)
-        
-        # Try multiple approaches to ensure cloaking is disabled
-        if hidhide_client.functioning:
-            # Try CLI first (most reliable)
-            cli_result = hidhide_client._run_cli(["--cloak-off"], retry_count=3)
-            logger.info(f"Cloak disabled via CLI before startup: {cli_result}")
-            
-            # Try API method as backup
-            api_result = hidhide_client.set_cloak_state(False)
-            logger.info(f"Cloak disabled via API before startup: {api_result}")
-            
-            # If device name is known, try to unhide specific devices
-            if hasattr(hidhide_client, 'config') and hidhide_client.config.get('device_name'):
-                device_name = hidhide_client.config.get('device_name')
-            else:
-                # Fallback to common device names
-                device_name = "Sim Coaches P1 Pro Pedals"
-            
-            logger.info(f"Finding all devices matching: {device_name}")
-            matching_devices = hidhide_client.find_all_matching_devices(device_name)
-            if matching_devices:
-                for device_path in matching_devices:
-                    try:
-                        # Try unhide by instance path
-                        unhide_result = hidhide_client.unhide_device(device_path)
-                        logger.info(f"Unhid device '{device_path}' via API: {unhide_result}")
-                    except Exception as e:
-                        logger.warning(f"Error unhiding device via API: {e}")
-                        
-                        # Fallback to CLI if available
-                        try:
-                            unhide_cmd_result = hidhide_client._run_cli(["--dev-unhide", device_path])
-                            logger.info(f"Unhid device via CLI: {unhide_cmd_result}")
-                        except Exception as e2:
-                            logger.error(f"Error unhiding device via CLI: {e2}")
-        else:
-            logger.warning(f"HidHide not functioning, skipping pre-startup cloaking control. Error context: {hidhide_client.error_context}")
-            
-    except Exception as e:
-        logger.error(f"Error during HidHide pre-startup: {e}")
-        # Continue anyway, we'll attempt to initialize again in the app
-    
-    try:
-        # Create and run the application
-        app = TrackProApp(test_mode)
-        
-        # Pass the already initialized HidHide client to the app
-        if hidhide_client is not None:
-            app.hidhide = hidhide_client
-            logger.info("Using pre-initialized HidHide client")
-        
-        # Make sure app_instance and app.app point to the same QApplication
-        app.app = app_instance
-        
-        # Set up explicit clean shutdown when Python is exiting
-        import atexit
-        atexit.register(app.cleanup)
-        
-        # Run the app
-        return app.run()
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        logger.error(traceback.format_exc())
-        
-        # Clean up pygame as a last resort
-        try:
-            pygame.quit()
-        except:
-            pass
-            
-        # Display error in message box
-        error_box = QMessageBox()
-        error_box.setIcon(QMessageBox.Critical)
-        error_box.setWindowTitle("TrackPro Error")
-        error_box.setText(f"Fatal error: {e}")
-        error_box.setDetailedText(traceback.format_exc())
-        error_box.exec_()
-        return 1
+    """Main entry point for the application."""
+    start_time = time.time()  # Record start time
+    logger.info("TrackPro Application Starting...")
 
-if __name__ == "__main__":
+    # --- Argument Parsing (Optional) ---
+    # If you need command-line arguments, parse them here.
+    # For now, we'll assume no special arguments are needed.
+    test_mode = False # Set to True for testing without hardware perhaps
+
+    # --- Ensure Single Instance (Optional but Recommended for GUI apps) ---
+    # Implement single instance lock if needed (e.g., using a lock file or QSharedMemory)
+
+    # --- Exception Handling ---
+    try:
+        # Set application details (optional but good practice)
+        QApplication.setApplicationName("TrackPro")
+        # TODO: Read version from a central place (e.g., __init__.py or config file)
+        QApplication.setApplicationVersion("1.4.3")
+
+        # Initialize and run the application
+        trackpro_app = TrackProApp(test_mode=test_mode, start_time=start_time)
+        trackpro_app.run()
+
+    except Exception as e:
+        # Log the exception
+        logger.critical(f"Unhandled exception occurred: {e}", exc_info=True)
+
+        # Attempt to show an error message box (might fail if QApplication isn't running)
+        try:
+            error_dialog = QMessageBox()
+            error_dialog.setIcon(QMessageBox.Critical)
+            error_dialog.setWindowTitle("TrackPro Critical Error")
+            error_dialog.setText("A critical error occurred and TrackPro must exit.")
+            error_dialog.setDetailedText(traceback.format_exc())
+            error_dialog.setStandardButtons(QMessageBox.Ok)
+            error_dialog.exec_()
+        except Exception as msg_e:
+            logger.error(f"Could not display the error message box: {msg_e}")
+
+        sys.exit(1) # Exit with an error code
+
+if __name__ == '__main__':
     main() 

@@ -943,6 +943,48 @@ class HardwareInput:
                         'name': 'Rain Mode',
                         'points': [(0, 0), (25, 8), (50, 20), (75, 35), (90, 60), (100, 80)],
                         'curve_type': 'Rain Mode'
+                    },
+                    # New throttle profiles
+                    {
+                        'name': 'Drift Control',
+                        'points': [(0, 0), (20, 15), (40, 45), (60, 90), (80, 95), (100, 100)],
+                        'curve_type': 'Drift Control'
+                    },
+                    {
+                        'name': 'F1 Style',
+                        'points': [(0, 0), (10, 3), (20, 8), (40, 20), (60, 40), (80, 70), (100, 100)],
+                        'curve_type': 'F1 Style'
+                    },
+                    {
+                        'name': 'Rally',
+                        'points': [(0, 0), (20, 25), (40, 40), (60, 60), (80, 85), (100, 100)],
+                        'curve_type': 'Rally'
+                    },
+                    {
+                        'name': 'Dirt Track',
+                        'points': [(0, 0), (20, 10), (40, 30), (60, 45), (80, 70), (100, 90)],
+                        'curve_type': 'Dirt Track'
+                    },
+                    {
+                        'name': 'Super Precise',
+                        'points': [(0, 0), (10, 2), (25, 5), (50, 15), (75, 35), (85, 65), (95, 85), (100, 100)],
+                        'curve_type': 'Super Precise'
+                    },
+                    # Wet Weather Racing presets
+                    {
+                        'name': 'Wet Weather Racing',
+                        'points': [(0, 0), (15, 5), (30, 12), (45, 20), (60, 30), (75, 45), (90, 70), (100, 85)],
+                        'curve_type': 'Wet Weather Racing'
+                    },
+                    {
+                        'name': 'Light Rain',
+                        'points': [(0, 0), (20, 10), (40, 22), (60, 38), (80, 65), (100, 90)],
+                        'curve_type': 'Light Rain'
+                    },
+                    {
+                        'name': 'Extreme Wet',
+                        'points': [(0, 0), (15, 3), (30, 8), (45, 15), (60, 25), (75, 40), (90, 60), (100, 75)],
+                        'curve_type': 'Extreme Wet'
                     }
                 ],
                 'brake': [
@@ -961,6 +1003,17 @@ class HardwareInput:
                         'points': [(0, 0), (25, 30), (50, 50), (75, 65), (100, 80)],
                         'curve_type': 'ABS Simulation'
                     },
+                    # Enhanced ABS variations
+                    {
+                        'name': 'ABS Racing',
+                        'points': [(0, 0), (20, 25), (40, 45), (60, 60), (80, 75), (100, 85)],
+                        'curve_type': 'ABS Racing'
+                    },
+                    {
+                        'name': 'ABS Competition',
+                        'points': [(0, 0), (15, 20), (30, 40), (50, 60), (70, 75), (90, 85), (100, 90)],
+                        'curve_type': 'ABS Competition'
+                    },
                     {
                         'name': 'Trail Braking',
                         'points': [(0, 0), (15, 5), (30, 20), (50, 45), (70, 75), (85, 95), (100, 100)],
@@ -971,15 +1024,68 @@ class HardwareInput:
                         'points': [(0, 0), (20, 10), (40, 25), (60, 50), (80, 90), (90, 98), (100, 100)],
                         'curve_type': 'Threshold Braking'
                     },
+                    # Enhanced Threshold Braking variations
+                    {
+                        'name': 'Precision Threshold',
+                        'points': [(0, 0), (15, 8), (30, 18), (45, 35), (60, 65), (75, 85), (85, 95), (100, 100)],
+                        'curve_type': 'Precision Threshold'
+                    },
+                    {
+                        'name': 'Race Threshold',
+                        'points': [(0, 0), (10, 5), (25, 15), (40, 30), (55, 55), (70, 80), (85, 95), (100, 100)],
+                        'curve_type': 'Race Threshold'
+                    },
                     {
                         'name': 'Wet Weather',
                         'points': [(0, 0), (20, 5), (40, 15), (60, 30), (80, 60), (100, 85)],
                         'curve_type': 'Wet Weather'
                     },
+                    # Additional Wet Weather variations
+                    {
+                        'name': 'Wet Racing',
+                        'points': [(0, 0), (15, 7), (30, 18), (45, 32), (60, 50), (75, 70), (90, 85), (100, 92)],
+                        'curve_type': 'Wet Racing'
+                    },
+                    {
+                        'name': 'Wet Circuit',
+                        'points': [(0, 0), (20, 10), (35, 22), (50, 38), (65, 55), (80, 75), (100, 90)],
+                        'curve_type': 'Wet Circuit'
+                    },
+                    {
+                        'name': 'Extreme Wet Braking',
+                        'points': [(0, 0), (15, 5), (30, 12), (45, 20), (60, 35), (75, 55), (90, 75), (100, 85)],
+                        'curve_type': 'Extreme Wet Braking'
+                    },
                     {
                         'name': 'Initial Bite',
                         'points': [(0, 0), (10, 20), (30, 45), (50, 65), (70, 80), (100, 100)],
                         'curve_type': 'Initial Bite'
+                    },
+                    # New brake profiles
+                    {
+                        'name': 'GT3 Racing',
+                        'points': [(0, 0), (5, 15), (15, 35), (30, 60), (50, 80), (75, 95), (100, 100)],
+                        'curve_type': 'GT3 Racing'
+                    },
+                    {
+                        'name': 'Endurance',
+                        'points': [(0, 0), (20, 15), (40, 30), (60, 50), (80, 75), (100, 95)],
+                        'curve_type': 'Endurance'
+                    },
+                    {
+                        'name': 'Technical Circuit',
+                        'points': [(0, 0), (15, 10), (30, 25), (45, 45), (60, 70), (75, 90), (100, 100)],
+                        'curve_type': 'Technical Circuit'
+                    },
+                    {
+                        'name': 'Oval Track',
+                        'points': [(0, 0), (30, 20), (50, 45), (70, 80), (85, 95), (100, 100)],
+                        'curve_type': 'Oval Track'
+                    },
+                    {
+                        'name': 'Street Car',
+                        'points': [(0, 0), (25, 25), (50, 50), (75, 75), (100, 100)],
+                        'curve_type': 'Street Car'
                     }
                 ],
                 'clutch': [
@@ -1017,6 +1123,48 @@ class HardwareInput:
                         'name': 'Smooth Launch',
                         'points': [(0, 0), (15, 5), (30, 20), (45, 45), (60, 80), (75, 95), (100, 100)],
                         'curve_type': 'Smooth Launch'
+                    },
+                    # New clutch profiles
+                    {
+                        'name': 'Performance Launch',
+                        'points': [(0, 0), (35, 15), (45, 40), (50, 70), (55, 90), (65, 98), (100, 100)],
+                        'curve_type': 'Performance Launch'
+                    },
+                    {
+                        'name': 'Drag Racing',
+                        'points': [(0, 0), (30, 10), (40, 30), (45, 50), (48, 80), (50, 95), (100, 100)],
+                        'curve_type': 'Drag Racing'
+                    },
+                    {
+                        'name': 'Heel-Toe',
+                        'points': [(0, 0), (20, 5), (40, 15), (65, 60), (85, 90), (100, 100)],
+                        'curve_type': 'Heel-Toe'
+                    },
+                    {
+                        'name': 'Rally Start',
+                        'points': [(0, 0), (30, 25), (45, 55), (55, 85), (65, 95), (100, 100)],
+                        'curve_type': 'Rally Start'
+                    },
+                    {
+                        'name': 'Half Clutch Control',
+                        'points': [(0, 0), (40, 20), (47, 40), (50, 60), (53, 80), (60, 95), (100, 100)],
+                        'curve_type': 'Half Clutch Control'
+                    },
+                    # Wet Weather clutch presets
+                    {
+                        'name': 'Wet Weather Launch',
+                        'points': [(0, 0), (30, 15), (40, 35), (50, 65), (60, 85), (70, 95), (100, 100)],
+                        'curve_type': 'Wet Weather Launch'
+                    },
+                    {
+                        'name': 'Wet Track Control',
+                        'points': [(0, 0), (25, 10), (40, 25), (50, 50), (60, 75), (75, 95), (100, 100)],
+                        'curve_type': 'Wet Track Control'
+                    },
+                    {
+                        'name': 'Wet Engagement',
+                        'points': [(0, 0), (35, 20), (45, 45), (55, 75), (65, 90), (75, 98), (100, 100)],
+                        'curve_type': 'Wet Engagement'
                     }
                 ]
             }

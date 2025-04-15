@@ -2,6 +2,7 @@ import irsdk
 import time
 import logging
 import math
+import threading
 from pathlib import Path
 from .telemetry_saver import TelemetrySaver
 
@@ -25,6 +26,11 @@ class SimpleIRacingAPI:
         self._telemetry_callbacks = []
         self._session_info = {}
         self._last_driver_inputs_log = 0
+        
+        # Thread control event
+        self._stop_event = threading.Event()
+        self._telemetry_timer = None
+        self._session_info_timer = None
         
         # Initialize telemetry saver
         self.telemetry_saver = TelemetrySaver()
@@ -124,17 +130,18 @@ class SimpleIRacingAPI:
     def _start_telemetry_timer(self):
         """Start a timer to process telemetry data periodically."""
         if not hasattr(self, '_telemetry_timer') or self._telemetry_timer is None:
-            import threading
             
             def telemetry_worker():
                 logger.info("Starting telemetry worker thread")
                 try:
-                    while self.state.ir_connected:
+                    # Use stop event instead of state flag
+                    while not self._stop_event.is_set():
                         # Process telemetry if connected
                         if self.state.ir_connected:
                             self.process_telemetry()
                         # Sleep for a short time (60 Hz update rate)
-                        time.sleep(1/60)
+                        # Use event wait for faster shutdown
+                        self._stop_event.wait(1/60) 
                 except Exception as e:
                     logger.error(f"Error in telemetry worker: {e}")
                     import traceback
@@ -142,6 +149,7 @@ class SimpleIRacingAPI:
                 logger.info("Telemetry worker thread stopped")
             
             # Create and start the thread
+            self._stop_event.clear() # Ensure event is clear before starting
             self._telemetry_timer = threading.Thread(target=telemetry_worker, daemon=True)
             self._telemetry_timer.start()
             logger.info("Telemetry worker thread started")
@@ -149,7 +157,6 @@ class SimpleIRacingAPI:
     def _start_session_info_timer(self):
         """Start a timer to periodically update session info."""
         if not hasattr(self, '_session_info_timer') or self._session_info_timer is None:
-            import threading
             
             def session_info_worker():
                 logger.info("Starting session info worker thread")
@@ -157,8 +164,8 @@ class SimpleIRacingAPI:
                     # Wait a bit for the initial connection to settle
                     time.sleep(2)
                     
-                    # Update every 5 seconds - don't need to update too frequently
-                    while self.state.ir_connected:
+                    # Use stop event instead of state flag
+                    while not self._stop_event.is_set(): 
                         if self.state.ir_connected:
                             # Try to update session info
                             try:
@@ -168,7 +175,8 @@ class SimpleIRacingAPI:
                                 import traceback
                                 logger.error(traceback.format_exc())
                         # Sleep to avoid too frequent updates
-                        time.sleep(5)
+                        # Use event wait for faster shutdown
+                        self._stop_event.wait(5) 
                 except Exception as e:
                     logger.error(f"Error in session info worker: {e}")
                     import traceback
@@ -176,6 +184,7 @@ class SimpleIRacingAPI:
                 logger.info("Session info worker thread stopped")
             
             # Create and start the thread
+            self._stop_event.clear() # Ensure event is clear
             self._session_info_timer = threading.Thread(target=session_info_worker, daemon=True)
             self._session_info_timer.start()
             logger.info("Session info update timer started")
@@ -303,16 +312,18 @@ class SimpleIRacingAPI:
         if not self.state.ir_connected:
             return
         
+        # We'll use a flag to track if we've frozen the buffer
+        buffer_frozen = False
+        
         try:
             # Freeze the buffer to get consistent data
             self.ir.freeze_var_buffer_latest()
+            buffer_frozen = True
             
             # Try to get various telemetry values with fallbacks
             # Speed - try multiple possible field names
             telemetry = {}
             
-            # Try to get various telemetry values with fallbacks
-            # Speed - try multiple possible field names
             for speed_field in ['Speed', 'DisplayedSpeed', 'speed', 'CarIdxVel']:
                 speed = self.ir[speed_field]
                 if speed is not None:
@@ -344,8 +355,11 @@ class SimpleIRacingAPI:
             for last_lap_field in ['LapLastLapTime', 'last_lap_time']:
                 last_lap_time = self.ir[last_lap_field]
                 if last_lap_time is not None and last_lap_time > 0:
+                    # Only log when the last lap time changes
+                    if not hasattr(self, '_last_recorded_lap_time') or self._last_recorded_lap_time != last_lap_time:
+                        logger.info(f"Updated last lap time: {last_lap_time:.3f} seconds")
+                        self._last_recorded_lap_time = last_lap_time
                     telemetry['last_lap_time'] = last_lap_time
-                    logger.info(f"Updated last lap time: {last_lap_time:.3f} seconds")
                     break
             
             # Best Lap Time
@@ -406,6 +420,13 @@ class SimpleIRacingAPI:
                 steering = self.ir[steering_field]
                 if steering is not None:
                     telemetry['steering'] = steering  # Value in radians
+                    break
+            
+            # Also get max steering wheel angle if available
+            for max_steering_field in ['SteeringWheelAngleMax', 'steeringWheelAngleMax']:
+                max_steering = self.ir[max_steering_field]
+                if max_steering is not None and max_steering > 0:
+                    telemetry['steering_max'] = max_steering  # Value in radians
                     break
             
             # Only log telemetry occasionally to avoid flooding logs
@@ -503,14 +524,16 @@ class SimpleIRacingAPI:
                         
         except Exception as e:
             logger.error(f"Error processing telemetry: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         finally:
-            # Ensure we unfreeze the buffer
-            try:
-                # We need to unfreeze the buffer, not freeze it again
-                if hasattr(self.ir, 'unfreeze_var_buffer_latest'):
+            # Always unfreeze the buffer, even if there was an error
+            if buffer_frozen and hasattr(self.ir, 'unfreeze_var_buffer_latest'):
+                try:
                     self.ir.unfreeze_var_buffer_latest()
-            except Exception as e:
-                logger.error(f"Error unfreezing buffer: {e}")
+                    buffer_frozen = False
+                except Exception as e:
+                    logger.error(f"Error unfreezing buffer: {e}")
     
     def register_on_connection_changed(self, callback):
         """Register a callback for connection status changes."""
@@ -534,6 +557,33 @@ class SimpleIRacingAPI:
     def disconnect(self):
         """Disconnect from iRacing."""
         if self.state.ir_connected:
+            logger.info("Disconnecting from iRacing...")
+            
+            # Signal threads to stop
+            self._stop_event.set()
+            
+            # Wait for threads to finish (with a timeout)
+            try:
+                if self._telemetry_timer and self._telemetry_timer.is_alive():
+                    logger.info("Waiting for telemetry worker thread to stop...")
+                    self._telemetry_timer.join(timeout=1.0) # Wait up to 1 second
+                    if self._telemetry_timer.is_alive():
+                         logger.warning("Telemetry worker thread did not stop gracefully.")
+                    else:
+                         logger.info("Telemetry worker thread stopped.")
+                self._telemetry_timer = None # Clear reference
+                
+                if self._session_info_timer and self._session_info_timer.is_alive():
+                    logger.info("Waiting for session info worker thread to stop...")
+                    self._session_info_timer.join(timeout=1.0) # Wait up to 1 second
+                    if self._session_info_timer.is_alive():
+                         logger.warning("Session info worker thread did not stop gracefully.")
+                    else:
+                         logger.info("Session info worker thread stopped.")
+                self._session_info_timer = None # Clear reference
+            except Exception as e:
+                 logger.error(f"Error joining worker threads: {e}")
+            
             # End telemetry saving session
             if hasattr(self, 'telemetry_saver'):
                 session_folder = self.telemetry_saver.end_session()
@@ -547,6 +597,7 @@ class SimpleIRacingAPI:
                 except Exception as e:
                     logger.error(f"Error closing Supabase lap session: {e}")
             
+            # Shutdown irsdk connection
             self.ir.shutdown()
             self.state.ir_connected = False
             self._is_connected = False

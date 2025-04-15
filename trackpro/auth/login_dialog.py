@@ -190,10 +190,13 @@ class LoginDialog(BaseAuthDialog):
                 # Get user info
                 user_response = supabase.get_user()
                 
+                # Get remember_me preference if checkbox exists
+                remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
+                
                 # Ensure session is saved
                 if hasattr(supabase, '_save_session') and user_response:
-                    logger.info("Explicitly saving Google session")
-                    supabase._save_session(user_response)
+                    logger.info(f"Explicitly saving Google session with remember_me={remember_me}")
+                    supabase._save_session(user_response, remember_me=remember_me)
                 
                 # Force the parent window to update if we can
                 try:
@@ -315,14 +318,17 @@ class LoginDialog(BaseAuthDialog):
 
         logger.info(f"OAuth completed: success={success}, provider={getattr(response, 'provider', 'unknown') if response else 'none'}")
         if success and response:
+            # Get remember_me preference if checkbox exists
+            remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
+            
             # Authentication successful - emit our own signal
             logger.info("Authentication successful - emitting auth_completed signal")
             self.auth_completed.emit(True, response)
             
             # Force save the session
             if hasattr(supabase, '_save_session'):
-                logger.info("Explicitly saving session after OAuth completion")
-                supabase._save_session(response)
+                logger.info(f"Explicitly saving session after OAuth completion with remember_me={remember_me}")
+                supabase._save_session(response, remember_me=remember_me)
             
             # Force the parent window to update if we can
             try:
@@ -398,14 +404,9 @@ class LoginDialog(BaseAuthDialog):
                 logger.info(f"User {email} signed in successfully")
                 
                 # Store the remember me preference
-                if remember_me:
-                    # Session persistence is handled by Supabase now
-                    pass
-                
-                # Force save the session
                 if hasattr(supabase, '_save_session'):
-                    logger.info("Explicitly saving session after login")
-                    supabase._save_session(response)
+                    logger.info(f"Explicitly saving session after login with remember_me={remember_me}")
+                    supabase._save_session(response, remember_me=remember_me)
                 
                 # Emit our signal
                 self.auth_completed.emit(True, response)

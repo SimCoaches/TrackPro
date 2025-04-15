@@ -1,6 +1,7 @@
 """Calibration database manager for handling user calibration data."""
 
 import logging
+import time # Add import for time.sleep
 from typing import Any, Dict, List, Optional
 from .base import DatabaseManager
 from .supabase_client import supabase
@@ -31,7 +32,7 @@ class CalibrationManager(DatabaseManager):
             List of calibration records
         """
         try:
-            response = self.client.table(self.table_name).select("*").eq("user", user_id).execute()
+            response = self.client.table(self.table_name).select("*").eq("user_id", user_id).execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting calibrations for user {user_id}: {e}")
@@ -94,38 +95,69 @@ class CalibrationManager(DatabaseManager):
         if save_key in self._save_timers:
             self._save_timers[save_key] = None
         
-        try:
-            calibration_data = {
-                "user": user_id,
-                "name": name,
-                "data": data
-            }
-            
-            # Check if calibration with this name already exists
-            existing = self.client.table(self.table_name)\
-                .select("*")\
-                .eq("user", user_id)\
-                .eq("name", name)\
-                .execute()
-            
-            if existing.data:
-                # Update existing calibration
-                response = self.client.table(self.table_name)\
-                    .update(calibration_data)\
-                    .eq("id", existing.data[0]["id"])\
+        # Add retry logic for Supabase operations
+        max_retries = 3
+        retry_delay = 1 # seconds
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                calibration_data = {
+                    "user_id": user_id,
+                    "name": name,
+                    "data": data
+                }
+                
+                # Check if calibration with this name already exists
+                # Only select the ID field and limit to 1 result for efficiency
+                existing = self.client.table(self.table_name)\
+                    .select("id")\
+                    .eq("user_id", user_id)\
+                    .eq("name", name)\
+                    .limit(1)\
                     .execute()
-                logger.info(f"Updated existing calibration '{name}' for user {user_id}")
-            else:
-                # Create new calibration
-                response = self.client.table(self.table_name)\
-                    .insert(calibration_data)\
-                    .execute()
-                logger.info(f"Created new calibration '{name}' for user {user_id}")
-            
-            return response.data[0]
-        except Exception as e:
-            logger.error(f"Error saving calibration for user {user_id}: {e}")
-            raise
+                
+                if existing.data:
+                    # Update existing calibration
+                    response = self.client.table(self.table_name)\
+                        .update(calibration_data)\
+                        .eq("id", existing.data[0]["id"])\
+                        .execute()
+                    logger.info(f"Attempt {attempt+1}: Updated existing calibration '{name}' for user {user_id}")
+                else:
+                    # Create new calibration
+                    response = self.client.table(self.table_name)\
+                        .insert(calibration_data)\
+                        .execute()
+                    logger.info(f"Attempt {attempt+1}: Created new calibration '{name}' for user {user_id}")
+                
+                # Success, return the data (ensure data exists)
+                if response.data:
+                    return response.data[0]
+                else:
+                    # Handle cases where insert/update might not return data as expected
+                    logger.warning(f"Calibration '{name}' for user {user_id} saved/updated, but no data returned in response.")
+                    return calibration_data # Return the input data as fallback
+
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"Attempt {attempt+1} failed to save calibration '{name}' for user {user_id}: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2 # Exponential backoff
+                else:
+                    logger.error(f"Failed to save calibration '{name}' for user {user_id} after {max_retries} attempts.")
+                    # Re-raise the last exception after all retries failed
+                    raise last_exception
+        
+        # Should not be reached if successful, but needed if loop finishes unexpectedly
+        logger.error(f"_perform_save for calibration '{name}' completed loop without success or expected error.")
+        if last_exception:
+             raise last_exception
+        else:
+             # Raise a generic error if no exception was caught but still failed
+             raise RuntimeError(f"Failed to save calibration '{name}' after retries, unknown reason.")
     
     def delete_calibration(self, user_id: str, name: str) -> bool:
         """Delete a calibration.
@@ -140,7 +172,7 @@ class CalibrationManager(DatabaseManager):
         try:
             response = self.client.table(self.table_name)\
                 .delete()\
-                .eq("user", user_id)\
+                .eq("user_id", user_id)\
                 .eq("name", name)\
                 .execute()
             
@@ -168,7 +200,7 @@ class CalibrationManager(DatabaseManager):
         try:
             response = self.client.table(self.table_name)\
                 .select("*")\
-                .eq("user", user_id)\
+                .eq("user_id", user_id)\
                 .eq("name", name)\
                 .execute()
             

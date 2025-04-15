@@ -17,6 +17,7 @@ class SimpleLapSaver:
         """Initialize with a Supabase client."""
         self._supabase = supabase_client
         self._user_email = None
+        self._user_id = None
         self._session_id = None
         self._track_id = None
         self._car_id = None
@@ -36,6 +37,11 @@ class SimpleLapSaver:
         """Set the user email for identification."""
         self._user_email = email
         logger.info(f"Set user email to: {email}")
+        
+    def set_user_id(self, user_id):
+        """Set the user ID for identification."""
+        self._user_id = user_id
+        logger.info(f"Set user ID to: {user_id}")
         
     def start_session(self, track_name, car_name, session_type="Race"):
         """Start a new session with track and car info."""
@@ -130,12 +136,24 @@ class SimpleLapSaver:
         try:
             columns = ", ".join(data.keys())
             placeholders = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in data.values()])
-            query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders}) RETURNING id"
+            # Remove explicit column name assumption in RETURNING clause - will now return the UUID column
+            query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders}) RETURNING *"
             
             # Use direct SQL query
             resp = self._supabase.rpc("execute_sql", {"sql": query}).execute()
             if resp.data and len(resp.data) > 0:
-                return resp.data[0]["id"]
+                # The UUID column in the database is 'id', but we access it by string key
+                # rather than assuming it's there
+                inserted_id = resp.data[0].get("id")
+                if inserted_id:
+                    return inserted_id
+                else:
+                    logger.warning(f"No 'id' column found in response: {resp.data[0]}")
+                    # Return first column as fallback if available
+                    first_key = next(iter(resp.data[0]), None)
+                    if first_key:
+                        return resp.data[0][first_key]
+                    return None
         except Exception as e:
             logger.error(f"SQL insert error: {e}")
         return None
@@ -287,6 +305,10 @@ class SimpleLapSaver:
                     "track_position": point.get("track_position", 0),
                     "timestamp": point.get("timestamp", 0) - self._lap_start_time,
                 }
+                
+                # Add user_id if available
+                if self._user_id:
+                    telemetry_point["user_id"] = self._user_id
                 
                 # Add optional fields if present
                 for field in ["speed", "rpm", "gear", "throttle", "brake", "clutch", "steering"]:

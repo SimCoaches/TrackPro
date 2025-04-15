@@ -11,6 +11,8 @@ from urllib.parse import urlparse, parse_qs
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QObject, QUrl, pyqtSignal, QTimer
 from ..database.supabase_client import supabase
+# Import User model and setter function
+from ..auth.user_manager import User, set_current_user 
 
 logger = logging.getLogger(__name__)
 
@@ -319,10 +321,25 @@ class OAuthHandler(QObject):
                         if result and hasattr(result, 'user') and result.user:
                             logger.info(f"Successfully authenticated user: {result.user.email}")
                             
+                            # *** ADDED: Set the current user in user_manager ***
+                            try:
+                                authenticated_user = User(
+                                    id=result.user.id,
+                                    email=result.user.email,
+                                    name=result.user.user_metadata.get('name', result.user.email),
+                                    is_authenticated=True
+                                )
+                                set_current_user(authenticated_user)
+                                logger.info("Set current user in user_manager successfully")
+                            except Exception as user_set_error:
+                                logger.error(f"Failed to set user in user_manager: {user_set_error}")
+                            # *** END ADDED CODE ***
+                            
                             # Ensure session is saved explicitly to the global client as well
                             if hasattr(supabase, '_save_session'):
-                                logger.info("Explicitly saving session to global client")
-                                supabase._save_session(result)
+                                logger.info("Explicitly saving session to global client with remember_me=True")
+                                # Always use remember_me=True for OAuth logins since there's no checkbox
+                                supabase._save_session(result, remember_me=True)
                                 
                                 # Verify the session was properly cached
                                 verification = supabase.get_user()
@@ -366,12 +383,13 @@ class OAuthHandler(QObject):
                     # Check if we have a valid user first
                     # Use the globally imported supabase client instance
                     user_response = supabase.get_user()
-                    if user_response and hasattr(user_response, 'user') and user_response.user: # Check user existence
+                    if user_response and hasattr(user_response, 'user') and user_response.user:
                         logger.info(f"User is authenticated: {user_response.user.email}")
 
                         # Save session explicitly to ensure persistence
                         # Use the globally imported supabase client instance
-                        supabase._save_session(user_response) # Use the global instance
+                        logger.info("Explicitly saving session to global client with remember_me=True")
+                        supabase._save_session(user_response, remember_me=True) # Always remember OAuth sessions
 
                         # Find the main window by looking through top-level widgets
                         from PyQt5.QtWidgets import QApplication, QMessageBox

@@ -142,7 +142,7 @@ try:
                     logger.warning("Failed to create Supabase client")
                     
                 from .iracing_lap_saver import IRacingLapSaver
-                iracing_lap_saver = IRacingLapSaver(supabase_client=supabase_client)
+                iracing_lap_saver = IRacingLapSaver()
                 logger.info("IRacingLapSaver initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize IRacingLapSaver: {e}")

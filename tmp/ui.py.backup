@@ -2544,18 +2544,17 @@ class RaceCoachWidget(QWidget):
         main_layout.addWidget(self.tab_widget)
         
         # Initialize with demo data if not connected
-        if not self.is_connected: # Line 2547
-            # QTimer.singleShot(500, self.load_demo_data) # Demo data loading disabled
-            pass # Add pass to fix IndentationError
+        if not self.is_connected:
+            QTimer.singleShot(500, self.load_demo_data)
             
     def _update_telemetry(self, telemetry_data):
         """Process telemetry data and update visualizations."""
         try:
             # Stop demo steering timer if it's running and we receive real data
-            # if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer.isActive():
-            #     logger.info("Stopping demo steering animation timer.")
-            #     # Queue the stop call on the main thread to avoid cross-thread issues
-            #     QTimer.singleShot(0, self._demo_steer_timer.stop)
+            if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer.isActive():
+                logger.info("Stopping demo steering animation timer.")
+                # Queue the stop call on the main thread to avoid cross-thread issues
+                QTimer.singleShot(0, self._demo_steer_timer.stop)
             
             # Log telemetry data periodically to check if it's being received properly
             if not hasattr(self, '_telemetry_log_count'):
@@ -2717,9 +2716,132 @@ class RaceCoachWidget(QWidget):
             logger.error(f"Error updating session info: {e}")
     
     def load_demo_data(self):
-        """Demo data loading disabled to prevent performance issues."""
-        logger.info("Demo data loading is disabled")
-        pass
+        """Load demo data into the telemetry comparison widget."""
+        try:
+            logger.info("Loading demo data for Race Coach visualization")
+            
+            # If our telemetry widget has a load_demo_data method, use it
+            if hasattr(self.telemetry_widget, 'load_demo_data'):
+                self.telemetry_widget.load_demo_data()
+                logger.info("Demo data loaded successfully")
+            else:
+                logger.info("TelemetryComparisonWidget doesn't have load_demo_data method, creating manual demo data")
+                
+                # Create manual demo data
+                import random
+                import math
+                
+                # Generate demo driver data
+                left_driver_info = {
+                    "name": "CHARLES", "lastname": "LECLERC", "team": "FERRARI", "position": "1",
+                    "lap_time": 83.456, "gap": -0.321, "full_throttle": 81, "heavy_braking": 5,
+                    "cornering": 14, "color": QColor(255, 0, 0)
+                }
+                right_driver_info = {
+                    "name": "CARLOS", "lastname": "SAINZ", "team": "FERRARI", "position": "2",
+                    "lap_time": 83.777, "gap": 0.321, "full_throttle": 79, "heavy_braking": 6,
+                    "cornering": 15, "color": QColor(255, 215, 0)
+                }
+                
+                # Generate speed data
+                num_points = 200
+                speed_data_left = []
+                speed_data_right = []
+                
+                for i in range(num_points):
+                    angle = i / num_points * 2 * math.pi
+                    speed = 250 + 70 * math.sin(angle) - 50 * math.sin(2 * angle)
+                    speed += random.uniform(-5, 5)
+                    speed = max(speed, 80)
+                    speed_data_left.append(speed)
+                    speed_data_right.append(speed + math.sin(i/num_points*2*math.pi*3)*10)
+                
+                # Generate delta data
+                delta_data = [0]
+                for i in range(1, num_points):
+                    # Calculate delta based on speed difference
+                    speed_l = max(1, speed_data_left[i])
+                    speed_r = max(1, speed_data_right[i])
+                    segment_time_left = 1 / speed_l
+                    segment_time_right = 1 / speed_r
+                    segment_delta = segment_time_right - segment_time_left
+                    delta_data.append(delta_data[-1] + segment_delta)
+                
+                # Scale delta to reasonable values
+                max_abs_delta = max(abs(min(delta_data)), abs(max(delta_data)))
+                if max_abs_delta > 0:
+                    scale = 0.5 / max_abs_delta
+                    delta_data = [d * scale for d in delta_data]
+                
+                # Set the data on the telemetry widget directly
+                if hasattr(self.telemetry_widget, 'set_driver_data'):
+                    self.telemetry_widget.set_driver_data(True, left_driver_info)
+                    self.telemetry_widget.set_driver_data(False, right_driver_info)
+                
+                if hasattr(self.telemetry_widget, 'set_speed_data'):
+                    self.telemetry_widget.set_speed_data(speed_data_left, speed_data_right)
+                    
+                if hasattr(self.telemetry_widget, 'set_delta_data'):
+                    self.telemetry_widget.set_delta_data(delta_data) # Corrected method call for demo data
+                
+                logger.info("Manual demo data loaded successfully")
+            
+            # Generate demo input data to display in the live telemetry section
+            if hasattr(self, 'input_trace'):
+                self.input_trace.clear_data()
+                # Add some random input trace data
+                throttle_profile = [0.0, 0.2, 0.5, 0.8, 1.0, 1.0, 0.9, 0.7, 0.5, 0.3, 0.0, 0.0]
+                brake_profile = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.7, 1.0]
+                clutch_profile = [0.0] * 12  # No clutch usage in this demo
+                
+                # Generate input trace data in a loop
+                for i in range(60):  # Simulate 1 second of data at 60Hz
+                    idx = i % len(throttle_profile)
+                    # Add some randomness
+                    throttle = max(0, min(1, throttle_profile[idx] + random.uniform(-0.05, 0.05)))
+                    brake = max(0, min(1, brake_profile[idx] + random.uniform(-0.05, 0.05)))
+                    clutch = max(0, min(1, clutch_profile[idx]))
+                    self.input_trace.add_data_point(throttle, brake, clutch)
+            
+            # Update gauges with demo data
+            if hasattr(self, 'speed_gauge'):
+                self.speed_gauge.set_value(random.uniform(180, 220))
+            
+            if hasattr(self, 'rpm_gauge'):
+                self.rpm_gauge.set_value(random.uniform(6000, 8000))
+                self.rpm_gauge.set_redline(8500)
+            
+            # Update text values with demo data
+            if hasattr(self, 'speed_value'):
+                self.speed_value.setText("215.3 km/h")
+                self.throttle_value.setText("45%")
+                self.brake_value.setText("0%")
+                self.clutch_value.setText("100%")
+                self.gear_value.setText("6")
+                self.rpm_value.setText("7245")
+                self.lap_value.setText("3")
+                self.laptime_value.setText("1:23.456")
+            
+            # Add demo steering wheel data
+            if hasattr(self, 'steering_wheel'):
+                # Generate a realistic steering angle
+                # Simulate turning into a corner
+                steering_angle = -0.7  # Turning left
+                self.steering_wheel.set_value(steering_angle)
+                
+                # Set up a timer to animate the steering for demo purposes
+                if not hasattr(self, '_demo_steer_timer'):
+                    self._demo_steer_time = 0
+                    self._demo_steer_timer = QTimer()
+                    self._demo_steer_timer.timeout.connect(self._update_demo_steering)
+                    self._demo_steer_timer.start(100)  # Update every 100ms instead of 50ms - reduces CPU usage by half
+                
+            logger.info("Demo data loaded successfully")
+                
+        except Exception as e:
+            logger.error(f"Error loading demo data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def set_driver_data(self, is_left_driver, data):
         """Update driver data and refresh display.
@@ -3167,9 +3289,9 @@ class RaceCoachWidget(QWidget):
             logger.info("RaceCoachWidget closeEvent triggered - cleaning up resources")
             
             # Stop the demo steering timer if it's running
-            # if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer and self._demo_steer_timer.isActive():
-            #     logger.info("Stopping demo steering animation timer")
-            #     self._demo_steer_timer.stop()
+            if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer and self._demo_steer_timer.isActive():
+                logger.info("Stopping demo steering animation timer")
+                self._demo_steer_timer.stop()
                 
             # Disconnect from iRacing API if it exists
             if hasattr(self, 'iracing_api') and self.iracing_api:
@@ -3190,9 +3312,9 @@ class RaceCoachWidget(QWidget):
             logger.info("RaceCoachWidget hideEvent triggered - pausing resources")
             
             # Stop the demo steering timer if it's running
-            # if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer and self._demo_steer_timer.isActive():
-            #     logger.info("Pausing demo steering animation timer")
-            #     self._demo_steer_timer.stop()
+            if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer and self._demo_steer_timer.isActive():
+                logger.info("Pausing demo steering animation timer")
+                self._demo_steer_timer.stop()
                 
             # Leave API connection active but log the state change
             if hasattr(self, 'iracing_api') and self.iracing_api:

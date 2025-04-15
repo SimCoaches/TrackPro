@@ -129,8 +129,13 @@ class SupabaseManager:
             self._saved_auth = None
             return False
     
-    def _save_session(self, response):
-        """Save session to file for persistence between app restarts."""
+    def _save_session(self, response, remember_me=True):
+        """Save session to file for persistence between app restarts.
+        
+        Args:
+            response: The authentication response containing session data
+            remember_me: Whether to remember the session after the app is closed (default: True)
+        """
         try:
             if not response:
                 return
@@ -143,14 +148,15 @@ class SupabaseManager:
             auth_data = {
                 'access_token': session.access_token if hasattr(session, 'access_token') else None,
                 'refresh_token': session.refresh_token if hasattr(session, 'refresh_token') else None,
-                'expires_at': session.expires_at if hasattr(session, 'expires_at') else None
+                'expires_at': session.expires_at if hasattr(session, 'expires_at') else None,
+                'remember_me': remember_me  # Store the remember_me preference
             }
             
             # Save to file
             with open(self._auth_file, 'w') as f:
                 json.dump(auth_data, f)
             
-            logger.info("Authentication session saved")
+            logger.info(f"Authentication session saved with remember_me={remember_me}")
             self._saved_auth = auth_data
             return True
         except Exception as e:
@@ -238,18 +244,18 @@ class SupabaseManager:
                     try:
                         # Set the session on the client - include refresh token if available
                         if self._saved_auth.get('refresh_token'):
-                            self._client.auth.set_session({
-                                'access_token': self._saved_auth.get('access_token'),
-                                'refresh_token': self._saved_auth.get('refresh_token')
-                            })
+                            # Fix: Pass access_token and refresh_token as direct parameters
+                            # (not as a dictionary) to match the client's API expectations
+                            self._client.auth.set_session(
+                                self._saved_auth.get('access_token'),
+                                self._saved_auth.get('refresh_token')
+                            )
                             logger.info("Session restored successfully using access and refresh tokens")
                         else:
                             # Refresh token is missing, cannot restore session reliably
                             logger.warning("Cannot restore session: Refresh token is missing from saved authentication data.")
                             # Do not attempt to set session without refresh token
                             # Let the subsequent get_session() call handle the state
-
-                        # logger.info("Session restored successfully") # This log is now conditional
                     except Exception as e:
                         logger.warning(f"Failed to restore session: {e}")
                 
@@ -636,8 +642,12 @@ class SupabaseManager:
             logger.error(f"Code exchange error: {e}")
             raise
     
-    def sign_out(self):
-        """Sign out the current user."""
+    def sign_out(self, force_clear=False):
+        """Sign out the current user.
+        
+        Args:
+            force_clear: If True, always clear the saved session regardless of remember_me preference
+        """
         if self._offline_mode or not self._client:
             logger.warning("Cannot sign out - Supabase is not connected")
             return
@@ -646,8 +656,27 @@ class SupabaseManager:
         
         def signout_func():
             self._client.auth.sign_out()
-            # Clear saved session
-            self._clear_session()
+            
+            # Check if we should clear the saved session
+            should_clear = force_clear
+            
+            # If not forcing, check the remember_me preference
+            if not force_clear and self._saved_auth and 'remember_me' in self._saved_auth:
+                remember_me = self._saved_auth.get('remember_me', False)
+                # Only clear if remember_me is False
+                should_clear = not remember_me
+                logger.info(f"Remember me preference is {remember_me}, {'clearing' if should_clear else 'keeping'} session data")
+            else:
+                # Default to clearing if remember_me not found
+                should_clear = True
+            
+            # Clear saved session if needed
+            if should_clear:
+                self._clear_session()
+                logger.info("Session cleared during sign out")
+            else:
+                logger.info("Session retained for remember me")
+            
             logger.info("Sign out successful")
         
         self._execute_with_retry(signout_func)

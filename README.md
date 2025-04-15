@@ -1,4 +1,4 @@
-# TrackPro v1.4.1
+# TrackPro v1.4.2
 
 ![TrackPro Logo](docs/images/logo.png)
 
@@ -33,16 +33,16 @@ TrackPro is a powerful application designed for sim racing enthusiasts who want 
 ### Standard Installation (Recommended)
 
 1. Download the latest installer from [GitHub Releases](https://github.com/SimCoaches/TrackPro/releases/latest)
-2. Run `TrackPro_Setup_v1.4.1.exe` and follow the installation instructions
+2. Run `TrackPro_Setup_v1.4.2.exe` and follow the installation instructions
 3. If prompted, install any required dependencies
-4. Run `TrackPro_v1.4.1.exe` as administrator
+4. Run `TrackPro_v1.4.2.exe` as administrator
 
 ### Portable Installation (Advanced)
 
 1. Download the portable version from [GitHub Releases](https://github.com/SimCoaches/TrackPro/releases/latest) 
 2. Extract the ZIP file to a location of your choice
 3. Install vJoy if not already installed
-4. Run `TrackPro_v1.4.1.exe` as administrator
+4. Run `TrackPro_v1.4.2.exe` as administrator
 
 ## Technical Notes
 
@@ -108,7 +108,7 @@ Each pedal has its own set of saved curves, allowing you to create specific prof
 
 ### Cloud Pedal Profiles
 
-New in version 1.4.1, TrackPro now supports cloud-synced pedal profiles:
+New in version 1.4.2, TrackPro now supports cloud-synced pedal profiles:
 
 1. **Save Pedal Profiles to the Cloud**:
    - Create an account or sign in via the "Login" option
@@ -132,7 +132,7 @@ This feature allows you to maintain consistent pedal response across different c
 
 ### iRacing Lap Time Tracking
 
-New in version 1.4.1, TrackPro includes a powerful lap time tracking system for iRacing:
+New in version 1.4.2, TrackPro includes a powerful lap time tracking system for iRacing:
 
 1. **Automatic Lap Detection**:
    - TrackPro automatically detects and records laps while you're racing in iRacing

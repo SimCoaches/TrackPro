@@ -8,7 +8,7 @@ import time
 import math
 
 # Version information - hardcoded to avoid cyclic imports
-__version__ = "1.4.1"
+__version__ = "1.4.3"
 
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -17,20 +17,22 @@ from PyQt5.QtWidgets import (
     QDialog, QFileDialog, QFormLayout, QLineEdit, QAction,
     QMenu, QApplication, QStyleFactory, QGridLayout, QTextEdit,
     QMenuBar, QMenu, QDialogButtonBox, QStackedWidget, QRadioButton, 
-    QButtonGroup, QGroupBox, QStatusBar, QProgressDialog
+    QButtonGroup, QGroupBox, QStatusBar, QProgressDialog, QSizePolicy
 )
 from PyQt5.QtCore import (
     Qt, QPointF, QTimer, pyqtSignal, QSettings, QThread, 
-    pyqtSlot, QSize, QRectF
+    pyqtSlot, QSize, QRectF, QMargins, QObject
 )
 from PyQt5.QtGui import (
     QPalette, QColor, QIcon, QPen, QBrush, QPainterPath, QFont,
-    QPainter, QLinearGradient, QMouseEvent
+    QPainter, QLinearGradient, QMouseEvent, QHideEvent, QShowEvent
 )
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 import pyqtgraph as pg
 from .calibration_chart import CalibrationChart
 from .config import config
+from .pedals.calibration import CalibrationWizard # Added this import
+from .pedals.profile_dialog import PedalProfileDialog
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -200,6 +202,9 @@ class IntegratedCalibrationChart:
         self.chart.setAnimationOptions(QChart.NoAnimation)  # Disable animations for precise positioning
         self.chart.legend().hide()
         
+        # Adjust chart margins - reduce top and sides, increase bottom substantially
+        self.chart.setContentsMargins(10, 10, 10, 40)  # Restore reasonable margins
+        
         # Create persistent line series for deadzone visualization
         self.min_deadzone_lower_series = QLineSeries()
         self.min_deadzone_upper_series = QLineSeries()
@@ -214,27 +219,40 @@ class IntegratedCalibrationChart:
         # Create axes with grid
         self.axis_x = QValueAxis()
         self.axis_x.setRange(0, 100)
-        self.axis_x.setTitleText("Input Value")
+        self.axis_x.setTitleText("Input")  # Shorter title
+        
+        # Use supported methods for styling with smaller font for x-axis to reduce space
+        self.axis_x.setTitleBrush(QColor(255, 255, 255))
+        self.axis_x.setLabelsBrush(QColor(255, 255, 255))
+        self.axis_x.setLabelsFont(QFont("Arial", 7))  # Smaller labels
+        self.axis_x.setTitleFont(QFont("Arial", 7))   # Smaller title
+        
         self.axis_x.setGridLineVisible(True)
         self.axis_x.setMinorGridLineVisible(True)
         self.axis_x.setLabelsVisible(True)
         self.axis_x.setTickCount(6)
         self.axis_x.setLabelFormat("%.0f%%")
-        self.axis_x.setTitleBrush(QColor(255, 255, 255))
-        self.axis_x.setLabelsBrush(QColor(255, 255, 255))
         self.axis_x.setGridLinePen(QPen(QColor(70, 70, 70), 1))
         self.axis_x.setMinorGridLinePen(QPen(QColor(60, 60, 60), 1))
         
         self.axis_y = QValueAxis()
         self.axis_y.setRange(0, 100)
-        self.axis_y.setTitleText("Output Value")
+        self.axis_y.setTitleText("Output")  # Shorter title
+        
+        # Use supported methods for styling with smaller font for y-axis to match x-axis
+        self.axis_y.setTitleBrush(QColor(255, 255, 255))
+        self.axis_y.setLabelsBrush(QColor(255, 255, 255))
+        self.axis_y.setLabelsFont(QFont("Arial", 7))  # Smaller labels to match x-axis
+        self.axis_y.setTitleFont(QFont("Arial", 7))   # Smaller title to match x-axis
+        # Remove unsupported methods
+        # self.axis_y.setLabelsPadding(10)
+        # self.axis_y.setTitleMargin(15)
+        
         self.axis_y.setGridLineVisible(True)
         self.axis_y.setMinorGridLineVisible(True)
         self.axis_y.setLabelsVisible(True)
         self.axis_y.setTickCount(6)
         self.axis_y.setLabelFormat("%.0f%%")
-        self.axis_y.setTitleBrush(QColor(255, 255, 255))
-        self.axis_y.setLabelsBrush(QColor(255, 255, 255))
         self.axis_y.setGridLinePen(QPen(QColor(70, 70, 70), 1))
         self.axis_y.setMinorGridLinePen(QPen(QColor(60, 60, 60), 1))
         
@@ -299,14 +317,20 @@ class IntegratedCalibrationChart:
         self.chart_view.set_scatter_series(self.control_points_series, self.curve_series)
         self.chart_view.point_moved.connect(self.on_control_point_moved)
         
+        # Set minimum height significantly larger to ensure space for axes
+        self.chart_view.setMinimumHeight(320)  # Increased from 280 to 320 for larger chart
+        # Set vertical size policy to ensure it takes the space
+        self.chart_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Let it expand/shrink
+        self.chart_view.setContentsMargins(5, 0, 5, 0)  # Minimize vertical margins
+        
+        # Add some bottom margin to the chart itself - REDUCED
+        self.chart.setMargins(QMargins(10, 5, 10, 5))  # Reduce top and bottom margins
+        
         # Debounce for control point updates
         self.point_move_timer = QTimer()
         self.point_move_timer.setSingleShot(True)
         self.point_move_timer.timeout.connect(self._delayed_control_point_moved)
         self.pending_update = False
-        
-        # Set minimum height for better visibility
-        self.chart_view.setMinimumHeight(270)
         
         # Add to layout
         parent_layout.addWidget(self.chart_view)
@@ -679,9 +703,12 @@ class MainWindow(QMainWindow):
     def __init__(self, oauth_handler=None):
         """Initialize the main window."""
         super().__init__()
-        self.setWindowTitle("TrackPro Configuration v1.4.1")
-        self.setMinimumSize(1000, 800)
-        self.setWindowIcon(QIcon(':/icons/app_icon.png'))
+        # Main window setup
+        self.window_width = 1200
+        self.window_height = 800
+        self.setWindowTitle("TrackPro Configuration v1.4.3")
+        self.setMinimumSize(1000, 700)
+        self.setWindowIcon(QIcon(":/icons/app_icon.ico"))
 
         # Store the shared OAuth handler
         self.oauth_handler = oauth_handler
@@ -864,6 +891,11 @@ class MainWindow(QMainWindow):
         # Add version information to status bar
         version_label = QLabel(f"Version: {__version__}")
         self.statusBar.addWidget(version_label)
+
+        # IMPORTANT: Update authentication state on startup to restore session
+        # Use a longer delay to make sure all components are properly initialized
+        logger.info("Scheduling authentication state update after initialization")
+        QTimer.singleShot(500, self.update_auth_state)
     
     def _init_pedal_data(self):
         """Initialize data structures for all pedals."""
@@ -920,14 +952,16 @@ class MainWindow(QMainWindow):
             QGroupBox {
                 border: 1px solid #555555;
                 border-radius: 3px;
-                padding: 3px;
-                margin-top: 5px;
-                margin-bottom: 5px;
+                padding: 2px;
+                margin-top: 3px;
+                margin-bottom: 3px;
+                font-size: 11px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 7px;
                 padding: 0px 3px 0px 3px;
+                top: -2px;
             }
             QPushButton {
                 background-color: #444444;
@@ -1011,16 +1045,19 @@ class MainWindow(QMainWindow):
         input_group.setLayout(input_layout)
         parent_layout.addWidget(input_group)
         
+        # Add spacing between Input Monitor and Calibration - REDUCED
+        parent_layout.addSpacing(5)  # Reduced from 15 to 5
+        
         # Store the group box for enabling/disabling the whole pedal section
         self.pedal_groups[pedal_key] = input_group
         
         # Calibration
         cal_group = QGroupBox("Calibration")
         cal_layout = QVBoxLayout()
-        cal_layout.setContentsMargins(5, 5, 5, 5)
-        cal_layout.setSpacing(5)
+        cal_layout.setContentsMargins(5, 5, 5, 5)  # Reduce top margin from 5 to 0
+        cal_layout.setSpacing(5)  # Reduce spacing from 10 to 5
         
-        # Create the integrated calibration chart - this replaces all the old chart code
+        # Add the integrated calibration chart - this replaces all the old chart code
         calibration_chart = IntegratedCalibrationChart(
             cal_layout, 
             pedal_name,
@@ -1030,93 +1067,171 @@ class MainWindow(QMainWindow):
         # Store the chart in the pedal data
         data['calibration_chart'] = calibration_chart
         
-        # Calibration controls
-        controls_layout = QHBoxLayout()
+        # Update the calibration chart to have more space at the bottom
+        # Use an alternative approach that doesn't require QMargins
+        data['calibration_chart'].chart.setPlotAreaBackgroundVisible(True)
+        data['calibration_chart'].chart.setBackgroundVisible(True)
         
-        # Add min/max calibration controls
-        min_layout = QVBoxLayout()
+        # Try to add spacing without using QMargins
+        try:
+            # First try setting chart margins directly
+            data['calibration_chart'].chart_view.setContentsMargins(10, 0, 10, 10)  # Reduce bottom margin from 40 to 10
+            # Also set the chart's own margins
+            data['calibration_chart'].chart.setMargins(QMargins(10, 10, 10, 10))  # Reduce bottom margin from 40 to 10
+        except Exception as e:
+            logger.error(f"Failed to set chart margins: {e}")
+            pass
+            
+        # Add consistent spacing after the chart view - REDUCED
+        cal_layout.addSpacing(10)  # Reduce from 70px to 10px
+        
+        # Calibration controls section - use vertical layout to stack rows
+        controls_layout = QVBoxLayout()
+        controls_layout.setContentsMargins(5, 20, 5, 5)  # Add more top margin to the controls section (increased from 15 to 20)
+        controls_layout.setSpacing(12)  # Increase spacing between label row and button row (increased from 8 to 12)
+        
+        # First row: Labels aligned with their respective controls
+        labels_row = QHBoxLayout()
+        labels_row.setSpacing(10)
+        
+        # Min label
         min_label = QLabel("Min: 0")
-        set_min_btn = QPushButton("Set Min")
-        set_min_btn.clicked.connect(lambda: self.set_current_as_min(pedal_key))
-        min_layout.addWidget(min_label)
-        min_layout.addWidget(set_min_btn)
+        labels_row.addWidget(min_label, 1)
         
-        # Remove fine-tuning buttons for min value
-        controls_layout.addLayout(min_layout)
-        
-        max_layout = QVBoxLayout()
+        # Max label
         max_label = QLabel("Max: 65535")
-        set_max_btn = QPushButton("Set Max")
-        set_max_btn.clicked.connect(lambda: self.set_current_as_max(pedal_key))
-        max_layout.addWidget(max_label)
-        max_layout.addWidget(set_max_btn)
+        labels_row.addWidget(max_label, 1)
         
-        # Remove fine-tuning buttons for max value
-        controls_layout.addLayout(max_layout)
-        
-        # Add reset button in a vertical layout for alignment
-        reset_layout = QVBoxLayout()
+        # Reset label
         reset_label = QLabel("Reset Curve")
-        reset_btn = QPushButton("Reset")
-        reset_btn.clicked.connect(lambda: self.reset_calibration(pedal_key))
-        reset_layout.addWidget(reset_label)
-        reset_layout.addWidget(reset_btn)
-        controls_layout.addLayout(reset_layout)
+        labels_row.addWidget(reset_label, 1)
         
         # Add spacer
-        controls_layout.addStretch()
+        labels_row.addStretch(1)
         
-        # Response curve selector in a vertical layout for alignment
-        curve_layout = QVBoxLayout()
+        # Curve type label
         curve_label = QLabel("Curve Type")
-        # Add fixed spacing above the label to align with other labels
-        curve_layout.addSpacing(4)
-        curve_layout.addWidget(curve_label)
+        labels_row.addWidget(curve_label, 2)
         
+        # Add labels row to main layout
+        controls_layout.addLayout(labels_row)
+        
+        # Second row: Actual controls
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(10)
+        
+        # Set Min button
+        set_min_btn = QPushButton("Set Min")
+        set_min_btn.clicked.connect(lambda: self.set_current_as_min(pedal_key))
+        set_min_btn.setFixedHeight(27)
+        controls_row.addWidget(set_min_btn, 1)
+        
+        # Set Max button
+        set_max_btn = QPushButton("Set Max")
+        set_max_btn.clicked.connect(lambda: self.set_current_as_max(pedal_key))
+        set_max_btn.setFixedHeight(27)
+        controls_row.addWidget(set_max_btn, 1)
+        
+        # Reset button
+        reset_btn = QPushButton("Reset")
+        reset_btn.clicked.connect(lambda: self.reset_calibration(pedal_key))
+        reset_btn.setFixedHeight(27)
+        controls_row.addWidget(reset_btn, 1)
+        
+        # Add spacer to push curve selector to the right
+        controls_row.addStretch(1)
+        
+        # Create the combo box for curve selection
         curve_selector = QComboBox()
-        curve_selector.addItems(["Linear", "Exponential", "Logarithmic", "S-Curve"])
+        curve_selector.addItems(["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"])
         curve_selector.setCurrentText("Linear")
-        curve_selector.setMinimumWidth(180)
-        # Set a fixed height to match the buttons
-        curve_selector.setFixedHeight(19)
+        
+        # Size settings - strictly enforce the height with fixed size policy
+        curve_selector.setMinimumWidth(130)  # Reduced from 180 to 130
+        curve_selector.setMaximumWidth(140)  # Add maximum width constraint
+        curve_selector.setFixedHeight(27)
+        curve_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # Fixed in both directions
+        
+        # Style with precise height control
         curve_selector.setStyleSheet("""
             QComboBox {
-                padding: 3px 10px;
-                min-height: 19px;
-                max-height: 19px;
+                background-color: #444444;
+                border: 1px solid #777777;
+                border-radius: 4px;
+                color: white;
+                padding: 0px 5px;  /* Reduced side padding */
+                height: 27px;
+                max-height: 27px;
+                min-height: 27px;
+                font-size: 12px;
+                text-align: left;  /* Ensure text is left-aligned */
             }
+            
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
+                width: 15px;
+                height: 20px;
+                border: none;  /* Remove border */
+                background: transparent;  /* Make background transparent */
+            }
+            
+            QComboBox::down-arrow {
+                width: 0;
+                height: 0;
+                border: 4px solid transparent;
+                border-top: 4px solid #aaa;  /* Lighter color */
+                margin-right: 2px;
+            }
+            
             QComboBox QAbstractItemView {
-                min-width: 220px;
-                padding: 5px;
+                background-color: #444444;
+                border: 1px solid #777777;
+                selection-background-color: #2a82da;
+                selection-color: white;
+                color: white;
+                padding: 1px;  /* Minimal padding */
             }
         """)
-        curve_selector.currentTextChanged.connect(lambda text: self.on_curve_selector_changed(pedal_key, text))
-        curve_layout.addWidget(curve_selector)
-        # Remove the Qt.AlignBottom alignment since we're using manual spacing
-        # curve_layout.setAlignment(Qt.AlignBottom)
-        controls_layout.addLayout(curve_layout)
         
-        # Store the calibration controls
+        # Connect signals
+        curve_selector.currentTextChanged.connect(lambda text: self.on_curve_selector_changed(pedal_key, text))
+        
+        # Add combo box to controls row
+        controls_row.addWidget(curve_selector, 2)
+        
+        # Add controls row to main layout
+        controls_layout.addLayout(controls_row)
+        
+        # Add spacer below the controls
+        controls_layout.addSpacing(10)
+        
+        # Store the curve selector in data
+        data['curve_type_selector'] = curve_selector
+        
+        # Log widget creation
+        logger.info(f"[{pedal_key}] Creating curve_type_selector with ID: {id(curve_selector)}")
+        
+        # Store all calibration controls in the data dictionary
         data['min_label'] = min_label
         data['max_label'] = max_label
         data['min_value'] = 0
         data['max_value'] = 65535
-        data['curve_type_selector'] = curve_selector
         
         # Standardize button heights
         set_min_btn.setFixedHeight(27)
         set_max_btn.setFixedHeight(27)
         reset_btn.setFixedHeight(27)
         
-        # Align labels to have consistent baseline
-        min_layout.setAlignment(min_label, Qt.AlignBottom)
-        max_layout.setAlignment(max_label, Qt.AlignBottom)
-        reset_layout.setAlignment(reset_label, Qt.AlignBottom)
-        # Remove curve_layout alignment since we're using manual spacing
-        # curve_layout.setAlignment(curve_label, Qt.AlignBottom)
+        # Fix alignments
+        min_label.setAlignment(Qt.AlignCenter)
+        max_label.setAlignment(Qt.AlignCenter)
+        reset_label.setAlignment(Qt.AlignCenter)
+        curve_label.setAlignment(Qt.AlignCenter)
         
-        # First add the main controls layout to the calibration layout
+        # Add the controls layout to the main layout
         cal_layout.addLayout(controls_layout)
+        cal_layout.addSpacing(5)  # Reduced from 20 to 5
         
         # Add deadzone controls
         deadzone_group = QGroupBox("Deadzones (%)")
@@ -1181,6 +1296,9 @@ class MainWindow(QMainWindow):
         cal_group.setLayout(cal_layout)
         parent_layout.addWidget(cal_group)
         
+        # Add spacing between Calibration and Output Monitor - REDUCED
+        parent_layout.addSpacing(5)  # Reduced from 15 to 5
+        
         # Output Monitor
         output_group = QGroupBox("Output Monitor")
         output_layout = QVBoxLayout()
@@ -1211,6 +1329,9 @@ class MainWindow(QMainWindow):
         output_group.setLayout(output_layout)
         parent_layout.addWidget(output_group)
         
+        # Add spacing between Output Monitor and Curve Management - REDUCED
+        parent_layout.addSpacing(5)  # Reduced from 15 to 5
+        
         # Curve Management
         manager_group = QGroupBox("Curve Management")
         manager_layout = QGridLayout()
@@ -1236,20 +1357,58 @@ class MainWindow(QMainWindow):
         selector_label = QLabel("Saved Curves:")
         manager_layout.addWidget(selector_label, 1, 0)
         
-        curve_list = QComboBox()
-        curve_list.setMinimumWidth(150)
+        # *** FIX: Create QComboBox with explicit parent ***
+        curve_list = QComboBox(manager_group)
+        curve_list.setMinimumWidth(130)  # Reduced width
+        curve_list.setMaximumWidth(140)  # Add maximum width
         curve_list.setFixedHeight(27)
+        curve_list.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # Fixed in both directions
+        # *** FIX: Simplify stylesheet to remove potential issues ***
         curve_list.setStyleSheet("""
             QComboBox {
-                padding: 3px 10px;
-                min-height: 19px;
+                background-color: #444444;
+                border: 1px solid #555555;
+                color: white;
+                padding: 0px 5px;  /* Reduced padding */
+                height: 27px;
+                max-height: 27px;
+                min-height: 27px;
+                text-align: left;  /* Left align text */
             }
+            
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
+                width: 15px;
+                height: 20px;
+                border: none;  /* Remove border */
+                background: transparent;  /* Make background transparent */
+            }
+            
+            QComboBox::down-arrow {
+                width: 0;
+                height: 0;
+                border: 4px solid transparent;
+                border-top: 4px solid #aaa;  /* Lighter color */
+                margin-right: 2px;
+            }
+            
             QComboBox QAbstractItemView {
-                min-width: 220px;
-                padding: 5px;
+                background-color: #444444;
+                border: 1px solid #777777;
+                selection-background-color: #2a82da;
+                selection-color: white;
+                color: white;
+                padding: 1px;  /* Minimal padding */
             }
         """)
         manager_layout.addWidget(curve_list, 1, 1)
+        
+        # *** FIX: Force some dummy items to verify dropdown works ***
+        curve_list.addItem("Loading...")
+        
+        # Log widget creation
+        logger.info(f"[{pedal_key}] Creating saved_curves_selector with ID: {id(curve_list)}")
         
         # Load Button
         load_btn = QPushButton("Load")
@@ -1267,7 +1426,7 @@ class MainWindow(QMainWindow):
         
         # Store references for curve management
         data['curve_name_input'] = name_input
-        data['saved_curves_selector'] = curve_list
+        data['saved_curves_selector'] = curve_list # Store the reference
         data['saved_curves_selector'].currentTextChanged.connect(
             lambda text: self.on_curve_selector_changed(pedal_key, text)
         )
@@ -1278,6 +1437,10 @@ class MainWindow(QMainWindow):
         
         # Store the QGroupBox for the pedal
         data['group_box'] = cal_group
+        
+        # *** FIX: Make sure all widgets are properly shown ***
+        manager_group.show()
+        curve_list.show()
     
     def set_input_value(self, pedal: str, value: int):
         """Set the input value for a pedal."""
@@ -1387,7 +1550,7 @@ class MainWindow(QMainWindow):
         calibration_chart = data['calibration_chart']
         
         # Generate new points based on the curve type
-        if curve_type in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
+        if curve_type in ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]:
             new_points = []
             
             if curve_type == "Linear":
@@ -1421,6 +1584,27 @@ class MainWindow(QMainWindow):
                     y = 100 / (1 + math.exp(-k * (x - 50)))
                     new_points.append(QPointF(x, y))
             
+            # Add logic for Reverse Log curve
+            elif curve_type == "Reverse Log":
+                # Reverse Logarithmic curve: y = (1 - sqrt(1 - x/100)) * 100
+                for i in range(5):
+                    x = i * 25
+                    if x == 100: # Avoid math domain error for sqrt(0) if x is exactly 100
+                        y = 100.0 
+                    elif x == 0: # Handle x=0 explicitly
+                        y = 0.0
+                    else:
+                        y = (1 - math.sqrt(1 - x / 100)) * 100
+                    new_points.append(QPointF(x, y))
+
+            # Add logic for Reverse Expo curve
+            elif curve_type == "Reverse Expo":
+                # Reverse Exponential curve: y = (1 - (1 - x/100)^2) * 100
+                for i in range(5):
+                    x = i * 25
+                    y = (1 - (1 - x / 100) ** 2) * 100
+                    new_points.append(QPointF(x, y))
+
             # Update the chart with the new points
             calibration_chart.set_points(new_points)
             
@@ -1860,13 +2044,12 @@ class MainWindow(QMainWindow):
         logger.info("Opening Calibration Wizard")
         try:
             # Create an instance of the CalibrationWizard
-            wizard = CalibrationWizard(parent=self)
+            # Pass the hardware input instance required by the wizard's constructor
+            wizard = CalibrationWizard(self.hardware, parent=self)
             
             # Connect signal to handle when wizard is completed
-            # The on_calibration_wizard_completed method should be in the TrackProApp class
-            if hasattr(self, "on_calibration_wizard_completed"):
-                wizard.calibration_complete.connect(self.on_calibration_wizard_completed)
-                
+            wizard.calibration_complete.connect(self.on_calibration_wizard_completed)
+            
             # Show the wizard dialog - it's modal so it will block until closed
             result = wizard.exec_()
             
@@ -2150,78 +2333,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"Error scheduling curve list refresh: {e}")
     
-    def refresh_curve_lists(self):
-        """Refresh the curve selection lists for all pedals with available curves."""
-        if not hasattr(self, 'hardware') or not self.hardware:
-            return
-            
-        # Check if hardware has curve lists
-        if not hasattr(self.hardware, 'list_available_curves'):
-            return
-        
-        # Set flag to prevent unnecessary callbacks during population
-        self._is_populating_curves = True
-        
-        # Refresh curve lists for each pedal
-        for pedal in ['throttle', 'brake', 'clutch']:
-            if pedal in self._pedal_data:
-                # Get available curves for this pedal
-                try:
-                    available_curves = self.hardware.list_available_curves(pedal)
-                    logger.info(f"Available curves for {pedal}: {available_curves}")
-                    
-                    # Update Curve Type selector (main dropdown)
-                    if 'curve_type_selector' in self._pedal_data[pedal]:
-                        curve_type_selector = self._pedal_data[pedal]['curve_type_selector']
-                        
-                        # Save current selection if possible
-                        current_curve_type = curve_type_selector.currentText()
-                        
-                        # Clear and repopulate the selector
-                        curve_type_selector.clear()
-                        
-                        # Add standard curves
-                        curve_type_selector.addItem("Linear")
-                        curve_type_selector.addItem("Exponential")  
-                        curve_type_selector.addItem("Logarithmic")
-                        curve_type_selector.addItem("S-Curve")
-                        
-                        # Add all available custom curves
-                        for curve in available_curves:
-                            if curve not in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
-                                curve_type_selector.addItem(curve)
-                        
-                        # Restore previous selection if it still exists
-                        index = curve_type_selector.findText(current_curve_type)
-                        if index >= 0:
-                            curve_type_selector.setCurrentIndex(index)
-                    
-                    # Update Saved Curves selector (in Curve Management section)
-                    if 'saved_curves_selector' in self._pedal_data[pedal]:
-                        saved_curves_selector = self._pedal_data[pedal]['saved_curves_selector']
-                        
-                        # Save current selection if possible
-                        current_saved_curve = saved_curves_selector.currentText()
-                        
-                        # Clear and repopulate the selector
-                        saved_curves_selector.clear()
-                        
-                        # Only add custom curves to the saved curves selector
-                        for curve in available_curves:
-                            if curve not in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
-                                saved_curves_selector.addItem(curve)
-                        
-                        # Restore previous selection if it still exists
-                        index = saved_curves_selector.findText(current_saved_curve)
-                        if index >= 0:
-                            saved_curves_selector.setCurrentIndex(index)
-                    
-                except Exception as e:
-                    logger.error(f"Error refreshing curve list for {pedal}: {e}")
-        
-        # Clear the flag after population is complete
-        self._is_populating_curves = False
-    
     def on_curve_selector_changed(self, pedal: str, curve_name: str):
         """Handle when the user selects a curve from a dropdown list."""
         if not curve_name:
@@ -2251,7 +2362,7 @@ class MainWindow(QMainWindow):
             
         if 'saved_curves_selector' in data and data['saved_curves_selector'].currentText() != curve_name:
             # Only update saved curves selector for custom curves
-            if curve_name not in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
+            if curve_name not in ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]:
                 if data['saved_curves_selector'].findText(curve_name) == -1:
                     data['saved_curves_selector'].addItem(curve_name)
                 data['saved_curves_selector'].setCurrentText(curve_name)
@@ -2312,7 +2423,7 @@ class MainWindow(QMainWindow):
     
     def delete_custom_curve(self, pedal: str, curve_name: str):
         """Delete a custom curve from the saved curves."""
-        if not curve_name or curve_name in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
+        if not curve_name or curve_name in ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]:
             logger.warning(f"Cannot delete built-in curve type: {curve_name}")
             self.show_message("Error", "Cannot delete built-in curve types")
             return
@@ -2412,17 +2523,42 @@ class MainWindow(QMainWindow):
         pass
 
     def _on_tab_changed(self, index):
+        """Handle tab change events."""
         # Update menu action states based on the current tab
         if index == 0:  # Pedal Config tab
             self.pedal_config_action.setChecked(True)
             self.race_coach_action.setChecked(False)
             self.calibration_wizard_btn.setVisible(True)
             self.save_calibration_btn.setVisible(True)
+            
+            # Send a hide event to Race Coach widget if it exists
+            for i in range(1, self.stacked_widget.count()):
+                widget = self.stacked_widget.widget(i)
+                if hasattr(widget, 'hideEvent'):
+                    try:
+                        # Create a hide event
+                        hide_event = QHideEvent()
+                        # Call the widget's hideEvent method
+                        widget.hideEvent(hide_event)
+                    except Exception as e:
+                        logger.error(f"Error sending hide event to widget: {e}")
+                        
         elif index == 1:  # Race Coach tab
             self.pedal_config_action.setChecked(False)
             self.race_coach_action.setChecked(True)
             self.calibration_wizard_btn.setVisible(False)
             self.save_calibration_btn.setVisible(False)
+            
+            # Send a show event to the Race Coach widget
+            widget = self.stacked_widget.widget(index)
+            if hasattr(widget, 'showEvent'):
+                try:
+                    # Create a show event
+                    show_event = QShowEvent()
+                    # Call the widget's showEvent method
+                    widget.showEvent(show_event)
+                except Exception as e:
+                    logger.error(f"Error sending show event to widget: {e}")
 
     def show_login_dialog(self):
         """Show the login dialog."""
@@ -2441,7 +2577,9 @@ class MainWindow(QMainWindow):
     def handle_logout(self):
         """Handle user logout."""
         try:
-            supabase.sign_out()
+            # Force clear the session when explicitly logging out via the UI
+            # This ensures that even with "Remember Me" checked, an explicit logout clears the session
+            supabase.sign_out(force_clear=True)
             self.update_auth_state()
             QMessageBox.information(self, "Success", "Logged out successfully")
         except Exception as e:
@@ -2451,6 +2589,8 @@ class MainWindow(QMainWindow):
     def update_auth_state(self):
         """Update the UI based on authentication state."""
         is_authenticated = supabase.is_authenticated()
+        
+        logger.info(f"Updating authentication state - User is authenticated: {is_authenticated}")
         
         # Update user label
         if is_authenticated:
@@ -2470,6 +2610,7 @@ class MainWindow(QMainWindow):
                     display_name = metadata.get('display_name', user_email or 'User')
                     self.user_label.setText(f"Logged in as: {display_name}")
                     self.user_label.setStyleSheet("color: #2ecc71;")
+                    logger.info(f"Updated UI to show user: {display_name}")
                 except Exception as e:
                     logger.error(f"Error updating user label: {e}")
                     self.user_label.setText("Logged in")
@@ -2479,6 +2620,7 @@ class MainWindow(QMainWindow):
             self.user_label.setStyleSheet("color: #3498db; text-decoration: underline; cursor: pointer;")
             # Make the label clickable to open login dialog
             self.user_label.mousePressEvent = lambda e: self.show_login_dialog()
+            logger.info("Updated UI to show not logged in state")
         
         # Update button visibility
         self.login_btn.setVisible(not is_authenticated)
@@ -2715,3 +2857,156 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error applying profile: {e}")
             self.show_message("Error", f"Could not apply profile: {str(e)}")
+
+    def on_calibration_wizard_completed(self, results):
+        """Handle the results when the calibration wizard finishes."""
+        logger.info(f"Calibration wizard completed with results: {results}")
+        if not results:
+            logger.warning("Calibration wizard returned no results.")
+            return
+            
+        try:
+            # Update the hardware object with the new calibration data
+            if hasattr(self, 'hardware') and self.hardware:
+                for pedal, data in results.items():
+                    if pedal in self.hardware.axis_ranges:
+                        logger.info(f"Updating {pedal} calibration: Axis={data.get('axis', -1)}, Min={data.get('min')}, Max={data.get('max')}")
+                        self.hardware.axis_ranges[pedal]['min'] = data.get('min', 0)
+                        self.hardware.axis_ranges[pedal]['max'] = data.get('max', 65535)
+                        if data.get('axis', -1) != -1:
+                            self.hardware.update_axis_mapping(pedal, data['axis'])
+                    else:
+                        logger.warning(f"Pedal {pedal} not found in hardware axis ranges during wizard completion handling.")
+                
+                # Optionally, re-save the configuration (though wizard might have already done it)
+                # self.hardware.save_axis_ranges()
+                # self.hardware.save_calibration() 
+
+                # Refresh relevant UI elements
+                logger.info("Refreshing UI after calibration.")
+                self.refresh_curve_lists()
+                for pedal in results.keys():
+                    if pedal in self._pedal_data:
+                        # Update min/max labels in UI
+                        min_val = self.hardware.axis_ranges[pedal].get('min', 0)
+                        max_val = self.hardware.axis_ranges[pedal].get('max', 65535)
+                        self._pedal_data[pedal]['min_value_label'].setText(f"Min: {min_val}")
+                        self._pedal_data[pedal]['max_value_label'].setText(f"Max: {max_val}")
+                        # Trigger chart update if needed
+                        self.on_point_moved(pedal)
+            else:
+                logger.error("Hardware object not available to apply calibration results.")
+
+            QMessageBox.information(self, "Calibration Applied", "Pedal calibration settings have been applied.")
+            
+        except Exception as e:
+            logger.error(f"Error applying calibration wizard results: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to apply calibration results: {str(e)}")
+
+    def refresh_curve_lists(self):
+        """Refresh the curve lists for all pedals."""
+        if not hasattr(self, 'hardware') or not self.hardware:
+            logger.warning("Cannot refresh curve lists - hardware not initialized")
+            return
+            
+        try:
+            # Set a flag to prevent triggering callbacks during list population
+            self._is_populating_curves = True
+            
+            # Refresh curve lists for each pedal
+            for pedal in ['throttle', 'brake', 'clutch']:
+                if pedal in self._pedal_data:
+                    data = self._pedal_data[pedal]
+                    
+                    # Get available curves from hardware
+                    curves = self.hardware.list_available_curves(pedal)
+                    logger.info(f"Found {len(curves)} curves for {pedal}: {curves}")
+                    
+                    # Update the saved curves dropdown if it exists
+                    if 'saved_curves_selector' in data and data['saved_curves_selector']:
+                        selector = data['saved_curves_selector']
+                        
+                        # Add Log for Widget Access ID
+                        logger.info(f"[{pedal}] Accessing saved_curves_selector with ID: {id(selector)}")
+                        
+                        # Verify the widget is alive and visible
+                        logger.info(f"[{pedal}] Selector isVisible: {selector.isVisible()}, isEnabled: {selector.isEnabled()}")
+                        
+                        current_text = selector.currentText()
+                        selector.clear()
+                        
+                        # Add some dummy items if no curves
+                        if not curves:
+                            selector.addItem("No curves found")
+                        
+                        # Add actual curves
+                        for curve in sorted(curves):
+                            selector.addItem(curve)
+                        
+                        logger.info(f"[{pedal}] saved_curves_selector item count after adding: {selector.count()}")
+                        
+                        # Restore selection if possible
+                        if current_text and current_text in curves:
+                            selector.setCurrentText(current_text)
+                        elif curves:
+                            selector.setCurrentText(sorted(curves)[0])
+                        else:
+                            selector.setCurrentIndex(-1)
+                            
+                        # Force UI Update
+                        selector.update()
+                        selector.repaint()
+                        selector.show()
+                    
+                    # *** FIX: Also update the curve_type_selector to include custom curves ***
+                    if 'curve_type_selector' in data and data['curve_type_selector']:
+                        # Get the main curve type selector
+                        curve_selector = data['curve_type_selector']
+                        
+                        # Log access
+                        logger.info(f"[{pedal}] Accessing curve_type_selector with ID: {id(curve_selector)}")
+                        logger.info(f"[{pedal}] curve_type_selector isVisible: {curve_selector.isVisible()}, isEnabled: {curve_selector.isEnabled()}")
+                        
+                        # Save current selection
+                        current_type = curve_selector.currentText()
+                        
+                        # Block signals to prevent unwanted callbacks
+                        curve_selector.blockSignals(True)
+                        
+                        # Remember the built-in types
+                        built_in_types = ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]
+                        
+                        # Clear and add built-in types 
+                        curve_selector.clear()
+                        curve_selector.addItems(built_in_types)
+                        
+                        # Add custom curves to the curve_type_selector
+                        for curve in sorted(curves):
+                            # Only add if not a built-in type
+                            if curve not in built_in_types:
+                                curve_selector.addItem(curve)
+                        
+                        # Log item count
+                        logger.info(f"[{pedal}] curve_type_selector item count after adding: {curve_selector.count()}")
+                        
+                        # Restore selection if possible
+                        if current_type and (current_type in built_in_types or current_type in curves):
+                            curve_selector.setCurrentText(current_type)
+                        else:
+                            # Default to Linear if previous selection is not available
+                            curve_selector.setCurrentText("Linear")
+                        
+                        # Unblock signals
+                        curve_selector.blockSignals(False)
+                        
+                        # Force UI update
+                        curve_selector.update()
+                        curve_selector.repaint()
+                        curve_selector.show()
+            
+            # Clear the flag after populating
+            self._is_populating_curves = False
+            logger.info("Curve lists refreshed successfully")
+        except Exception as e:
+            logger.error(f"Error refreshing curve lists: {e}")
+            self._is_populating_curves = False

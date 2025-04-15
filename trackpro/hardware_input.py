@@ -773,6 +773,32 @@ class HardwareInput:
                         'name': 'Rain Mode',
                         'points': [(0, 0), (25, 8), (50, 20), (75, 35), (90, 60), (100, 80)],
                         'curve_type': 'Rain Mode'
+                    },
+                    # New throttle profiles
+                    {
+                        'name': 'Drift Control',
+                        'points': [(0, 0), (20, 15), (40, 45), (60, 90), (80, 95), (100, 100)],
+                        'curve_type': 'Drift Control'
+                    },
+                    {
+                        'name': 'F1 Style',
+                        'points': [(0, 0), (10, 3), (20, 8), (40, 20), (60, 40), (80, 70), (100, 100)],
+                        'curve_type': 'F1 Style'
+                    },
+                    {
+                        'name': 'Rally',
+                        'points': [(0, 0), (20, 25), (40, 40), (60, 60), (80, 85), (100, 100)],
+                        'curve_type': 'Rally'
+                    },
+                    {
+                        'name': 'Dirt Track',
+                        'points': [(0, 0), (20, 10), (40, 30), (60, 45), (80, 70), (100, 90)],
+                        'curve_type': 'Dirt Track'
+                    },
+                    {
+                        'name': 'Super Precise',
+                        'points': [(0, 0), (10, 2), (25, 5), (50, 15), (75, 35), (85, 65), (95, 85), (100, 100)],
+                        'curve_type': 'Super Precise'
                     }
                 ],
                 'brake': [
@@ -810,6 +836,32 @@ class HardwareInput:
                         'name': 'Initial Bite',
                         'points': [(0, 0), (10, 20), (30, 45), (50, 65), (70, 80), (100, 100)],
                         'curve_type': 'Initial Bite'
+                    },
+                    # New brake profiles
+                    {
+                        'name': 'GT3 Racing',
+                        'points': [(0, 0), (5, 15), (15, 35), (30, 60), (50, 80), (75, 95), (100, 100)],
+                        'curve_type': 'GT3 Racing'
+                    },
+                    {
+                        'name': 'Endurance',
+                        'points': [(0, 0), (20, 15), (40, 30), (60, 50), (80, 75), (100, 95)],
+                        'curve_type': 'Endurance'
+                    },
+                    {
+                        'name': 'Technical Circuit',
+                        'points': [(0, 0), (15, 10), (30, 25), (45, 45), (60, 70), (75, 90), (100, 100)],
+                        'curve_type': 'Technical Circuit'
+                    },
+                    {
+                        'name': 'Oval Track',
+                        'points': [(0, 0), (30, 20), (50, 45), (70, 80), (85, 95), (100, 100)],
+                        'curve_type': 'Oval Track'
+                    },
+                    {
+                        'name': 'Street Car',
+                        'points': [(0, 0), (25, 25), (50, 50), (75, 75), (100, 100)],
+                        'curve_type': 'Street Car'
                     }
                 ],
                 'clutch': [
@@ -847,6 +899,32 @@ class HardwareInput:
                         'name': 'Smooth Launch',
                         'points': [(0, 0), (15, 5), (30, 20), (45, 45), (60, 80), (75, 95), (100, 100)],
                         'curve_type': 'Smooth Launch'
+                    },
+                    # New clutch profiles
+                    {
+                        'name': 'Performance Launch',
+                        'points': [(0, 0), (35, 15), (45, 40), (50, 70), (55, 90), (65, 98), (100, 100)],
+                        'curve_type': 'Performance Launch'
+                    },
+                    {
+                        'name': 'Drag Racing',
+                        'points': [(0, 0), (30, 10), (40, 30), (45, 50), (48, 80), (50, 95), (100, 100)],
+                        'curve_type': 'Drag Racing'
+                    },
+                    {
+                        'name': 'Heel-Toe',
+                        'points': [(0, 0), (20, 5), (40, 15), (65, 60), (85, 90), (100, 100)],
+                        'curve_type': 'Heel-Toe'
+                    },
+                    {
+                        'name': 'Rally Start',
+                        'points': [(0, 0), (30, 25), (45, 55), (55, 85), (65, 95), (100, 100)],
+                        'curve_type': 'Rally Start'
+                    },
+                    {
+                        'name': 'Half Clutch Control',
+                        'points': [(0, 0), (40, 20), (47, 40), (50, 60), (53, 80), (60, 95), (100, 100)],
+                        'curve_type': 'Half Clutch Control'
                     }
                 ]
             }

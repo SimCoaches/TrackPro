@@ -31,7 +31,7 @@ class UserManager(DatabaseManager):
                 logger.error(f"Could not extract user ID from response: {user}")
                 return None
                 
-            response = self.client.from_("user_details").select("*").eq("id", user_id).single().execute()
+            response = self.client.from_("user_details").select("*").eq("user_id", user_id).single().execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting current user data: {e}")
@@ -95,7 +95,7 @@ class UserManager(DatabaseManager):
             
             try:
                 # Get metadata from user_details table instead of auth.users
-                response = self.client.from_("user_details").select("metadata").eq("id", user_id).single().execute()
+                response = self.client.from_("user_details").select("metadata").eq("user_id", user_id).single().execute()
                 return response.data.get("metadata", {}) if response.data else {}
             except Exception as e:
                 # Get metadata directly from the user object as fallback
@@ -133,7 +133,7 @@ class UserManager(DatabaseManager):
             updated_metadata = {**current_metadata, **metadata}
             
             # Update in user_details table instead of auth.users
-            response = self.client.from_("user_details").update({"metadata": updated_metadata}).eq("id", user_id).execute()
+            response = self.client.from_("user_details").update({"metadata": updated_metadata}).eq("user_id", user_id).execute()
             
             success = bool(response.data)
             if success:
@@ -163,7 +163,7 @@ class UserManager(DatabaseManager):
                     logger.error(f"Could not extract user ID: {user_id}")
                     return None
             
-            response = self.client.from_("user_details").select("*").eq("id", user_id).single().execute()
+            response = self.client.from_("user_details").select("*").eq("user_id", user_id).single().execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting user details: {e}")
@@ -209,7 +209,7 @@ class UserManager(DatabaseManager):
             logger.debug(f"Update details: {details}")
             
             # Update user details
-            response = self.client.from_("user_details").update(details).eq("id", user_id).execute()
+            response = self.client.from_("user_details").update(details).eq("user_id", user_id).execute()
             
             # Log the response for debugging
             logger.debug(f"Update response: {response}")
@@ -250,11 +250,11 @@ class UserManager(DatabaseManager):
         try:
             # Get user details
             logger.debug("Querying user_profiles table")
-            profile_response = self.client.from_("user_profiles").select("*").eq("id", user_id).single().execute()
+            profile_response = self.client.from_("user_profiles").select("*").eq("user_id", user_id).single().execute()
             logger.debug(f"user_profiles response: {profile_response.data if hasattr(profile_response, 'data') else None}")
             
             logger.debug("Querying user_details table")
-            details_response = self.client.from_("user_details").select("*").eq("id", user_id).single().execute()
+            details_response = self.client.from_("user_details").select("*").eq("user_id", user_id).single().execute()
             logger.debug(f"user_details response: {details_response.data if hasattr(details_response, 'data') else None}")
             
             # Get base user info

@@ -103,6 +103,7 @@ class IRacingLapSaver:
             The session ID if successful, None otherwise
         """
         if self._connection_disabled:
+            logger.warning("Cannot start session: Supabase connection is disabled.")
             return None
             
         if not self._supabase:
@@ -110,17 +111,55 @@ class IRacingLapSaver:
             self._connection_disabled = True  # Disable future attempts
             return None
         
-        # Ensure we have a user ID before creating a session
-        if not self._user_id:
-            try:
-                from ..auth.user_manager import get_current_user
-                user = get_current_user()
-                if user and hasattr(user, 'id'):
-                    self._user_id = user.id
-                    logger.info(f"Set user ID for new session: {self._user_id}")
-            except Exception as e:
-                logger.warning(f"Could not get user ID for session: {e}")
+        # --- Robust User ID Retrieval with Retry ---
+        retry_attempts = 3
+        retry_delay = 0.5 # seconds
         
+        for attempt in range(retry_attempts):
+            if not self._user_id:
+                try:
+                    from ..auth.user_manager import get_current_user
+                    user = get_current_user()
+                    if user and hasattr(user, 'user_id') and user.user_id:
+                        self._user_id = user.user_id
+                        logger.info(f"Attempt {attempt+1}: Set user ID for session from user.user_id: {self._user_id}")
+                        break # Exit loop if user_id found
+                    elif user and hasattr(user, 'id') and user.id:
+                        self._user_id = user.id
+                        logger.info(f"Attempt {attempt+1}: Set user ID for session from user.id: {self._user_id}")
+                        break # Exit loop if user_id found
+                    else:
+                         # Try checking user_details as a fallback (though less reliable right after signup)
+                        try:
+                            # Ensure we use the correct user_id field name based on previous migration
+                            details_response = self._supabase.table("user_details").select("user_id").eq("user_id", user.id if user else None).limit(1).execute()
+                            if details_response.data and len(details_response.data) > 0:
+                                self._user_id = details_response.data[0].get('user_id')
+                                if self._user_id:
+                                     logger.info(f"Attempt {attempt+1}: Set user ID from user_details fallback: {self._user_id}")
+                                     break # Exit loop if user_id found
+                        except Exception as ud_error:
+                            logger.debug(f"Attempt {attempt+1}: Could not get user ID from user_details: {ud_error}")
+                            
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt+1}: Error getting current user: {e}")
+
+            if self._user_id:
+                 break # Exit loop if user_id found in this attempt
+
+            if attempt < retry_attempts - 1:
+                 logger.warning(f"Attempt {attempt+1}: User ID not found, retrying in {retry_delay}s...")
+                 time.sleep(retry_delay)
+            else:
+                 logger.error(f"Failed to obtain user ID after {retry_attempts} attempts. Cannot create session.")
+                 return None # Explicitly fail if no user_id after retries
+        # --- End User ID Retrieval ---
+
+        # Ensure we definitely have a user ID now
+        if not self._user_id:
+             logger.error("Cannot start session: User ID is missing.")
+             return None
+
         # Check if track exists or create it
         track_id = self._get_or_create_track(track_name)
         if not track_id:
@@ -138,18 +177,24 @@ class IRacingLapSaver:
             session_id = str(uuid.uuid4())
             session_data = {
                 "id": session_id,
+                "user_id": self._user_id, # user_id is now guaranteed to be non-None
                 "track_id": track_id,
                 "car_id": car_id,
                 "session_type": session_type,
                 "session_date": datetime.now().isoformat()
             }
             
-            # Only add user_id if it exists (making it optional)
-            if self._user_id:
-                session_data["user_id"] = self._user_id
-            
+            # Optional: Add email if needed (though user_id should be primary)
+            # try:
+            #     user_response = self._supabase.table("user_profiles").select("email").eq("user_id", self._user_id).execute()
+            #     if user_response.data and len(user_response.data) > 0 and 'email' in user_response.data[0]:
+            #         session_data["email"] = user_response.data[0]['email']
+            # except Exception as email_error:
+            #     logger.warning(f"Could not get email for user {self._user_id}: {email_error}")
+
+            logger.info(f"Attempting to create session with data: {session_data}")
             result = self._supabase.table("sessions").insert(session_data).execute()
-            
+                
             if result.data:
                 self._current_session_id = session_id
                 self._current_track_id = track_id
@@ -159,15 +204,22 @@ class IRacingLapSaver:
                 self._is_first_telemetry = True
                 self._current_lap_data = []
                 self._best_lap_time = float('inf')
-                
                 logger.info(f"Started new session: {session_id} - {track_name} - {car_name} - {session_type}")
                 return session_id
             else:
-                logger.error("Failed to create session in Supabase")
+                # Log the specific error if available in the response
+                error_details = getattr(result, 'error', None) or getattr(result, 'message', 'No data returned')
+                logger.error(f"Failed to create session in Supabase. Error: {error_details}")
                 return None
                 
-        except Exception as e:
-            logger.error(f"Error creating session: {e}")
+        except Exception as insert_error:
+            # Catch potential exceptions during insert (e.g., RLS violation, network issues)
+            logger.error(f"Error inserting session into Supabase: {insert_error}")
+            # Log the user ID that was attempted
+            logger.error(f"Attempted insert with User ID: {self._user_id}")
+
+            # Do NOT proceed or mask the error by returning a session ID
+            # The session was not created successfully in the database.
             return None
 
     def _get_or_create_track(self, track_name):
@@ -433,10 +485,8 @@ class IRacingLapSaver:
         if is_personal_best:
             self._best_lap_time = lap_time
         
-        # Create lap entry
-        lap_id = str(uuid.uuid4())
+        # Create lap entry - no manual ID needed, Supabase will auto-generate it 
         lap_data = {
-            "id": lap_id,
             "session_id": self._current_session_id,
             "lap_number": lap_number,
             "lap_time": lap_time,
@@ -465,7 +515,9 @@ class IRacingLapSaver:
             try:
                 result = self._supabase.table("laps").insert(lap_data).execute()
                 
-                if result.data:
+                if result.data and len(result.data) > 0:
+                    # Get the generated ID from the result
+                    lap_id = result.data[0]["id"]
                     logger.info(f"Saved lap {lap_number} with time {lap_time:.3f}s to Supabase")
                     
                     # Set current lap ID for telemetry data
@@ -547,7 +599,8 @@ class IRacingLapSaver:
                 "brake": telemetry_point.get('brake', 0),
                 "clutch": telemetry_point.get('clutch', 0),
                 "steering": telemetry_point.get('steering', 0),
-                "timestamp": telemetry_point.get('timestamp', 0) - self._lap_start_time  # Relative to lap start
+                "timestamp": telemetry_point.get('timestamp', 0) - self._lap_start_time,  # Relative to lap start
+                "user_id": self._user_id  # Add user_id from the class instance
             }
             
             # Add to batch
