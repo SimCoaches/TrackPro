@@ -6,6 +6,9 @@ import subprocess
 import time
 import logging
 from datetime import datetime
+from PyQt5 import QtWebEngineWidgets
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication
 
 # Set higher logging level for noisy HTTP and Supabase libraries
 for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager', 'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 'supafunc']:
@@ -218,6 +221,9 @@ def show_error_dialog(message):
     try:
         from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QDialog, QPushButton, QHBoxLayout
         
+        # Set attribute BEFORE creating QApplication implicitly or explicitly
+        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+
         # Create QApplication instance if it doesn't exist
         app = QApplication.instance()
         if app is None:
@@ -451,7 +457,9 @@ if __name__ == "__main__":
         logger.warning("Another instance of TrackPro is already running")
         if "TrackPro_v" in sys.executable:  # Only show message if running from EXE
             from PyQt5.QtWidgets import QApplication, QMessageBox
-            app = QApplication([])
+            # Ensure attribute is set before potentially creating QApplication here
+            QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+            app = QApplication([]) # Ensure QApplication exists before showing message box
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Warning)
             msg.setText("TrackPro is already running")
@@ -460,6 +468,8 @@ if __name__ == "__main__":
             msg.exec_()
         sys.exit(0)
     
+    # Set attribute BEFORE potentially creating QApplication in main()
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
     try:
         logger.info("Importing trackpro.main module...")
         from trackpro.main import main

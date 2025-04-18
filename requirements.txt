@@ -1,4 +1,5 @@
 PyQt5>=5.15.0
+PyQtWebEngine>=5.15.0
 pygame>=2.0.0
 pywin32>=300
 requests>=2.25.0

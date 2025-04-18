@@ -726,6 +726,14 @@ SectionEnd
             "numpy.ma"
         ]
         
+        # Add PyQtWebEngine modules
+        pyqt_web_modules = [
+            "PyQt5.QtWebEngineWidgets",
+            "PyQt5.QtWebEngine",
+            "PyQt5.QtWebEngineCore",
+            "PyQtWebEngine"
+        ]
+        
         # Additional dependencies that might be required
         additional_modules = [
             "sqlite3",
@@ -734,7 +742,7 @@ SectionEnd
             "matplotlib.pyplot"
         ]
         
-        all_modules = race_coach_modules + numpy_modules + additional_modules
+        all_modules = race_coach_modules + numpy_modules + pyqt_web_modules + additional_modules
         
         for module in all_modules:
             modules.append(f"--hidden-import={module}")
@@ -807,6 +815,10 @@ SectionEnd
             '--hidden-import=PyQt5.QtCore',
             '--hidden-import=PyQt5.QtGui',
             '--hidden-import=PyQt5.QtWidgets',
+            '--hidden-import=PyQt5.QtWebEngineWidgets',
+            '--hidden-import=PyQt5.QtWebEngine',
+            '--hidden-import=PyQt5.QtWebEngineCore',
+            '--hidden-import=PyQtWebEngine',
             '--hidden-import=pygame',
             '--hidden-import=win32serviceutil',
             '--hidden-import=win32service',
@@ -814,6 +826,24 @@ SectionEnd
             '--add-data=trackpro.manifest;.'  # Include manifest in the package
         ]
         
+        # Add PyQt5 translation and resources for WebEngine
+        try:
+            import PyQt5
+            pyqt_path = os.path.dirname(PyQt5.__file__)
+            # Add Qt translations and resources needed for WebEngine
+            translations_path = os.path.join(pyqt_path, "Qt5", "translations")
+            resources_path = os.path.join(pyqt_path, "Qt5", "resources")
+            
+            if os.path.exists(translations_path):
+                print(f"Adding PyQt5 translations from: {translations_path}")
+                opts.extend(['--add-data', f'{translations_path};PyQt5/Qt5/translations'])
+            
+            if os.path.exists(resources_path):
+                print(f"Adding PyQt5 resources from: {resources_path}")
+                opts.extend(['--add-data', f'{resources_path};PyQt5/Qt5/resources'])
+        except Exception as e:
+            print(f"Warning: Could not add PyQt5 translations/resources: {e}")
+
         # Add Race Coach modules
         opts.extend(race_coach_imports)
         
@@ -904,6 +934,21 @@ SectionEnd
             print(f"PyInstaller Error: {str(e)}")
             raise Exception(f"Failed to build executable: {str(e)}")
         
+        # Verify PyQtWebEngine was included in the build
+        print("\nVerifying PyQtWebEngine inclusion...")
+        spec_file = f"TrackPro_v{self.version}.spec"
+        if os.path.exists(spec_file):
+            try:
+                with open(spec_file, 'r', encoding='utf-8') as f:
+                    spec_content = f.read()
+                    if "PyQtWebEngine" in spec_content and "QtWebEngineWidgets" in spec_content:
+                        print("✓ Verified PyQtWebEngine is included in the build")
+                    else:
+                        print("! Warning: PyQtWebEngine may not be properly included in the build")
+                        print("  You may need to manually add these dependencies to the .spec file")
+            except Exception as e:
+                print(f"! Warning: Could not verify PyQtWebEngine inclusion: {e}")
+        
         # Verify the exe was created
         exe_path = os.path.join("dist", f"TrackPro_v{self.version}.exe")
         if os.path.exists(exe_path):
@@ -929,6 +974,7 @@ SectionEnd
         # Check for required Python packages
         required_packages = {
             "PyQt5": "PyQt5>=5.15.0",
+            "PyQtWebEngine": "PyQtWebEngine>=5.15.0",
             "pygame": "pygame>=2.0.0",
             "pywin32": "pywin32>=300",
             "requests": "requests>=2.25.0",
