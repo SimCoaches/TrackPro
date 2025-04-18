@@ -3374,26 +3374,6 @@ class VideoPlayer(QWidget):
         # Add the fallback view to the stack
         self.stack.addWidget(self.html_view)
         
-        # Controls
-        self.controls_widget = QWidget() # Make controls a member for easy show/hide
-        controls_layout = QHBoxLayout(self.controls_widget)
-        
-        self.play_button = QPushButton("Play")
-        self.play_button.setFixedSize(80, 32)
-        self.play_button.clicked.connect(self.play_video)
-        controls_layout.addWidget(self.play_button)
-        
-        self.progress = QSlider(Qt.Horizontal)
-        self.progress.setEnabled(False)  # Disabled since YouTube has its own controls
-        controls_layout.addWidget(self.progress)
-        
-        self.browser_button = QPushButton("Open in Browser")
-        self.browser_button.setFixedSize(120, 32)
-        self.browser_button.clicked.connect(self.open_in_browser)
-        controls_layout.addWidget(self.browser_button)
-        
-        layout.addWidget(self.controls_widget)
-        
     def get_youtube_embed_url(self, url):
         """Convert YouTube URL to embed URL."""
         # Handle various YouTube URL formats
@@ -3432,19 +3412,6 @@ class VideoPlayer(QWidget):
         # Directly load into web_view, assuming it works
         logger.info(f"Loading video in QWebEngineView: {embed_url}")
         self.web_view.load(QUrl(embed_url)) # Convert string to QUrl
-        # Controls container visibility might not be needed anymore, 
-        # but leave it for now in case we re-add fallback later.
-        # Ensure controls_widget itself is visible, but internal buttons are gone.
-    
-    def play_video(self):
-        """Play the current video."""
-        if self.current_video:
-            if self.has_web_engine:
-                # Already playing in the web view
-                pass
-            else:
-                # Open in browser as fallback
-                self.open_in_browser()
     
     def open_in_browser(self):
         """Open the video in a web browser."""

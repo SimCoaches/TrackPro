@@ -8,7 +8,7 @@ import time
 import math
 
 # Version information - hardcoded to avoid cyclic imports
-__version__ = "1.4.3"
+__version__ = "1.4.4"
 
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -705,9 +705,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         # Main window setup
         self.window_width = 1200
-        self.window_height = 800
-        self.setWindowTitle("TrackPro Configuration v1.4.3")
-        self.setMinimumSize(1000, 700)
+        self.window_height = 900  # Increased from 800 to 900
+        self.setWindowTitle("TrackPro Configuration v1.4.4")
+        self.setMinimumSize(1000, 875)  # Increased minimum height from 700 to 800
         self.setWindowIcon(QIcon(":/icons/app_icon.ico"))
 
         # Store the shared OAuth handler
@@ -2153,6 +2153,18 @@ class MainWindow(QMainWindow):
     
     def open_race_coach(self):
         """Open the Race Coach screen with password protection."""
+        # First check if user is authenticated
+        if not supabase.is_authenticated():
+            # Show dialog telling user to log in
+            QMessageBox.information(
+                self,
+                "Login Required",
+                "You need to be logged in to access the Race Coach feature.\n\n"
+                "Please log in using the Login button in the top right corner."
+            )
+            logger.info("Race Coach access attempted without login")
+            return
+        
         try:
             # Show password dialog
             password_dialog = PasswordDialog(self)
@@ -2657,7 +2669,8 @@ class MainWindow(QMainWindow):
         """
         # Example: Protect the Race Coach feature
         if hasattr(self, 'race_coach_action'):
-            self.race_coach_action.setEnabled(is_authenticated)
+            # Keep button enabled but with tooltip when not authenticated
+            self.race_coach_action.setEnabled(True)
             if not is_authenticated:
                 self.race_coach_action.setToolTip("Please log in to access Race Coach")
             else:

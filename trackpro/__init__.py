@@ -1,6 +1,6 @@
 """TrackPro - Advanced Pedal Input Mapping Software"""
 
-__version__ = "1.4.3"
+__version__ = "1.4.4"
 __author__ = "Sim Coaches"
 __license__ = "Proprietary"
 __copyright__ = "Copyright 2025 Sim Coaches"

@@ -1208,7 +1208,7 @@ def main():
         # Set application details (optional but good practice)
         QApplication.setApplicationName("TrackPro")
         # TODO: Read version from a central place (e.g., __init__.py or config file)
-        QApplication.setApplicationVersion("1.4.3")
+        QApplication.setApplicationVersion("1.4.4")
 
         # Initialize and run the application
         trackpro_app = TrackProApp(test_mode=test_mode, start_time=start_time)

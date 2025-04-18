@@ -1,6 +1,14 @@
 # Changelog
 
-## 1.4.2 - 2025-06-20
+## 1.4.4 - 2025-06-25
+- Updated version to 1.4.4
+- Bug fixes and performance improvements
+
+## 1.4.3 - 2025-06-20
+- Updated version to 1.4.3
+- [Insert other changes here]
+
+## 1.4.2 - 2025-06-15
 - Updated version to 1.4.2
 - [Insert other changes here]
 
