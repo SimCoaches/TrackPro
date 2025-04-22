@@ -3,7 +3,7 @@ import os
 import logging
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QTabWidget, QGroupBox,
-                             QSplitter, QComboBox, QStatusBar, QMainWindow, QMessageBox, QApplication, QGridLayout, QFrame, QFormLayout, QCheckBox, QProgressBar, QSizePolicy, QSpacerItem, QScrollArea, QStackedWidget, QLineEdit, QSlider)
+                             QSplitter, QComboBox, QStatusBar, QMainWindow, QMessageBox, QApplication, QGridLayout, QFrame, QFormLayout, QCheckBox, QProgressBar, QSizePolicy, QSpacerItem, QScrollArea, QStackedWidget, QLineEdit, QSlider, QTabBar)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QUrl  # Import QUrl
 from PyQt5.QtGui import QFont, QColor, QPalette, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QConicalGradient, QPixmap
 from PyQt5.QtWebEngineWidgets import QWebEngineView  # Add direct import
@@ -17,6 +17,25 @@ import math
 import random  # Import random module for demo animations
 from datetime import datetime
 from pathlib import Path  # Add Path import for file handling
+
+# Need QObject and QThread for background tasks
+from PyQt5.QtCore import QObject, QThread
+
+# Import the auth update function directly here as well
+from Supabase.auth import update_auth_state_from_client, is_logged_in
+
+# Supabase helpers for laps and telemetry
+try:
+    from Supabase.database import get_laps, get_telemetry_points
+except Exception as _sup_err:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Supabase import failed ({_sup_err}), using fallback functions.")
+    # When Supabase is not configured (offline demo) we still want UI to load.
+    def get_laps(*_args, **_kwargs):
+        return None, "Supabase unavailable"
+
+    def get_telemetry_points(*_args, **_kwargs):
+        return None, "Supabase unavailable"
 
 # Try to import QPointF and QRectF from QtCore
 try:
@@ -132,6 +151,56 @@ except ImportError:
             return len(self._points)
 
 logger = logging.getLogger(__name__)
+
+# --- Worker for Background Telemetry Fetching (Phase 3, Step 7) ---
+class TelemetryFetchWorker(QObject):
+    finished = pyqtSignal(object, object) # Pass two results (left_pts, right_pts)
+    error = pyqtSignal(str, str)          # Pass two error messages
+
+    def __init__(self, left_lap_id, right_lap_id):
+        super().__init__()
+        self.left_lap_id = left_lap_id
+        self.right_lap_id = right_lap_id
+        self.is_cancelled = False
+
+    def run(self):
+        """Fetch telemetry data for both laps."""
+        logger.info(f"Worker thread starting fetch for {self.left_lap_id} and {self.right_lap_id}")
+        left_pts, right_pts = None, None
+        msg_left, msg_right = "", ""
+
+        try:
+            # Fetch left lap
+            if not self.is_cancelled:
+                left_pts, msg_left = get_telemetry_points(self.left_lap_id, columns=["track_position","speed"])
+                if left_pts is None:
+                    logger.warning(f"Failed fetching left lap: {msg_left}")
+                    # Don't emit error yet, try fetching right lap
+
+            # Fetch right lap
+            if not self.is_cancelled:
+                right_pts, msg_right = get_telemetry_points(self.right_lap_id, columns=["track_position","speed"])
+                if right_pts is None:
+                    logger.warning(f"Failed fetching right lap: {msg_right}")
+                    # Don't emit error yet, proceed if left lap succeeded
+
+            # Check results and emit appropriate signal
+            if self.is_cancelled:
+                 logger.info("Telemetry fetch cancelled.")
+                 self.error.emit("Operation Cancelled", "Operation Cancelled")
+            elif left_pts is None and right_pts is None:
+                 self.error.emit(msg_left or "Fetch failed", msg_right or "Fetch failed")
+            else:
+                 # Emit results even if one failed, handle None in the main thread
+                 self.finished.emit(left_pts, right_pts)
+
+        except Exception as e:
+            logger.error(f"Exception in TelemetryFetchWorker: {e}", exc_info=True)
+            self.error.emit(f"Worker Error: {e}", f"Worker Error: {e}")
+
+    def cancel(self):
+        self.is_cancelled = True
+# --- End Worker ---
 
 class GaugeBase(QWidget):
     """Base class for custom gauge widgets."""
@@ -2266,6 +2335,904 @@ class DeltaGraphWidget(QWidget):
 
 # --- End New Widget ---
 
+class VideosTab(QWidget):
+    """Tab for displaying video courses in a Kajabi-like interface."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Setup logging
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Initializing VideosTab (RaceFlix)")
+        
+        # Main layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Stacked widget to switch between courses list and individual course view
+        self.stacked_widget = QStackedWidget()
+        
+        # Create courses list view
+        self.courses_view = QWidget()
+        courses_layout = QVBoxLayout(self.courses_view)
+        
+        # Header
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 20, 20, 10)
+        
+        title = QLabel("Racing Courses")
+        title.setStyleSheet("font-size: 24px; font-weight: bold; color: white;")
+        header_layout.addWidget(title)
+        
+        # Search box
+        search_box = QWidget()
+        search_box.setFixedWidth(250)
+        search_box_layout = QHBoxLayout(search_box)
+        search_box_layout.setContentsMargins(0, 0, 0, 0)
+        
+        search_icon = QLabel("🔍")
+        search_icon.setStyleSheet("color: #999; font-size: 16px;")
+        
+        search_input = QLineEdit()
+        search_input.setPlaceholderText("Search courses...")
+        search_input.setStyleSheet("""
+            background-color: #333;
+            border: none;
+            padding: 8px;
+            border-radius: 4px;
+            color: white;
+        """)
+        
+        search_box_layout.addWidget(search_icon)
+        search_box_layout.addWidget(search_input)
+        
+        header_layout.addWidget(search_box)
+        
+        courses_layout.addWidget(header)
+        
+        # Category tabs - Use QTabBar instead of QTabWidget for better styling control
+        tab_bar = QTabBar()
+        tab_bar.setDrawBase(False)
+        tab_bar.setExpanding(False)
+        tab_bar.setStyleSheet("""
+            QTabBar::tab {
+                background-color: transparent;
+                color: #CCC;
+                padding: 8px 16px;
+                margin-right: 4px;
+                border-bottom: 2px solid transparent;
+            }
+            QTabBar::tab:selected {
+                color: white;
+                border-bottom: 2px solid #3498db;
+            }
+        """)
+        
+        # Add tabs
+        tab_bar.addTab("All Courses")
+        tab_bar.addTab("Beginner")
+        tab_bar.addTab("Intermediate")
+        tab_bar.addTab("Advanced")
+        
+        tab_holder = QWidget()
+        tab_holder_layout = QHBoxLayout(tab_holder)
+        tab_holder_layout.addWidget(tab_bar)
+        tab_holder_layout.addStretch()
+        tab_holder_layout.setContentsMargins(20, 0, 20, 5)
+        
+        courses_layout.addWidget(tab_holder)
+        
+        # Content stack for different tab contents
+        self.content_stack = QStackedWidget()
+        
+        # Create content for each tab
+        all_tab = QWidget()
+        beginner_tab = QWidget()
+        intermediate_tab = QWidget()
+        advanced_tab = QWidget()
+        
+        # Create layouts for each tab
+        all_layout = QVBoxLayout(all_tab)
+        all_layout.setContentsMargins(0, 0, 0, 0)
+        beginner_layout = QVBoxLayout(beginner_tab)
+        beginner_layout.setContentsMargins(0, 0, 0, 0)
+        intermediate_layout = QVBoxLayout(intermediate_tab)
+        intermediate_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout = QVBoxLayout(advanced_tab)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Set up course grid for each category
+        self.setup_course_grid(all_tab, "all")
+        self.setup_course_grid(beginner_tab, "beginner")
+        self.setup_course_grid(intermediate_tab, "intermediate")
+        self.setup_course_grid(advanced_tab, "advanced")
+        
+        # Add tabs to stack
+        self.content_stack.addWidget(all_tab)
+        self.content_stack.addWidget(beginner_tab)
+        self.content_stack.addWidget(intermediate_tab)
+        self.content_stack.addWidget(advanced_tab)
+        
+        # Connect tab bar signal
+        tab_bar.currentChanged.connect(self.content_stack.setCurrentIndex)
+        
+        courses_layout.addWidget(self.content_stack)
+        
+        # Create course detail view (right side of main stacked widget)
+        self.course_view = CourseView()
+        self.course_view.back_button.clicked.connect(self.show_courses_list)
+        
+        # Add both views to the stacked widget
+        self.stacked_widget.addWidget(self.courses_view)
+        self.stacked_widget.addWidget(self.course_view)
+        
+        layout.addWidget(self.stacked_widget)
+        
+        # Start with courses list
+        self.stacked_widget.setCurrentIndex(0)
+        
+        # Log completion
+        self.logger.info("VideosTab (RaceFlix) initialization complete")
+        
+        # Force initial layout of the tab (helps with rendering)
+        QTimer.singleShot(100, self.ensure_courses_visible)
+    
+    def ensure_courses_visible(self):
+        """Ensure courses are visible after initial layout."""
+        self.logger.info("Ensuring courses are visible")
+        
+        # Force layout update
+        for i in range(self.content_stack.count()):
+            page = self.content_stack.widget(i)
+            page.updateGeometry()
+            page.adjustSize()
+            
+        # Update the current tab's layout
+        current_tab = self.content_stack.currentWidget()
+        if current_tab:
+            current_tab.updateGeometry()
+            current_tab.adjustSize()
+            
+        # Process events to ensure UI updates immediately
+        self.update()
+        QApplication.processEvents()
+        
+        # Log completion
+        self.logger.info("Layout updated to ensure course visibility")
+
+    def setup_course_grid(self, tab_widget, category):
+        """Set up grid of course cards for a given category tab."""
+        self.logger.info(f"Setting up course grid for category: {category}")
+        
+        # Get the layout for the specific tab widget (e.g., all_tab's layout)
+        tab_layout = tab_widget.layout()
+        if not tab_layout:
+            # If the tab widget doesn't have a layout yet, create one.
+            # This should ideally happen when the tab widget itself is created.
+            tab_layout = QVBoxLayout(tab_widget)
+            tab_layout.setContentsMargins(0, 0, 0, 0)
+            self.logger.warning(f"Layout not found for tab {category}, created a new one.")
+            # No need to call tab_widget.setLayout() here, the parent is set in constructor
+
+        # Get sample courses for this category
+        courses = self.get_sample_courses(category)
+        self.logger.info(f"Found {len(courses)} courses for category {category}")
+        
+        # Clear previous widgets from the layout if any exist
+        while tab_layout.count():
+            item = tab_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if not courses:
+            # If no courses, display a message
+            empty_label = QLabel("No courses found for this category")
+            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setStyleSheet("color: #999; padding: 40px;")
+            tab_layout.addWidget(empty_label)
+            self.logger.info(f"Added 'No courses found' label to {category} tab")
+        else:
+            # Create scroll area to handle large grids
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setStyleSheet("""
+                QScrollArea {
+                    border: none;
+                    background-color: transparent;
+                }
+                QScrollBar:vertical {
+                    background: #333;
+                    width: 10px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #666;
+                    border-radius: 5px;
+                }
+            """)
+            
+            # Create the widget that will contain the grid
+            grid_container_widget = QWidget()
+            grid_layout = QGridLayout(grid_container_widget)
+            grid_layout.setSpacing(20)
+            grid_layout.setContentsMargins(20, 10, 20, 20) # Add margins here
+            grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            
+            # Add courses to grid
+            row, col = 0, 0
+            max_cols = 3  # Show 3 cards per row
+            
+            for i, course in enumerate(courses):
+                try:
+                    self.logger.info(f"Creating card for course {i+1}: {course['title']}")
+                    # Parent the card to the grid_container_widget
+                    course_card = CourseCard(course, parent=grid_container_widget) 
+                    
+                    course_id = course['id'] 
+                    course_card.clicked.connect(
+                        lambda checked, cid=course_id: 
+                        self.show_course_detail(next(c for c in courses if c['id'] == cid))
+                    )
+                    
+                    grid_layout.addWidget(course_card, row, col)
+                    self.logger.info(f"Added course card: {course['title']} at grid position {row},{col}")
+                    
+                    col += 1
+                    if col >= max_cols:
+                        col = 0
+                        row += 1
+                        
+                except Exception as e:
+                    self.logger.error(f"Error creating course card: {e}", exc_info=True)
+            
+            # Add stretch to the bottom row if needed
+            grid_layout.setRowStretch(row + 1, 1)
+            # Add stretch to the last column if needed to push cards left
+            grid_layout.setColumnStretch(max_cols, 1)
+
+            # Set the widget containing the grid into the scroll area
+            scroll_area.setWidget(grid_container_widget)
+            
+            # Add the scroll area directly to the tab's layout
+            tab_layout.addWidget(scroll_area)
+            self.logger.info(f"Added scroll_area containing grid to {category} tab layout")
+
+        # No need to call tab_widget.setLayout() again
+
+    def get_sample_courses(self, category):
+        """Get sample course data for the specified category."""
+        all_courses = [
+            {
+                "id": 1,
+                "title": "Racing Fundamentals",
+                "description": "Master the basics of racing with this comprehensive course.",
+                "level": "beginner",
+                "lessons": 12,
+                "duration": "3h 20m",
+                "thumbnail": "racing_fundamentals.jpg",
+                "instructor": "John Smith",
+                "modules": [
+                    {"title": "Intro to Racing", "duration": "15m", "video_id": "6ENB7xQ7vhA"},  # Driver61 racing fundamentals
+                    {"title": "Basic Car Control", "duration": "25m", "video_id": "ewQwgL76lFo"}, # Driver61 car control
+                    {"title": "Racing Lines", "duration": "30m", "video_id": "VEJh4lLCvbU"},      # Driver61 racing line
+                ]
+            },
+            {
+                "id": 2,
+                "title": "Advanced Cornering Techniques",
+                "description": "Learn how to master every type of corner and optimize your racing line.",
+                "level": "intermediate",
+                "lessons": 8,
+                "duration": "2h 45m",
+                "thumbnail": "advanced_cornering.jpg",
+                "instructor": "Sarah Johnson",
+                "modules": [
+                    {"title": "Corner Analysis", "duration": "20m", "video_id": "dZWfnjXJ9cM"},  # Skip Barber corner analysis
+                    {"title": "Trail Braking", "duration": "35m", "video_id": "bVME4VzexAA"},    # Trail braking tutorial
+                    {"title": "Exit Strategies", "duration": "25m", "video_id": "zXPSj-6Yjdw"},   # Exit strategies
+                ]
+            },
+            {
+                "id": 3,
+                "title": "Racecraft Mastery",
+                "description": "Advanced strategies for overtaking, defending, and race management.",
+                "level": "advanced",
+                "lessons": 10,
+                "duration": "4h 10m",
+                "thumbnail": "racecraft.jpg",
+                "instructor": "Michael Chen",
+                "modules": [
+                    {"title": "Race Starts", "duration": "30m", "video_id": "N8qhvPW-sIQ"},     # Race starts guide
+                    {"title": "Overtaking", "duration": "45m", "video_id": "Dw6GmA7wGg4"},      # Overtaking tutorial
+                    {"title": "Defensive Driving", "duration": "40m", "video_id": "J0TzOJ-Rph0"}, # Defensive driving
+                ]
+            },
+            {
+                "id": 4,
+                "title": "Simulator Setup",
+                "description": "Learn how to properly set up your simulator for optimal performance.",
+                "level": "beginner",
+                "lessons": 6,
+                "duration": "1h 50m",
+                "thumbnail": "simulator.jpg",
+                "instructor": "Alex Rivera",
+                "modules": [
+                    {"title": "Hardware Setup", "duration": "25m", "video_id": "UON3FPRqFj4"},  # Sim hardware setup
+                    {"title": "Software Calibration", "duration": "30m", "video_id": "5v8XSEeJFnM"}, # Wheel setup
+                    {"title": "Force Feedback", "duration": "20m", "video_id": "WhRGn_3yuHE"},      # FFB settings
+                ]
+            },
+            {
+                "id": 5,
+                "title": "Wet Weather Driving",
+                "description": "Master the art of driving in challenging wet conditions.",
+                "level": "intermediate",
+                "lessons": 7,
+                "duration": "2h 15m",
+                "thumbnail": "wet_weather.jpg",
+                "instructor": "Emma Lewis",
+                "modules": [
+                    {"title": "Rain Techniques", "duration": "35m", "video_id": "AZ7pX_1BbEI"},    # Wet driving techniques
+                    {"title": "Puddle Management", "duration": "25m", "video_id": "RMxkOmBE0iI"},   # Wet racing guide
+                    {"title": "Wet Setup", "duration": "30m", "video_id": "Jg_wm3wJ9t4"},          # Wet setup guide
+                ]
+            },
+            {
+                "id": 6,
+                "title": "Data Analysis for Racing",
+                "description": "Learn how to analyze telemetry data to improve your lap times.",
+                "level": "advanced",
+                "lessons": 9,
+                "duration": "3h 40m",
+                "thumbnail": "data_analysis.jpg",
+                "instructor": "David Park",
+                "modules": [
+                    {"title": "Telemetry Basics", "duration": "30m", "video_id": "KU7TCADpc-o"},   # Telemetry basics
+                    {"title": "Speed Traces", "duration": "35m", "video_id": "NjX-BMwhyOc"},        # Data analysis guide
+                    {"title": "Comparing Laps", "duration": "40m", "video_id": "NML0mgLbFDs"},      # Lap comparison
+                ]
+            }
+        ]
+        
+        self.logger.info(f"Filtering courses for category: {category}")
+        if category == "all":
+            return all_courses
+        else:
+            filtered = [course for course in all_courses if course["level"] == category]
+            self.logger.info(f"Filtered down to {len(filtered)} courses")
+            return filtered
+
+    def show_course_detail(self, course_data):
+        """Show the detailed view for a course."""
+        self.logger.info(f"Showing course detail for: {course_data['title']}")
+        self.course_view.set_course(course_data)
+        self.stacked_widget.setCurrentIndex(1)
+    
+    def show_courses_list(self):
+        """Return to the courses list view."""
+        self.logger.info("Returning to courses list")
+        self.stacked_widget.setCurrentIndex(0)
+
+
+class CourseCard(QFrame):
+    """Widget for displaying a course card in the grid."""
+    
+    # Signal emitted when card is clicked
+    clicked = pyqtSignal(bool)
+    
+    def __init__(self, course_data, parent=None):
+        super().__init__(parent)
+        self.course_data = course_data
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Creating CourseCard for: {course_data['title']}")
+        
+        # Set fixed size to ensure consistent layout
+        self.setFixedSize(300, 280)
+        self.setStyleSheet("""
+            CourseCard {
+                background-color: #333;
+                border-radius: 10px;
+                margin: 5px;
+            }
+            CourseCard:hover {
+                background-color: #444;
+                border: 1px solid #3498db;
+            }
+        """)
+        
+        # Make clickable
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Set up layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Thumbnail area
+        thumbnail = QLabel()
+        thumbnail.setFixedHeight(150)
+        thumbnail.setStyleSheet("""
+            background-color: #555;
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
+            padding: 0;
+            margin: 0;
+        """)
+        
+        # Create thumbnail image with consistent color based on course ID
+        thumbnail_pixmap = self.create_thumbnail(course_data)
+        thumbnail.setPixmap(thumbnail_pixmap)
+        
+        # Content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(15, 12, 15, 12)
+        content_layout.setSpacing(5)
+        
+        # Title
+        title = QLabel(course_data["title"])
+        title.setStyleSheet("font-weight: bold; color: white; font-size: 16px;")
+        title.setWordWrap(True)
+        title.setFixedHeight(40)
+        
+        # Description (limited height)
+        description = QLabel(course_data["description"])
+        description.setStyleSheet("color: #CCC; font-size: 12px;")
+        description.setWordWrap(True)
+        description.setFixedHeight(40)
+        
+        # Meta info
+        meta_widget = QWidget()
+        meta_layout = QHBoxLayout(meta_widget)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(10)
+        
+        # Level badge
+        level_label = QLabel(course_data["level"].capitalize())
+        level_badge_style = {
+            "beginner": "background-color: #27ae60;",
+            "intermediate": "background-color: #f39c12;",
+            "advanced": "background-color: #c0392b;"
+        }
+        level_style = level_badge_style.get(course_data["level"], "background-color: #3498db;")
+        level_label.setStyleSheet(f"""
+            padding: 3px 8px;
+            {level_style}
+            color: white;
+            border-radius: 3px;
+            font-size: 10px;
+        """)
+        
+        # Duration
+        duration_label = QLabel(f"🕒 {course_data['duration']}")
+        duration_label.setStyleSheet("color: #999; font-size: 12px;")
+        
+        # Lessons
+        lessons_label = QLabel(f"📚 {course_data['lessons']} Lessons")
+        lessons_label.setStyleSheet("color: #999; font-size: 12px;")
+        
+        meta_layout.addWidget(level_label)
+        meta_layout.addWidget(duration_label)
+        meta_layout.addWidget(lessons_label)
+        meta_layout.addStretch()
+        
+        # Add everything to the content layout
+        content_layout.addWidget(title)
+        content_layout.addWidget(description)
+        content_layout.addWidget(meta_widget)
+        
+        # Add thumbnail and content to main layout
+        layout.addWidget(thumbnail)
+        layout.addWidget(content)
+        
+        # Ensure card is visible
+        self.setVisible(True)
+        
+    def create_thumbnail(self, course_data):
+        """Create a thumbnail for the course card."""
+        try:
+            # Generate a consistent color based on the course ID
+            color_seed = course_data["id"] % 10
+            colors = [
+                QColor(255, 100, 100),  # Red
+                QColor(100, 200, 100),  # Green
+                QColor(100, 100, 255),  # Blue
+                QColor(255, 200, 100),  # Orange
+                QColor(200, 100, 255),  # Purple
+                QColor(100, 200, 255),  # Light blue
+                QColor(255, 100, 200),  # Pink
+                QColor(200, 255, 100),  # Lime
+                QColor(255, 200, 200),  # Light pink
+                QColor(200, 200, 255)   # Light purple
+            ]
+            
+            # Create a gradient for the thumbnail
+            base_color = colors[color_seed]
+            darker_color = QColor(int(base_color.red() * 0.7), int(base_color.green() * 0.7), int(base_color.blue() * 0.7))
+            
+            # Create the pixmap
+            thumbnail_pixmap = QPixmap(300, 150)
+            thumbnail_pixmap.fill(base_color)  # Fill with solid color first as fallback
+            
+            # Then try to add gradient and icon
+            painter = QPainter(thumbnail_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Create and draw gradient
+            gradient = QLinearGradient(0, 0, 300, 150)
+            gradient.setColorAt(0, base_color)
+            gradient.setColorAt(1, darker_color)
+            painter.fillRect(0, 0, 300, 150, gradient)
+            
+            # Draw course icon
+            icon_color = QColor(255, 255, 255, 180)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(icon_color))
+            
+            # Draw different icon based on course level
+            if course_data["level"] == "beginner":
+                # Draw a flag icon for beginner courses
+                painter.drawRect(135, 55, 30, 5)  # Flag pole
+                painter.drawRect(135, 55, 5, 40)  # Flag pole
+                painter.drawRect(140, 55, 25, 20)  # Flag
+            elif course_data["level"] == "intermediate":
+                # Draw a steering wheel for intermediate courses
+                painter.drawEllipse(125, 45, 50, 50)  # Outer circle
+                painter.setBrush(QBrush(darker_color))
+                painter.drawEllipse(140, 60, 20, 20)  # Inner circle
+            else:
+                # Draw a trophy for advanced courses
+                painter.drawRect(135, 60, 30, 35)  # Trophy cup
+                painter.drawRect(145, 95, 10, 10)  # Trophy base
+                painter.drawRect(140, 105, 20, 5)  # Trophy bottom
+                
+            # Add text label for type
+            painter.setPen(QPen(Qt.white))
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            if course_data["level"] == "beginner":
+                painter.drawText(10, 20, "BEGINNER")
+            elif course_data["level"] == "intermediate":
+                painter.drawText(10, 20, "INTERMEDIATE")
+            else:
+                painter.drawText(10, 20, "ADVANCED")
+            
+            painter.end()
+            return thumbnail_pixmap
+            
+        except Exception as e:
+            self.logger.error(f"Error creating thumbnail: {e}")
+            # Use a solid color as fallback
+            thumbnail_pixmap = QPixmap(300, 150)
+            thumbnail_pixmap.fill(QColor(80, 80, 80))
+            return thumbnail_pixmap
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press events to emit clicked signal."""
+        super().mousePressEvent(event)
+        self.clicked.emit(True)
+
+
+class CourseView(QWidget):
+    """Widget for displaying detailed course information and video player."""
+    
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Main layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Header with back button
+        header = QWidget()
+        header.setStyleSheet("background-color: #333;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 15, 20, 15)
+        
+        self.back_button = QPushButton("← Back to Courses")
+        self.back_button.setCursor(Qt.PointingHandCursor)
+        self.back_button.setStyleSheet("""
+            background: none;
+            border: none;
+            color: #3498db;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 5px;
+            text-align: left;
+        """)
+        
+        header_layout.addWidget(self.back_button)
+        header_layout.addStretch()
+        
+        # Course content area
+        content_area = QWidget()
+        content_layout = QHBoxLayout(content_area)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        content_layout.setSpacing(20)
+        
+        # Video player area (left side)
+        video_area = QWidget()
+        video_area.setMinimumWidth(640)
+        video_layout = QVBoxLayout(video_area)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(15)
+        
+        # Video player placeholder
+        self.video_player = QWebEngineView()
+        self.video_player.setMinimumHeight(360)
+        self.video_player.setStyleSheet("background-color: #111; border-radius: 5px;")
+        # Load a placeholder initially
+        self.video_player.setHtml("""
+            <html>
+                <body style="margin:0;padding:0;display:flex;justify-content:center;align-items:center;height:100%;background:#111;">
+                    <div style="text-align:center;color:#666;font-family:Arial,sans-serif;">
+                        <div style="font-size:48px;margin-bottom:10px;">▶️</div>
+                        <div style="font-size:18px;">Select a lesson to start</div>
+                    </div>
+                </body>
+            </html>
+        """)
+        
+        # Current video info
+        self.current_title = QLabel("Select a lesson to start")
+        self.current_title.setStyleSheet("font-size: 18px; font-weight: bold; color: white;")
+        
+        video_layout.addWidget(self.video_player)
+        video_layout.addWidget(self.current_title)
+        
+        # Course modules area (right side)
+        modules_area = QWidget()
+        modules_layout = QVBoxLayout(modules_area)
+        modules_layout.setContentsMargins(0, 0, 0, 0)
+        modules_layout.setSpacing(5)
+        
+        # Course title
+        self.course_title = QLabel("Course Title")
+        self.course_title.setStyleSheet("font-size: 24px; font-weight: bold; color: white;")
+        
+        # Instructor
+        self.instructor = QLabel("Instructor: Instructor Name")
+        self.instructor.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        # Course stats
+        stats_widget = QWidget()
+        stats_layout = QHBoxLayout(stats_widget)
+        stats_layout.setContentsMargins(0, 10, 0, 10)
+        stats_layout.setSpacing(15)
+        
+        self.level_label = QLabel("Level: Beginner")
+        self.level_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        self.duration_label = QLabel("Duration: 3h 20m")
+        self.duration_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        self.lessons_label = QLabel("Lessons: 12")
+        self.lessons_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        stats_layout.addWidget(self.level_label)
+        stats_layout.addWidget(self.duration_label)
+        stats_layout.addWidget(self.lessons_label)
+        stats_layout.addStretch()
+        
+        # Modules title
+        modules_title = QLabel("Course Modules")
+        modules_title.setStyleSheet("font-size: 18px; font-weight: bold; color: white; margin-top: 10px;")
+        
+        # Modules list
+        modules_scroll = QScrollArea()
+        modules_scroll.setWidgetResizable(True)
+        modules_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background: #333;
+                width: 10px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background: #666;
+                border-radius: 5px;
+            }
+        """)
+        
+        self.modules_list = QWidget()
+        self.modules_layout = QVBoxLayout(self.modules_list)
+        self.modules_layout.setContentsMargins(0, 0, 0, 0)
+        self.modules_layout.setSpacing(10)
+        self.modules_layout.addStretch()
+        
+        modules_scroll.setWidget(self.modules_list)
+        
+        # Add elements to modules area
+        modules_layout.addWidget(self.course_title)
+        modules_layout.addWidget(self.instructor)
+        modules_layout.addWidget(stats_widget)
+        modules_layout.addWidget(modules_title)
+        modules_layout.addWidget(modules_scroll)
+        
+        # Add areas to content layout
+        content_layout.addWidget(video_area, 2)
+        content_layout.addWidget(modules_area, 1)
+        
+        # Add header and content to main layout
+        layout.addWidget(header)
+        layout.addWidget(content_area)
+        
+    def set_course(self, course_data):
+        """Update the course view with new course data."""
+        # Update course info
+        self.course_title.setText(course_data["title"])
+        self.instructor.setText(f"Instructor: {course_data['instructor']}")
+        self.level_label.setText(f"Level: {course_data['level'].capitalize()}")
+        self.duration_label.setText(f"Duration: {course_data['duration']}")
+        self.lessons_label.setText(f"Lessons: {course_data['lessons']} lessons")
+        
+        # Clear existing modules
+        # First, remove all widgets from the layout
+        while self.modules_layout.count() > 0:
+            item = self.modules_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Add new modules
+        for i, module in enumerate(course_data["modules"]):
+            module_card = ModuleCard(module, i+1)
+            module_card.clicked.connect(lambda checked, m=module: self.play_module(m))
+            self.modules_layout.addWidget(module_card)
+        
+        # Add stretch at the end
+        self.modules_layout.addStretch()
+    
+    def play_module(self, module):
+        """Play the selected module video."""
+        # Update the current title
+        self.current_title.setText(module["title"])
+        
+        # Get the YouTube video ID
+        video_id = module.get("video_id", "")
+        
+        # Create HTML for embedding YouTube video
+        if video_id:
+            # HTML template with YouTube embed
+            html_content = f"""
+            <html>
+                <head>
+                    <style>
+                        body, html {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }}
+                        .container {{ display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; }}
+                        .video-container {{ width: 100%; height: 100%; position: relative; }}
+                        iframe {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }}
+                        .error-message {{ display: none; color: #FFF; text-align: center; padding: 20px; }}
+                    </style>
+                    <script>
+                        // Add error handling for video loading
+                        function showError() {{
+                            document.getElementById('videoContainer').style.display = 'none';
+                            document.getElementById('errorMessage').style.display = 'block';
+                        }}
+                        
+                        // Check connection status
+                        window.addEventListener('load', function() {{
+                            if (!navigator.onLine) {{
+                                showError();
+                            }}
+                        }});
+                    </script>
+                </head>
+                <body>
+                    <div class="container">
+                        <div id="videoContainer" class="video-container">
+                            <iframe 
+                                src="https://www.youtube.com/embed/{video_id}?autoplay=0&rel=0" 
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                                allowfullscreen
+                                onerror="showError()">
+                            </iframe>
+                        </div>
+                        <div id="errorMessage" class="error-message">
+                            <h3>Unable to load video</h3>
+                            <p>Please check your internet connection and try again.</p>
+                        </div>
+                    </div>
+                </body>
+            </html>
+            """
+            
+            self.video_player.setHtml(html_content)
+            
+        else:
+            # Fallback if no video ID is provided
+            self.video_player.setHtml(f"""
+                <html>
+                    <body style="margin:0;padding:0;display:flex;justify-content:center;align-items:center;height:100%;background:#111;">
+                        <div style="text-align:center;color:#EEE;font-family:Arial,sans-serif;">
+                            <div style="font-size:24px;margin-bottom:20px;">{module["title"]}</div>
+                            <div style="font-size:48px;margin-bottom:20px;">▶️</div>
+                            <div style="font-size:16px;">Duration: {module["duration"]}</div>
+                            <div style="font-size:14px;color:#999;margin-top:20px;">Video not available</div>
+                        </div>
+                    </body>
+                </html>
+            """)
+
+
+class ModuleCard(QFrame):
+    """Widget for displaying a module in the course view."""
+    
+    # Signal emitted when card is clicked
+    clicked = pyqtSignal(bool)
+    
+    def __init__(self, module_data, module_number, parent=None):
+        super().__init__(parent)
+        self.module_data = module_data
+        
+        self.setStyleSheet("""
+            ModuleCard {
+                background-color: #333;
+                border-radius: 5px;
+                padding: 10px;
+            }
+            ModuleCard:hover {
+                background-color: #444;
+            }
+        """)
+        
+        # Make clickable
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Set up layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Module number
+        number = QLabel(str(module_number))
+        number.setStyleSheet("""
+            background-color: #3498db;
+            color: white;
+            border-radius: 15px;
+            min-width: 30px;
+            min-height: 30px;
+            max-width: 30px;
+            max-height: 30px;
+            font-weight: bold;
+            qproperty-alignment: AlignCenter;
+        """)
+        
+        # Module info
+        info = QWidget()
+        info_layout = QVBoxLayout(info)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(5)
+        
+        title = QLabel(module_data["title"])
+        title.setStyleSheet("color: white; font-weight: bold;")
+        
+        duration = QLabel(f"Duration: {module_data['duration']}")
+        duration.setStyleSheet("color: #CCC; font-size: 12px;")
+        
+        info_layout.addWidget(title)
+        info_layout.addWidget(duration)
+        
+        # Play icon
+        play = QLabel("▶")
+        play.setStyleSheet("color: #3498db; font-size: 16px;")
+        
+        # Add everything to the layout
+        layout.addWidget(number)
+        layout.addWidget(info, 1)
+        layout.addWidget(play)
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press events to emit clicked signal."""
+        super().mousePressEvent(event)
+        self.clicked.emit(True)
+
+
 class RaceCoachWidget(QWidget):
     """Main container widget for Race Coach functionality.
     
@@ -2282,7 +3249,14 @@ class RaceCoachWidget(QWidget):
         # Track connection state
         self.is_connected = False
         self.session_info = {}
-        
+
+        # Attributes for background telemetry fetching
+        self.telemetry_fetch_thread = None
+        self.telemetry_fetch_worker = None
+
+        # Flag to track if initial lap list load has happened
+        self._initial_lap_load_done = False
+
         # Initialize UI
         self.setup_ui()
         
@@ -2397,6 +3371,44 @@ class RaceCoachWidget(QWidget):
         # Create the Telemetry Tab
         telemetry_tab = QWidget()
         telemetry_layout = QVBoxLayout(telemetry_tab)
+
+        # -------- Lap selection controls (Phase 2, Step 4) --------
+        lap_select_frame = QFrame()
+        lap_select_layout = QHBoxLayout(lap_select_frame)
+        lap_select_layout.setContentsMargins(5, 5, 5, 5)
+
+        left_label = QLabel("Lap A:")
+        left_label.setStyleSheet("color:#DDD")
+        self.left_lap_combo = QComboBox()
+        self.left_lap_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
+        self.left_lap_combo.setMinimumWidth(200)
+
+        right_label = QLabel("Lap B:")
+        right_label.setStyleSheet("color:#DDD")
+        self.right_lap_combo = QComboBox()
+        self.right_lap_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
+        self.right_lap_combo.setMinimumWidth(200)
+
+        self.compare_button = QPushButton("Compare Laps")
+        self.compare_button.setStyleSheet("padding: 5px 10px;")
+        self.compare_button.clicked.connect(self.on_compare_clicked)
+
+        self.refresh_laps_button = QPushButton("🔄") # Refresh icon
+        self.refresh_laps_button.setToolTip("Refresh lap list from database")
+        self.refresh_laps_button.setStyleSheet("padding: 5px;")
+        self.refresh_laps_button.setFixedWidth(40)
+        self.refresh_laps_button.clicked.connect(self.refresh_lap_list)
+
+        lap_select_layout.addWidget(left_label)
+        lap_select_layout.addWidget(self.left_lap_combo, 1)
+        lap_select_layout.addSpacing(20)
+        lap_select_layout.addWidget(right_label)
+        lap_select_layout.addWidget(self.right_lap_combo, 1)
+        lap_select_layout.addSpacing(20)
+        lap_select_layout.addWidget(self.compare_button)
+        lap_select_layout.addWidget(self.refresh_laps_button)
+
+        telemetry_layout.addWidget(lap_select_frame)
 
         # Telemetry comparison widget
         self.telemetry_widget = TelemetryComparisonWidget(self)
@@ -3219,662 +4231,160 @@ class RaceCoachWidget(QWidget):
         # Call the parent class implementation
         super().showEvent(event)
 
-# This duplicate class is removed - we already have a complete DeltaGraphWidget implementation earlier in the file
+        # Trigger initial lap list load only once
+        if not self._initial_lap_load_done:
+             logger.info("RaceCoachWidget shown, triggering initial lap list load.")
+             # First, ensure the auth module state is synchronized with the client
+             update_auth_state_from_client()
+             self.refresh_lap_list() # Auth check is now inside this method
+             self._initial_lap_load_done = True
 
-class CourseCard(QFrame):
-    """Widget to display a course card with thumbnail, title and description."""
-    
-    clicked = pyqtSignal(dict)  # Signal when card is clicked, passes course data
-    
-    def __init__(self, course_data, parent=None):
-        super().__init__(parent)
-        self.course_data = course_data
-        self.setFixedSize(280, 320)
-        self.setCursor(Qt.PointingHandCursor)
-        
-        self.setObjectName("CourseCard")
-        self.setStyleSheet("""
-            #CourseCard {
-                background-color: #222;
-                border-radius: 8px;
-                border: 1px solid #444;
-            }
-            #CourseCard:hover {
-                border: 1px solid #666;
-                background-color: #2a2a2a;
-            }
-            QLabel {
-                color: white;
-                background: transparent;
-            }
-        """)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 10)
-        layout.setSpacing(8)
-        
-        # Thumbnail
-        self.thumbnail = QLabel()
-        self.thumbnail.setFixedSize(280, 180)
-        self.thumbnail.setAlignment(Qt.AlignCenter)
-        self.thumbnail.setStyleSheet("border-top-left-radius: 8px; border-top-right-radius: 8px;")
-        
-        # Load thumbnail if provided
-        if "thumbnail" in course_data and course_data["thumbnail"]:
-            pixmap = QPixmap(course_data["thumbnail"])
-            if not pixmap.isNull():
-                self.thumbnail.setPixmap(pixmap.scaled(280, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            else:
-                self.thumbnail.setText("Thumbnail Not Found")
-                self.thumbnail.setStyleSheet("background-color: #333; color: white;")
+    def perform_initial_load(self):
+        """Performs the initial authentication check and lap list load."""
+        if not self._initial_lap_load_done:
+            logger.info("RaceCoachWidget performing initial load.")
+            # First, ensure the auth module state is synchronized with the client
+            update_auth_state_from_client()
+            self.refresh_lap_list() # Auth check is now inside this method
+            self._initial_lap_load_done = True
         else:
-            self.thumbnail.setText("No Thumbnail")
-            self.thumbnail.setStyleSheet("background-color: #333; color: white;")
-            
-        layout.addWidget(self.thumbnail)
-        
-        # Content area
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(12, 0, 12, 0)
-        content_layout.setSpacing(8)
-        
-        # Title
-        self.title_label = QLabel(course_data.get("title", "Untitled Course"))
-        self.title_label.setWordWrap(True)
-        title_font = QFont()
-        title_font.setBold(True)
-        title_font.setPointSize(12)
-        self.title_label.setFont(title_font)
-        content_layout.addWidget(self.title_label)
-        
-        # Description 
-        description = course_data.get("description", "No description available")
-        # Truncate description if too long
-        if len(description) > 120:
-            description = description[:117] + "..."
-            
-        self.desc_label = QLabel(description)
-        self.desc_label.setWordWrap(True)
-        self.desc_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        content_layout.addWidget(self.desc_label)
-        
-        # Stats row (lessons, duration)
-        stats_widget = QWidget()
-        stats_layout = QHBoxLayout(stats_widget)
-        stats_layout.setContentsMargins(0, 0, 0, 0)
-        
-        lessons_count = course_data.get("lessons", 0)
-        lessons_label = QLabel(f"{lessons_count} lesson{'s' if lessons_count != 1 else ''}")
-        lessons_label.setStyleSheet("color: #888; font-size: 10px;")
-        
-        duration = course_data.get("duration", "")
-        duration_label = QLabel(duration)
-        duration_label.setStyleSheet("color: #888; font-size: 10px;")
-        
-        stats_layout.addWidget(lessons_label)
-        stats_layout.addStretch()
-        stats_layout.addWidget(duration_label)
-        
-        content_layout.addWidget(stats_widget)
-        layout.addWidget(content_widget)
-        
-    def mousePressEvent(self, event):
-        self.clicked.emit(self.course_data)
-        super().mousePressEvent(event)
-        
-class VideoPlayer(QWidget):
-    """Video player widget for course lessons with YouTube support."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumSize(640, 360) # Reverted minimum size
-        self.current_video = None
-        
-        # Set size policy to indicate height depends on width
-        policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Main content area - either web view or fallback
-        self.stack = QStackedWidget()
-        layout.addWidget(self.stack)
-        
-        # Try to import QtWebEngineWidgets for YouTube embedding
-        logger.info("Attempting to import PyQt5.QtWebEngineWidgets...")
-        try:
-            from PyQt5.QtWebEngineWidgets import QWebEngineView
-            logger.info("PyQt5.QtWebEngineWidgets imported successfully.")
-            self.web_view = QWebEngineView()
-            self.web_view.setStyleSheet("background-color: #111;")
-            self.stack.addWidget(self.web_view)
-            self.has_web_engine = True
-        except ImportError as e:
-            logger.warning(f"Failed to import PyQt5.QtWebEngineWidgets: {e}. Using fallback player.")
-            self.has_web_engine = False
-        
-        # Create a fallback player using QLabel and HTML
-        self.html_view = QLabel()
-        # self.html_view.setAlignment(Qt.AlignCenter) # Removed alignment
-        self.html_view.setScaledContents(True) # Added scaling
-        self.html_view.setStyleSheet("""
-            background-color: #111;
-            color: white;
-            font-size: 16px;
-            border-radius: 4px;
-            padding: 10px;
-        """)
-        self.html_view.setTextFormat(Qt.RichText)
-        self.html_view.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        self.html_view.setOpenExternalLinks(True)
-        
-        # Add the fallback view to the stack
-        self.stack.addWidget(self.html_view)
-        
-    def get_youtube_embed_url(self, url):
-        """Convert YouTube URL to embed URL."""
-        # Handle various YouTube URL formats
-        import re
-        video_id = None
-        
-        # Full youtube.com URL
-        match = re.search(r'youtube\.com/watch\?v=([a-zA-Z0-9_-]+)', url)
-        if match:
-            video_id = match.group(1)
-        
-        # Shortened youtu.be URL
-        if not video_id:
-            match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', url)
-            if match:
-                video_id = match.group(1)
-        
-        # Direct video ID
-        if not video_id and re.match(r'^[a-zA-Z0-9_-]{11}$', url):
-            video_id = url
-            
-        if video_id:
-            # Ensure autoplay=1 is removed
-            return f"https://www.youtube.com/embed/{video_id}", video_id 
-        
-        # If we couldn't extract a video ID, return the original URL
-        return url, None
-    
-    def load_video(self, video_url):
-        """Load a video into the player."""
-        self.current_video = video_url
-        
-        # Get YouTube embed URL and video ID
-        embed_url, video_id = self.get_youtube_embed_url(video_url)
-        
-        # Directly load into web_view, assuming it works
-        logger.info(f"Loading video in QWebEngineView: {embed_url}")
-        self.web_view.load(QUrl(embed_url)) # Convert string to QUrl
-    
-    def open_in_browser(self):
-        """Open the video in a web browser."""
-        if self.current_video:
-            import webbrowser
-            webbrowser.open(self.current_video)
+            logger.info("RaceCoachWidget initial load already done, skipping.")
 
-    def heightForWidth(self, width):
-        """Return the preferred height for a given width to maintain 16:9 ratio."""
-        return int(width * 9.0 / 16.0)
 
-    def hasHeightForWidth(self):
-        """Indicate that the widget's height depends on its width."""
-        return True
+    # -------- Lap Comparison Methods (Phase 2) --------
 
-    def sizeHint(self):
-        """Provide a reasonable default size hint."""
-        # Base the hint on a common 16:9 size like 720p
-        width = 640 
-        return QSize(width, self.heightForWidth(width))
-
-class CourseView(QWidget):
-    """Widget for displaying the course content and video player."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def refresh_lap_list(self):
+        """Fetch latest laps from Supabase and populate combo boxes."""
+        import logging
+        logger = logging.getLogger(__name__)
         
-        layout = QVBoxLayout(self)
+        logger.info("Refreshing lap list...")
         
-        # Back button
-        self.back_button = QPushButton("← Back to Courses")
-        self.back_button.setFixedHeight(36)
-        self.back_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #3498db;
-                border: none;
-                text-align: left;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                color: #2980b9;
-            }
-        """)
-        layout.addWidget(self.back_button)
+        # Try multiple approaches to get laps - this is the most robust solution
+        # that handles the case when the Race Coach module has its own Supabase client
+        # that isn't fully initialized yet
         
-        # Course header
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
+        # First try the normal approach using module auth
+        laps = None
         
-        self.course_title = QLabel("Course Title")
-        self.course_title.setStyleSheet("""
-            font-size: 24px;
-            font-weight: bold;
-            color: white;
-        """)
-        header_layout.addWidget(self.course_title)
-        header_layout.addStretch()
-        
-        layout.addWidget(header)
-        
-        # Main content area - split between video player and lessons
-        content = QSplitter(Qt.Horizontal)
-        
-        # Video player (left side)
-        self.video_player = VideoPlayer()
-        
-        # Lessons list (right side)
-        lessons_widget = QWidget()
-        lessons_layout = QVBoxLayout(lessons_widget)
-        
-        lessons_header = QLabel("Course Content")
-        lessons_header.setStyleSheet("""
-            font-size: 18px;
-            font-weight: bold;
-            color: white;
-        """)
-        lessons_layout.addWidget(lessons_header)
-        
-        self.lessons_list = QScrollArea()
-        self.lessons_list.setWidgetResizable(True)
-        self.lessons_list.setStyleSheet("""
-            background-color: #222;
-            border: 1px solid #444;
-            border-radius: 4px;
-        """)
-        
-        lessons_container = QWidget()
-        self.lessons_container_layout = QVBoxLayout(lessons_container)
-        self.lessons_container_layout.setAlignment(Qt.AlignTop)
-        self.lessons_list.setWidget(lessons_container)
-        
-        lessons_layout.addWidget(self.lessons_list)
-        
-        content.addWidget(self.video_player)
-        content.addWidget(lessons_widget)
-        content.setSizes([600, 300])  # Initial sizes
-        
-        # Give the splitter vertical stretch factor
-        layout.addWidget(content, 1)
-        
-    def set_course(self, course_data):
-        """Load a course into the view."""
-        self.course_title.setText(course_data.get("title", "Untitled Course"))
-        
-        # Clear existing lessons
-        while self.lessons_container_layout.count():
-            item = self.lessons_container_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        # Add new lessons
-        lessons = course_data.get("lessons_data", [])
-        for i, lesson in enumerate(lessons):
-            lesson_widget = QWidget()
-            lesson_layout = QHBoxLayout(lesson_widget)
-            lesson_layout.setContentsMargins(8, 12, 8, 12)
-            
-            # Lesson number
-            num_label = QLabel(f"{i+1}")
-            num_label.setStyleSheet("""
-                background-color: #333;
-                color: white;
-                border-radius: 12px;
-                padding: 4px;
-                min-width: 24px;
-                max-width: 24px;
-                min-height: 24px;
-                max-height: 24px;
-                font-weight: bold;
-                text-align: center;
-            """)
-            num_label.setAlignment(Qt.AlignCenter)
-            
-            # Lesson info
-            info_widget = QWidget()
-            info_layout = QVBoxLayout(info_widget)
-            info_layout.setContentsMargins(0, 0, 0, 0)
-            info_layout.setSpacing(2)
-            
-            title_label = QLabel(lesson.get("title", f"Lesson {i+1}"))
-            title_label.setStyleSheet("color: white; font-weight: bold;")
-            
-            duration = lesson.get("duration", "")
-            desc_label = QLabel(f"Duration: {duration}")
-            desc_label.setStyleSheet("color: #aaa; font-size: 11px;")
-            
-            info_layout.addWidget(title_label)
-            info_layout.addWidget(desc_label)
-            
-            lesson_layout.addWidget(num_label)
-            lesson_layout.addWidget(info_widget, 1)
-            
-            # Make lessons clickable
-            lesson_frame = QFrame()
-            lesson_frame.setLayout(lesson_layout)
-            lesson_frame.setCursor(Qt.PointingHandCursor)
-            lesson_frame.setStyleSheet("""
-                QFrame {
-                    background-color: #2a2a2a;
-                    border-radius: 4px;
-                }
-                QFrame:hover {
-                    background-color: #333;
-                }
-            """)
-            
-            # Use a lambda to create a closure with the current lesson
-            lesson_video_url = lesson.get("video_url", "")
-            lesson_frame.mousePressEvent = lambda event, url=lesson_video_url, title=lesson.get("title", ""): self.play_lesson(url, title)
-            
-            self.lessons_container_layout.addWidget(lesson_frame)
-        
-        # Add a spacer at the end
-        self.lessons_container_layout.addStretch()
-        
-        # Load the first lesson if available
-        if lessons and "video_url" in lessons[0]:
-            self.play_lesson(lessons[0]["video_url"], lessons[0].get("title", "Lesson 1"))
-    
-    def play_lesson(self, video_url, title):
-        """Play a specific lesson."""
-        self.video_player.load_video(video_url)
-
-class VideosTab(QWidget):
-    """Tab for displaying video courses in a Kajabi-like interface."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        
-        # Main layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Stacked widget to switch between courses list and individual course view
-        self.stacked_widget = QStackedWidget()
-        
-        # Create courses list view
-        self.courses_view = QWidget()
-        courses_layout = QVBoxLayout(self.courses_view)
-        
-        # Header
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 20, 20, 10)
-        
-        title = QLabel("Racing Courses")
-        title.setStyleSheet("font-size: 24px; font-weight: bold; color: white;")
-        header_layout.addWidget(title)
-        
-        search_box = QWidget()
-        search_layout = QHBoxLayout(search_box)
-        search_layout.setContentsMargins(0, 0, 0, 0)
-        
-        search_icon = QLabel("🔍")
-        search_field = QLineEdit()
-        search_field.setPlaceholderText("Search courses...")
-        search_field.setStyleSheet("""
-            QLineEdit {
-                background-color: #333;
-                color: white;
-                border-radius: 4px;
-                padding: 8px;
-                min-width: 200px;
-            }
-        """)
-        
-        search_layout.addWidget(search_icon)
-        search_layout.addWidget(search_field)
-        header_layout.addWidget(search_box)
-        
-        courses_layout.addWidget(header)
-        
-        # Categories tabs
-        categories = QTabWidget()
-        categories.setStyleSheet("""
-            QTabWidget::pane {
-                border: none;
-                background-color: transparent;
-            }
-            QTabBar::tab {
-                background-color: transparent;
-                color: #aaa;
-                padding: 8px 16px;
-                margin-right: 4px;
-                border-bottom: 2px solid transparent;
-            }
-            QTabBar::tab:selected {
-                color: #3498db;
-                border-bottom: 2px solid #3498db;
-            }
-            QTabBar::tab:hover:!selected {
-                color: white;
-            }
-        """)
-        
-        # Add category tabs
-        all_courses_tab = QWidget()
-        racing_basics_tab = QWidget()
-        advanced_techniques_tab = QWidget()
-        track_guides_tab = QWidget()
-        
-        categories.addTab(all_courses_tab, "All Courses")
-        categories.addTab(racing_basics_tab, "Racing Basics")
-        categories.addTab(advanced_techniques_tab, "Advanced Techniques")
-        categories.addTab(track_guides_tab, "Track Guides")
-        
-        courses_layout.addWidget(categories)
-        
-        # Course grid layout for each tab
-        self.setup_course_grid(all_courses_tab, "all")
-        self.setup_course_grid(racing_basics_tab, "racing_basics")
-        self.setup_course_grid(advanced_techniques_tab, "advanced")
-        self.setup_course_grid(track_guides_tab, "track_guides")
-        
-        # Create course detail view
-        self.course_view = CourseView()
-        self.course_view.back_button.clicked.connect(self.show_courses_list)
-        
-        # Add both views to the stacked widget
-        self.stacked_widget.addWidget(self.courses_view)
-        self.stacked_widget.addWidget(self.course_view)
-        
-        layout.addWidget(self.stacked_widget)
-        
-        # Start with courses list
-        self.stacked_widget.setCurrentIndex(0)
-        
-    def setup_course_grid(self, tab_widget, category):
-        """Set up a grid of course cards for a category tab."""
-        # Create a scroll area for the courses
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.NoFrame)
-        
-        scroll_content = QWidget()
-        grid_layout = QGridLayout(scroll_content)
-        grid_layout.setContentsMargins(20, 10, 20, 20)
-        grid_layout.setSpacing(20)
-        
-        # Get sample courses for this category
-        courses = self.get_sample_courses(category)
-        
-        # Add courses to grid
-        row, col = 0, 0
-        max_cols = 3  # Number of columns in the grid
-        
-        for course in courses:
-            course_card = CourseCard(course)
-            course_card.clicked.connect(self.show_course_detail)
-            
-            grid_layout.addWidget(course_card, row, col)
-            
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
+        # 1. Try using our module's auth and client
+        if is_logged_in():
+            laps, msg = get_laps(limit=50, user_only=True)
+            if laps:
+                logger.info(f"Successfully fetched {len(laps)} laps using module client")
                 
-        # Add stretchers to keep grid aligned
-        grid_layout.setRowStretch(row + 1, 1)
-        grid_layout.setColumnStretch(max_cols, 1)
-        
-        scroll_area.setWidget(scroll_content)
-        
-        # Set up the tab layout
-        tab_layout = QVBoxLayout(tab_widget)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(scroll_area)
-    
-    def get_sample_courses(self, category):
-        """Return sample courses for the given category."""
-        all_courses = [
-            {
-                "id": "racing101",
-                "title": "Racing Fundamentals",
-                "description": "Learn the basics of performance driving with this comprehensive course for beginners.",
-                "category": "racing_basics",
-                "thumbnail": None,  # Would be a path to an image
-                "lessons": 8,
-                "duration": "2h 15m",
-                "lessons_data": [
-                    {"title": "Introduction to Racing", "duration": "12:30", "video_url": "https://www.youtube.com/watch?v=6-sGV2XXUeU"},
-                    {"title": "Car Control Basics", "duration": "18:45", "video_url": "https://www.youtube.com/watch?v=ewQwgL76lFo"},
-                    {"title": "Racing Lines Explained", "duration": "22:10", "video_url": "https://www.youtube.com/watch?v=VEJh4lLCvRc"},
-                    {"title": "Braking Techniques", "duration": "16:55", "video_url": "https://www.youtube.com/watch?v=zXPSj56lavE"},
-                    {"title": "Throttle Control", "duration": "14:20", "video_url": "https://www.youtube.com/watch?v=N8qBdOs0s1E"},
-                    {"title": "Cornering Fundamentals", "duration": "19:40", "video_url": "https://www.youtube.com/watch?v=6si3T6-6K7o"},
-                    {"title": "Race Day Preparation", "duration": "15:15", "video_url": "https://www.youtube.com/watch?v=5xkqOX_9Iqk"},
-                    {"title": "Practice Drills", "duration": "17:30", "video_url": "https://www.youtube.com/watch?v=b9cK7h3UhOs"}
-                ]
-            },
-            {
-                "id": "advanced_braking",
-                "title": "Advanced Braking Techniques",
-                "description": "Master the art of braking with this advanced course for experienced drivers.",
-                "category": "advanced",
-                "thumbnail": None,
-                "lessons": 5,
-                "duration": "1h 45m",
-                "lessons_data": [
-                    {"title": "The Science of Braking", "duration": "18:20", "video_url": "https://www.youtube.com/watch?v=PgLz6WuCrTY"},
-                    {"title": "Trail Braking Mastery", "duration": "24:15", "video_url": "https://www.youtube.com/watch?v=k73GhFLRP9Y"},
-                    {"title": "Threshold Braking", "duration": "22:30", "video_url": "https://www.youtube.com/watch?v=zQvMrCRiPjA"},
-                    {"title": "Wet Weather Braking", "duration": "19:40", "video_url": "https://www.youtube.com/watch?v=TJ2UAj3CaBU"},
-                    {"title": "Race Scenario Applications", "duration": "20:15", "video_url": "https://www.youtube.com/watch?v=xGdLCfYcIn4"}
-                ]
-            },
-            {
-                "id": "nurburgring",
-                "title": "Conquering the Nürburgring",
-                "description": "Learn every corner of the legendary Nürburgring Nordschleife with our detailed track guide.",
-                "category": "track_guides",
-                "thumbnail": None,
-                "lessons": 6,
-                "duration": "3h 20m",
-                "lessons_data": [
-                    {"title": "Nürburgring History", "duration": "12:40", "video_url": "https://www.youtube.com/watch?v=vfpVLqVmRgc"},
-                    {"title": "Sectors Overview", "duration": "15:50", "video_url": "https://www.youtube.com/watch?v=C0st2ST_WPs"},
-                    {"title": "North Section Deep Dive", "duration": "35:20", "video_url": "https://www.youtube.com/watch?v=KhvnkU71MX8"},
-                    {"title": "Carousel and Challenging Corners", "duration": "42:15", "video_url": "https://www.youtube.com/watch?v=3lMUoiWeBE0"},
-                    {"title": "Final Sectors", "duration": "28:30", "video_url": "https://www.youtube.com/watch?v=9m-S5Mn_BF4"},
-                    {"title": "Full Lap Analysis", "duration": "65:25", "video_url": "https://www.youtube.com/watch?v=GD3yC9OJ2xQ"}
-                ]
-            },
-            {
-                "id": "car_setup",
-                "title": "Race Car Setup Fundamentals",
-                "description": "Understanding and optimizing your car's setup for maximum performance on any track.",
-                "category": "advanced",
-                "thumbnail": None,
-                "lessons": 7,
-                "duration": "2h 30m",
-                "lessons_data": [
-                    {"title": "Setup Philosophy", "duration": "14:30", "video_url": "https://www.youtube.com/watch?v=6Z_G7cfcJzE"},
-                    {"title": "Suspension Tuning", "duration": "25:15", "video_url": "https://www.youtube.com/watch?v=jURy5TJ7OKk"},
-                    {"title": "Tire Pressure and Camber", "duration": "22:40", "video_url": "https://www.youtube.com/watch?v=GDvF89Bh27Y"},
-                    {"title": "Aero Adjustments", "duration": "18:55", "video_url": "https://www.youtube.com/watch?v=AYMvaRKNlO4"},
-                    {"title": "Gearing Strategy", "duration": "21:10", "video_url": "https://www.youtube.com/watch?v=79V3QS0vCuY"},
-                    {"title": "Brake Bias Tuning", "duration": "16:45", "video_url": "https://www.youtube.com/watch?v=QdY7YuN8XVE"},
-                    {"title": "Creating a Setup Worksheet", "duration": "20:55", "video_url": "https://www.youtube.com/watch?v=8y3Vu-FnlPE"}
-                ]
-            },
-            {
-                "id": "racing_weather",
-                "title": "Racing in Different Weather Conditions",
-                "description": "Master the skills needed to excel in rain, heat, and changing weather conditions.",
-                "category": "advanced",
-                "thumbnail": None,
-                "lessons": 4,
-                "duration": "1h 50m",
-                "lessons_data": [
-                    {"title": "Rain Racing Fundamentals", "duration": "28:15", "video_url": "https://www.youtube.com/watch?v=WRtYnJMVnzA"},
-                    {"title": "Transitioning Conditions", "duration": "24:30", "video_url": "https://www.youtube.com/watch?v=UkM7KdRHzuY"},
-                    {"title": "Hot Weather Techniques", "duration": "26:45", "video_url": "https://www.youtube.com/watch?v=j_HA8QMqaVU"},
-                    {"title": "Weather Strategy and Planning", "duration": "30:30", "video_url": "https://www.youtube.com/watch?v=XdDtW6oecPE"}
-                ]
-            },
-            {
-                "id": "mental_training",
-                "title": "Mental Training for Racers",
-                "description": "Develop the mental skills and mindset needed to perform at your best behind the wheel.",
-                "category": "racing_basics",
-                "thumbnail": None,
-                "lessons": 6,
-                "duration": "2h 10m",
-                "lessons_data": [
-                    {"title": "Concentration and Focus", "duration": "18:20", "video_url": "https://www.youtube.com/watch?v=11JxHSQNmzs"},
-                    {"title": "Managing Race Day Anxiety", "duration": "22:15", "video_url": "https://www.youtube.com/watch?v=wcKFujbNhLg"},
-                    {"title": "Visualization Techniques", "duration": "20:40", "video_url": "https://www.youtube.com/watch?v=A9RpwbQdJyk"},
-                    {"title": "Decision Making Under Pressure", "duration": "24:55", "video_url": "https://www.youtube.com/watch?v=7SehQ-UjpRQ"},
-                    {"title": "Goal Setting for Racers", "duration": "19:30", "video_url": "https://www.youtube.com/watch?v=IgBF2hRHFHw"},
-                    {"title": "Post-Race Analysis", "duration": "24:20", "video_url": "https://www.youtube.com/watch?v=i1I7B9Q6kGw"}
-                ]
-            }
-        ]
-        
-        if category == "all":
-            return all_courses
-        
-        return [course for course in all_courses if course["category"] == category]
-    
-    def show_course_detail(self, course_data):
-        """Show the detailed view for a course."""
-        self.course_view.set_course(course_data)
-        self.stacked_widget.setCurrentIndex(1)
-    
-    def show_courses_list(self):
-        """Return to the courses list view."""
-        self.stacked_widget.setCurrentIndex(0)
+        # 2. If that didn't work, try direct database access with main app's client
+        if not laps:
+            logger.info("Module client fetch failed, trying main app client")
+            try:
+                # Import the main app's Supabase client
+                from trackpro.database.supabase_client import supabase as main_supabase
+                
+                if main_supabase and main_supabase.client:
+                    # Check if user is authenticated in main app
+                    try:
+                        user = main_supabase.get_user()
+                        if user:
+                            # Debug the user object structure
+                            user_repr = str(user)[:100] + "..." if len(str(user)) > 100 else str(user)
+                            logger.info(f"Found user object: {user_repr}")
+                            
+                            # Determine user info - handle different response structures
+                            user_id = None
+                            if hasattr(user, 'id'):
+                                user_id = user.id
+                                logger.info(f"Found user ID directly: {user_id}")
+                            elif hasattr(user, 'user') and hasattr(user.user, 'id'):
+                                user_id = user.user.id
+                                logger.info(f"Found user ID via user.user: {user_id}")
+                            elif hasattr(user, 'data') and hasattr(user.data, 'user') and hasattr(user.data.user, 'id'):
+                                user_id = user.data.user.id
+                                logger.info(f"Found user ID via data.user: {user_id}")
+                            
+                            # Log success without trying to access email
+                            logger.info("Successfully got authenticated user from main app")
+                            
+                            # Query laps directly - don't filter by user ID as we're already authenticated
+                            response = main_supabase.client.table("laps").select("*").limit(50).execute()
+                            if response:
+                                # Debug the response structure
+                                resp_repr = str(response)[:100] + "..." if len(str(response)) > 100 else str(response)
+                                logger.info(f"Got response: {resp_repr}")
+                                
+                                # Try different ways to access the data
+                                if hasattr(response, 'data'):
+                                    laps = response.data
+                                elif hasattr(response, 'json') and callable(response.json):
+                                    try:
+                                        json_data = response.json()
+                                        laps = json_data.get('data', [])
+                                    except:
+                                        laps = []
+                                elif isinstance(response, dict) and 'data' in response:
+                                    laps = response['data']
+                                else:
+                                    # Last resort - maybe response itself is the data array
+                                    laps = response if isinstance(response, list) else []
+                                
+                                if laps:
+                                    logger.info(f"Successfully fetched {len(laps)} laps using main app client")
+                    except Exception as e:
+                        logger.warning(f"Error checking main app authentication: {e}")
+                        # Log more details about the exception
+                        import traceback
+                        logger.debug(f"Authentication error traceback: {traceback.format_exc()}")
+            except Exception as e:
+                logger.warning(f"Error accessing main app Supabase client: {e}")
+                # Log more details about the exception
+                import traceback
+                logger.debug(f"Supabase client error traceback: {traceback.format_exc()}")
+                
+        # Try yet another approach if all else fails - direct SQL query
+        if not laps and hasattr(self, 'data_manager'):
+            try:
+                logger.info("Trying to fetch laps through local database")
+                # Try to get laps from local database
+                local_laps = self.data_manager.get_laps(limit=50)
+                if local_laps:
+                    laps = local_laps
+                    logger.info(f"Successfully fetched {len(laps)} laps from local database")
+            except Exception as e:
+                logger.warning(f"Error fetching local laps: {e}")
+                
+        # If still no laps, show login message
+        if not laps:
+            logger.warning("All lap fetch approaches failed - showing login message")
+            self.left_lap_combo.clear()
+            self.right_lap_combo.clear()
+            self.left_lap_combo.addItem("Log in to view laps", None)
+            self.right_lap_combo.addItem("Log in to view laps", None)
+            return
 
-# ... existing code ...
+        # Success! Update the combo boxes
+        self.left_lap_combo.clear()
+        self.right_lap_combo.clear()
+        
+        # Display lap number and time
+        for lap in laps:
+            lap_id = lap.get("id")
+            lap_num = lap.get("lap_number", "N/A")
+            lap_time = lap.get("lap_time")
+            if lap_time is not None:
+                display_text = f"Lap {lap_num}  -  {self._format_time(lap_time)}"
+            else:
+                display_text = f"Lap {lap_num}  -  (No Time)"
+            self.left_lap_combo.addItem(display_text, lap_id)
+            self.right_lap_combo.addItem(display_text, lap_id)
+        logger.info(f"Populated lap lists with {len(laps)} laps.")
 
-def setup_ui(self):
-    """Set up the race coach UI components."""
-    # ... existing code ...
-    
-    # Create the Videos Tab
-    videos_tab = VideosTab(self)
-    
-    # Add tabs to the tab widget
-    self.tab_widget.addTab(overview_tab, "Overview")
-    self.tab_widget.addTab(telemetry_tab, "Telemetry")
-    self.tab_widget.addTab(live_telemetry_tab, "Live Telemetry")
-    self.tab_widget.addTab(videos_tab, "RaceFlix") # Add the new videos tab
+    def on_compare_clicked(self):
+        """Initiates the background fetch for selected lap telemetry."""
+        # Check if a fetch is already running
+        if self.telemetry_fetch_thread is not None and self.telemetry_fetch_thread.isRunning():
+            logger.warning("Comparison already in progress. Please wait.")
+            # Optionally show a brief message to the user
+            # QMessageBox.information(self, "In Progress", "Lap comparison already running.")
+            return
 
-    # ... rest of existing code ...
+        left_lap_id = self.left_lap_combo.currentData()
+        right_lap_id = self.right_lap_combo.currentData()

@@ -33,6 +33,7 @@ from .calibration_chart import CalibrationChart
 from .config import config
 from .pedals.calibration import CalibrationWizard # Added this import
 from .pedals.profile_dialog import PedalProfileDialog
+from .race_coach.ui import RaceCoachWidget # Add import
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -2662,20 +2663,28 @@ class MainWindow(QMainWindow):
         self.update_protected_features(is_authenticated)
     
     def update_protected_features(self, is_authenticated: bool):
-        """Update the state of protected features based on authentication.
+        """Enable/disable features based on authentication state."""
+        # Example: Enable/disable Race Coach tab or specific actions
         
-        Args:
-            is_authenticated: Whether the user is authenticated
-        """
-        # Example: Protect the Race Coach feature
+        # Make Race Coach menu item checkable only when authenticated
         if hasattr(self, 'race_coach_action'):
-            # Keep button enabled but with tooltip when not authenticated
-            self.race_coach_action.setEnabled(True)
+            self.race_coach_action.setEnabled(is_authenticated)
             if not is_authenticated:
-                self.race_coach_action.setToolTip("Please log in to access Race Coach")
-            else:
-                self.race_coach_action.setToolTip("")
-    
+                self.race_coach_action.setChecked(False)
+                # Switch back to pedal config if Race Coach was active
+                if self.stacked_widget.currentWidget() is not None and \
+                   isinstance(self.stacked_widget.currentWidget(), RaceCoachWidget):
+                    self.open_pedal_config()
+        
+        # Trigger initial load for RaceCoachWidget if authenticated and widget exists
+        if is_authenticated:
+            for i in range(self.stacked_widget.count()):
+                widget = self.stacked_widget.widget(i)
+                if isinstance(widget, RaceCoachWidget):
+                    logger.info("Authentication ready, triggering RaceCoachWidget initial load.")
+                    widget.perform_initial_load()
+                    break # Assuming only one instance
+
     def toggle_supabase(self, enabled: bool):
         """Toggle Supabase integration on/off."""
         if enabled:

@@ -452,6 +452,9 @@ if __name__ == "__main__":
     # Verify the environment
     check_environment()
     
+    # Import auth module later to avoid initial circular dependencies
+    from Supabase import auth as supabase_auth
+    
     # Check if another instance is already running
     if not check_single_instance():
         logger.warning("Another instance of TrackPro is already running")
@@ -475,6 +478,7 @@ if __name__ == "__main__":
         from trackpro.main import main
         
         logger.info("Starting TrackPro main function...")
+        # Main application entry point - Supabase client gets initialized here
         main()
         
         logger.info("TrackPro main function completed normally")

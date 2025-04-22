@@ -49,5 +49,15 @@ def get_client() -> Client:
             
     return _supabase_client
 
+def is_client_initialized():
+    """
+    Check if the Supabase client is fully initialized.
+    
+    Returns:
+        bool: True if client is initialized, False otherwise
+    """
+    global _supabase_client
+    return _supabase_client is not None and hasattr(_supabase_client, 'auth') and _supabase_client.auth is not None
+
 # Export the client instance
 supabase = get_client() 

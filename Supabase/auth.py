@@ -213,7 +213,39 @@ def is_logged_in() -> bool:
     Returns:
         bool: True if a user is logged in, False otherwise
     """
-    return _current_user is not None and _current_session is not None
+    global _current_user, _current_session
+    
+    # First check our module state
+    if _current_user is not None and _current_session is not None:
+        return True
+        
+    # If module state doesn't indicate logged in, check directly with Supabase client
+    # This serves as a fallback when module state is not synchronized
+    if supabase and hasattr(supabase, 'client') and supabase.client and hasattr(supabase.client, 'auth'):
+        try:
+            # Try to get the current session
+            session = supabase.client.auth.get_session()
+            if session and session.user:
+                # Update our module state while we're at it
+                _current_user = session.user
+                _current_session = session
+                return True
+                
+            # Also try the alternative method
+            try:
+                user = supabase.client.auth.get_user()
+                if user and hasattr(user, 'user') and user.user:
+                    # Update our module state
+                    _current_user = user.user
+                    # Session might still be None, which is fine
+                    return True
+            except:
+                pass
+        except Exception as e:
+            logger.debug(f"Error checking login status with Supabase client: {e}")
+            pass
+    
+    return False
 
 def get_current_user():
     """
@@ -233,4 +265,47 @@ def get_session_token() -> str:
     """
     if _current_session:
         return _current_session.access_token
-    return "" 
+    return ""
+
+def update_auth_state_from_client():
+    """Synchronize the module's auth state with the Supabase client's state.
+    
+    This should be called after initializing the client or restoring a session.
+    """
+    global _current_user, _current_session
+    
+    # Access the client instance via the imported manager object
+    if not supabase or not hasattr(supabase, 'client') or not supabase.client or not hasattr(supabase.client, 'auth'):
+        logger.warning("Cannot update auth state: Supabase client not fully initialized.")
+        _current_user = None
+        _current_session = None
+        return
+        
+    try:
+        # Get the session directly from the client instance
+        session = supabase.client.auth.get_session()
+        
+        if session and session.user:
+            logger.info(f"Updating auth state from client. Found session for user: {session.user.email}")
+            _current_session = session
+            _current_user = session.user
+        else:
+            # Try an alternative method to check auth state
+            # Some versions of Supabase's library return different response formats
+            try:
+                user = supabase.client.auth.get_user()
+                if user and hasattr(user, 'user') and user.user:
+                    logger.info(f"Updating auth state from client using get_user. Found user: {user.user.email}")
+                    _current_user = user.user
+                    _current_session = session  # Even if None, this is correct
+                    return
+            except Exception as alt_e:
+                logger.warning(f"Alternative auth check failed: {alt_e}")
+            
+            logger.info("Updating auth state from client. No active session found.")
+            _current_user = None
+            _current_session = None
+    except Exception as e:
+        logger.error(f"Error updating auth state from client: {e}", exc_info=True)
+        _current_user = None
+        _current_session = None 

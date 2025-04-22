@@ -168,4 +168,84 @@ def delete_profile() -> Tuple[bool, str]:
         else:
             return False, "Failed to delete profile"
     except Exception as e:
-        return False, f"Failed to delete profile: {e}" 
+        return False, f"Failed to delete profile: {e}"
+
+# --- New Telemetry / Lap helpers ---
+
+def get_laps(limit: int = 100, user_only: bool = False):
+    """Fetch laps from the `laps` table.
+
+    Args:
+        limit: Maximum number of laps to return (default 100).
+        user_only: If True, only return laps for the currently logged‑in user.
+
+    Returns:
+        Tuple of (list[dict] | None, str): Data and status message.
+    """
+    if not auth.is_logged_in():
+        return None, "Not logged in. Please log in to view laps"
+
+    # Ensure we are using an authenticated session
+    session_token = auth.get_session_token()
+    supabase.auth.set_session(session_token)
+
+    try:
+        query = supabase.table("laps").select("*").limit(limit).order("created_at", desc=True)
+        if user_only:
+            current_user = auth.get_current_user()
+            if current_user:
+                query = query.eq("user_id", current_user.id)
+        result = query.execute()
+        return result.data, "Laps retrieved successfully"
+    except Exception as e:
+        return None, f"Failed to retrieve laps: {e}"
+
+
+def get_lap(lap_id: str):
+    """Get a single lap record by id."""
+    if not auth.is_logged_in():
+        return None, "Not logged in. Please log in to view lap details"
+
+    session_token = auth.get_session_token()
+    supabase.auth.set_session(session_token)
+
+    try:
+        result = supabase.table("laps").select("*").eq("id", lap_id).single().execute()
+        return result.data, "Lap retrieved successfully"
+    except Exception as e:
+        return None, f"Failed to retrieve lap: {e}"
+
+
+def get_telemetry_points(lap_id: str, columns: Optional[list[str]] = None):
+    """Retrieve telemetry points for a given lap from Supabase.
+
+    Args:
+        lap_id: UUID of the lap to fetch telemetry for.
+        columns: Optional list of columns to select – if None, selects all.
+
+    Returns:
+        Tuple[list[dict] | None, str]
+    """
+    if not auth.is_logged_in():
+        return None, "Not logged in. Please log in to view telemetry points"
+
+    if not lap_id:
+        return None, "lap_id is required"
+
+    session_token = auth.get_session_token()
+    supabase.auth.set_session(session_token)
+
+    try:
+        sel = "*" if columns is None else ",".join(columns)
+        result = (
+            supabase.table("telemetry_points")
+            .select(sel)
+            .eq("lap_id", lap_id)
+            .order("track_position")
+            .execute()
+        )
+        return result.data, f"Retrieved {len(result.data) if result.data else 0} telemetry points"
+    except Exception as e:
+        return None, f"Failed to retrieve telemetry points: {e}"
+
+# --- End Telemetry / Lap helpers --- 
