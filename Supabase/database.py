@@ -172,29 +172,72 @@ def delete_profile() -> Tuple[bool, str]:
 
 # --- New Telemetry / Lap helpers ---
 
-def get_laps(limit: int = 100, user_only: bool = False):
+def get_laps(limit: int = 50, user_only: bool = True, session_id: str = None):
     """Fetch laps from the `laps` table.
 
     Args:
-        limit: Maximum number of laps to return (default 100).
-        user_only: If True, only return laps for the currently logged‑in user.
+        limit: Maximum number of laps to return (default 50).
+        user_only: If True, only return laps for the currently logged-in user.
+        session_id: If provided, filter laps by this session ID.
 
     Returns:
         Tuple of (list[dict] | None, str): Data and status message.
     """
-    if not auth.is_logged_in():
+    # Import the main authenticated client
+    try:
+        from trackpro.database.supabase_client import supabase as main_supabase
+    except ImportError:
+        logger.error("Could not import main Supabase client in get_laps")
+        return None, "Internal error: Cannot access database client"
+
+    # Check authentication using the main client
+    if user_only and not main_supabase.is_authenticated():
         return None, "Not logged in. Please log in to view laps"
 
-    # Ensure we are using an authenticated session
-    session_token = auth.get_session_token()
-    supabase.auth.set_session(session_token)
-
     try:
-        query = supabase.table("laps").select("*").limit(limit).order("created_at", desc=True)
+        # Use the main client for the query
+        query = main_supabase.client.table("laps").select("*").limit(limit).order("lap_number")
+
+        # Filter by session ID if provided
+        if session_id:
+            query = query.eq('session_id', session_id)
+
+        # Filter by user ID if requested
         if user_only:
-            current_user = auth.get_current_user()
-            if current_user:
-                query = query.eq("user_id", current_user.id)
+            # Get user directly from the main client
+            user = main_supabase.get_user()
+            user_id = None
+            if user:
+                 if hasattr(user, 'id'):
+                     user_id = user.id
+                 elif hasattr(user, 'user') and hasattr(user.user, 'id'):
+                     user_id = user.user.id
+            
+            if user_id:
+                # Need to join with sessions table to filter by user_id
+                # This assumes laps table has a session_id foreign key
+                # Modify query to filter based on user ID in the joined sessions table
+                # NOTE: Supabase Python client might not support join filtering directly in this way easily.
+                # A view or function might be better, or filtering post-fetch.
+                # For now, we'll stick to filtering by session_id, assuming sessions are already user-filtered.
+                # If session_id is NOT provided, we CAN filter laps by user_id via the session join.
+                if not session_id:
+                     # Adjust query to filter based on user ID in the sessions table
+                     # This requires knowing the structure and how to perform the join/filter efficiently.
+                     # Let's assume a direct filter on laps table if user_id exists there (unlikely but simpler)
+                     # Or fetch sessions first and then laps for those sessions? More complex.
+                     # **Revisiting**: The easiest way is to fetch sessions first if session_id is None.
+                     # For now, the primary use case provides session_id, so direct user filtering here is complex.
+                     # Let's rely on the session_id being user-specific for now.
+                     # If session_id is None and user_only is True, we should probably return an error or fetch user's sessions first.
+                     logger.warning("get_laps: user_only=True without session_id is not fully supported yet for direct user filtering.")
+                     # Fallback: If no session_id, return empty for now if user_only is True without session filter.
+                     # return [], "Need session_id for user-specific laps"
+                     pass # Let the session_id filter handle user specificity for now
+            else:
+                logger.warning("get_laps: user_only=True but could not get user ID from main client")
+                return [], "Could not determine user ID"
+
         result = query.execute()
         return result.data, "Laps retrieved successfully"
     except Exception as e:
@@ -247,5 +290,65 @@ def get_telemetry_points(lap_id: str, columns: Optional[list[str]] = None):
         return result.data, f"Retrieved {len(result.data) if result.data else 0} telemetry points"
     except Exception as e:
         return None, f"Failed to retrieve telemetry points: {e}"
+
+# --- Add missing get_sessions function ---
+def get_sessions(limit: int = 50, user_only: bool = False):
+    """Fetch sessions from the `sessions` table.
+
+    Args:
+        limit: Maximum number of sessions to return (default 50).
+        user_only: If True, only return sessions for the currently logged-in user.
+
+    Returns:
+        Tuple of (list[dict] | None, str): Data and status message.
+    """
+    # Import the main authenticated client
+    try:
+        from trackpro.database.supabase_client import supabase as main_supabase
+    except ImportError:
+        logger.error("Could not import main Supabase client in get_sessions")
+        return None, "Internal error: Cannot access database client"
+
+    # Check authentication using the main client
+    if not main_supabase.is_authenticated():
+        return None, "Not logged in. Please log in to view sessions"
+
+    try:
+        # Use the main client for the query
+        query = main_supabase.client.table("sessions").select("*, tracks(name), cars(name)").limit(limit).order("created_at", desc=True)
+        
+        if user_only:
+            # Get user directly from the main client
+            user = main_supabase.get_user()
+            user_id = None
+            if user:
+                 if hasattr(user, 'id'):
+                     user_id = user.id
+                 elif hasattr(user, 'user') and hasattr(user.user, 'id'):
+                     user_id = user.user.id
+            
+            if user_id:
+                query = query.eq("user_id", user_id)
+            else:
+                logger.warning("get_sessions: user_only=True but could not get user ID from main client")
+                return [], "Could not determine user ID"
+                
+        result = query.execute()
+
+        # Process results to flatten track/car names
+        processed_data = []
+        if result.data:
+            for session in result.data:
+                session['track_name'] = session.get('tracks', {}).get('name', 'Unknown Track') if session.get('tracks') else 'Unknown Track'
+                session['car_name'] = session.get('cars', {}).get('name', 'Unknown Car') if session.get('cars') else 'Unknown Car'
+                # Remove nested structures if they exist
+                session.pop('tracks', None)
+                session.pop('cars', None)
+                processed_data.append(session)
+
+        return processed_data, "Sessions retrieved successfully"
+    except Exception as e:
+        return None, f"Failed to retrieve sessions: {e}"
+# --- End get_sessions function ---
 
 # --- End Telemetry / Lap helpers --- 

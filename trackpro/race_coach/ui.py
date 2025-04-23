@@ -15,7 +15,7 @@ import json
 import platform
 import math
 import random  # Import random module for demo animations
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path  # Add Path import for file handling
 
 # Need QObject and QThread for background tasks
@@ -26,7 +26,7 @@ from Supabase.auth import update_auth_state_from_client, is_logged_in
 
 # Supabase helpers for laps and telemetry
 try:
-    from Supabase.database import get_laps, get_telemetry_points
+    from Supabase.database import get_laps, get_telemetry_points, get_sessions # Add get_sessions import
 except Exception as _sup_err:
     logger = logging.getLogger(__name__)
     logger.warning(f"Supabase import failed ({_sup_err}), using fallback functions.")
@@ -36,6 +36,18 @@ except Exception as _sup_err:
 
     def get_telemetry_points(*_args, **_kwargs):
         return None, "Supabase unavailable"
+        
+    # Add fallback for get_sessions
+    def get_sessions(*_args, **_kwargs):
+        # Return some dummy session data for offline testing
+        logger.info("Using fallback get_sessions")
+        now = datetime.now()
+        sessions = [
+            {"id": "session_1", "created_at": (now - timedelta(hours=1)).isoformat(), "track_name": "Demo Track 1", "car_name": "Demo Car A"},
+            {"id": "session_2", "created_at": (now - timedelta(days=1)).isoformat(), "track_name": "Demo Track 2", "car_name": "Demo Car B"},
+            {"id": "session_3", "created_at": (now - timedelta(days=2)).isoformat(), "track_name": "Demo Track 1", "car_name": "Demo Car C"},
+        ]
+        return sessions, "Using fallback data"
 
 # Try to import QPointF and QRectF from QtCore
 try:
@@ -154,7 +166,9 @@ logger = logging.getLogger(__name__)
 
 # --- Worker for Background Telemetry Fetching (Phase 3, Step 7) ---
 class TelemetryFetchWorker(QObject):
-    finished = pyqtSignal(object, object) # Pass two results (left_pts, right_pts)
+    # finished = pyqtSignal(object, object) # Pass two results (left_pts, right_pts) - Original
+    # Modified finished signal to emit dictionaries containing stats and points
+    finished = pyqtSignal(object, object)
     error = pyqtSignal(str, str)          # Pass two error messages
 
     def __init__(self, left_lap_id, right_lap_id):
@@ -163,36 +177,133 @@ class TelemetryFetchWorker(QObject):
         self.right_lap_id = right_lap_id
         self.is_cancelled = False
 
+    def _calculate_lap_stats(self, telemetry_points):
+        """Calculate statistics from a list of telemetry points."""
+        if not telemetry_points or len(telemetry_points) < 2:
+            return None # Not enough data
+
+        # Sort points by timestamp just in case
+        telemetry_points.sort(key=lambda p: p.get('timestamp', 0))
+
+        total_time = telemetry_points[-1].get('timestamp', 0) - telemetry_points[0].get('timestamp', 0)
+        if total_time <= 0:
+            return None # Invalid time range
+
+        full_throttle_time = 0
+        heavy_braking_time = 0
+        cornering_time = 0
+
+        # Define thresholds
+        THROTTLE_THRESHOLD = 0.98
+        BRAKE_THRESHOLD = 0.80
+        STEERING_THRESHOLD = 0.1 # Radians, adjust as needed
+
+        speeds = []
+        track_positions = []
+
+        for i in range(len(telemetry_points) - 1):
+            p1 = telemetry_points[i]
+            p2 = telemetry_points[i+1]
+
+            dt = p2.get('timestamp', 0) - p1.get('timestamp', 0)
+            if dt <= 0: continue # Skip invalid time steps
+
+            # Calculate time spent in different states during this interval (use p1's value)
+            throttle = p1.get('throttle', 0)
+            brake = p1.get('brake', 0)
+            steering = p1.get('steering', 0)
+
+            if throttle is not None and throttle >= THROTTLE_THRESHOLD:
+                full_throttle_time += dt
+            if brake is not None and brake >= BRAKE_THRESHOLD:
+                heavy_braking_time += dt
+            if steering is not None and abs(steering) >= STEERING_THRESHOLD:
+                 # Optional: Add conditions like not braking heavily?
+                 # if brake is None or brake < BRAKE_THRESHOLD * 0.8:
+                 cornering_time += dt
+
+            # Collect data for graphs (using p1's values)
+            speeds.append(p1.get('speed', 0))
+            track_positions.append(p1.get('track_position', 0))
+
+        # Add last point's data for graphs
+        speeds.append(telemetry_points[-1].get('speed', 0))
+        track_positions.append(telemetry_points[-1].get('track_position', 0))
+
+
+        # Calculate percentages
+        full_throttle_pct = int((full_throttle_time / total_time) * 100) if total_time > 0 else 0
+        heavy_braking_pct = int((heavy_braking_time / total_time) * 100) if total_time > 0 else 0
+        cornering_pct = int((cornering_time / total_time) * 100) if total_time > 0 else 0
+
+        # Get overall lap time from the lap record itself (more accurate)
+        # This needs to be passed or fetched separately if needed here.
+        # For now, we'll just pass the stats.
+
+        stats = {
+            "full_throttle": full_throttle_pct,
+            "heavy_braking": heavy_braking_pct,
+            "cornering": cornering_pct,
+            # Add lap time and gap later if fetched/calculated
+        }
+        points = {
+            "speed": speeds,
+            "track_position": track_positions
+            # Add delta later if calculated
+        }
+
+        return {"stats": stats, "points": points}
+
+
     def run(self):
-        """Fetch telemetry data for both laps."""
+        """Fetch telemetry data for both laps and calculate stats."""
         logger.info(f"Worker thread starting fetch for {self.left_lap_id} and {self.right_lap_id}")
-        left_pts, right_pts = None, None
+        left_data, right_data = None, None
         msg_left, msg_right = "", ""
+        # Define columns needed for calculation and graphs
+        required_columns = [
+            "track_position", "speed", "throttle", "brake", "steering", "timestamp"
+        ]
 
         try:
             # Fetch left lap
             if not self.is_cancelled:
-                left_pts, msg_left = get_telemetry_points(self.left_lap_id, columns=["track_position","speed"])
+                # Fetch all required columns
+                left_pts, msg_left = get_telemetry_points(self.left_lap_id, columns=required_columns)
                 if left_pts is None:
-                    logger.warning(f"Failed fetching left lap: {msg_left}")
-                    # Don't emit error yet, try fetching right lap
+                    logger.warning(f"Failed fetching left lap telemetry: {msg_left}")
+                else:
+                    logger.info(f"Fetched {len(left_pts)} points for left lap {self.left_lap_id}")
+                    left_data = self._calculate_lap_stats(left_pts)
+                    if not left_data:
+                         logger.warning(f"Could not calculate stats for left lap {self.left_lap_id}")
+                         msg_left = "Stat calculation failed (left)"
+
 
             # Fetch right lap
             if not self.is_cancelled:
-                right_pts, msg_right = get_telemetry_points(self.right_lap_id, columns=["track_position","speed"])
+                # Fetch all required columns
+                right_pts, msg_right = get_telemetry_points(self.right_lap_id, columns=required_columns)
                 if right_pts is None:
-                    logger.warning(f"Failed fetching right lap: {msg_right}")
-                    # Don't emit error yet, proceed if left lap succeeded
+                    logger.warning(f"Failed fetching right lap telemetry: {msg_right}")
+                else:
+                    logger.info(f"Fetched {len(right_pts)} points for right lap {self.right_lap_id}")
+                    right_data = self._calculate_lap_stats(right_pts)
+                    if not right_data:
+                         logger.warning(f"Could not calculate stats for right lap {self.right_lap_id}")
+                         msg_right = "Stat calculation failed (right)"
+
 
             # Check results and emit appropriate signal
             if self.is_cancelled:
                  logger.info("Telemetry fetch cancelled.")
                  self.error.emit("Operation Cancelled", "Operation Cancelled")
-            elif left_pts is None and right_pts is None:
-                 self.error.emit(msg_left or "Fetch failed", msg_right or "Fetch failed")
+            elif left_data is None and right_data is None:
+                 self.error.emit(msg_left or "Fetch/Calc failed", msg_right or "Fetch/Calc failed")
             else:
-                 # Emit results even if one failed, handle None in the main thread
-                 self.finished.emit(left_pts, right_pts)
+                 # Emit results (dictionaries with stats and points) even if one failed
+                 logger.info(f"Emitting finished signal. Left valid: {left_data is not None}, Right valid: {right_data is not None}")
+                 self.finished.emit(left_data, right_data)
 
         except Exception as e:
             logger.error(f"Exception in TelemetryFetchWorker: {e}", exc_info=True)
@@ -2341,379 +2452,41 @@ class VideosTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Setup logging
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("Initializing VideosTab (RaceFlix)")
-        
-        # Main layout
+        # COMPLETELY SIMPLIFIED UI FOR DEBUGGING - JUST A DIRECT LABEL TO SEE IF IT DISPLAYS
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
         
-        # Stacked widget to switch between courses list and individual course view
-        self.stacked_widget = QStackedWidget()
+        # Add extremely visible debug label
+        test_label = QLabel("CRITICAL DEBUG: THIS SHOULD BE VISIBLE")
+        test_label.setStyleSheet("""
+            background-color: red; 
+            color: white; 
+            font-size: 24px;
+            padding: 20px;
+            margin: 20px;
+        """)
+        test_label.setFixedHeight(100)
+        test_label.setAlignment(Qt.AlignCenter)
         
-        # Create courses list view
-        self.courses_view = QWidget()
-        courses_layout = QVBoxLayout(self.courses_view)
-        
-        # Header
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 20, 20, 10)
-        
-        title = QLabel("Racing Courses")
-        title.setStyleSheet("font-size: 24px; font-weight: bold; color: white;")
-        header_layout.addWidget(title)
-        
-        # Search box
-        search_box = QWidget()
-        search_box.setFixedWidth(250)
-        search_box_layout = QHBoxLayout(search_box)
-        search_box_layout.setContentsMargins(0, 0, 0, 0)
-        
-        search_icon = QLabel("🔍")
-        search_icon.setStyleSheet("color: #999; font-size: 16px;")
-        
-        search_input = QLineEdit()
-        search_input.setPlaceholderText("Search courses...")
-        search_input.setStyleSheet("""
-            background-color: #333;
-            border: none;
-            padding: 8px;
-            border-radius: 4px;
+        # Button to test interaction
+        test_button = QPushButton("CLICK ME TO PROVE INTERACTION WORKS")
+        test_button.setStyleSheet("""
+            background-color: green;
             color: white;
+            font-size: 18px;
+            padding: 10px;
+            margin: 20px;
         """)
+        test_button.setFixedHeight(50)
+        test_button.clicked.connect(lambda: test_label.setText("Button clicked! UI is working!"))
         
-        search_box_layout.addWidget(search_icon)
-        search_box_layout.addWidget(search_input)
+        # Add widgets directly to layout
+        layout.addWidget(test_label)
+        layout.addWidget(test_button)
         
-        header_layout.addWidget(search_box)
+        # Print to console for verification
+        print("VideosTab COMPLETELY SIMPLIFIED UI CREATED")
         
-        courses_layout.addWidget(header)
-        
-        # Category tabs - Use QTabBar instead of QTabWidget for better styling control
-        tab_bar = QTabBar()
-        tab_bar.setDrawBase(False)
-        tab_bar.setExpanding(False)
-        tab_bar.setStyleSheet("""
-            QTabBar::tab {
-                background-color: transparent;
-                color: #CCC;
-                padding: 8px 16px;
-                margin-right: 4px;
-                border-bottom: 2px solid transparent;
-            }
-            QTabBar::tab:selected {
-                color: white;
-                border-bottom: 2px solid #3498db;
-            }
-        """)
-        
-        # Add tabs
-        tab_bar.addTab("All Courses")
-        tab_bar.addTab("Beginner")
-        tab_bar.addTab("Intermediate")
-        tab_bar.addTab("Advanced")
-        
-        tab_holder = QWidget()
-        tab_holder_layout = QHBoxLayout(tab_holder)
-        tab_holder_layout.addWidget(tab_bar)
-        tab_holder_layout.addStretch()
-        tab_holder_layout.setContentsMargins(20, 0, 20, 5)
-        
-        courses_layout.addWidget(tab_holder)
-        
-        # Content stack for different tab contents
-        self.content_stack = QStackedWidget()
-        
-        # Create content for each tab
-        all_tab = QWidget()
-        beginner_tab = QWidget()
-        intermediate_tab = QWidget()
-        advanced_tab = QWidget()
-        
-        # Create layouts for each tab
-        all_layout = QVBoxLayout(all_tab)
-        all_layout.setContentsMargins(0, 0, 0, 0)
-        beginner_layout = QVBoxLayout(beginner_tab)
-        beginner_layout.setContentsMargins(0, 0, 0, 0)
-        intermediate_layout = QVBoxLayout(intermediate_tab)
-        intermediate_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout = QVBoxLayout(advanced_tab)
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Set up course grid for each category
-        self.setup_course_grid(all_tab, "all")
-        self.setup_course_grid(beginner_tab, "beginner")
-        self.setup_course_grid(intermediate_tab, "intermediate")
-        self.setup_course_grid(advanced_tab, "advanced")
-        
-        # Add tabs to stack
-        self.content_stack.addWidget(all_tab)
-        self.content_stack.addWidget(beginner_tab)
-        self.content_stack.addWidget(intermediate_tab)
-        self.content_stack.addWidget(advanced_tab)
-        
-        # Connect tab bar signal
-        tab_bar.currentChanged.connect(self.content_stack.setCurrentIndex)
-        
-        courses_layout.addWidget(self.content_stack)
-        
-        # Create course detail view (right side of main stacked widget)
-        self.course_view = CourseView()
-        self.course_view.back_button.clicked.connect(self.show_courses_list)
-        
-        # Add both views to the stacked widget
-        self.stacked_widget.addWidget(self.courses_view)
-        self.stacked_widget.addWidget(self.course_view)
-        
-        layout.addWidget(self.stacked_widget)
-        
-        # Start with courses list
-        self.stacked_widget.setCurrentIndex(0)
-        
-        # Log completion
-        self.logger.info("VideosTab (RaceFlix) initialization complete")
-        
-        # Force initial layout of the tab (helps with rendering)
-        QTimer.singleShot(100, self.ensure_courses_visible)
-    
-    def ensure_courses_visible(self):
-        """Ensure courses are visible after initial layout."""
-        self.logger.info("Ensuring courses are visible")
-        
-        # Force layout update
-        for i in range(self.content_stack.count()):
-            page = self.content_stack.widget(i)
-            page.updateGeometry()
-            page.adjustSize()
-            
-        # Update the current tab's layout
-        current_tab = self.content_stack.currentWidget()
-        if current_tab:
-            current_tab.updateGeometry()
-            current_tab.adjustSize()
-            
-        # Process events to ensure UI updates immediately
-        self.update()
-        QApplication.processEvents()
-        
-        # Log completion
-        self.logger.info("Layout updated to ensure course visibility")
-
-    def setup_course_grid(self, tab_widget, category):
-        """Set up grid of course cards for a given category tab."""
-        self.logger.info(f"Setting up course grid for category: {category}")
-        
-        # Get the layout for the specific tab widget (e.g., all_tab's layout)
-        tab_layout = tab_widget.layout()
-        if not tab_layout:
-            # If the tab widget doesn't have a layout yet, create one.
-            # This should ideally happen when the tab widget itself is created.
-            tab_layout = QVBoxLayout(tab_widget)
-            tab_layout.setContentsMargins(0, 0, 0, 0)
-            self.logger.warning(f"Layout not found for tab {category}, created a new one.")
-            # No need to call tab_widget.setLayout() here, the parent is set in constructor
-
-        # Get sample courses for this category
-        courses = self.get_sample_courses(category)
-        self.logger.info(f"Found {len(courses)} courses for category {category}")
-        
-        # Clear previous widgets from the layout if any exist
-        while tab_layout.count():
-            item = tab_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        if not courses:
-            # If no courses, display a message
-            empty_label = QLabel("No courses found for this category")
-            empty_label.setAlignment(Qt.AlignCenter)
-            empty_label.setStyleSheet("color: #999; padding: 40px;")
-            tab_layout.addWidget(empty_label)
-            self.logger.info(f"Added 'No courses found' label to {category} tab")
-        else:
-            # Create scroll area to handle large grids
-            scroll_area = QScrollArea()
-            scroll_area.setWidgetResizable(True)
-            scroll_area.setStyleSheet("""
-                QScrollArea {
-                    border: none;
-                    background-color: transparent;
-                }
-                QScrollBar:vertical {
-                    background: #333;
-                    width: 10px;
-                    border-radius: 5px;
-                }
-                QScrollBar::handle:vertical {
-                    background: #666;
-                    border-radius: 5px;
-                }
-            """)
-            
-            # Create the widget that will contain the grid
-            grid_container_widget = QWidget()
-            grid_layout = QGridLayout(grid_container_widget)
-            grid_layout.setSpacing(20)
-            grid_layout.setContentsMargins(20, 10, 20, 20) # Add margins here
-            grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-            
-            # Add courses to grid
-            row, col = 0, 0
-            max_cols = 3  # Show 3 cards per row
-            
-            for i, course in enumerate(courses):
-                try:
-                    self.logger.info(f"Creating card for course {i+1}: {course['title']}")
-                    # Parent the card to the grid_container_widget
-                    course_card = CourseCard(course, parent=grid_container_widget) 
-                    
-                    course_id = course['id'] 
-                    course_card.clicked.connect(
-                        lambda checked, cid=course_id: 
-                        self.show_course_detail(next(c for c in courses if c['id'] == cid))
-                    )
-                    
-                    grid_layout.addWidget(course_card, row, col)
-                    self.logger.info(f"Added course card: {course['title']} at grid position {row},{col}")
-                    
-                    col += 1
-                    if col >= max_cols:
-                        col = 0
-                        row += 1
-                        
-                except Exception as e:
-                    self.logger.error(f"Error creating course card: {e}", exc_info=True)
-            
-            # Add stretch to the bottom row if needed
-            grid_layout.setRowStretch(row + 1, 1)
-            # Add stretch to the last column if needed to push cards left
-            grid_layout.setColumnStretch(max_cols, 1)
-
-            # Set the widget containing the grid into the scroll area
-            scroll_area.setWidget(grid_container_widget)
-            
-            # Add the scroll area directly to the tab's layout
-            tab_layout.addWidget(scroll_area)
-            self.logger.info(f"Added scroll_area containing grid to {category} tab layout")
-
-        # No need to call tab_widget.setLayout() again
-
-    def get_sample_courses(self, category):
-        """Get sample course data for the specified category."""
-        all_courses = [
-            {
-                "id": 1,
-                "title": "Racing Fundamentals",
-                "description": "Master the basics of racing with this comprehensive course.",
-                "level": "beginner",
-                "lessons": 12,
-                "duration": "3h 20m",
-                "thumbnail": "racing_fundamentals.jpg",
-                "instructor": "John Smith",
-                "modules": [
-                    {"title": "Intro to Racing", "duration": "15m", "video_id": "6ENB7xQ7vhA"},  # Driver61 racing fundamentals
-                    {"title": "Basic Car Control", "duration": "25m", "video_id": "ewQwgL76lFo"}, # Driver61 car control
-                    {"title": "Racing Lines", "duration": "30m", "video_id": "VEJh4lLCvbU"},      # Driver61 racing line
-                ]
-            },
-            {
-                "id": 2,
-                "title": "Advanced Cornering Techniques",
-                "description": "Learn how to master every type of corner and optimize your racing line.",
-                "level": "intermediate",
-                "lessons": 8,
-                "duration": "2h 45m",
-                "thumbnail": "advanced_cornering.jpg",
-                "instructor": "Sarah Johnson",
-                "modules": [
-                    {"title": "Corner Analysis", "duration": "20m", "video_id": "dZWfnjXJ9cM"},  # Skip Barber corner analysis
-                    {"title": "Trail Braking", "duration": "35m", "video_id": "bVME4VzexAA"},    # Trail braking tutorial
-                    {"title": "Exit Strategies", "duration": "25m", "video_id": "zXPSj-6Yjdw"},   # Exit strategies
-                ]
-            },
-            {
-                "id": 3,
-                "title": "Racecraft Mastery",
-                "description": "Advanced strategies for overtaking, defending, and race management.",
-                "level": "advanced",
-                "lessons": 10,
-                "duration": "4h 10m",
-                "thumbnail": "racecraft.jpg",
-                "instructor": "Michael Chen",
-                "modules": [
-                    {"title": "Race Starts", "duration": "30m", "video_id": "N8qhvPW-sIQ"},     # Race starts guide
-                    {"title": "Overtaking", "duration": "45m", "video_id": "Dw6GmA7wGg4"},      # Overtaking tutorial
-                    {"title": "Defensive Driving", "duration": "40m", "video_id": "J0TzOJ-Rph0"}, # Defensive driving
-                ]
-            },
-            {
-                "id": 4,
-                "title": "Simulator Setup",
-                "description": "Learn how to properly set up your simulator for optimal performance.",
-                "level": "beginner",
-                "lessons": 6,
-                "duration": "1h 50m",
-                "thumbnail": "simulator.jpg",
-                "instructor": "Alex Rivera",
-                "modules": [
-                    {"title": "Hardware Setup", "duration": "25m", "video_id": "UON3FPRqFj4"},  # Sim hardware setup
-                    {"title": "Software Calibration", "duration": "30m", "video_id": "5v8XSEeJFnM"}, # Wheel setup
-                    {"title": "Force Feedback", "duration": "20m", "video_id": "WhRGn_3yuHE"},      # FFB settings
-                ]
-            },
-            {
-                "id": 5,
-                "title": "Wet Weather Driving",
-                "description": "Master the art of driving in challenging wet conditions.",
-                "level": "intermediate",
-                "lessons": 7,
-                "duration": "2h 15m",
-                "thumbnail": "wet_weather.jpg",
-                "instructor": "Emma Lewis",
-                "modules": [
-                    {"title": "Rain Techniques", "duration": "35m", "video_id": "AZ7pX_1BbEI"},    # Wet driving techniques
-                    {"title": "Puddle Management", "duration": "25m", "video_id": "RMxkOmBE0iI"},   # Wet racing guide
-                    {"title": "Wet Setup", "duration": "30m", "video_id": "Jg_wm3wJ9t4"},          # Wet setup guide
-                ]
-            },
-            {
-                "id": 6,
-                "title": "Data Analysis for Racing",
-                "description": "Learn how to analyze telemetry data to improve your lap times.",
-                "level": "advanced",
-                "lessons": 9,
-                "duration": "3h 40m",
-                "thumbnail": "data_analysis.jpg",
-                "instructor": "David Park",
-                "modules": [
-                    {"title": "Telemetry Basics", "duration": "30m", "video_id": "KU7TCADpc-o"},   # Telemetry basics
-                    {"title": "Speed Traces", "duration": "35m", "video_id": "NjX-BMwhyOc"},        # Data analysis guide
-                    {"title": "Comparing Laps", "duration": "40m", "video_id": "NML0mgLbFDs"},      # Lap comparison
-                ]
-            }
-        ]
-        
-        self.logger.info(f"Filtering courses for category: {category}")
-        if category == "all":
-            return all_courses
-        else:
-            filtered = [course for course in all_courses if course["level"] == category]
-            self.logger.info(f"Filtered down to {len(filtered)} courses")
-            return filtered
-
-    def show_course_detail(self, course_data):
-        """Show the detailed view for a course."""
-        self.logger.info(f"Showing course detail for: {course_data['title']}")
-        self.course_view.set_course(course_data)
-        self.stacked_widget.setCurrentIndex(1)
-    
-    def show_courses_list(self):
-        """Return to the courses list view."""
-        self.logger.info("Returning to courses list")
-        self.stacked_widget.setCurrentIndex(0)
+        # Skip all the complex UI setup for now to isolate the problem
 
 
 class CourseCard(QFrame):
@@ -2735,10 +2508,11 @@ class CourseCard(QFrame):
                 background-color: #333;
                 border-radius: 10px;
                 margin: 5px;
+                border: 2px solid #FF0000; /* RED DEBUGGING BORDER */
             }
             CourseCard:hover {
                 background-color: #444;
-                border: 1px solid #3498db;
+                border: 2px solid #3498db;
             }
         """)
         
@@ -3044,7 +2818,7 @@ class CourseView(QWidget):
         self.modules_layout = QVBoxLayout(self.modules_list)
         self.modules_layout.setContentsMargins(0, 0, 0, 0)
         self.modules_layout.setSpacing(10)
-        self.modules_layout.addStretch()
+        # self.modules_layout.addStretch() # REMOVED THIS LINE
         
         modules_scroll.setWidget(self.modules_list)
         
@@ -3373,10 +3147,29 @@ class RaceCoachWidget(QWidget):
         telemetry_layout = QVBoxLayout(telemetry_tab)
 
         # -------- Lap selection controls (Phase 2, Step 4) --------
-        lap_select_frame = QFrame()
-        lap_select_layout = QHBoxLayout(lap_select_frame)
-        lap_select_layout.setContentsMargins(5, 5, 5, 5)
+        controls_frame = QFrame() # Changed from lap_select_frame
+        controls_layout = QGridLayout(controls_frame) # Use GridLayout for better arrangement
+        controls_layout.setContentsMargins(5, 5, 5, 5)
+        controls_layout.setHorizontalSpacing(15) # Add horizontal spacing
 
+        # -- Row 0: Session Selection --
+        session_label = QLabel("Session:")
+        session_label.setStyleSheet("color:#DDD")
+        self.session_combo = QComboBox()
+        self.session_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
+        self.session_combo.setMinimumWidth(400) # Give session combo more space
+        self.session_combo.currentIndexChanged.connect(self.on_session_changed) # Connect signal
+
+        self.refresh_button = QPushButton("🔄 Refresh All") # Combined refresh button
+        self.refresh_button.setToolTip("Refresh session and lap lists from database")
+        self.refresh_button.setStyleSheet("padding: 5px 10px;")
+        self.refresh_button.clicked.connect(self.refresh_session_and_lap_lists) # Updated connection
+
+        controls_layout.addWidget(session_label, 0, 0)
+        controls_layout.addWidget(self.session_combo, 0, 1, 1, 2) # Span 2 columns
+        controls_layout.addWidget(self.refresh_button, 0, 3)
+
+        # -- Row 1: Lap Selection --
         left_label = QLabel("Lap A:")
         left_label.setStyleSheet("color:#DDD")
         self.left_lap_combo = QComboBox()
@@ -3393,22 +3186,22 @@ class RaceCoachWidget(QWidget):
         self.compare_button.setStyleSheet("padding: 5px 10px;")
         self.compare_button.clicked.connect(self.on_compare_clicked)
 
-        self.refresh_laps_button = QPushButton("🔄") # Refresh icon
-        self.refresh_laps_button.setToolTip("Refresh lap list from database")
-        self.refresh_laps_button.setStyleSheet("padding: 5px;")
-        self.refresh_laps_button.setFixedWidth(40)
-        self.refresh_laps_button.clicked.connect(self.refresh_lap_list)
+        # Remove old refresh button
+        # self.refresh_laps_button = QPushButton("🔄") # Refresh icon
+        # self.refresh_laps_button.setToolTip("Refresh lap list from database")
+        # self.refresh_laps_button.setStyleSheet("padding: 5px;")
+        # self.refresh_laps_button.setFixedWidth(40)
+        # self.refresh_laps_button.clicked.connect(self.refresh_lap_list)
 
-        lap_select_layout.addWidget(left_label)
-        lap_select_layout.addWidget(self.left_lap_combo, 1)
-        lap_select_layout.addSpacing(20)
-        lap_select_layout.addWidget(right_label)
-        lap_select_layout.addWidget(self.right_lap_combo, 1)
-        lap_select_layout.addSpacing(20)
-        lap_select_layout.addWidget(self.compare_button)
-        lap_select_layout.addWidget(self.refresh_laps_button)
+        controls_layout.addWidget(left_label, 1, 0)
+        controls_layout.addWidget(self.left_lap_combo, 1, 1)
+        controls_layout.addWidget(right_label, 1, 2)
+        controls_layout.addWidget(self.right_lap_combo, 1, 3)
+        controls_layout.addWidget(self.compare_button, 1, 4)
+        # Remove old refresh button widget add
+        # lap_select_layout.addWidget(self.refresh_laps_button)
 
-        telemetry_layout.addWidget(lap_select_frame)
+        telemetry_layout.addWidget(controls_frame) # Add the controls frame
 
         # Telemetry comparison widget
         self.telemetry_widget = TelemetryComparisonWidget(self)
@@ -4231,29 +4024,133 @@ class RaceCoachWidget(QWidget):
         # Call the parent class implementation
         super().showEvent(event)
 
-        # Trigger initial lap list load only once
+        # Trigger initial load only once
         if not self._initial_lap_load_done:
              logger.info("RaceCoachWidget shown, triggering initial lap list load.")
              # First, ensure the auth module state is synchronized with the client
              update_auth_state_from_client()
-             self.refresh_lap_list() # Auth check is now inside this method
+             # self.refresh_lap_list() # Auth check is now inside this method - THIS LINE IS WRONG
+             self.perform_initial_load() # Call this instead to handle sessions and laps
              self._initial_lap_load_done = True
 
     def perform_initial_load(self):
         """Performs the initial authentication check and lap list load."""
-        if not self._initial_lap_load_done:
-            logger.info("RaceCoachWidget performing initial load.")
-            # First, ensure the auth module state is synchronized with the client
-            update_auth_state_from_client()
-            self.refresh_lap_list() # Auth check is now inside this method
-            self._initial_lap_load_done = True
+        logger.info("RaceCoachWidget performing initial load.")
+
+        # Explicitly check auth using the main client
+        try:
+            from trackpro.database.supabase_client import supabase as main_supabase
+            is_authenticated = main_supabase.is_authenticated()
+            logger.info(f"perform_initial_load: Authentication check via main client: {is_authenticated}")
+        except Exception as e:
+            logger.error(f"Error checking auth state in perform_initial_load: {e}")
+            is_authenticated = False # Assume not logged in if check fails
+
+        if not is_authenticated:
+            logger.warning("User not authenticated (checked via main client). Cannot load sessions/laps.")
+            self.session_combo.clear()
+            self.session_combo.addItem("Log in to view sessions", None)
+            self.left_lap_combo.clear()
+            self.left_lap_combo.addItem("Log in first", None)
+            self.right_lap_combo.clear()
+            self.right_lap_combo.addItem("Log in first", None)
+            return
+
+        # If authenticated, proceed to refresh lists
+        logger.info("User is authenticated, proceeding to refresh lists.")
+        self.refresh_session_list() # Fetch sessions first
+        current_session_id = self.session_combo.currentData() # Get the currently selected session ID
+        if current_session_id:
+             self.refresh_lap_list(current_session_id) # Fetch laps for that session
         else:
-            logger.info("RaceCoachWidget initial load already done, skipping.")
+             # If no session is selected after refresh, update lap combos
+             self.left_lap_combo.clear()
+             self.left_lap_combo.addItem("Select session", None)
+             self.right_lap_combo.clear()
+             self.right_lap_combo.addItem("Select session", None)
 
 
     # -------- Lap Comparison Methods (Phase 2) --------
 
-    def refresh_lap_list(self):
+    def refresh_session_and_lap_lists(self):
+        """Refreshes both the session list and the laps for the currently selected session."""
+        logger.info("Refreshing session and lap lists...")
+        
+        # Explicitly check auth using the main client
+        try:
+            from trackpro.database.supabase_client import supabase as main_supabase
+            is_authenticated = main_supabase.is_authenticated()
+            logger.info(f"refresh_session_and_lap_lists: Auth check via main client: {is_authenticated}")
+        except Exception as e:
+            logger.error(f"Error checking auth state in refresh_session_and_lap_lists: {e}")
+            is_authenticated = False # Assume not logged in if check fails
+
+        if not is_authenticated:
+            logger.warning("User not logged in (checked via main client). Cannot refresh sessions or laps.")
+            self.session_combo.clear()
+            self.session_combo.addItem("Log in to view sessions", None)
+            self.left_lap_combo.clear()
+            self.left_lap_combo.addItem("Log in first", None)
+            self.right_lap_combo.clear()
+            self.right_lap_combo.addItem("Log in first", None)
+            return
+
+        # Fetch and populate sessions
+        self.refresh_session_list()
+
+        # After sessions are loaded, trigger lap list refresh for the selected session
+        # (The on_session_changed slot will handle this if the session index changes,
+        # but we need to trigger it manually if the session list refreshes but the
+        # selected index stays the same)
+        current_session_id = self.session_combo.currentData()
+        if current_session_id:
+            self.refresh_lap_list(current_session_id)
+        else:
+            # No session selected or available, clear lap lists
+            self.left_lap_combo.clear()
+            self.left_lap_combo.addItem("Select a session", None)
+            self.right_lap_combo.clear()
+            self.right_lap_combo.addItem("Select a session", None)
+
+    def refresh_session_list(self):
+        """Fetch latest sessions from Supabase and populate the session combo box."""
+        logger.info("Refreshing session list...")
+        self.session_combo.clear()
+        
+        # REMOVED Redundant Auth Check - Now handled by calling functions
+        # if not is_logged_in():
+        #     self.session_combo.addItem("Log in to view sessions", None)
+        #     return
+            
+        sessions, msg = get_sessions(limit=50, user_only=True) # Assuming get_sessions exists
+
+        if sessions is None:
+            logger.error(f"Failed to fetch sessions: {msg}")
+            self.session_combo.addItem(f"Error: {msg}", None)
+            return
+        
+        if not sessions:
+            self.session_combo.addItem("No sessions found", None)
+            return
+            
+        # Populate the session combo box
+        logger.info(f"Populating session list with {len(sessions)} sessions.")
+        for session in sessions:
+            session_id = session.get("id")
+            created_at_str = session.get("created_at", "")
+            track_name = session.get("track_name", "Unknown Track")
+            car_name = session.get("car_name", "Unknown Car")
+            
+            try:
+                # Attempt to parse timestamp for display
+                timestamp = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')) # Handle Z timezone
+                display_text = f"{timestamp.strftime('%Y-%m-%d %H:%M')} - {track_name} ({car_name})"
+            except (ValueError, TypeError):
+                 display_text = f"{created_at_str} - {track_name} ({car_name})" # Fallback
+                 
+            self.session_combo.addItem(display_text, session_id)
+
+    def refresh_lap_list(self, session_id):
         """Fetch latest laps from Supabase and populate combo boxes."""
         import logging
         logger = logging.getLogger(__name__)
@@ -4269,9 +4166,9 @@ class RaceCoachWidget(QWidget):
         
         # 1. Try using our module's auth and client
         if is_logged_in():
-            laps, msg = get_laps(limit=50, user_only=True)
+            laps, msg = get_laps(limit=50, user_only=True, session_id=session_id) # Filter by session_id
             if laps:
-                logger.info(f"Successfully fetched {len(laps)} laps using module client")
+                logger.info(f"Successfully fetched {len(laps)} laps for session {session_id} using module client")
                 
         # 2. If that didn't work, try direct database access with main app's client
         if not laps:
@@ -4305,7 +4202,7 @@ class RaceCoachWidget(QWidget):
                             logger.info("Successfully got authenticated user from main app")
                             
                             # Query laps directly - don't filter by user ID as we're already authenticated
-                            response = main_supabase.client.table("laps").select("*").limit(50).execute()
+                            response = main_supabase.client.table("laps").select("*").eq('session_id', session_id).limit(50).execute()
                             if response:
                                 # Debug the response structure
                                 resp_repr = str(response)[:100] + "..." if len(str(response)) > 100 else str(response)
@@ -4327,7 +4224,7 @@ class RaceCoachWidget(QWidget):
                                     laps = response if isinstance(response, list) else []
                                 
                                 if laps:
-                                    logger.info(f"Successfully fetched {len(laps)} laps using main app client")
+                                    logger.info(f"Successfully fetched {len(laps)} laps for session {session_id} using main app client")
                     except Exception as e:
                         logger.warning(f"Error checking main app authentication: {e}")
                         # Log more details about the exception
@@ -4343,21 +4240,19 @@ class RaceCoachWidget(QWidget):
         if not laps and hasattr(self, 'data_manager'):
             try:
                 logger.info("Trying to fetch laps through local database")
-                # Try to get laps from local database
-                local_laps = self.data_manager.get_laps(limit=50)
+                # Try to get laps from local database (assuming filter capability exists)
+                local_laps = self.data_manager.get_laps(limit=50, session_id=session_id)
                 if local_laps:
                     laps = local_laps
                     logger.info(f"Successfully fetched {len(laps)} laps from local database")
             except Exception as e:
                 logger.warning(f"Error fetching local laps: {e}")
                 
-        # If still no laps, show login message
+        # If still no laps for this session, show message
         if not laps:
             logger.warning("All lap fetch approaches failed - showing login message")
-            self.left_lap_combo.clear()
-            self.right_lap_combo.clear()
-            self.left_lap_combo.addItem("Log in to view laps", None)
-            self.right_lap_combo.addItem("Log in to view laps", None)
+            self.left_lap_combo.addItem("No laps for this session", None)
+            self.right_lap_combo.addItem("No laps for this session", None)
             return
 
         # Success! Update the combo boxes
@@ -4388,3 +4283,169 @@ class RaceCoachWidget(QWidget):
 
         left_lap_id = self.left_lap_combo.currentData()
         right_lap_id = self.right_lap_combo.currentData()
+
+        if not left_lap_id or not right_lap_id:
+            logger.warning("Please select two laps to compare.")
+            QMessageBox.warning(self, "Selection Missing", "Please select a lap for both Lap A and Lap B.")
+            return
+
+        logger.info(f"Starting telemetry fetch for Lap A ({left_lap_id}) and Lap B ({right_lap_id})")
+
+        # Create worker and thread
+        self.telemetry_fetch_worker = TelemetryFetchWorker(left_lap_id, right_lap_id)
+        self.telemetry_fetch_thread = QThread()
+        self.telemetry_fetch_worker.moveToThread(self.telemetry_fetch_thread)
+
+        # Connect signals
+        self.telemetry_fetch_worker.finished.connect(self._on_telemetry_fetch_finished) # Connect to new slot
+        self.telemetry_fetch_worker.error.connect(self._on_telemetry_fetch_error)       # Connect to new slot
+        self.telemetry_fetch_thread.started.connect(self.telemetry_fetch_worker.run)
+        self.telemetry_fetch_worker.finished.connect(self.telemetry_fetch_thread.quit)
+        self.telemetry_fetch_worker.finished.connect(self.telemetry_fetch_worker.deleteLater)
+        self.telemetry_fetch_thread.finished.connect(self.telemetry_fetch_thread.deleteLater)
+        # Add error signal connection for cleanup
+        self.telemetry_fetch_worker.error.connect(self.telemetry_fetch_thread.quit)
+        self.telemetry_fetch_worker.error.connect(self.telemetry_fetch_worker.deleteLater)
+
+
+        # Start the thread
+        self.telemetry_fetch_thread.start()
+
+        # Optionally disable UI elements while loading
+        self.compare_button.setEnabled(False)
+        self.compare_button.setText("Loading...")
+
+
+    def _on_telemetry_fetch_finished(self, left_data, right_data):
+        """Handle the results from the TelemetryFetchWorker."""
+        logger.info("Telemetry fetch finished. Processing results...")
+        self.compare_button.setEnabled(True) # Re-enable button
+        self.compare_button.setText("Compare Laps")
+
+        # Check if data is valid before updating
+        if left_data is None and right_data is None:
+             logger.error("Both lap fetches failed or calculation failed.")
+             QMessageBox.critical(self, "Error", "Failed to load telemetry data for both selected laps.")
+             return
+        elif left_data is None:
+             logger.warning("Left lap data fetch or calculation failed.")
+             # Proceed with right data only? Or show error? For now, show warning.
+             QMessageBox.warning(self, "Warning", "Failed to load telemetry for Lap A. Displaying Lap B only.")
+        elif right_data is None:
+             logger.warning("Right lap data fetch or calculation failed.")
+             QMessageBox.warning(self, "Warning", "Failed to load telemetry for Lap B. Displaying Lap A only.")
+
+        # Update TelemetryComparisonWidget
+        if hasattr(self, 'telemetry_widget'):
+            if left_data and 'stats' in left_data:
+                 # Also add lap time if available in combo box text
+                 left_lap_text = self.left_lap_combo.currentText()
+                 try:
+                     lap_time_str = left_lap_text.split('-')[-1].strip()
+                     if lap_time_str != '(No Time)':
+                         # Convert M:SS.mmm to seconds
+                         parts = lap_time_str.split(':')
+                         if len(parts) == 2:
+                              seconds_parts = parts[1].split('.')
+                              if len(seconds_parts) == 2:
+                                   minutes = int(parts[0])
+                                   seconds = int(seconds_parts[0])
+                                   milliseconds = int(seconds_parts[1])
+                                   left_data['stats']['lap_time'] = minutes * 60 + seconds + milliseconds / 1000.0
+                 except Exception as e:
+                     logger.warning(f"Could not parse lap time from '{left_lap_text}': {e}")
+
+                 self.telemetry_widget.set_driver_data(True, left_data['stats'])
+            else:
+                 # Clear left driver data if fetch failed
+                 self.telemetry_widget.set_driver_data(True, {"full_throttle": 0, "heavy_braking": 0, "cornering": 0, "lap_time": 0, "gap": 0})
+
+
+            if right_data and 'stats' in right_data:
+                 # Add lap time if available
+                 right_lap_text = self.right_lap_combo.currentText()
+                 try:
+                     lap_time_str = right_lap_text.split('-')[-1].strip()
+                     if lap_time_str != '(No Time)':
+                         parts = lap_time_str.split(':')
+                         if len(parts) == 2:
+                              seconds_parts = parts[1].split('.')
+                              if len(seconds_parts) == 2:
+                                   minutes = int(parts[0])
+                                   seconds = int(seconds_parts[0])
+                                   milliseconds = int(seconds_parts[1])
+                                   right_data['stats']['lap_time'] = minutes * 60 + seconds + milliseconds / 1000.0
+                 except Exception as e:
+                     logger.warning(f"Could not parse lap time from '{right_lap_text}': {e}")
+
+                 self.telemetry_widget.set_driver_data(False, right_data['stats'])
+            else:
+                 # Clear right driver data if fetch failed
+                 self.telemetry_widget.set_driver_data(False, {"full_throttle": 0, "heavy_braking": 0, "cornering": 0, "lap_time": 0, "gap": 0})
+
+            # Update speed graph
+            left_speed = left_data['points']['speed'] if left_data and 'points' in left_data else []
+            right_speed = right_data['points']['speed'] if right_data and 'points' in right_data else []
+            self.telemetry_widget.set_speed_data(left_speed, right_speed)
+
+            # --- Calculate and Update Delta Graph ---
+            delta_data = []
+            if left_data and right_data and left_data['points']['track_position'] and right_data['points']['track_position']:
+                try:
+                    # Ensure timestamps are aligned or interpolate?
+                    # For simplicity, assume points roughly align by track position for now.
+                    # This requires a more sophisticated alignment based on track_position
+                    # Let's just calculate a simple delta based on time difference if timestamps exist
+                    # (This part needs refinement for accurate delta calculation)
+
+                    # Placeholder: Calculate time difference based on index for now
+                    # Assuming left_lap is baseline
+                    # Find total time for each lap first
+                    left_total_time = left_data['stats'].get('lap_time', 0)
+                    right_total_time = right_data['stats'].get('lap_time', 0)
+
+                    if left_total_time > 0 and right_total_time > 0:
+                         # Simplified delta - this isn't a proper per-point delta graph
+                         delta_data = [0] * len(left_data['points']['track_position']) # Needs real calc
+                         logger.warning("Delta calculation is currently a placeholder.")
+                    else:
+                         logger.warning("Cannot calculate delta without lap times.")
+
+                except Exception as e:
+                    logger.error(f"Error calculating delta: {e}")
+
+            self.telemetry_widget.set_delta_data(delta_data)
+
+            # Update the overall widget to redraw graphs
+            self.telemetry_widget.update()
+
+
+    def _on_telemetry_fetch_error(self, msg_left, msg_right):
+        """Handle errors from the TelemetryFetchWorker."""
+        logger.error(f"Telemetry fetch failed. Left: '{msg_left}', Right: '{msg_right}'")
+        QMessageBox.critical(self, "Telemetry Error",
+                             f"Could not load telemetry data.\\n\\nLap A: {msg_left}\\nLap B: {msg_right}")
+        # Re-enable the compare button
+        self.compare_button.setEnabled(True)
+        self.compare_button.setText("Compare Laps")
+
+    def on_session_changed(self, index):
+        """Handle session selection changes from the combo box."""
+        # Get the selected session ID (stored as data)
+        session_id = self.session_combo.itemData(index)
+        if session_id:
+            logger.info(f"Session changed to: {session_id}")
+            self.refresh_lap_list(session_id)
+        else:
+            # Handle case where "No sessions found" or error item is selected
+            logger.info("Invalid session selected or no sessions available.")
+            self.left_lap_combo.clear()
+            self.right_lap_combo.clear()
+            self.left_lap_combo.addItem("Select session first", None)
+            self.right_lap_combo.addItem("Select session first", None)
+
+
+# Example of how to use the RaceCoachWidget
+if __name__ == '__main__':
+    # Add pass or actual example code here
+    pass

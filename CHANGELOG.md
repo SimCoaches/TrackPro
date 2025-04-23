@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.5 - 2025-07-02
+- Fixed OAuth callback issues when signing up with Google
+- Fixed connection errors during email signup
+- Improved error handling for network connections
+- Enhanced port conflict detection and handling
+- Fixed 'err_empty_response' and 'err_connection_failed' errors
+
 ## 1.4.4 - 2025-06-25
 - Updated version to 1.4.4
 - Bug fixes and performance improvements

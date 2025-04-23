@@ -716,6 +716,36 @@ class SupabaseManager:
         try:
             # If already connected and initialized, just return True
             if self._client and not self._offline_mode:
+                # Additional verification: try a simple operation to confirm connection
+                try:
+                    # Use a brief timeout for the connection test
+                    import requests
+                    from requests.adapters import HTTPAdapter
+                    from urllib3.util.retry import Retry
+                    
+                    # Create a session with retry for the connection test
+                    session = requests.Session()
+                    retry_strategy = Retry(
+                        total=3,
+                        backoff_factor=0.5,
+                        status_forcelist=[429, 500, 502, 503, 504],
+                    )
+                    adapter = HTTPAdapter(max_retries=retry_strategy)
+                    session.mount("https://", adapter)
+                    
+                    # Basic health check - only wait 10 seconds maximum
+                    base_url = self._client.rest_url
+                    response = session.get(f"{base_url}/health", timeout=10)
+                    if response.status_code == 200:
+                        logger.info("Verified Supabase connection via health check")
+                        return True
+                    else:
+                        logger.warning(f"Supabase health check returned status {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"Connection verification failed: {e}")
+                    # Continue with DNS check if health verification fails
+                
+                # Default to True if we couldn't do health check but client exists
                 return True
                 
             # If Supabase is disabled in config, don't even try

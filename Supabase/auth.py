@@ -214,14 +214,19 @@ def is_logged_in() -> bool:
         bool: True if a user is logged in, False otherwise
     """
     global _current_user, _current_session
+    logger.debug("Checking is_logged_in...")
     
     # First check our module state
     if _current_user is not None and _current_session is not None:
+        logger.debug(f"Logged in based on module state: User={_current_user.id}, Session exists.")
         return True
+    else:
+        logger.debug(f"Module state check: _current_user={_current_user}, _current_session={_current_session}")
         
     # If module state doesn't indicate logged in, check directly with Supabase client
     # This serves as a fallback when module state is not synchronized
     if supabase and hasattr(supabase, 'client') and supabase.client and hasattr(supabase.client, 'auth'):
+        logger.debug("Checking login status via Supabase client fallback...")
         try:
             # Try to get the current session
             session = supabase.client.auth.get_session()
@@ -229,22 +234,40 @@ def is_logged_in() -> bool:
                 # Update our module state while we're at it
                 _current_user = session.user
                 _current_session = session
+                logger.debug(f"Logged in based on client.get_session(): User={_current_user.id}")
                 return True
+            else:
+                logger.debug(f"client.get_session() did not return a valid session/user. Session: {session}")
                 
             # Also try the alternative method
             try:
-                user = supabase.client.auth.get_user()
-                if user and hasattr(user, 'user') and user.user:
+                user_response = supabase.client.auth.get_user()
+                # Check the structure of the response carefully
+                user = None
+                if hasattr(user_response, 'user') and user_response.user:
+                    user = user_response.user
+                elif hasattr(user_response, 'data') and hasattr(user_response.data, 'user') and user_response.data.user:
+                    user = user_response.data.user
+                
+                if user:
                     # Update our module state
-                    _current_user = user.user
-                    # Session might still be None, which is fine
+                    _current_user = user
+                    # Session might still be None if only user info is available
+                    _current_session = session # Keep session from previous check
+                    logger.debug(f"Logged in based on client.get_user(): User={_current_user.id}")
                     return True
-            except:
+                else:
+                    logger.debug(f"client.get_user() did not return a valid user. Response: {user_response}")
+            except Exception as get_user_e:
+                logger.debug(f"Error during client.get_user() fallback: {get_user_e}")
                 pass
         except Exception as e:
             logger.debug(f"Error checking login status with Supabase client: {e}")
             pass
+    else:
+        logger.debug("Supabase client not available for fallback check.")
     
+    logger.debug("is_logged_in returning False")
     return False
 
 def get_current_user():

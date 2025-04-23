@@ -10,6 +10,7 @@ import logging
 import os
 import traceback
 import re
+import socket
 
 # Defer local imports until needed in __init__ or other methods
 # from .pedals.hardware_input import HardwareInput
@@ -854,21 +855,34 @@ class TrackProApp:
                 )
     
     def setup_oauth_handler(self):
-        """Set up OAuth callback handling for social logins."""
+        """Set up the OAuth handler for the application."""
         try:
-            # Create OAuth handler
+            # Create the shared OAuth handler
+            logger.info("Setting up OAuth handler")
             self.oauth_handler = oauth_handler.OAuthHandler()
             
-            # Connect the auth_completed signal to our auth state change handler
+            # Connect to the auth_completed signal
             self.oauth_handler.auth_completed.connect(self.handle_auth_state_change)
             
-            # Start callback server for OAuth login callbacks
+            # Check if port 3000 is available
+            try:
+                # Try to bind to the port to check if it's available
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.bind(('127.0.0.1', 3000))
+                sock.close()
+                logger.info("Port 3000 is available for callback server")
+            except socket.error:
+                logger.warning("Port 3000 is already in use. OAuth callback may fail.")
+                
+            # Start the callback server
             self.oauth_callback_server = self.oauth_handler.setup_callback_server()
             
             logger.info("OAuth handler initialized successfully")
         except Exception as e:
             logger.error(f"Error setting up OAuth handler: {e}")
-            logger.error(traceback.format_exc())
+            # Create a placeholder handler just so the UI doesn't crash
+            self.oauth_handler = oauth_handler.OAuthHandler()
+            self.oauth_callback_server = None
     
     def cleanup(self, force_unhide=True):
         """Clean up resources before application closes."""
@@ -1208,7 +1222,7 @@ def main():
         # Set application details (optional but good practice)
         QApplication.setApplicationName("TrackPro")
         # TODO: Read version from a central place (e.g., __init__.py or config file)
-        QApplication.setApplicationVersion("1.4.4")
+        QApplication.setApplicationVersion("1.4.5")
 
         # Initialize and run the application
         trackpro_app = TrackProApp(test_mode=test_mode, start_time=start_time)

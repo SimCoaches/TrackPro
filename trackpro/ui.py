@@ -8,7 +8,7 @@ import time
 import math
 
 # Version information - hardcoded to avoid cyclic imports
-__version__ = "1.4.4"
+__version__ = "1.4.5"
 
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -707,7 +707,7 @@ class MainWindow(QMainWindow):
         # Main window setup
         self.window_width = 1200
         self.window_height = 900  # Increased from 800 to 900
-        self.setWindowTitle("TrackPro Configuration v1.4.4")
+        self.setWindowTitle("TrackPro Configuration v1.4.5")
         self.setMinimumSize(1000, 875)  # Increased minimum height from 700 to 800
         self.setWindowIcon(QIcon(":/icons/app_icon.ico"))
 
@@ -1924,6 +1924,7 @@ class MainWindow(QMainWindow):
         self.race_coach_action.triggered.connect(self.open_race_coach)
         self.race_coach_action.setCheckable(True)
         self.race_coach_action.setChecked(False)
+        self.race_coach_action.setToolTip("Login required to access Race Coach features")
         menubar.addAction(self.race_coach_action)
         
         # Style the menu bar for dark theme
@@ -2156,13 +2157,22 @@ class MainWindow(QMainWindow):
         """Open the Race Coach screen with password protection."""
         # First check if user is authenticated
         if not supabase.is_authenticated():
-            # Show dialog telling user to log in
-            QMessageBox.information(
-                self,
-                "Login Required",
-                "You need to be logged in to access the Race Coach feature.\n\n"
-                "Please log in using the Login button in the top right corner."
-            )
+            # Create a custom message box with login button
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Login Required")
+            msg_box.setText("You need to be logged in to access the Race Coach feature.")
+            msg_box.setIcon(QMessageBox.Information)
+            
+            # Add a button to open login dialog
+            login_button = msg_box.addButton("Login Now", QMessageBox.ActionRole)
+            cancel_button = msg_box.addButton(QMessageBox.Cancel)
+            
+            msg_box.exec_()
+            
+            # Check which button was clicked
+            if msg_box.clickedButton() == login_button:
+                self.show_login_dialog()
+            
             logger.info("Race Coach access attempted without login")
             return
         
@@ -2668,8 +2678,11 @@ class MainWindow(QMainWindow):
         
         # Make Race Coach menu item checkable only when authenticated
         if hasattr(self, 'race_coach_action'):
-            self.race_coach_action.setEnabled(is_authenticated)
-            if not is_authenticated:
+            self.race_coach_action.setEnabled(True)  # Always enable to show login message
+            if is_authenticated:
+                self.race_coach_action.setToolTip("Access Race Coach features")
+            else:
+                self.race_coach_action.setToolTip("Login required to access Race Coach features")
                 self.race_coach_action.setChecked(False)
                 # Switch back to pedal config if Race Coach was active
                 if self.stacked_widget.currentWidget() is not None and \

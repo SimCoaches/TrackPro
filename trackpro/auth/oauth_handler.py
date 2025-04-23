@@ -261,11 +261,15 @@ class OAuthHandler(QObject):
                 try:
                     logger.info(f"Received callback: {self.path}")
 
-                    # Send a response to the browser
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    self.wfile.write(b"<html><body><h1>Authentication successful!</h1><p>You can close this window now.</p></body></html>")
+                    # Safely check if wfile exists before writing to it
+                    if hasattr(self, 'wfile') and self.wfile is not None:
+                        # Send a response to the browser
+                        self.send_response(200)
+                        self.send_header('Content-type', 'text/html')
+                        self.end_headers()
+                        self.wfile.write(b"<html><body><h1>Authentication successful!</h1><p>You can close this window now.</p></body></html>")
+                    else:
+                        logger.error("Cannot send response: wfile is None")
 
                     # Parse the full callback path properly
                     parsed_path = urlparse(self.path)
@@ -293,8 +297,9 @@ class OAuthHandler(QObject):
                 except Exception as e:
                     logger.error(f"Error in callback server do_GET: {e}", exc_info=True)
                     try:
-                        self.send_response(500)
-                        self.end_headers()
+                        if hasattr(self, 'wfile') and self.wfile is not None:
+                            self.send_response(500)
+                            self.end_headers()
                     except Exception as send_e:
                          logger.error(f"Error sending 500 response: {send_e}") # Avoid crashing handler
 
