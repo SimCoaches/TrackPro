@@ -5,6 +5,7 @@ import math
 import threading
 from pathlib import Path
 from .telemetry_saver import TelemetrySaver
+from PyQt5.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +14,15 @@ class State:
     ir_connected = False
     last_car_setup_tick = -1
 
-class SimpleIRacingAPI:
+class SimpleIRacingAPI(QObject):
     """A simpler implementation of iRacing API based on the pyirsdk example."""
+    
+    # Define the signal
+    sessionInfoUpdated = pyqtSignal(dict)
     
     def __init__(self):
         """Initialize the API."""
+        super().__init__()
         self.ir = irsdk.IRSDK()
         self.state = State()
         self._is_connected = False
@@ -42,565 +47,306 @@ class SimpleIRacingAPI:
         logger.info("SimpleIRacingAPI initialized")
     
     def connect(self, on_connected=None, on_disconnected=None, on_session_info_changed=None, on_telemetry_update=None):
-        """Connect to iRacing."""
-        logger.info("Attempting to connect to iRacing")
-        
+        """Register callbacks. Connection is handled by the monitor thread."""
+        logger.info("SimpleIRacingAPI.connect called - registering callbacks.")
         # Register callbacks if provided
-        if on_connected:
-            self.register_on_connection_changed(on_connected)
+        if on_connected: self.register_on_connection_changed(on_connected)
         if on_disconnected:
-            # Create a wrapper to call the on_disconnected callback
             def on_disconnected_wrapper(is_connected, session_info):
-                if not is_connected:
-                    on_disconnected()
+                if not is_connected: on_disconnected()
             self.register_on_connection_changed(on_disconnected_wrapper)
-        if on_session_info_changed:
-            self.register_on_session_info_changed(on_session_info_changed)
-        if on_telemetry_update:
-            self.register_on_telemetry_data(on_telemetry_update)
-        
-        # Attempt to connect directly
-        connected = self.check_iracing()
-        
-        # Notify about the connection status
-        if connected:
-            logger.info("Successfully connected to iRacing")
-            self._is_connected = True
-            for callback in self._connection_callbacks:
-                try:
-                    callback(True, self._session_info)
-                except Exception as e:
-                    logger.error(f"Error in connection callback: {e}")
-            
-            # Start a timer to periodically update session info
-            self._start_session_info_timer()
-        else:
-            logger.warning("Failed to connect to iRacing - simulator may not be running")
-        
-        return connected
-    
-    def check_iracing(self):
-        """Check if we are connected to iRacing and update the connection state."""
-        if self.state.ir_connected and not (self.ir.is_initialized and self.ir.is_connected):
-            self.state.ir_connected = False
-            self.state.last_car_setup_tick = -1
-            self.ir.shutdown()
-            logger.info('irsdk disconnected')
-            self._is_connected = False
-            
-            # End telemetry saving session
-            if hasattr(self, 'telemetry_saver'):
-                self.telemetry_saver.end_session()
-            
-            # Notify callbacks about disconnect
-            for callback in self._connection_callbacks:
-                try:
-                    callback(False, None)
-                except Exception as e:
-                    logger.error(f"Error in connection callback on disconnect: {e}")
-            return False
-        elif not self.state.ir_connected and self.ir.startup() and self.ir.is_initialized and self.ir.is_connected:
-            self.state.ir_connected = True
-            logger.info('irsdk connected')
-            self._is_connected = True
-            
-            # Update session info
-            self._update_session_info()
-            
-            # Start telemetry timer
-            self._start_telemetry_timer()
-            
-            # Start session info update timer
-            self._start_session_info_timer()
-            
-            # Start a new telemetry saving session
-            track_name = self.get_current_track()
-            car_name = self.get_current_car()
-            self.telemetry_saver.start_session(None, track_name, car_name)
-            
-            # Notify callbacks about successful connect
-            for callback in self._connection_callbacks:
-                try:
-                    callback(True, self._session_info)
-                except Exception as e:
-                    logger.error(f"Error in connection callback on connect: {e}")
-            return True
-        return False
+        # if on_session_info_changed: self.register_on_session_info_changed(on_session_info_changed) # Legacy
+        if on_telemetry_update: self.register_on_telemetry_data(on_telemetry_update)
+
+        # DO NOT attempt connection here - monitor thread handles it.
+        # DO NOT start timers here - monitor thread handles session info, telemetry timer is separate.
+        # self._start_telemetry_timer() # Telemetry timer can start if needed, but monitor should confirm connection first.
+        logger.info("Callbacks registered. Waiting for monitor thread to establish connection.")
+        return True # Indicate registration happened, not actual connection.
     
     def _start_telemetry_timer(self):
         """Start a timer to process telemetry data periodically."""
         if not hasattr(self, '_telemetry_timer') or self._telemetry_timer is None:
-            
             def telemetry_worker():
                 logger.info("Starting telemetry worker thread")
                 try:
-                    # Use stop event instead of state flag
+                    loop_count = 0
                     while not self._stop_event.is_set():
-                        # Process telemetry if connected
-                        if self.state.ir_connected:
+                        loop_count += 1
+                        if loop_count % 300 == 0: # Log every 5 seconds approx
+                             logger.debug(f"Telemetry worker loop running. Connected: {self._is_connected}")
+
+                        # Use internal _is_connected flag set by monitor
+                        if self._is_connected:
                             self.process_telemetry()
-                        # Sleep for a short time (60 Hz update rate)
-                        # Use event wait for faster shutdown
+                        else:
+                            # Sleep longer if not connected
+                            self._stop_event.wait(0.5)
+                            continue
                         self._stop_event.wait(1/60) 
                 except Exception as e:
-                    logger.error(f"Error in telemetry worker: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                    logger.error(f"Error in telemetry worker: {e}", exc_info=True)
                 logger.info("Telemetry worker thread stopped")
-            
-            # Create and start the thread
-            self._stop_event.clear() # Ensure event is clear before starting
+            self._stop_event.clear()
             self._telemetry_timer = threading.Thread(target=telemetry_worker, daemon=True)
             self._telemetry_timer.start()
             logger.info("Telemetry worker thread started")
     
     def _start_session_info_timer(self):
-        """Start a timer to periodically update session info."""
-        if not hasattr(self, '_session_info_timer') or self._session_info_timer is None:
-            
-            def session_info_worker():
-                logger.info("Starting session info worker thread")
-                try:
-                    # Wait a bit for the initial connection to settle
-                    time.sleep(2)
-                    
-                    # Use stop event instead of state flag
-                    while not self._stop_event.is_set(): 
-                        if self.state.ir_connected:
-                            # Try to update session info
-                            try:
-                                self._update_session_info()
-                            except Exception as e:
-                                logger.error(f"Error in session info update: {e}")
-                                import traceback
-                                logger.error(traceback.format_exc())
-                        # Sleep to avoid too frequent updates
-                        # Use event wait for faster shutdown
-                        self._stop_event.wait(5) 
-                except Exception as e:
-                    logger.error(f"Error in session info worker: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                logger.info("Session info worker thread stopped")
-            
-            # Create and start the thread
-            self._stop_event.clear() # Ensure event is clear
-            self._session_info_timer = threading.Thread(target=session_info_worker, daemon=True)
-            self._session_info_timer.start()
-            logger.info("Session info update timer started")
+        """(DISABLED) Start a timer to periodically update session info."""
+        logger.info("Session info timer/polling is DISABLED in SimpleIRacingAPI.")
     
     def _update_session_info(self):
-        """Update session information from iRacing, optimized for car name retrieval."""
-        if not self.state.ir_connected:
-            return False
-        
-        track_name = None
-        car_name = None
-        
-        try:
-            logger.info("Updating session info from iRacing")
+        """(DISABLED) Start a timer to periodically update session info."""
+    
+    def update_info_from_monitor(self, session_info: dict, is_connected: bool):
+        """Update internal state from the monitor thread and emit signals."""
+        connection_changed = False
+        if self._is_connected != is_connected:
+            self._is_connected = is_connected
+            self.state.ir_connected = is_connected # Keep state in sync
+            connection_changed = True
+            logger.info(f"API Connection state updated by monitor: {self._is_connected}")
             
-            # Primary method: Try PlayerInfo for car name first
-            if hasattr(self.ir, 'PlayerInfo'):
+            # If connected, properly initialize irsdk
+            if self._is_connected:
+                logger.info("Initializing/reinitializing irsdk connection...")
                 try:
-                    player_info = self.ir.PlayerInfo
-                    if isinstance(player_info, dict) and 'CarScreenName' in player_info:
-                        car_name = player_info['CarScreenName']
-                        logger.info(f"SUCCESS! Found car name via PlayerInfo: {car_name}")
-                    else:
-                        logger.debug(f"PlayerInfo available but no CarScreenName: {player_info}")
-                except Exception as e:
-                    logger.error(f"Error accessing PlayerInfo: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
-            
-            # Fallback: Use parsed session info if PlayerInfo fails
-            if not car_name:
-                logger.info("Falling back to session info parsing for car name")
-                try:
-                    # This is a critical fix - for iRacing API version compatibility:
-                    # The _get_session_info method requires a key parameter in some versions
-                    # Let's handle this by creating helper function
-                    def get_session_info_safe(key=None):
+                    # Shutdown the irsdk instance if it exists
+                    if self.ir:
                         try:
-                            if hasattr(self.ir, '_get_session_info'):
-                                # Pass the key if the method requires it
-                                if key is not None:
-                                    return self.ir._get_session_info(key)
-                                else:
-                                    # Try calling with no arguments
-                                    try:
-                                        return self.ir._get_session_info()
-                                    except TypeError:
-                                        # If that fails, try with an empty string key
-                                        return self.ir._get_session_info('')
-                            elif hasattr(self.ir, 'session_info'):
-                                # Direct access if available
-                                return self.ir.session_info
+                            self.ir.shutdown()
+                            logger.info("Shut down existing irsdk instance")
                         except Exception as e:
-                            logger.error(f"Error accessing session info: {e}")
-                            return None
+                            logger.warning(f"Error shutting down irsdk: {e}")
                     
-                    # Try to get driver info from session info
-                    session_info = get_session_info_safe()
-                    if session_info and 'DriverInfo' in session_info:
-                        driver_info = session_info['DriverInfo']
-                        if 'Drivers' in driver_info and driver_info['Drivers']:
-                            car_name = driver_info['Drivers'][0].get('CarScreenName', None)
-                            if car_name:
-                                logger.info(f"SUCCESS! Found car name via DriverInfo: {car_name}")
-                            else:
-                                logger.debug(f"DriverInfo available but no CarScreenName: {driver_info}")
-                except Exception as e:
-                    logger.error(f"Error parsing session info for car name: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
-            
-            # Final fallback: Default if no car name found
-            if not car_name:
-                car_name = "iRacing Vehicle"
-                logger.warning("No car name found; using default: iRacing Vehicle")
-            
-            # Update track name using the same session info helper
-            try:
-                session_info = get_session_info_safe()
-                if session_info and 'WeekendInfo' in session_info:
-                    weekend_info = session_info['WeekendInfo']
-                    for track_field in ['TrackDisplayName', 'TrackName']:
-                        if track_field in weekend_info:
-                            track_name = weekend_info[track_field]
-                            logger.info(f"Found track name: {track_name}")
-                            break
-            except Exception as e:
-                logger.debug(f"Error getting track name: {e}")
-            
-            # Update session info dictionary
-            self._session_info['current_track'] = track_name if track_name else "Brands Hatch Circuit"  # Fallback
-            self._session_info['current_car'] = car_name
-            
-            # IMPORTANT FIX: Make sure we start a Supabase session if we have car and track info
-            if self.lap_saver and track_name and car_name:
-                # Check if we need to start a new session
-                if not getattr(self.lap_saver, '_current_session_id', None):
-                    logger.info(f"Starting Supabase session for {track_name} with {car_name}")
-                    session_type = self.get_session_type()
-                    session_id = self.lap_saver.start_session(track_name, car_name, session_type)
-                    if session_id:
-                        logger.info(f"Started Supabase session with ID: {session_id}")
+                    # Create a new instance and initialize it
+                    self.ir = irsdk.IRSDK()
+                    startup_result = self.ir.startup()
+                    logger.info(f"irsdk startup result: {startup_result}")
+                    
+                    # Check if initialization was successful
+                    if startup_result and hasattr(self.ir, 'is_initialized') and self.ir.is_initialized:
+                        logger.info("irsdk successfully initialized")
                     else:
-                        logger.error("Failed to start Supabase session")
-            
-            logger.info(f"Final session info: Track={self._session_info['current_track']}, Car={self._session_info['current_car']}")
-            
-            # Notify callbacks
-            for callback in self._session_info_callbacks:
-                try:
-                    callback(self._session_info)
+                        logger.warning("irsdk initialization failed or incomplete")
                 except Exception as e:
-                    logger.error(f"Error in session info callback: {e}")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error updating session info: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-        
-        return False
+                    logger.error(f"Error during irsdk initialization: {e}")
+                    
+                # Start/Stop telemetry timer based on connection state
+                if not self._telemetry_timer or not self._telemetry_timer.is_alive():
+                    # Add a small delay to allow irsdk internal state to settle
+                    logger.info("Connection established, waiting 3s before starting telemetry polling...")
+                    time.sleep(3.0)
+                    self._start_telemetry_timer()
+            elif not self._is_connected and self._telemetry_timer and self._telemetry_timer.is_alive():
+                # Signal telemetry thread to stop if disconnecting
+                # self._stop_event.set() # This might be too aggressive if monitor reconnects quickly
+                pass
+
+        # Update session info dictionary
+        session_changed = False
+        if session_info != self._session_info:
+             self._session_info = session_info.copy() # Update with a copy
+             session_changed = True
+             logger.debug(f"API session info updated by monitor: {self._session_info}")
+
+        # Prepare payload for signal
+        signal_payload = {
+            'is_connected': self._is_connected,
+            'session_info': self._session_info.copy()
+        }
+
+        # Emit session info signal (containing connection status and session info)
+        if hasattr(self, 'sessionInfoUpdated'):
+             self.sessionInfoUpdated.emit(signal_payload)
+             logger.debug("Emitted sessionInfoUpdated signal")
+        else:
+             logger.warning("sessionInfoUpdated signal does not exist on API instance")
     
     def process_telemetry(self):
         """Process telemetry data from iRacing."""
-        if not self.state.ir_connected:
+        # Check if we're connected first
+        if not self._is_connected:
+            return
+
+        # Debug: Check if IR object exists at all
+        if not self.ir:
+            logger.warning("IR object is None")
             return
         
-        # We'll use a flag to track if we've frozen the buffer
-        buffer_frozen = False
-        
+        # Check if we are connected to iracing properly
+        if not hasattr(self.ir, 'is_connected') or not self.ir.is_connected:
+            if not hasattr(self, '_conn_error_counter'):
+                self._conn_error_counter = 0
+            self._conn_error_counter += 1
+            if self._conn_error_counter % 300 == 0:
+                logger.warning("IRSDK not connected")
+            return
+
         try:
-            # Freeze the buffer to get consistent data
+            # Freeze buffer to get consistent data as shown in example
             self.ir.freeze_var_buffer_latest()
-            buffer_frozen = True
             
-            # Try to get various telemetry values with fallbacks
-            # Speed - try multiple possible field names
+            # Debug: Log all available variables occasionally
+            if not hasattr(self, '_debug_counter'):
+                self._debug_counter = 0
+            self._debug_counter += 1
+            
+            # Every ~10 seconds call the debug function
+            if self._debug_counter % 600 == 0:
+                logger.info("Running iRacing variable debug function...")
+                self.debug_ir_vars()
+            
+            # Create telemetry dictionary with DIRECT dictionary access
+            # based on the example code pattern
             telemetry = {}
             
-            for speed_field in ['Speed', 'DisplayedSpeed', 'speed', 'CarIdxVel']:
-                speed = self.ir[speed_field]
-                if speed is not None:
-                    telemetry['speed'] = speed * 3.6  # Convert to km/h
-                    break
-            
-            # RPM
-            for rpm_field in ['RPM', 'EngineRPM', 'rpm', 'engine_rpm']:
-                rpm = self.ir[rpm_field]
-                if rpm is not None:
-                    telemetry['rpm'] = rpm
-                    break
-            
-            # Gear
-            for gear_field in ['Gear', 'gear', 'CarIdxGear']:
-                gear = self.ir[gear_field]
-                if gear is not None:
-                    telemetry['gear'] = gear
-                    break
-            
-            # Current Lap Time (time in current lap)
-            for current_lap_field in ['LapCurrentLapTime', 'lap_time', 'current_lap_time']:
-                current_lap_time = self.ir[current_lap_field]
-                if current_lap_time is not None:
-                    telemetry['lap_time'] = current_lap_time
-                    break
-            
-            # Last Lap Time (completed lap time)
-            for last_lap_field in ['LapLastLapTime', 'last_lap_time']:
-                last_lap_time = self.ir[last_lap_field]
-                if last_lap_time is not None and last_lap_time > 0:
-                    # Only log when the last lap time changes
-                    if not hasattr(self, '_last_recorded_lap_time') or self._last_recorded_lap_time != last_lap_time:
-                        logger.info(f"Updated last lap time: {last_lap_time:.3f} seconds")
-                        self._last_recorded_lap_time = last_lap_time
-                    telemetry['last_lap_time'] = last_lap_time
-                    break
-            
-            # Best Lap Time
-            for best_lap_field in ['LapBestLapTime', 'best_lap_time']:
-                best_lap_time = self.ir[best_lap_field]
-                if best_lap_time is not None and best_lap_time > 0:
-                    telemetry['best_lap_time'] = best_lap_time
-                    # Only log when the best lap time changes
-                    if not hasattr(self, '_last_best_lap') or self._last_best_lap != best_lap_time:
-                        logger.info(f"New best lap time: {best_lap_time:.3f} seconds")
-                        self._last_best_lap = best_lap_time
-                    break
-            
-            # Lap Count
-            for lap_count_field in ['Lap', 'LapCompleted', 'lap', 'lap_completed']:
-                lap_count = self.ir[lap_count_field]
-                if lap_count is not None:
-                    telemetry['lap_count'] = lap_count
-                    break
-            
-            # Session Time
-            for session_time_field in ['SessionTime', 'session_time']:
-                session_time = self.ir[session_time_field]
+            # Session time is a good test variable
+            session_time = None
+            try:
+                session_time = self.ir['SessionTime']
                 if session_time is not None:
-                    telemetry['session_time'] = session_time
-                    break
+                    logger.debug(f"Session time retrieved: {session_time}")
+                    telemetry['SessionTimeSecs'] = session_time
+            except Exception as e:
+                if self._debug_counter % 300 == 0:
+                    logger.warning(f"Failed to get SessionTime: {e}")
+                    
+            # Try to get LapDistPct - critical for lap detection
+            try:
+                lap_dist_pct = self.ir['LapDistPct']
+                telemetry['LapDistPct'] = lap_dist_pct
+                # Log this more frequently as it's crucial for lap detection
+                if self._debug_counter % 120 == 0:  # Every ~2 seconds
+                    logger.debug(f"LapDistPct: {lap_dist_pct}")
+            except Exception as e:
+                if self._debug_counter % 300 == 0:
+                    logger.warning(f"Failed to get LapDistPct: {e}")
             
-            # Track Position (percentage around track)
-            for track_pos_field in ['LapDistPct', 'lap_dist_pct']:
-                track_pos = self.ir[track_pos_field]
-                if track_pos is not None:
-                    telemetry['track_position'] = track_pos
-                    break
+            # Try to get lap info - critical for lap tracking
+            try:
+                current_lap = self.ir['Lap']
+                lap_completed = self.ir['LapCompleted']
+                lap_current_time = self.ir['LapCurrentLapTime']
+                lap_last_time = self.ir['LapLastLapTime']
+                
+                telemetry['Lap'] = current_lap
+                telemetry['LapCompleted'] = lap_completed
+                telemetry['LapCurrentLapTime'] = lap_current_time
+                telemetry['LapLastLapTime'] = lap_last_time
+                
+                # Log lap info more frequently
+                if self._debug_counter % 60 == 0:  # Every second
+                    logger.debug(f"Lap info: Current={current_lap}, Completed={lap_completed}, CurrentTime={lap_current_time}, LastTime={lap_last_time}")
+            except Exception as e:
+                if self._debug_counter % 300 == 0:
+                    logger.warning(f"Failed to get lap information: {e}")
             
-            # Throttle input - add driver input data 
-            for throttle_field in ['Throttle', 'throttle', 'ThrottleRaw']:
-                throttle = self.ir[throttle_field]
-                if throttle is not None:
-                    telemetry['throttle'] = throttle  # Value between 0-1
-                    break
+            # Now do the same for all other variables, with direct dictionary access
+            try: telemetry['Speed'] = self.ir['Speed']
+            except: telemetry['Speed'] = 0.0
             
-            # Brake input
-            for brake_field in ['Brake', 'brake', 'BrakeRaw']:
-                brake = self.ir[brake_field]
-                if brake is not None:
-                    telemetry['brake'] = brake  # Value between 0-1
-                    break
+            try: telemetry['RPM'] = self.ir['RPM']
+            except: telemetry['RPM'] = 0.0
             
-            # Clutch input
-            for clutch_field in ['Clutch', 'clutch', 'ClutchRaw']:
-                clutch = self.ir[clutch_field]
-                if clutch is not None:
-                    telemetry['clutch'] = clutch  # Value between 0-1
-                    break
+            try: telemetry['Gear'] = self.ir['Gear'] 
+            except: telemetry['Gear'] = 0
             
-            # Steering wheel angle input
-            for steering_field in ['SteeringWheelAngle', 'steeringWheelAngle']:
-                steering = self.ir[steering_field]
-                if steering is not None:
-                    telemetry['steering'] = steering  # Value in radians
-                    break
+            try: telemetry['LapBestLapTime'] = self.ir['LapBestLapTime']
+            except: telemetry['LapBestLapTime'] = None
             
-            # Also get max steering wheel angle if available
-            for max_steering_field in ['SteeringWheelAngleMax', 'steeringWheelAngleMax']:
-                max_steering = self.ir[max_steering_field]
-                if max_steering is not None and max_steering > 0:
-                    telemetry['steering_max'] = max_steering  # Value in radians
-                    break
+            try: telemetry['Throttle'] = self.ir['Throttle']
+            except: telemetry['Throttle'] = None
             
-            # Only log telemetry occasionally to avoid flooding logs
+            try: telemetry['Brake'] = self.ir['Brake']
+            except: telemetry['Brake'] = None
+            
+            try: telemetry['Clutch'] = self.ir['Clutch']
+            except: telemetry['Clutch'] = None
+            
+            try: telemetry['SteeringWheelAngle'] = self.ir['SteeringWheelAngle']
+            except: telemetry['SteeringWheelAngle'] = None
+            
+            try: telemetry['SteeringWheelAngleMax'] = self.ir['SteeringWheelAngleMax']
+            except: telemetry['SteeringWheelAngleMax'] = None
+
+            # --- Handle Speed Type (Sequence vs Number) --- #
+            speed = telemetry['Speed'] # Use the retrieved value
+            if isinstance(speed, (list, tuple)):
+                speed = speed[0] if len(speed)>0 and isinstance(speed[0], (int, float)) else 0.0
+            elif not isinstance(speed, (int, float)): speed = 0.0
+            # Update the speed value after potential type correction
+            telemetry['speed'] = speed # Keep in m/s
+            
+            # Add current track/car from internal state
+            telemetry['track_name'] = self._session_info.get('current_track')
+            telemetry['car_name'] = self._session_info.get('current_car')
+
+            # Dump telemetry to log occasionally
             if not hasattr(self, '_telemetry_log_counter'):
                 self._telemetry_log_counter = 0
-            
             self._telemetry_log_counter += 1
-            if self._telemetry_log_counter % 600 == 0:  # Log every 10 seconds (at 60Hz)
-                # Log what we found
-                log_values = {k: v for k, v in telemetry.items() if v is not None}
-                logger.debug(f"Telemetry data: {log_values}")
-                
-                # Specifically log lap times for debugging
-                if 'lap_time' in telemetry:
-                    logger.info(f"Current lap time: {telemetry['lap_time']:.3f}")
-                if 'last_lap_time' in telemetry:
-                    logger.info(f"Last lap time: {telemetry['last_lap_time']:.3f}")
-                if 'best_lap_time' in telemetry:
-                    logger.info(f"Best lap time: {telemetry['best_lap_time']:.3f}")
-                
-                # Log driver inputs when available
-                if 'throttle' in telemetry:
-                    logger.info(f"Throttle input: {telemetry['throttle']:.2f}")
-                if 'brake' in telemetry:
-                    logger.info(f"Brake input: {telemetry['brake']:.2f}")
-                if 'clutch' in telemetry:
-                    logger.info(f"Clutch input: {telemetry['clutch']:.2f}")
-                if 'steering' in telemetry:
-                    # Convert radians to degrees for more readable logs
-                    steering_degrees = telemetry['steering'] * 180 / math.pi
-                    logger.info(f"Steering angle: {steering_degrees:.2f}° ({telemetry['steering']:.2f} rad)")
-            
-            # Process telemetry with the telemetry saver
-            if hasattr(self, 'telemetry_saver') and telemetry and 'track_position' in telemetry:
-                lap_result = self.telemetry_saver.process_telemetry(telemetry)
-                if lap_result:
-                    # New lap detected
-                    is_new_lap, lap_number, lap_time = lap_result
-                    logger.info(f"New lap completed: Lap {lap_number}, Time: {lap_time:.3f}s")
-                    
-                    # Update telemetry with the manually calculated lap time if it's better
-                    if 'best_lap_time' in telemetry:
-                        if telemetry['best_lap_time'] <= 0 or lap_time < telemetry['best_lap_time']:
-                            telemetry['best_lap_time'] = lap_time
-                    else:
-                        telemetry['best_lap_time'] = lap_time
-            
-            # Process telemetry with IRacingLapSaver for Supabase
-            if self.lap_saver is not None and telemetry and 'track_position' in telemetry:
-                # Add track and car name to telemetry for auto-session creation if needed
-                if 'track_name' not in telemetry:
-                    telemetry['track_name'] = self.get_current_track()
-                if 'car_name' not in telemetry:
-                    telemetry['car_name'] = self.get_current_car()
-                
-                # Process telemetry with lap saver
-                try:
-                    # Log once every 10 seconds to avoid spam
-                    if self._telemetry_log_counter % 600 == 0:
-                        logger.debug(f"Sending telemetry to Supabase lap saver: track_pos={telemetry.get('track_position', 'N/A')}")
-                    
-                    lap_result = self.lap_saver.process_telemetry(telemetry)
-                    if lap_result:
-                        # New lap detected in Supabase
-                        is_new_lap, lap_number, lap_time = lap_result
-                        logger.info(f"New lap completed in Supabase: Lap {lap_number}, Time: {lap_time:.3f}s")
-                except Exception as e:
-                    logger.error(f"Error processing telemetry with Supabase lap saver: {e}")
-            
-            # Notify callbacks if we have at least some data
-            if telemetry and len(telemetry) > 0:
-                # Update session info with lap times if they exist
-                if 'best_lap_time' in telemetry and telemetry['best_lap_time'] > 0:
-                    self._session_info['best_lap_time'] = telemetry['best_lap_time']
-                
-                if 'last_lap_time' in telemetry and telemetry['last_lap_time'] > 0:
-                    self._session_info['last_lap_time'] = telemetry['last_lap_time']
-                
-                # Call telemetry callbacks
-                for callback in self._telemetry_callbacks:
+            if self._telemetry_log_counter % 60 == 0:
+                if session_time is not None:
+                    formatted_values = {k: f"{v:.2f}" if isinstance(v, float) else v 
+                                       for k, v in telemetry.items() if v is not None}
+                    logger.info(f"Telemetry data: {formatted_values}")
+                else:
+                    logger.warning("No session time available in telemetry")
+
+            # --- Pass to TelemetrySaver and LapSaver --- #
+            # Ensure essential data exists before passing
+            if telemetry.get('LapDistPct') is not None and telemetry.get('SessionTimeSecs') is not None:
+                lap_info_to_pass_to_ui = None
+                if self.telemetry_saver: 
+                    lap_info_to_pass_to_ui = self.telemetry_saver.process_telemetry(telemetry)
+                if self.lap_saver:
                     try:
-                        # Add debug logging for driver inputs to track what's being sent
-                        driver_inputs = {}
-                        for input_name in ['throttle', 'brake', 'clutch']:
-                            if input_name in telemetry:
-                                driver_inputs[input_name] = telemetry[input_name]
-                        
-                        if driver_inputs and not hasattr(self, '_last_driver_inputs_log') or time.time() - self._last_driver_inputs_log > 10:
-                            logger.debug(f"Sending driver inputs to UI: {driver_inputs}")
-                            self._last_driver_inputs_log = time.time()
-                            
-                        callback(telemetry)
+                         lap_result_supabase = self.lap_saver.process_telemetry(telemetry)
+                         if lap_result_supabase: lap_info_to_pass_to_ui = lap_result_supabase
                     except Exception as e:
-                        logger.error(f"Error in telemetry callback: {e}")
+                        logger.error(f"Error processing telemetry with Supabase lap saver: {e}")
+
+                # --- Notify Callbacks --- #
+                if telemetry:
+                    if lap_info_to_pass_to_ui:
+                        telemetry['is_new_lap'] = lap_info_to_pass_to_ui[0]
+                        telemetry['completed_lap_number'] = lap_info_to_pass_to_ui[1]
+                        telemetry['completed_lap_time'] = lap_info_to_pass_to_ui[2]
+                    display_telemetry = telemetry.copy()
+                    display_telemetry['speed'] = speed * 3.6 # Convert for UI
+                    for callback in self._telemetry_callbacks:
+                         try: callback(display_telemetry)
+                         except Exception as e: logger.error(f"Error in telemetry callback: {e}")
+            elif self._telemetry_log_counter % 60 == 0:
+                logger.warning(f"Missing essential telemetry: LapDistPct={telemetry.get('LapDistPct')}, SessionTimeSecs={telemetry.get('SessionTimeSecs')}")
                         
         except Exception as e:
-            logger.error(f"Error processing telemetry: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-        finally:
-            # Always unfreeze the buffer, even if there was an error
-            if buffer_frozen and hasattr(self.ir, 'unfreeze_var_buffer_latest'):
-                try:
-                    self.ir.unfreeze_var_buffer_latest()
-                    buffer_frozen = False
-                except Exception as e:
-                    logger.error(f"Error unfreezing buffer: {e}")
+            logger.error(f"Error in process_telemetry: {e}", exc_info=True)
     
     def register_on_connection_changed(self, callback):
-        """Register a callback for connection status changes."""
-        if callback not in self._connection_callbacks:
-            self._connection_callbacks.append(callback)
-    
+        if callback not in self._connection_callbacks: self._connection_callbacks.append(callback)
     def register_on_session_info_changed(self, callback):
-        """Register a callback for session info changes."""
-        if callback not in self._session_info_callbacks:
-            self._session_info_callbacks.append(callback)
-    
+        if callback not in self._session_info_callbacks: self._session_info_callbacks.append(callback)
     def register_on_telemetry_data(self, callback):
-        """Register a callback for telemetry data updates."""
-        if callback not in self._telemetry_callbacks:
-            self._telemetry_callbacks.append(callback)
-    
+        if callback not in self._telemetry_callbacks: self._telemetry_callbacks.append(callback)
     def is_connected(self):
-        """Check if connected to iRacing."""
-        return self._is_connected and self.ir and self.ir.is_connected
-    
+        return self._is_connected # Use internal flag set by monitor
     def disconnect(self):
-        """Disconnect from iRacing."""
         if self.state.ir_connected:
             logger.info("Disconnecting from iRacing...")
-            
-            # Signal threads to stop
             self._stop_event.set()
-            
-            # Wait for threads to finish (with a timeout)
             try:
-                if self._telemetry_timer and self._telemetry_timer.is_alive():
-                    logger.info("Waiting for telemetry worker thread to stop...")
-                    self._telemetry_timer.join(timeout=1.0) # Wait up to 1 second
-                    if self._telemetry_timer.is_alive():
-                         logger.warning("Telemetry worker thread did not stop gracefully.")
-                    else:
-                         logger.info("Telemetry worker thread stopped.")
-                self._telemetry_timer = None # Clear reference
-                
-                if self._session_info_timer and self._session_info_timer.is_alive():
-                    logger.info("Waiting for session info worker thread to stop...")
-                    self._session_info_timer.join(timeout=1.0) # Wait up to 1 second
-                    if self._session_info_timer.is_alive():
-                         logger.warning("Session info worker thread did not stop gracefully.")
-                    else:
-                         logger.info("Session info worker thread stopped.")
-                self._session_info_timer = None # Clear reference
-            except Exception as e:
-                 logger.error(f"Error joining worker threads: {e}")
-            
-            # End telemetry saving session
-            if hasattr(self, 'telemetry_saver'):
-                session_folder = self.telemetry_saver.end_session()
-                logger.info(f"Saved telemetry data to {session_folder}")
-            
-            # Close Supabase session if lap saver exists
-            if self.lap_saver is not None:
-                try:
-                    self.lap_saver.close_session()
-                    logger.info("Closed Supabase lap session")
-                except Exception as e:
-                    logger.error(f"Error closing Supabase lap session: {e}")
-            
-            # Shutdown irsdk connection
+                if self._telemetry_timer and self._telemetry_timer.is_alive(): self._telemetry_timer.join(timeout=1.0)
+                self._telemetry_timer = None
+                # No session timer to join
+            except Exception as e: logger.error(f"Error joining worker threads: {e}")
+            if hasattr(self, 'telemetry_saver'): self.telemetry_saver.end_session()
             self.ir.shutdown()
-            self.state.ir_connected = False
-            self._is_connected = False
+            self.state.ir_connected = False # Keep state object in sync
+            # Notify UI of disconnect via the update method
+            self.update_info_from_monitor({}, is_connected=False)
             logger.info("Disconnected from iRacing")
             return True
         return False
@@ -751,3 +497,51 @@ class SimpleIRacingAPI:
         logger.info("Lap saver set for telemetry processing")
         
         return True 
+
+    def debug_ir_vars(self):
+        """Debug function to print all available iRacing variables."""
+        if not self.ir:
+            logger.error("Cannot debug vars - IR object is None")
+            return
+            
+        try:
+            # Try to get all variables directly
+            available_vars = {}
+            
+            # Check if get_all_vars is available
+            if hasattr(self.ir, 'get_all_vars'):
+                all_vars = self.ir.get_all_vars()
+                if all_vars:
+                    # Log the variable names and some values
+                    logger.info(f"Found {len(all_vars)} variables through get_all_vars")
+                    # Log first 10 variables and their values as example
+                    sample = {k: all_vars[k] for k in list(all_vars.keys())[:10]}
+                    logger.info(f"Sample variables: {sample}")
+                    return
+                
+            # Alternative approach - check for the _var_headers_dict attribute
+            if hasattr(self.ir, '_var_headers_dict'):
+                headers = self.ir._var_headers_dict
+                if headers:
+                    logger.info(f"Found {len(headers)} variables in _var_headers_dict")
+                    sample_keys = list(headers.keys())[:10]
+                    sample = {k: headers[k] for k in sample_keys}
+                    logger.info(f"Sample headers: {sample}")
+                    return
+                    
+            # If nothing found
+            logger.error("Could not find any variables in the IR object")
+            
+            # Try a direct test of common variables
+            test_vars = ['SessionTime', 'Speed', 'RPM', 'Gear', 'Throttle', 'Brake']
+            results = {}
+            for var in test_vars:
+                try:
+                    value = self.ir[var]
+                    results[var] = value
+                except Exception as e:
+                    results[var] = f"Error: {str(e)}"
+            logger.info(f"Direct test of common variables: {results}")
+            
+        except Exception as e:
+            logger.error(f"Error in debug_ir_vars: {e}", exc_info=True) 

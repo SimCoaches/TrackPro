@@ -2064,44 +2064,31 @@ class MainWindow(QMainWindow):
                 logger.info("Calibration wizard cancelled")
         except Exception as e:
             logger.error(f"Error opening calibration wizard: {e}")
-            QMessageBox.warning(self, "Calibration Error", 
-                               f"There was an error opening the calibration wizard: {str(e)}")
+            self.show_message("Error", f"Could not open calibration wizard: {str(e)}")
         
+        # Refresh UI if needed (e.g., if wizard modified things)
+        # self.refresh_curve_lists() # Removed redundant call
+
     def save_calibration(self):
-        """Save the current calibration to a file."""
+        """Save the current calibration settings."""
         logger.info("Saving calibration data manually")
         try:
-            if hasattr(self, "hardware") and self.hardware is not None:
-                # Get current calibration data from the hardware
-                calibration_data = self.hardware.calibration
-                
-                # Save the calibration
-                self.hardware.save_calibration(calibration_data)
-                
-                # Show success message
-                QMessageBox.information(
-                    self,
-                    "Calibration Saved",
-                    "Calibration settings have been saved successfully."
-                )
+            if hasattr(self, 'hardware') and self.hardware:
+                # Trigger save in hardware module
+                self.hardware.save_calibration(self.hardware.calibration)
+                self.show_message("Calibration Saved", "Calibration settings saved successfully.")
                 logger.info("Calibration saved manually by user")
             else:
-                logger.warning("Cannot save calibration: hardware not accessible")
-                QMessageBox.warning(
-                    self,
-                    "Error",
-                    "Could not save calibration: hardware interface not accessible."
-                )
+                logger.warning("Cannot save calibration - hardware not available")
+                self.show_message("Error", "Hardware not available to save calibration.")
         except Exception as e:
-            logger.error(f"Failed to save calibration: {e}")
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to save calibration: {str(e)}"
-            )
-        
+            logger.error(f"Error saving calibration: {e}")
+            self.show_message("Error", f"Could not save calibration: {str(e)}")
+        # Refresh curve lists after saving calibration - Removed redundant call
+        # self.refresh_curve_lists()
+
     def reset_calibration(self, pedal: str):
-        """Reset calibration for the specified pedal to default values."""
+        """Reset calibration for a specific pedal."""
         logger.info(f"Resetting calibration for pedal: {pedal}")
         try:
             # Reset the calibration points to a linear curve
@@ -2145,7 +2132,7 @@ class MainWindow(QMainWindow):
                 "Error",
                 f"Failed to reset calibration for {pedal}: {str(e)}"
             )
-    
+
     def set_pedal_available(self, pedal: str, available: bool):
         """Set whether a pedal is available (connected).
         Since we've removed all UI indicators, this now only handles enabling/disabling pedal controls.
@@ -2937,6 +2924,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error applying calibration wizard results: {e}")
             QMessageBox.critical(self, "Error", f"Failed to apply calibration results: {str(e)}")
+
+        # Refresh UI after applying results - Removed redundant call
+        # self.refresh_curve_lists()
 
     def refresh_curve_lists(self):
         """Refresh the curve lists for all pedals."""

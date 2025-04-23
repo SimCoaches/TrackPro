@@ -2,10 +2,11 @@
 
 from PyQt5.QtWidgets import (
     QLineEdit, QLabel, QFormLayout, QMessageBox, QDateEdit, QCheckBox,
-    QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QWidget
+    QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QWidget,
+    QSizePolicy
 )
 from PyQt5.QtCore import QDate, Qt, QSize
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 import logging
@@ -43,8 +44,9 @@ class SignupDialog(BaseAuthDialog):
         # Call parent constructor
         super().__init__(parent, title="Create Account")
         
-        # Set larger size
-        self.setMinimumWidth(450)
+        # Set larger size for two columns
+        self.setMinimumWidth(750)
+        self.setMinimumHeight(450)
         
         # Add offline warning if needed
         self.check_offline_status()
@@ -92,23 +94,83 @@ class SignupDialog(BaseAuthDialog):
     
     def setup_step1_fields(self):
         """Set up fields for step 1 (email & password)."""
+        # Common style for text inputs
+        input_style = """
+            QLineEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 6px;
+                border-radius: 4px;
+                color: #ddd; /* Text color */
+            }
+            QLineEdit:focus {
+                border: 1px solid #77aaff; /* Highlight border on focus */
+                background-color: #4a4a4a;
+            }
+        """
+        
         # Email field
         self.email_input = QLineEdit()
         self.email_input.setPlaceholderText("example@email.com")
+        self.email_input.setStyleSheet(input_style)
         self.step1_form.addRow("Email: *", self.email_input)
         
         # Password field
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setStyleSheet(input_style)
         self.step1_form.addRow("Password: *", self.password_input)
         
         # Confirm password field
         self.confirm_password_input = QLineEdit()
         self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        self.confirm_password_input.setStyleSheet(input_style)
         self.step1_form.addRow("Confirm Password: *", self.confirm_password_input)
     
     def setup_step2_fields(self):
         """Set up fields for step 2 (personal info)."""
+        # Common style for text inputs (can be defined once in __init__ or setup_ui if preferred)
+        input_style = """
+            QLineEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 6px;
+                border-radius: 4px;
+                color: #ddd; /* Text color */
+            }
+            QLineEdit:focus {
+                border: 1px solid #77aaff; /* Highlight border on focus */
+                background-color: #4a4a4a;
+            }
+        """
+        # Style for QDateEdit (optional, adjust as needed)
+        date_edit_style = """
+            QDateEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 5px; /* Adjusted padding */
+                border-radius: 4px;
+                color: #ddd;
+            }
+            QDateEdit::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 15px;
+                border-left-width: 1px;
+                border-left-color: darkgray;
+                border-left-style: solid;
+                border-top-right-radius: 3px;
+                border-bottom-right-radius: 3px;
+            }
+            QDateEdit::down-arrow {
+                 /* image: url(:/icons/down_arrow.png); Optionally use an icon */
+            }
+             QDateEdit:focus {
+                border: 1px solid #77aaff; 
+                background-color: #4a4a4a;
+            }
+        """
+
         # Header for step 2
         step2_header = QLabel("Please complete your profile")
         step2_header.setStyleSheet("font-weight: bold; color: #2980b9;")
@@ -117,14 +179,17 @@ class SignupDialog(BaseAuthDialog):
         # Display name field (username)
         self.display_name_input = QLineEdit()
         self.display_name_input.setPlaceholderText("Choose a username")
+        self.display_name_input.setStyleSheet(input_style)
         self.step2_form.addRow("Username:", self.display_name_input)
         
         # First name field
         self.first_name_input = QLineEdit()
+        self.first_name_input.setStyleSheet(input_style)
         self.step2_form.addRow("First Name:", self.first_name_input)
         
         # Last name field
         self.last_name_input = QLineEdit()
+        self.last_name_input.setStyleSheet(input_style)
         self.step2_form.addRow("Last Name:", self.last_name_input)
         
         # Date of birth field
@@ -135,6 +200,7 @@ class SignupDialog(BaseAuthDialog):
         # Set default date to 18 years ago
         default_date = QDate.currentDate().addYears(-18)
         self.date_of_birth_input.setDate(default_date)
+        self.date_of_birth_input.setStyleSheet(date_edit_style)
         self.step2_form.addRow("Date of Birth:", self.date_of_birth_input)
         
         # Terms checkbox
@@ -142,30 +208,53 @@ class SignupDialog(BaseAuthDialog):
         self.step2_form.addRow("", self.agree_terms_checkbox)
     
     def setup_ui(self):
-        """Set up the dialog UI with additional social login buttons."""
-        # Main layout
-        main_layout = QVBoxLayout()
-        self.setLayout(main_layout)
+        """Set up the dialog UI with a two-column layout."""
+        # Main horizontal layout for two columns
+        main_h_layout = QHBoxLayout()
+        self.setLayout(main_h_layout)
+
+        # --- Left Column (Signup Form) ---
+        left_column_widget = QWidget()
+        left_column_layout = QVBoxLayout(left_column_widget)
+        left_column_layout.setContentsMargins(10, 10, 20, 10)
+
+        # Add Heading
+        heading_label = QLabel("TrackPro")
+        heading_label.setAlignment(Qt.AlignCenter)
+        heading_label.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 5px;")
+        left_column_layout.addWidget(heading_label)
+
+        # Add Subheading
+        subheading_label = QLabel("Making Drivers Faster One Lap At A Time")
+        subheading_label.setAlignment(Qt.AlignCenter)
+        subheading_label.setStyleSheet("font-size: 12px; color: #bbb; margin-bottom: 20px;")
+        left_column_layout.addWidget(subheading_label)
+
+        # Offline warning placeholder (if needed, inserted by check_offline_status)
+        # self.offline_warning might be added here later
+
+        # Form layout for signup (contains the QStackedWidget)
+        form_container_layout = QFormLayout()
+        left_column_layout.addLayout(form_container_layout)
         
-        # Form layout for signup
-        form_layout = QFormLayout()
-        main_layout.addLayout(form_layout)
-        
-        # Set up form fields in steps
-        self.setup_form_fields(form_layout)
+        # Set up form fields in steps (This adds the QStackedWidget to form_container_layout)
+        self.setup_form_fields(form_container_layout)
+
+        # Add vertical spacing
+        left_column_layout.addSpacing(15)
         
         # Add OR divider
         divider_layout = QHBoxLayout()
         divider_layout.addStretch()
         divider_layout.addWidget(QLabel("OR"))
         divider_layout.addStretch()
-        main_layout.addLayout(divider_layout)
+        left_column_layout.addLayout(divider_layout)
         
         # Add Sign Up With header
         header_label = QLabel("Sign Up With:")
         header_label.setAlignment(Qt.AlignCenter)
-        header_label.setStyleSheet("font-weight: bold;")
-        main_layout.addWidget(header_label)
+        header_label.setStyleSheet("font-weight: bold; margin-top: 10px; margin-bottom: 5px;")
+        left_column_layout.addWidget(header_label)
         
         # Social login buttons layout
         social_layout = QHBoxLayout()
@@ -174,78 +263,76 @@ class SignupDialog(BaseAuthDialog):
         # Get the icons directory path
         icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "icons")
         
-        # Google login button
+        # Google login button (Adjusted style like login dialog)
         self.google_button = QPushButton()
         self.google_button.setToolTip("Sign up with Google")
-        self.google_button.setFlat(True)
-        self.google_button.setCursor(Qt.PointingHandCursor)
-        self.google_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: transparent;
-            }
-            QPushButton:pressed {
-                background-color: transparent;
-            }
-        """)
-        
-        # Set icon if the file exists
         google_icon_path = os.path.join(icons_dir, "google.png")
         if os.path.exists(google_icon_path):
             self.google_button.setIcon(QIcon(google_icon_path))
-            self.google_button.setIconSize(QSize(45, 45))
-            self.google_button.setFixedSize(QSize(45, 45))
+            self.google_button.setIconSize(self.google_button.sizeHint() * 1.5)
+            self.google_button.setFixedSize(self.google_button.iconSize() * 1.2)
         else:
-            self.google_button.setText("Sign up with Google")
+            self.google_button.setText("Google")
         self.google_button.clicked.connect(self.handle_google_signup)
         social_layout.addWidget(self.google_button)
         
         # Add spacing between buttons
-        social_layout.addSpacing(40)
+        social_layout.addSpacing(20)
         
-        # Discord login button
+        # Discord login button (Adjusted style like login dialog)
         self.discord_button = QPushButton()
         self.discord_button.setToolTip("Sign up with Discord")
-        self.discord_button.setFlat(True)
-        self.discord_button.setCursor(Qt.PointingHandCursor)
-        self.discord_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: transparent;
-            }
-            QPushButton:pressed {
-                background-color: transparent;
-            }
-        """)
-        
-        # Set icon if the file exists
         discord_icon_path = os.path.join(icons_dir, "discord.png")
         if os.path.exists(discord_icon_path):
             self.discord_button.setIcon(QIcon(discord_icon_path))
-            self.discord_button.setIconSize(QSize(45, 45))
-            self.discord_button.setFixedSize(QSize(45, 45))
+            self.discord_button.setIconSize(self.discord_button.sizeHint() * 1.5)
+            self.discord_button.setFixedSize(self.discord_button.iconSize() * 1.2)
         else:
-            self.discord_button.setText("Sign up with Discord")
+            self.discord_button.setText("Discord")
         self.discord_button.clicked.connect(self.handle_discord_signup)
         social_layout.addWidget(self.discord_button)
         
         social_layout.addStretch()
-        main_layout.addLayout(social_layout)
+        left_column_layout.addLayout(social_layout)
+
+        # Add stretch to push buttons to the bottom
+        left_column_layout.addStretch(1)
         
-        # Button layout
+        # Button layout (Cancel/Back/Next/Create Account)
         button_layout = QHBoxLayout()
-        main_layout.addLayout(button_layout)
-        
-        # Set up buttons
+        # Set up buttons (calls parent method, adds Back button)
         self.setup_buttons(button_layout)
+        left_column_layout.addLayout(button_layout)
+
+        # Add left column widget to main layout
+        main_h_layout.addWidget(left_column_widget, 1)
+
+        # --- Right Column (Image) ---
+        right_column_widget = QWidget()
+        right_column_layout = QVBoxLayout(right_column_widget)
+        right_column_layout.setContentsMargins(20, 10, 10, 10)
+        right_column_widget.setStyleSheet("background-color: #3a3a3a; border-radius: 5px;")
+
+        # Placeholder for image
+        image_label = QLabel("Signup Image Placeholder")
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        image_label.setStyleSheet("color: #ccc; font-size: 16px;")
         
-        # Set tab order for accessible navigation
+        # Optional: Load an actual image if available
+        image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "images", "login_image.png")
+        if os.path.exists(image_path):
+            pixmap = QPixmap(image_path)
+            image_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            image_label.setText("Image not found")
+        
+        right_column_layout.addWidget(image_label)
+
+        # Add right column widget to main layout
+        main_h_layout.addWidget(right_column_widget, 1)
+        
+        # Set tab order for accessible navigation (might need adjustment for two columns)
         self.set_tab_order()
         
         # Show the first step

@@ -3041,22 +3041,33 @@ class RaceCoachWidget(QWidget):
                 if hasattr(self.iracing_api, 'register_on_connection_changed'):
                     logger.info("Using SimpleIRacingAPI callback methods")
                     self.iracing_api.register_on_connection_changed(self.on_iracing_connected)
-                    self.iracing_api.register_on_session_info_changed(self.on_session_info_changed)
-                    self.iracing_api.register_on_telemetry_data(self.on_telemetry_data) # Corrected method name
-                    
-                    # Explicitly connect to iRacing
-                    self.iracing_api.connect()
-                    
-                # Fall back to IRacingAPI method names
+                    # self.iracing_api.register_on_session_info_changed(self.on_session_info_changed) # Legacy callback, use signal now
+                    self.iracing_api.register_on_telemetry_data(self.on_telemetry_data)
+
+                    # --- Connect the new signal --- #
+                    if hasattr(self.iracing_api, 'sessionInfoUpdated'):
+                        logger.info("Connecting sessionInfoUpdated signal to UI update slot.")
+                        # Pass the dictionary payload from the signal to the slot
+                        self.iracing_api.sessionInfoUpdated.connect(self._update_connection_status)
+                    else:
+                        logger.warning("iRacing API instance does not have sessionInfoUpdated signal.")
+                    # ----------------------------- #
+
+                    # Explicitly connect to iRacing (This will be passive now)
+                    # self.iracing_api.connect() # Monitor thread handles connection
+                    pass # Connect call only registers callbacks now
+
+                # Fall back to IRacingAPI method names (This path likely won't be used anymore)
                 elif hasattr(self.iracing_api, 'register_connection_callback'):
-                    logger.info("Using IRacingAPI callback methods")
-                    self.iracing_api.register_connection_callback(self.on_iracing_connected)
-                    self.iracing_api.register_session_info_callback(self.on_session_info_changed)
-                    self.iracing_api.register_telemetry_callback(self.on_telemetry_data)
+                    # logger.info("Using IRacingAPI callback methods")
+                    # self.iracing_api.register_connection_callback(self.on_iracing_connected)
+                    # self.iracing_api.register_session_info_callback(self.on_session_info_changed)
+                    # self.iracing_api.register_telemetry_callback(self.on_telemetry_data)
+                    logger.warning("Legacy IRacingAPI callback registration attempted - this might not work as expected.")
                 else:
                     logger.warning("Unable to register callbacks with iRacing API - incompatible implementation")
             except Exception as e:
-                logger.error(f"Error connecting to iRacing API: {e}")
+                logger.error(f"Error setting up callbacks for iRacing API: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
     
@@ -3463,57 +3474,57 @@ class RaceCoachWidget(QWidget):
 
     def on_iracing_connected(self, is_connected, session_info=None):
         """Handle connection status changes from iRacing API."""
-        logger.info(f"iRacing connection status changed: {is_connected}")
+        # This can still be called by the API's connection logic (e.g., via update_info_from_monitor)
+        logger.info(f"UI: on_iracing_connected called with is_connected={is_connected}")
         self.is_connected = is_connected
-        
-        if session_info:
-            self.session_info = session_info
-        
-        self._update_connection_status(is_connected)
-    
+        # No longer need to update session_info here, signal handler does it
+        # if session_info:
+        #     self.session_info = session_info
+        self._update_connection_status() # Update UI based on new connection state
+
     def on_session_info_changed(self, session_info):
-        """Handle session info changes from iRacing API."""
-        logger.info("Session info changed")
-        self.session_info = session_info
-        self._update_session_info(session_info)
-    
-    def _update_connection_status(self, is_connected):
-        """Update UI based on connection status."""
-        if is_connected:
+        """(Legacy/Fallback) Handle session info changes from iRacing API callbacks."""
+        logger.info("UI: on_session_info_changed (legacy callback) called.")
+        self.session_info = session_info # Store locally just in case
+        # Let the signal handler _update_connection_status handle the UI update
+        # self._update_session_info_ui(session_info)
+
+    def _update_connection_status(self, payload: dict):
+        """Update UI based on connection status and session info signal payload."""
+        logger.debug(f"UI received update signal with payload: {payload}")
+        # Extract info from the payload sent by the signal
+        is_connected = payload.get('is_connected', False)
+        session_info = payload.get('session_info', {})
+
+        # Update internal state
+        self.is_connected = is_connected
+        self.session_info = session_info # Store the latest info
+
+        if self.is_connected:
             self.connection_label.setText("iRacing: Connected")
-            self.connection_label.setStyleSheet("""
-                color: green;
-                font-weight: bold;
-            """)
-            
-            # If we have session info, update it
-            if self.session_info:
-                self._update_session_info(self.session_info)
+            self.connection_label.setStyleSheet("color: green; font-weight: bold;")
+
+            # Get latest track/car from the received session_info dictionary
+            track_name = session_info.get('current_track', "No Track")
+            car_name = session_info.get('current_car', "No Car")
+            # TODO: Get driver name if added to session_info
+            driver_name = "N/A" # Placeholder
+
+            # Update labels
+            self.track_label.setText(f"Track: {track_name}")
+            self.driver_label.setText(f"Car: {car_name}") # Using driver label for car for now
+
         else:
             self.connection_label.setText("iRacing: Disconnected")
-            self.connection_label.setStyleSheet("""
-                color: red;
-                font-weight: bold;
-            """)
+            self.connection_label.setStyleSheet("color: red; font-weight: bold;")
             self.driver_label.setText("No Driver")
             self.track_label.setText("No Track")
-    
-    def _update_session_info(self, session_info):
-        """Update UI with session information."""
-        try:
-            # Extract and display driver name
-            if 'DriverInfo' in session_info and 'DriverUserID' in session_info['DriverInfo']:
-                driver_id = session_info['DriverInfo']['DriverUserID']
-                driver_name = session_info['DriverInfo'].get('DriverName', 'Unknown Driver')
-                self.driver_label.setText(f"Driver: {driver_name}")
-            
-            # Extract and display track name
-            if 'WeekendInfo' in session_info and 'TrackDisplayName' in session_info['WeekendInfo']:
-                track_name = session_info['WeekendInfo']['TrackDisplayName']
-                self.track_label.setText(f"Track: {track_name}")
-        except Exception as e:
-            logger.error(f"Error updating session info: {e}")
-    
+
+    # def _update_session_info_ui(self, session_info):
+    #    """(Deprecated) Update UI with session information."""
+    #    # This logic is now merged into _update_connection_status
+    #    pass
+
     def load_demo_data(self):
         """Demo data loading disabled to prevent performance issues."""
         logger.info("Demo data loading is disabled")

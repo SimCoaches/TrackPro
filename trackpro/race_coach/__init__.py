@@ -143,6 +143,11 @@ try:
                     
                 from .iracing_lap_saver import IRacingLapSaver
                 iracing_lap_saver = IRacingLapSaver()
+                if supabase_client:
+                    iracing_lap_saver.set_supabase_client(supabase_client)
+                    logger.info("Successfully passed Supabase client to IRacingLapSaver")
+                else:
+                    logger.warning("Could not pass Supabase client to IRacingLapSaver - get_supabase_client returned None")
                 logger.info("IRacingLapSaver initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize IRacingLapSaver: {e}")
@@ -181,7 +186,19 @@ try:
                             user_id = user.id
                             iracing_lap_saver.set_user_id(user_id)
                             logger.info(f"Set user ID for lap saver: {user_id}")
-                            
+
+                            # --- Start iRacing Session Monitor Thread --- #
+                            try:
+                                import threading
+                                from .iracing_session_monitor import start_monitoring
+                                # Pass the client object, user ID, lap saver, and API instance
+                                start_monitoring(supabase_client, user_id, iracing_lap_saver, iracing_api)
+                            except ImportError as import_err:
+                                logger.error(f"Failed to import or start iRacing session monitor: {import_err}")
+                            except Exception as monitor_err:
+                                logger.error(f"Error starting iRacing session monitor thread: {monitor_err}")
+                            # --- End Monitor Thread Start ---
+
                             # Also set user ID in session info so it can be accessed later
                             if hasattr(iracing_api, '_session_info'):
                                 iracing_api._session_info['user_id'] = user_id

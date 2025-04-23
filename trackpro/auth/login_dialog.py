@@ -2,10 +2,10 @@
 
 from PyQt5.QtWidgets import (
     QLineEdit, QCheckBox, QFormLayout, QLabel, 
-    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox
+    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 import logging
@@ -32,37 +32,59 @@ class LoginDialog(BaseAuthDialog):
         # Call parent constructor
         super().__init__(parent, title="Sign In")
         
-        # Set minimum width
-        self.setMinimumWidth(400)
+        # Set minimum width - adjust as needed for two columns
+        self.setMinimumWidth(700) # Increased width for two columns
+        self.setMinimumHeight(400) # Added minimum height
     
     def setup_ui(self):
-        """Set up the dialog UI with additional social login buttons."""
-        # Main layout
-        main_layout = QVBoxLayout()
-        self.setLayout(main_layout)
+        """Set up the dialog UI with a two-column layout."""
+        # Main horizontal layout for two columns
+        main_h_layout = QHBoxLayout()
+        self.setLayout(main_h_layout)
+        
+        # --- Left Column (Login Form) ---
+        left_column_widget = QWidget()
+        left_column_layout = QVBoxLayout(left_column_widget)
+        left_column_layout.setContentsMargins(10, 10, 20, 10) # Add some margin
+        
+        # Add Heading
+        heading_label = QLabel("TrackPro")
+        heading_label.setAlignment(Qt.AlignCenter)
+        heading_label.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 5px;")
+        left_column_layout.addWidget(heading_label)
+        
+        # Add Subheading
+        subheading_label = QLabel("Making Drivers Faster One Lap At A Time")
+        subheading_label.setAlignment(Qt.AlignCenter)
+        subheading_label.setStyleSheet("font-size: 12px; color: #bbb; margin-bottom: 20px;")
+        left_column_layout.addWidget(subheading_label)
         
         # Form layout for traditional login
         form_layout = QFormLayout()
-        main_layout.addLayout(form_layout)
+        left_column_layout.addLayout(form_layout)
         
         # Set up traditional form fields
         self.setup_form_fields(form_layout)
+        
+        # Add some vertical spacing
+        left_column_layout.addSpacing(15)
         
         # Add OR divider
         divider_layout = QHBoxLayout()
         divider_layout.addStretch()
         divider_layout.addWidget(QLabel("OR"))
         divider_layout.addStretch()
-        main_layout.addLayout(divider_layout)
+        left_column_layout.addLayout(divider_layout)
         
         # Add Sign In With header
         header_label = QLabel("Sign In With:")
         header_label.setAlignment(Qt.AlignCenter)
-        header_label.setStyleSheet("font-weight: bold;")
-        main_layout.addWidget(header_label)
+        header_label.setStyleSheet("font-weight: bold; margin-top: 10px; margin-bottom: 5px;")
+        left_column_layout.addWidget(header_label)
         
         # Social login buttons
         social_layout = QHBoxLayout()
+        social_layout.addStretch() # Center buttons
         
         # Get the icons directory path
         icons_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "icons")
@@ -74,11 +96,14 @@ class LoginDialog(BaseAuthDialog):
         google_icon_path = os.path.join(icons_dir, "google.png")
         if os.path.exists(google_icon_path):
             google_button.setIcon(QIcon(google_icon_path))
-            google_button.setIconSize(google_button.sizeHint())
+            google_button.setIconSize(google_button.sizeHint() * 1.5) # Make icon larger
+            google_button.setFixedSize(google_button.iconSize() * 1.2) # Adjust button size
         else:
-            google_button.setText("Sign in with Google")
+            google_button.setText("Google") # Shorter text
         google_button.clicked.connect(self.handle_google_login)
         social_layout.addWidget(google_button)
+        
+        social_layout.addSpacing(20) # Add spacing between social buttons
         
         # Discord login button
         self.discord_button = QPushButton()
@@ -87,22 +112,54 @@ class LoginDialog(BaseAuthDialog):
         discord_icon_path = os.path.join(icons_dir, "discord.png")
         if os.path.exists(discord_icon_path):
             self.discord_button.setIcon(QIcon(discord_icon_path))
-            self.discord_button.setIconSize(self.discord_button.sizeHint())
+            self.discord_button.setIconSize(self.discord_button.sizeHint() * 1.5) # Make icon larger
+            self.discord_button.setFixedSize(self.discord_button.iconSize() * 1.2) # Adjust button size
         else:
-            self.discord_button.setText("Sign in with Discord")
+            self.discord_button.setText("Discord") # Shorter text
         self.discord_button.clicked.connect(self.handle_discord_login)
         social_layout.addWidget(self.discord_button)
         
-        main_layout.addLayout(social_layout)
+        social_layout.addStretch() # Center buttons
+        left_column_layout.addLayout(social_layout)
         
-        # Button layout
+        # Add stretch to push buttons to the bottom
+        left_column_layout.addStretch(1)
+        
+        # Button layout (Cancel/Submit)
         button_layout = QHBoxLayout()
-        main_layout.addLayout(button_layout)
-        
-        # Set up buttons
+        # Set up buttons (calls parent method)
         self.setup_buttons(button_layout)
+        left_column_layout.addLayout(button_layout)
         
-        # Set tab order
+        # Add left column widget to main layout
+        main_h_layout.addWidget(left_column_widget, 1) # Assign stretch factor 1
+        
+        # --- Right Column (Image) ---
+        right_column_widget = QWidget()
+        right_column_layout = QVBoxLayout(right_column_widget)
+        right_column_layout.setContentsMargins(20, 10, 10, 10) # Add some margin
+        right_column_widget.setStyleSheet("background-color: #3a3a3a; border-radius: 5px;") # Simple background for placeholder
+        
+        # Placeholder for image
+        image_label = QLabel("Login Image Placeholder")
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        image_label.setStyleSheet("color: #ccc; font-size: 16px;")
+        
+        # Optional: Load an actual image if available
+        image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "images", "login_image.png")
+        if os.path.exists(image_path):
+            pixmap = QPixmap(image_path)
+            image_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            image_label.setText("Image not found")
+        
+        right_column_layout.addWidget(image_label)
+        
+        # Add right column widget to main layout
+        main_h_layout.addWidget(right_column_widget, 1) # Assign stretch factor 1
+        
+        # Set tab order (consider how it flows across columns if needed)
         self.set_tab_order()
     
     def setup_form_fields(self, form_layout):
@@ -111,14 +168,31 @@ class LoginDialog(BaseAuthDialog):
         Args:
             form_layout: The form layout to add fields to
         """
+        # Common style for text inputs
+        input_style = """
+            QLineEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 6px;
+                border-radius: 4px;
+                color: #ddd; /* Text color */
+            }
+            QLineEdit:focus {
+                border: 1px solid #77aaff; /* Highlight border on focus */
+                background-color: #4a4a4a;
+            }
+        """
+        
         # Email field
         self.email_input = QLineEdit()
         self.email_input.setPlaceholderText("example@email.com")
+        self.email_input.setStyleSheet(input_style)
         form_layout.addRow("Email:", self.email_input)
         
         # Password field
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setStyleSheet(input_style)
         form_layout.addRow("Password:", self.password_input)
         
         # Remember me checkbox

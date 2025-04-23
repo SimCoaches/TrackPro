@@ -618,11 +618,11 @@ class TrackProApp:
                                 selector.addItem(curve_type)
                             selector.setCurrentText(curve_type)
         
-        # Refresh the curve lists if the method exists
-        if hasattr(self.window, 'refresh_curve_lists'):
-            self.window.refresh_curve_lists()
-        else:
-            logger.warning("MainWindow does not have refresh_curve_lists method, skipping refresh")
+        # Refresh the curve lists if the method exists - REMOVING this call
+        # if hasattr(self.window, 'refresh_curve_lists'):
+        #     self.window.refresh_curve_lists()
+        # else:
+        #     logger.warning("MainWindow does not have refresh_curve_lists method, skipping refresh")
     
     def on_calibration_updated(self, pedal: str):
         """Handle calibration updates from UI."""
@@ -1139,25 +1139,62 @@ class TrackProApp:
         warning.show()
     
     def handle_auth_state_change(self, is_authenticated):
-        """Handle changes in authentication state.
-        
-        This is called when the user logs in or out.
-        
-        Args:
-            is_authenticated: Whether the user is now authenticated
-        """
-        try:
-            logger.info(f"Authentication state changed: {is_authenticated}")
+        """Handles the authentication state change from the OAuth handler or initial load."""
+        # Prevent running during initial startup before hardware is ready
+        if not self.startup_complete:
+            logger.debug("handle_auth_state_change called before startup complete, skipping.")
+            return
             
-            # Check if we need to sync any cloud data
-            if is_authenticated:
-                # Example: check for online settings
-                pass
-        except Exception as e:
-            logger.error(f"Error handling auth state change: {e}")
-    
+        logger.info(f"Authentication state changed (post-startup): {is_authenticated}")
+
+        # Ensure UI updates first (display login status, etc.) - REMOVED call to break loop
+        # if hasattr(self, 'window'):
+        #     self.window.update_auth_state() # Let the UI know first
+
+        if is_authenticated:
+            logger.info("User authenticated. Attempting to sync calibration and refresh curves.")
+            # Sync calibration AFTER login
+            if hasattr(self, 'hardware') and self.hardware:
+                try:
+                    # Call the correct sync method (remove force_download if not supported)
+                    if hasattr(self.hardware, '_sync_with_cloud'):
+                        logger.info("Calling hardware._sync_with_cloud()...")
+                        self.hardware._sync_with_cloud()
+                    else:
+                        logger.warning("hardware._sync_with_cloud() method not found.")
+                        
+                    # Load potentially updated calibration into UI
+                    self.load_calibration()
+                except Exception as e:
+                    logger.error(f"Error during post-authentication sync/load: {e}")
+            else:
+                logger.warning("Hardware not available for post-authentication sync/load.")
+
+            # Refresh curve lists AFTER login and potential sync
+            if hasattr(self, 'window') and hasattr(self.window, 'refresh_curve_lists') and self.hardware:
+                 logger.info("Refreshing curve lists post-authentication...")
+                 try:
+                     self.window.refresh_curve_lists() # Refresh lists AFTER login
+                 except Exception as e:
+                     logger.error(f"Error refreshing curve lists post-authentication: {e}")
+            else:
+                logger.warning("Window, refresh_curve_lists method, or hardware not available for post-auth refresh.")
+        else:
+            # Handle logout state if needed (e.g., load default curves/calibration)
+            logger.info("User is not authenticated or logged out.")
+            # Optionally: Load default calibration or clear user-specific settings
+            # self.load_default_calibration()
+            # if hasattr(self, 'window') and hasattr(self.window, 'refresh_curve_lists'):
+            #    self.window.refresh_curve_lists() # Refresh to show only local/default curves
+
+
+        # Emit signal for other components (like Race Coach) if needed
+        # This was previously inside update_auth_state in the UI, REMOVED here to prevent recursion
+        # if hasattr(self, 'window'):
+        #     self.window.auth_state_changed.emit(is_authenticated)
+
     def run(self):
-        """Run the application."""
+        """Main application execution loop."""
         try:
             # Start in offline mode by default if not already authenticated
             if not supabase.is_authenticated():

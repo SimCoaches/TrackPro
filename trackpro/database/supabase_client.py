@@ -32,7 +32,7 @@ def get_supabase_client():
             _supabase_manager = SupabaseManager()
         
         # Return the client
-        return _supabase_manager.client
+        return _supabase_manager.client if _supabase_manager else None
     except Exception as e:
         logger.error(f"Error getting Supabase client: {e}")
         return None
@@ -218,18 +218,23 @@ class SupabaseManager:
             self._hostname = parsed_url.netloc
             
             # Try to resolve hostname in advance
+            logger.info(f"[INIT_DEBUG] Attempting DNS resolution for: {self._hostname}")
             ips = resolve_hostname(self._hostname)
             if ips:
                 self._cached_ip = ips[0]
                 logger.info(f"Resolved {self._hostname} to {self._cached_ip}")
+            else:
+                logger.warning(f"[INIT_DEBUG] DNS resolution failed for {self._hostname}")
             
             # Create Supabase client
             logger.info("Initializing Supabase client...")
             try:
                 # Use retry strategy for client creation
                 def create_and_test_client():
+                    logger.info("[INIT_DEBUG] Attempting create_client...")
                     # Create client without extra options to avoid 'headers' error
                     client = create_client(url, key)
+                    logger.info("[INIT_DEBUG] create_client call successful.")
                     return client
                 
                 # Explicitly clear old client to avoid reusing
@@ -237,6 +242,7 @@ class SupabaseManager:
                 
                 # Create new client
                 self._client = self._retry_strategy.execute(create_and_test_client)
+                logger.info(f"[INIT_DEBUG] Client object created: {self._client is not None}")
                 
                 # If we have a saved session, try to restore it
                 if self._saved_auth and self._saved_auth.get('access_token'):
@@ -263,21 +269,26 @@ class SupabaseManager:
                 try:
                     # Just check if we can access the auth API
                     logger.info("Testing connection to Supabase...")
+                    logger.info("[INIT_DEBUG] Attempting _client.auth.get_session()...")
                     self._client.auth.get_session()
+                    logger.info("[INIT_DEBUG] _client.auth.get_session() successful.")
                     self._offline_mode = False
                     logger.info("Supabase client initialized and connected successfully")
                 except Exception as e:
+                    logger.error(f"[INIT_DEBUG] _client.auth.get_session() failed: {e}")
                     logger.warning(f"Connected but session retrieval failed: {e}")
                     # Still consider it a success if we got this far
                     self._offline_mode = False
                     logger.info("Supabase client initialized (with limited functionality)")
             except Exception as e:
+                logger.error(f"[INIT_DEBUG] Client creation/retry failed: {e}")
                 logger.error(f"Failed to create/test Supabase client after retries: {e}")
                 self._offline_mode = True
                 self._client = None
                 return
             
         except Exception as e:
+            logger.error(f"[INIT_DEBUG] General initialization failure: {e}")
             logger.error(f"Failed to initialize Supabase client: {e}")
             self._offline_mode = True
             self._client = None

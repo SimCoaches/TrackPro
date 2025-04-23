@@ -22,6 +22,9 @@ class OAuthHandler(QObject):
     # Signal emitted when authentication is completed
     auth_completed = pyqtSignal(bool, object)
     
+    # Signal emitted when a user needs to complete their profile
+    profile_completion_required = pyqtSignal(object)
+    
     def __init__(self, parent=None):
         """Initialize the OAuth handler."""
         super().__init__(parent)
@@ -339,6 +342,48 @@ class OAuthHandler(QObject):
                             except Exception as user_set_error:
                                 logger.error(f"Failed to set user in user_manager: {user_set_error}")
                             # *** END ADDED CODE ***
+                            
+                            # OPTIMIZATION: Get user details from metadata if available rather than making another query
+                            try:
+                                user_id = result.user.id
+                                # First check user metadata from the auth response
+                                user_metadata = result.user.user_metadata or {}
+                                
+                                has_complete_profile = (
+                                    user_metadata.get('first_name') and 
+                                    user_metadata.get('last_name') and
+                                    user_metadata.get('date_of_birth')
+                                )
+                                
+                                # Only query database if metadata doesn't have what we need
+                                if not has_complete_profile:
+                                    logger.info(f"Checking profile completeness for user {user_id} (from process_callback)")
+                                    user_details = supabase.client.table('user_details').select('*').eq('user_id', user_id).execute()
+                                    
+                                    if user_details and user_details.data:
+                                        profile_data = user_details.data[0]
+                                        logger.info(f"User profile for {user_id} is {'complete' if profile_data.get('first_name') and profile_data.get('last_name') and profile_data.get('date_of_birth') else 'incomplete'} (from process_callback). Fields found: {profile_data}")
+                                        
+                                        has_complete_profile = (
+                                            profile_data.get('first_name') and 
+                                            profile_data.get('last_name') and
+                                            profile_data.get('date_of_birth')
+                                        )
+                                    else:
+                                        logger.info(f"No user_details record found for {user_id}")
+                                        has_complete_profile = False
+                                else:
+                                    logger.info(f"User profile for {user_id} is complete based on auth metadata")
+                                
+                                # Emit the appropriate signal based on profile completeness
+                                if not has_complete_profile:
+                                    logger.info(f"Queueing public profile_completion_required emit for user {result.user.email}")
+                                    QTimer.singleShot(0, lambda: self.profile_completion_required.emit(result))
+                                else:
+                                    logger.info(f"User has complete profile, proceeding with normal auth flow")
+                            except Exception as profile_e:
+                                logger.error(f"Error checking profile completeness: {profile_e}", exc_info=True)
+                                # Continue with auth flow on error
                             
                             # Ensure session is saved explicitly to the global client as well
                             if hasattr(supabase, '_save_session'):
