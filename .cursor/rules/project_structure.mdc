@@ -1,0 +1,38 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+\
+# TrackPro Project Structure
+
+This document outlines the structure and key components of the TrackPro project.
+
+## Root Directory
+
+*   `[main.py](mdc:main.py)`: Simple entry point, likely calls `[run_app.py](mdc:run_app.py)`.
+*   `[run_app.py](mdc:run_app.py)`: Script responsible for setting up and running the main application logic found in `[trackpro/main.py](mdc:trackpro/main.py)`.
+*   `[trackpro/](mdc:trackpro)`: Contains the core application source code.
+*   `[Supabase/](mdc:Supabase)`: Directory for Supabase integration files.
+*   `[db_connection.py](mdc:db_connection.py)`: Handles the primary database connection (check `[trackpro/database/](mdc:trackpro/database)` for more specifics).
+*   `[requirements.txt](mdc:requirements.txt)`: Python package dependencies.
+*   `[build.py](mdc:build.py)`: Custom build script, likely using PyInstaller.
+*   `[TrackPro_v1.4.6.spec](mdc:TrackPro_v1.4.6.spec)`: PyInstaller specification file.
+*   `[installer.nsi](mdc:installer.nsi)`: NSIS script for building the Windows installer.
+*   `[README.md](mdc:README.md)`: Project overview and setup instructions.
+*   `[CHANGELOG.md](mdc:CHANGELOG.md)`: History of changes.
+
+## Core Application (`trackpro/`)
+
+*   `[trackpro/main.py](mdc:trackpro/main.py)`: The main application logic and orchestration.
+*   `[trackpro/ui.py](mdc:trackpro/ui.py)`: User Interface implementation (likely PyQt/PySide).
+*   `[trackpro/config.py](mdc:trackpro/config.py)`: Application configuration settings.
+*   `[trackpro/database/](mdc:trackpro/database)`: Modules related to database interactions (models, queries, etc.).
+*   `[trackpro/auth/](mdc:trackpro/auth)`: User authentication logic.
+*   `[trackpro/gamification/](mdc:trackpro/gamification)`: Gamification features implementation.
+*   `[trackpro/hardware_input.py](mdc:trackpro/hardware_input.py)`: Handles input from hardware devices (e.g., pedals).
+*   `[trackpro/updater.py](mdc:trackpro/updater.py)`: Logic for checking and applying application updates.
+*   `[trackpro/logging_config.py](mdc:trackpro/logging_config.py)`: Configuration for application logging.
+*   `[trackpro/resources/](mdc:trackpro/resources)`: Static assets like icons, images, etc.
+*   `[trackpro/ui/](mdc:trackpro/ui)`: Likely contains UI definition files (e.g., `.ui` files if using Qt Designer).
+
