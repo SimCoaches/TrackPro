@@ -1,0 +1,6114 @@
+import sys
+import os
+import logging
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
+                             QPushButton, QLabel, QTabWidget, QGroupBox,
+                             QSplitter, QComboBox, QStatusBar, QMainWindow, QMessageBox, QApplication, QGridLayout, QFrame, QFormLayout, QCheckBox, QProgressBar, QSizePolicy, QSpacerItem, QScrollArea, QStackedWidget, QLineEdit, QSlider, QTabBar, QDialog, QTableWidget, QTableWidgetItem)
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QUrl  # Import QUrl
+from PyQt5.QtGui import QFont, QColor, QPalette, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient, QConicalGradient, QPixmap
+from PyQt5.QtWebEngineWidgets import QWebEngineView  # Add direct import
+
+# --- Added import for Gamification UI elements ---
+from trackpro.gamification.ui.overview_elements import GamificationOverviewWidget
+# ---------------------------------------------
+
+from .widgets.throttle_graph import ThrottleGraphWidget  # Import our throttle graph widget
+from .widgets.brake_graph import BrakeGraphWidget  # Import our brake graph widget
+from .widgets.steering_graph import SteeringGraphWidget  # Import our steering graph widget
+from .widgets.speed_graph import SpeedGraphWidget  # Import our speed graph widget
+import time
+import threading
+import weakref
+import numpy as np  # Add numpy import for array handling
+import json
+import platform
+import math
+import random  # Import random module for demo animations
+from datetime import datetime, timedelta
+from pathlib import Path  # Add Path import for file handling
+from trackpro.race_coach.utils.data_processing import resample_telemetry  # Import the telemetry processing function
+
+# Need QObject and QThread for background tasks
+from PyQt5.QtCore import QObject, QThread
+
+# Import the auth update function directly here as well
+from Supabase.auth import update_auth_state_from_client, is_logged_in
+
+# Add our own telemetry validation utilities
+from .utils.telemetry_validation import validate_lap_telemetry, calculate_coverage_percentage
+from .utils.telemetry_worker import TelemetrySaveWorker, TelemetryMonitorWorker
+
+# Supabase helpers for laps and telemetry
+try:
+    from Supabase.database import get_laps, get_telemetry_points, get_sessions # Add get_sessions import
+    from trackpro.database.supabase_client import get_supabase_client # ADD THIS IMPORT
+except Exception as _sup_err:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Supabase import failed ({_sup_err}), using fallback functions.")
+    # When Supabase is not configured (offline demo) we still want UI to load.
+    def get_laps(*_args, **_kwargs):
+        return None, "Supabase unavailable"
+
+    def get_telemetry_points(*_args, **_kwargs):
+        return None, "Supabase unavailable"
+        
+    # Add fallback for get_sessions
+    def get_sessions(*_args, **_kwargs):
+        # Return some dummy session data for offline testing
+        logger.info("Using fallback get_sessions")
+        now = datetime.now()
+        sessions = [
+            {"id": "session_1", "created_at": (now - timedelta(hours=1)).isoformat(), "track_name": "Demo Track 1", "car_name": "Demo Car A"},
+            {"id": "session_2", "created_at": (now - timedelta(days=1)).isoformat(), "track_name": "Demo Track 2", "car_name": "Demo Car B"},
+            {"id": "session_3", "created_at": (now - timedelta(days=2)).isoformat(), "track_name": "Demo Track 1", "car_name": "Demo Car C"},
+        ]
+        return sessions, "Using fallback data"
+
+    # Add fallback for get_supabase_client if needed
+    def get_supabase_client(*_args, **_kwargs):
+        logger.warning("Using fallback get_supabase_client")
+        return None
+
+# Try to import QPointF and QRectF from QtCore
+try:
+    from PyQt5.QtCore import QPointF, QRectF, QSizeF
+except ImportError:
+    # Define fallback classes if imports fail
+    class QPointF:
+        """Simple replacement for QPointF when not available."""
+        def __init__(self, x, y):
+            self._x = x
+            self._y = y
+            
+        def x(self):
+            return self._x
+            
+        def y(self):
+            return self._y
+            
+    class QRectF:
+        """Simple replacement for QRectF when not available."""
+        def __init__(self, *args):
+            if len(args) == 4:  # (x, y, width, height)
+                self._x = args[0]
+                self._y = args[1]
+                self._width = args[2]
+                self._height = args[3]
+            elif len(args) == 2:  # (QPointF, QSizeF)
+                point, size = args
+                self._x = point.x() if hasattr(point, 'x') and callable(point.x) else point.x
+                self._y = point.y() if hasattr(point, 'y') and callable(point.y) else point.y
+                self._width = size.width() if hasattr(size, 'width') and callable(size.width) else size.width
+                self._height = size.height() if hasattr(size, 'height') and callable(size.height) else size.height
+            else:
+                raise TypeError("QRectF requires either (x, y, width, height) or (QPointF, QSizeF)")
+            
+        def left(self):
+            return self._x
+            
+        def top(self):
+            return self._y
+            
+        def width(self):
+            return self._width
+            
+        def height(self):
+            return self._height
+    
+    class QSizeF:
+        """Simple replacement for QSizeF when not available."""
+        def __init__(self, width, height):
+            self._width = width
+            self._height = height
+            
+        def width(self):
+            return self._width
+            
+        def height(self):
+            return self._height
+
+# Try to import QPainterPath
+try:
+    from PyQt5.QtGui import QPainterPath
+except ImportError:
+    # This is more complex to replace, might need more involved fallback
+    class QPainterPath:
+        """Simple replacement for QPainterPath - limited functionality."""
+        def __init__(self):
+            self._points = []
+            self._current_point = (0, 0)
+            
+        def moveTo(self, x, y=None):
+            """Move to position without drawing a line."""
+            if y is None and isinstance(x, (QPointF, tuple)):
+                # Handle QPointF or tuple
+                if isinstance(x, QPointF):
+                    x_val = x.x() if callable(x.x) else x.x
+                    y_val = x.y() if callable(x.y) else x.y
+                else:
+                    x_val, y_val = x
+            else:
+                x_val, y_val = x, y
+                
+            self._current_point = (x_val, y_val)
+            self._points = [self._current_point]
+            
+        def lineTo(self, x, y=None):
+            """Draw line from current position to specified point."""
+            if y is None and isinstance(x, (QPointF, tuple)):
+                # Handle QPointF or tuple
+                if isinstance(x, QPointF):
+                    x_val = x.x() if callable(x.x) else x.x
+                    y_val = x.y() if callable(x.y) else x.y
+                else:
+                    x_val, y_val = x
+            else:
+                x_val, y_val = x, y
+                
+            self._current_point = (x_val, y_val)
+            self._points.append(self._current_point)
+            
+        def closeSubpath(self):
+            """Close the current subpath by drawing a line to the beginning point."""
+            if self._points and len(self._points) > 0:
+                self._points.append(self._points[0])
+                self._current_point = self._points[0]
+                
+        def isEmpty(self):
+            """Return True if the path contains no elements."""
+            return len(self._points) == 0
+            
+        def elementCount(self):
+            """Return the number of path elements."""
+            return len(self._points)
+
+logger = logging.getLogger(__name__)
+
+# --- Worker for Background Telemetry Fetching (Phase 3, Step 7) ---
+class TelemetryFetchWorker(QObject):
+    # finished = pyqtSignal(object, object) # Pass two results (left_pts, right_pts) - Original
+    # Modified finished signal to emit dictionaries containing stats and points
+    finished = pyqtSignal(object, object)
+    error = pyqtSignal(str, str)          # Pass two error messages
+
+    def __init__(self, left_lap_id, right_lap_id):
+        super().__init__()
+        self.left_lap_id = left_lap_id
+        self.right_lap_id = right_lap_id
+        self.is_cancelled = False
+        
+        # Store a reference to the main client module
+        try:
+            from trackpro.database.supabase_client import supabase as app_supabase
+            self.app_supabase = app_supabase
+            logger.info("TelemetryFetchWorker: Got main Supabase client reference")
+        except ImportError:
+            self.app_supabase = None
+            logger.error("TelemetryFetchWorker: Could not import main Supabase client")
+
+    def _calculate_lap_stats(self, telemetry_points):
+        """Calculate statistics from a list of telemetry points."""
+        if not telemetry_points or len(telemetry_points) < 2:
+            return None # Not enough data
+
+        # Sort points by timestamp just in case
+        telemetry_points.sort(key=lambda p: p.get('timestamp', 0))
+
+        total_time = telemetry_points[-1].get('timestamp', 0) - telemetry_points[0].get('timestamp', 0)
+        if total_time <= 0:
+            return None # Invalid time range
+
+        full_throttle_time = 0
+        heavy_braking_time = 0
+        cornering_time = 0
+
+        # Define thresholds
+        THROTTLE_THRESHOLD = 0.98
+        BRAKE_THRESHOLD = 0.80
+        STEERING_THRESHOLD = 0.1 # Radians, adjust as needed
+
+        speeds = []
+        track_positions = []
+        timestamps = []
+        
+        # Store the previous timestamp for duration calculations
+        prev_timestamp = telemetry_points[0].get('timestamp', 0)
+        
+        # Track current segment
+        in_full_throttle = False
+        in_heavy_braking = False
+        in_cornering = False
+        
+        for point in telemetry_points:
+            timestamp = point.get('timestamp', 0)
+            throttle = point.get('throttle', 0)
+            brake = point.get('brake', 0)
+            steering = abs(point.get('steering', 0))
+            speed = point.get('speed', 0)
+            track_position = point.get('track_position', 0)
+            
+            # Duration of this segment
+            duration = timestamp - prev_timestamp
+            
+            # Only count if duration is reasonable
+            if 0 < duration < 1.0:  # Reasonable duration between telemetry points
+                # Track full throttle time
+                if throttle >= THROTTLE_THRESHOLD:
+                    if not in_full_throttle:
+                        in_full_throttle = True
+                    full_throttle_time += duration
+                else:
+                    in_full_throttle = False
+                
+                # Track heavy braking time
+                if brake >= BRAKE_THRESHOLD:
+                    if not in_heavy_braking:
+                        in_heavy_braking = True
+                    heavy_braking_time += duration
+                else:
+                    in_heavy_braking = False
+                
+                # Track cornering time (significant steering input)
+                if steering >= STEERING_THRESHOLD:
+                    if not in_cornering:
+                        in_cornering = True
+                    cornering_time += duration
+                else:
+                    in_cornering = False
+            
+            # Collect data for analysis
+            speeds.append(speed)
+            track_positions.append(track_position)
+            timestamps.append(timestamp)
+            
+            # Update previous timestamp
+            prev_timestamp = timestamp
+        
+        # Calculate speed statistics
+        avg_speed = sum(speeds) / len(speeds) if speeds else 0
+        max_speed = max(speeds) if speeds else 0
+        
+        # Calculate percentage of time spent in each zone
+        full_throttle_pct = (full_throttle_time / total_time) * 100 if total_time > 0 else 0
+        heavy_braking_pct = (heavy_braking_time / total_time) * 100 if total_time > 0 else 0
+        cornering_pct = (cornering_time / total_time) * 100 if total_time > 0 else 0
+        
+        # Create stats and points data structure
+        stats = {
+            'total_time': total_time,
+            'avg_speed': avg_speed,
+            'max_speed': max_speed,
+            'full_throttle_pct': full_throttle_pct,
+            'heavy_braking_pct': heavy_braking_pct,
+            'cornering_pct': cornering_pct
+        }
+        
+        # Return the stats and the raw telemetry points directly
+        return {"stats": stats, "points": telemetry_points}
+
+    def run(self):
+        """Fetch telemetry data for both laps and calculate stats."""
+        logger.info(f"Worker thread starting fetch for {self.left_lap_id} and {self.right_lap_id}")
+        left_data, right_data = None, None
+        left_error, right_error = "", ""
+        
+        # Ensure we have a valid Supabase client
+        supabase_client = None
+        
+        # Try getting an authenticated client from multiple sources
+        try:
+            # First, try using the app-level Supabase client reference
+            if hasattr(self, 'app_supabase') and self.app_supabase and self.app_supabase.is_authenticated():
+                logger.info("TelemetryFetchWorker: Using main app Supabase client")
+                supabase_client = self.app_supabase
+            
+            # As a fallback, try direct import from database client
+            if not supabase_client:
+                from trackpro.database.supabase_client import supabase
+                if supabase and supabase.is_authenticated():
+                    logger.info("TelemetryFetchWorker: Using imported Supabase client")
+                    supabase_client = supabase
+            
+            # Last resort, try from Supabase module
+            if not supabase_client:
+                import Supabase.client
+                if hasattr(Supabase.client, 'supabase') and Supabase.client.supabase:
+                    logger.info("TelemetryFetchWorker: Using Supabase module client")
+                    supabase_client = Supabase.client.supabase
+                    
+        except Exception as e:
+            logger.error(f"TelemetryFetchWorker: Error getting Supabase client: {e}")
+            
+        # If we still don't have a client, use a direct approach
+        if not supabase_client:
+            try:
+                import Supabase.auth
+                if not Supabase.auth.is_logged_in():
+                    logger.warning("TelemetryFetchWorker: User not logged in according to auth module")
+            except Exception as e:
+                logger.error(f"TelemetryFetchWorker: Error accessing Supabase auth module: {e}")
+
+        # Define columns needed for calculation and graphs
+        required_columns = [
+            "track_position", "speed", "throttle", "brake", "steering", "timestamp"
+        ]
+
+        try:
+            # Fetch left lap
+            if not self.is_cancelled:
+                try:
+                    # Fetch all required columns
+                    from Supabase.database import get_telemetry_points
+                    left_pts, msg_left = get_telemetry_points(self.left_lap_id, columns=required_columns)
+                    if left_pts is None:
+                        left_error = msg_left or "Failed to fetch telemetry"
+                        logger.warning(f"Failed fetching left lap telemetry: {left_error}")
+                    else:
+                        logger.info(f"Fetched {len(left_pts)} points for left lap {self.left_lap_id}")
+                        left_data = self._calculate_lap_stats(left_pts)
+                        if not left_data:
+                            left_error = "Stat calculation failed (left)"
+                            logger.warning(f"Could not calculate stats for left lap {self.left_lap_id}")
+                except Exception as e:
+                    left_error = f"Exception: {str(e)}"
+                    logger.error(f"Exception fetching left lap telemetry: {e}")
+
+            # Fetch right lap
+            if not self.is_cancelled:
+                try:
+                    # Fetch all required columns
+                    from Supabase.database import get_telemetry_points
+                    right_pts, msg_right = get_telemetry_points(self.right_lap_id, columns=required_columns)
+                    if right_pts is None:
+                        right_error = msg_right or "Failed to fetch telemetry"
+                        logger.warning(f"Failed fetching right lap telemetry: {right_error}")
+                    else:
+                        logger.info(f"Fetched {len(right_pts)} points for right lap {self.right_lap_id}")
+                        right_data = self._calculate_lap_stats(right_pts)
+                        if not right_data:
+                            right_error = "Stat calculation failed (right)"
+                            logger.warning(f"Could not calculate stats for right lap {self.right_lap_id}")
+                except Exception as e:
+                    right_error = f"Exception: {str(e)}"
+                    logger.error(f"Exception fetching right lap telemetry: {e}")
+
+            # Check results and emit appropriate signal
+            if self.is_cancelled:
+                logger.info("Telemetry fetch cancelled.")
+                self.error.emit("Operation Cancelled", "Operation Cancelled")
+            elif left_data is None and right_data is None:
+                self.error.emit(left_error or "Fetch/Calc failed", right_error or "Fetch/Calc failed")
+            else:
+                # Emit results (dictionaries with stats and points) even if one failed
+                logger.info(f"Emitting finished signal. Left valid: {left_data is not None}, Right valid: {right_data is not None}")
+                self.finished.emit(left_data, right_data)
+
+        except Exception as e:
+            logger.error(f"Exception in TelemetryFetchWorker: {e}", exc_info=True)
+            self.error.emit(f"Worker Error: {e}", f"Worker Error: {e}")
+
+    def cancel(self):
+        self.is_cancelled = True
+# --- End Worker ---
+
+# --- Worker for Background Initial Data Loading ---
+class InitialLoadWorker(QObject):
+    """Worker to load initial session and lap lists in the background."""
+    sessions_loaded = pyqtSignal(list, str) # (sessions_data, message)
+    laps_loaded = pyqtSignal(list, str)     # (laps_data, message)
+    error = pyqtSignal(str)                 # (error_message)
+    finished = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.is_cancelled = False
+
+    def run(self):
+        """Fetch initial sessions and laps, filtering sessions that have laps."""
+        logger.info("InitialLoadWorker started.")
+
+        try:
+            # 1. Check Authentication
+            from trackpro.database.supabase_client import supabase as main_supabase
+            is_authenticated = False
+            user_id = None
+            try:
+                is_authenticated = main_supabase.is_authenticated()
+                if is_authenticated:
+                    # Corrected: Call get_user directly on the manager instance
+                    user_response = main_supabase.get_user() 
+                    if user_response and user_response.user:
+                        user_id = user_response.user.id
+                    else:
+                        logger.warning("InitialLoadWorker: is_authenticated is True, but get_user returned no user.")
+                        is_authenticated = False # Treat as not authenticated if user object is missing
+                logger.info(f"InitialLoadWorker: Auth check via main client: {is_authenticated}, UserID: {user_id}")
+            except Exception as auth_err:
+                # Log the specific error, check if it's the expected 'auth' attribute error
+                logger.error(f"Error checking auth state in InitialLoadWorker: {auth_err}", exc_info=True)
+                # Attempt to continue if possible, otherwise emit error
+                if "'SupabaseManager' object has no attribute 'auth'" in str(auth_err):
+                    logger.warning("Caught known auth attribute error, attempting recovery...")
+                    # Maybe try alternative ways to check auth or just proceed cautiously
+                    is_authenticated = False # Assume not authenticated if specific check fails
+                else:
+                    self.error.emit(f"Authentication check failed: {auth_err}")
+                    self.finished.emit()
+                    return
+
+            if self.is_cancelled: return
+
+            # If authentication failed (either initially or during user fetch), exit
+            if not is_authenticated or not user_id:
+                logger.warning("InitialLoadWorker: User not authenticated or user ID not found.")
+                self.sessions_loaded.emit([], "User not logged in")
+                self.laps_loaded.emit([], "User not logged in")
+                self.finished.emit()
+                return
+
+            # 2. Fetch User's Sessions from Supabase
+            logger.info("InitialLoadWorker: Fetching user sessions from Supabase...")
+            sessions, msg_sess = get_sessions(limit=100, user_only=True) # Increased limit slightly
+            
+            # Also check for cached session data in local file
+            local_sessions = []
+            try:
+                import os
+                import json
+                local_session_file = os.path.join(os.path.expanduser("~/Documents/TrackPro/Sessions"), "active_sessions.json")
+                
+                if os.path.exists(local_session_file):
+                    logger.info(f"InitialLoadWorker: Found local session cache file: {local_session_file}")
+                    with open(local_session_file, 'r') as f:
+                        cached_sessions = json.load(f)
+                    
+                    # Convert cached sessions to format expected by UI
+                    for session_id, session_data in cached_sessions.items():
+                        # Ensure the session belongs to this user
+                        if session_data.get('user_id') == user_id:
+                            # Check if this session is already in sessions list from Supabase
+                            if not any(s.get('id') == session_id for s in sessions if sessions):
+                                # Format the session data to match Supabase format
+                                formatted_session = {
+                                    'id': session_id,
+                                    'user_id': user_id,
+                                    'track_name': session_data.get('track_name', 'Unknown Track'),
+                                    'car_name': session_data.get('car_name', 'Unknown Car'),
+                                    'session_type': session_data.get('session_type', 'Race'),
+                                    'track_config': session_data.get('track_config', ''),
+                                    'session_date': session_data.get('timestamp', ''),
+                                    'is_local_cache': True  # Flag to indicate it came from local cache
+                                }
+                                local_sessions.append(formatted_session)
+                    
+                    logger.info(f"InitialLoadWorker: Loaded {len(local_sessions)} additional sessions from local cache")
+            except Exception as cache_error:
+                logger.error(f"InitialLoadWorker: Error loading local session cache: {cache_error}", exc_info=True)
+            
+            if self.is_cancelled: return
+
+            # Combine Supabase sessions and local sessions
+            if sessions is None:
+                sessions = []
+            
+            # Add local sessions to the list
+            combined_sessions = sessions + local_sessions
+            
+            if not combined_sessions:
+                logger.info("InitialLoadWorker: No sessions found for the user.")
+                self.sessions_loaded.emit([], "No sessions found")
+                self.laps_loaded.emit([], "No sessions found")
+                self.finished.emit()
+                return
+
+            # 3. Efficiently Find Session IDs with Laps
+            logger.info(f"InitialLoadWorker: Checking which of the {len(combined_sessions)} sessions have laps...")
+            session_ids = [s['id'] for s in combined_sessions if s.get('id')] # Get IDs of fetched sessions
+            lap_session_ids = set()
+            
+            if session_ids:
+                try:
+                    # Query laps table only for the session IDs we are interested in
+                    laps_query = main_supabase.client.table('laps') \
+                        .select('session_id') \
+                        .in_('session_id', session_ids) \
+                        .execute()
+                        
+                    if laps_query.data:
+                        lap_session_ids = {lap['session_id'] for lap in laps_query.data if lap.get('session_id')}
+                        logger.info(f"InitialLoadWorker: Found {len(lap_session_ids)} session IDs with laps.")
+                    else:
+                        logger.info("InitialLoadWorker: No laps found for any of the fetched sessions.")
+                        
+                except Exception as lap_fetch_err:
+                    logger.error(f"InitialLoadWorker: Error fetching lap session IDs: {lap_fetch_err}")
+                    # Proceed without filtering if this fails, but log the error
+                    lap_session_ids = set(session_ids) # Assume all have laps if query fails
+
+            # 4. Filter Sessions
+            # Include both sessions with laps and sessions from local cache (newer sessions might not have laps yet)
+            valid_sessions = [s for s in combined_sessions if s.get('id') in lap_session_ids or s.get('is_local_cache', False)]
+            
+            # Sort sessions by date (newest first)
+            valid_sessions.sort(key=lambda s: s.get('session_date', ''), reverse=True)
+            
+            logger.info(f"InitialLoadWorker: Filtered down to {len(valid_sessions)} sessions.")
+            
+            # Emit filtered sessions
+            self.sessions_loaded.emit(valid_sessions, msg_sess or "Sessions loaded")
+            if self.is_cancelled: return
+
+            # 5. Fetch Laps for the First Valid Session (if any)
+            first_session_id = None
+            if valid_sessions:
+                first_session_id = valid_sessions[0].get("id")
+
+            if first_session_id:
+                logger.info(f"InitialLoadWorker: Fetching laps for first valid session: {first_session_id}")
+                laps, msg_laps = get_laps(limit=50, user_only=True, session_id=first_session_id)
+                if self.is_cancelled: return
+
+                if laps is None:
+                    logger.error(f"InitialLoadWorker: Failed to fetch laps for first session: {msg_laps}")
+                    self.laps_loaded.emit([], f"Failed to load laps: {msg_laps}")
+                else:
+                    logger.info(f"InitialLoadWorker: Fetched {len(laps)} laps for the first valid session.")
+                    self.laps_loaded.emit(laps, msg_laps or "Laps loaded")
+            else:
+                logger.info("InitialLoadWorker: No valid sessions with laps found, skipping initial lap load.")
+                self.laps_loaded.emit([], "No sessions with laps found")
+
+            self.finished.emit()
+            logger.info("InitialLoadWorker finished.")
+
+        except Exception as e:
+            logger.error(f"Exception in InitialLoadWorker: {e}", exc_info=True)
+            self.error.emit(f"Worker Error: {e}")
+            self.finished.emit()
+
+    def cancel(self):
+        self.is_cancelled = True
+        logger.info("InitialLoadWorker cancellation requested.")
+# --- End Initial Load Worker ---
+
+class GaugeBase(QWidget):
+    """Base class for custom gauge widgets."""
+    def __init__(self, min_value=0, max_value=100, parent=None):
+        super().__init__(parent)
+        self.min_value = min_value
+        self.max_value = max_value
+        self.value = min_value
+        
+        # Appearance settings
+        self.gauge_color = QColor(0, 122, 204)  # #007ACC
+        self.background_color = QColor(45, 45, 48)  # #2D2D30
+        self.text_color = QColor(255, 255, 255)  # White
+        
+        # Set minimum size for proper rendering
+        self.setMinimumSize(200, 150)
+        
+    def set_value(self, value):
+        """Set the current value of the gauge."""
+        # Clamp value to range
+        self.value = max(self.min_value, min(self.max_value, value))
+        self.update()  # Trigger a repaint
+        
+    def get_normalized_value(self):
+        """Get the normalized value (0-1) for drawing."""
+        range_value = self.max_value - self.min_value
+        if range_value == 0:
+            return 0
+        return (self.value - self.min_value) / range_value
+        
+    def paintEvent(self, event):
+        """Override to implement custom painting."""
+        # Base class does nothing - override in subclasses
+        pass
+        
+class SpeedGauge(GaugeBase):
+    """Custom gauge widget for displaying vehicle speed."""
+    def __init__(self, parent=None):
+        super().__init__(0, 300, parent)  # Speed from 0-300 km/h
+        self.setObjectName("SpeedGauge")
+        self.title = "Speed"
+        self.units = "km/h"
+        
+        # Special colors for speed display
+        self.low_speed_color = QColor(0, 150, 200)
+        self.high_speed_color = QColor(255, 50, 50)
+        
+    def paintEvent(self, event):
+        """Paint the speed gauge."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        width = self.width()
+        height = self.height()
+        
+        # Enforce minimum size for proper rendering
+        if width < 100 or height < 50:
+            # Draw a simplified version for very small sizes
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(self.background_color))
+            painter.drawRect(0, 0, width, height)
+            
+            # Draw a simple horizontal bar for speed
+            normalized = self.get_normalized_value()
+            if normalized > 0:
+                fill_width = int(normalized * width)
+                
+                # Simple gradient from blue to red
+                gradient = QLinearGradient(0, 0, width, 0)
+                gradient.setColorAt(0, self.low_speed_color)
+                gradient.setColorAt(1, self.high_speed_color)
+                
+                painter.setBrush(QBrush(gradient))
+                painter.drawRect(0, 0, fill_width, height)
+            
+            # Add basic speed text if there's enough room
+            if width >= 40 and height >= 20:
+                painter.setPen(QPen(self.text_color))
+                painter.drawText(0, 0, width, height, Qt.AlignCenter, f"{self.value:.0f}")
+            
+            return
+        
+        # Regular rendering for normal sizes
+        # Calculate dimensions
+        padding = max(5, min(10, width / 20))  # Adaptive padding
+        gauge_width = width - (padding * 2)
+        gauge_height = max(10, min(30, height / 5))  # Adaptive height
+        
+        # Draw gauge background
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(self.background_color.darker(120)))
+        painter.drawRoundedRect(padding, height - gauge_height - padding, 
+                               gauge_width, gauge_height, 5, 5)
+        
+        # Draw gauge fill - gradient from blue to red based on speed
+        normalized = self.get_normalized_value()
+        if normalized > 0:
+            # Create gradient
+            gradient = QLinearGradient(padding, 0, padding + gauge_width, 0)
+            gradient.setColorAt(0, self.low_speed_color)
+            gradient.setColorAt(1, self.high_speed_color)
+            
+            painter.setBrush(QBrush(gradient))
+            fill_width = int(normalized * gauge_width)
+            painter.drawRoundedRect(padding, height - gauge_height - padding, 
+                                   fill_width, gauge_height, 5, 5)
+        
+        # Draw title if there's enough room
+        if height >= 80:
+            title_font = painter.font()
+            title_font.setPointSize(max(8, min(12, width / 20)))  # Adaptive font size
+            title_font.setBold(True)
+            painter.setFont(title_font)
+            painter.setPen(QPen(self.text_color))
+            painter.drawText(padding, padding, gauge_width, 30, 
+                            Qt.AlignLeft | Qt.AlignVCenter, self.title)
+        
+        # Draw value with adaptive font size
+        value_font = painter.font()
+        value_font.setPointSize(max(10, min(22, width / 10)))  # Adaptive font size
+        value_font.setBold(True)
+        painter.setFont(value_font)
+        value_text = f"{self.value:.1f} {self.units}"
+        painter.drawText(padding, 40, gauge_width, 50, 
+                        Qt.AlignCenter, value_text)
+        
+        # Only draw tick marks if there's enough room
+        if width >= 200 and height >= 100:
+            painter.setPen(QPen(self.text_color.lighter(150), 1))
+            tick_y = height - gauge_height - padding - 5
+            
+            # Major ticks every 50 km/h
+            for speed in range(0, int(self.max_value) + 1, 50):
+                tick_x = padding + (speed / self.max_value) * gauge_width
+                painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 10)
+                
+                # Draw tick label
+                painter.drawText(int(tick_x) - 15, tick_y - 15, 30, 20, 
+                                Qt.AlignCenter, str(speed))
+            
+            # Minor ticks every 10 km/h
+            painter.setPen(QPen(self.text_color.lighter(120), 0.5))
+            for speed in range(0, int(self.max_value) + 1, 10):
+                if speed % 50 != 0:  # Skip major ticks
+                    tick_x = padding + (speed / self.max_value) * gauge_width
+                    painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 5)
+        
+class RPMGauge(GaugeBase):
+    """Custom gauge widget for displaying engine RPM."""
+    def __init__(self, parent=None):
+        super().__init__(0, 10000, parent)  # RPM from 0-10000
+        self.setObjectName("RPMGauge")
+        self.title = "RPM"
+        self.redline = 7500  # Default redline
+        
+    def set_redline(self, redline):
+        """Set the redline RPM value."""
+        self.redline = redline
+        self.update()
+        
+    def paintEvent(self, event):
+        """Paint the RPM gauge."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        width = self.width()
+        height = self.height()
+        
+        # Enforce minimum size for proper rendering
+        if width < 100 or height < 100:
+            # Draw a simplified version for very small sizes
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(self.background_color))
+            painter.drawRect(0, 0, width, height)
+            
+            # Draw a simple arc for RPM if possible
+            if width >= 40 and height >= 40:
+                center_x = width / 2
+                center_y = height / 2
+                radius = min(width, height) / 2 - 2
+                
+                # Draw background arc
+                arc_rect = QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2)
+                painter.setPen(QPen(self.text_color.darker(120), 2))
+                painter.drawArc(arc_rect, 135 * 16, 270 * 16)
+                
+                # Draw filled arc for current RPM
+                normalized = self.get_normalized_value()
+                if normalized > 0:
+                    redline_normalized = (self.redline - self.min_value) / (self.max_value - self.min_value)
+                    
+                    # Determine color based on whether RPM is approaching redline
+                    if normalized < redline_normalized * 0.8:
+                        gauge_color = QColor(0, 150, 200)  # Blue for normal operation
+                    elif normalized < redline_normalized:
+                        gauge_color = QColor(255, 150, 0)  # Orange for approaching redline
+                    else:
+                        gauge_color = QColor(255, 50, 50)  # Red for at/beyond redline
+                        
+                    # Draw filled arc
+                    painter.setPen(QPen(gauge_color, 2, Qt.SolidLine, Qt.RoundCap))
+                    span = normalized * 270
+                    painter.drawArc(arc_rect, 135 * 16, int(span * 16))
+            
+            # Add basic RPM text
+            painter.setPen(QPen(self.text_color))
+            rpm_text = f"{self.value/1000:.1f}k"
+            painter.drawText(0, 0, width, height, Qt.AlignCenter, rpm_text)
+            
+            return
+        
+        # Regular rendering for normal sizes
+        # Calculate dimensions and center point
+        margin = max(5, min(10, width / 20))  # Adaptive margin
+        center_x = width / 2
+        center_y = height / 2
+        radius = min(width, height) / 2 - margin
+        
+        # Draw gauge background - arc from 135° to 405° (270° span)
+        start_angle = 135
+        span_angle = 270
+        arc_rect = QRectF(QPointF(center_x - radius, center_y - radius), QSizeF(radius * 2, radius * 2))
+        
+        # Draw outer ring
+        painter.setPen(QPen(self.text_color.darker(120), 5))
+        painter.drawArc(arc_rect, start_angle * 16, span_angle * 16)
+        
+        # Calculate normalized position for current value and redline
+        normalized = self.get_normalized_value()
+        redline_normalized = (self.redline - self.min_value) / (self.max_value - self.min_value)
+        
+        # Draw filled arc for current RPM
+        if normalized > 0:
+            # Determine color based on whether RPM is approaching redline
+            if normalized < redline_normalized * 0.8:
+                gauge_color = QColor(0, 150, 200)  # Blue for normal operation
+            elif normalized < redline_normalized:
+                gauge_color = QColor(255, 150, 0)  # Orange for approaching redline
+            else:
+                gauge_color = QColor(255, 50, 50)  # Red for at/beyond redline
+                
+            # Draw filled arc
+            pen_width = max(5, min(10, width / 30))  # Adaptive pen width
+            painter.setPen(QPen(gauge_color, pen_width, Qt.SolidLine, Qt.RoundCap))
+            span = normalized * span_angle
+            painter.drawArc(arc_rect, start_angle * 16, int(span * 16))
+        
+        # Draw redline marker
+        if redline_normalized > 0 and redline_normalized <= 1:
+            redline_angle = start_angle + (redline_normalized * span_angle)
+            redline_x = center_x + radius * 0.95 * math.cos(math.radians(redline_angle))
+            redline_y = center_y + radius * 0.95 * math.sin(math.radians(redline_angle))
+            
+            painter.setPen(QPen(QColor(255, 0, 0), 3))  # Thick red pen
+            painter.drawLine(int(center_x), int(center_y), int(redline_x), int(redline_y))
+        
+        # Draw RPM text in center
+        value_font = painter.font()
+        value_font.setPointSize(18)
+        value_font.setBold(True)
+        painter.setFont(value_font)
+        painter.setPen(QPen(self.text_color))
+        
+        # Format RPM text - show in thousands with one decimal place
+        rpm_text = f"{self.value/1000:.1f}k"
+        painter.drawText(arc_rect, Qt.AlignCenter, rpm_text)
+        
+        # Draw title text
+        title_font = painter.font()
+        title_font.setPointSize(12)
+        painter.setFont(title_font)
+        title_rect = QRectF(arc_rect.left(), arc_rect.top() + arc_rect.height() // 2 + 10,
+                          arc_rect.width(), 30)
+        painter.drawText(title_rect, Qt.AlignCenter, self.title)
+
+class SteeringWheelWidget(GaugeBase):
+    """Widget for steering wheel visualization."""
+    
+    def __init__(self, parent=None):
+        super().__init__(-1.0, 1.0, parent)  # Steering ranges from -1.0 to 1.0
+        self.setObjectName("SteeringWheelWidget")
+        self.title = "Steering"
+        
+        # Special colors and settings for the steering display
+        self.wheel_color = QColor(50, 50, 50)  # Dark gray for wheel
+        self.wheel_rim_color = QColor(80, 80, 80)  # Lighter gray for rim
+        self.wheel_marker_color = QColor(255, 0, 0)  # Red for center marker
+        self.steering_angle = 0.0  # Current steering angle in radians
+        # Set max rotation to handle 1080-degree wheels (convert to radians)
+        # 1080 degrees = 3 * 360 degrees = 3 * 2π radians ≈ 18.85 radians 
+        self.max_rotation = 3.0 * math.pi  # Maximum steering wheel rotation in radians (1080 degrees)
+        
+        # Set minimum size for proper rendering
+        self.setMinimumSize(180, 180)
+        
+        # Performance optimization: cache the rendered wheel
+        self._cached_wheel = None
+        self._last_size = (0, 0)
+        self._last_angle = None
+        
+    def set_value(self, value):
+        """Set the current steering wheel angle (-1.0 to 1.0)."""
+        # Call the parent method to handle normalization
+        old_value = self.value
+        super().set_value(value)
+        
+        # Only update the angle if the value has actually changed
+        if old_value != self.value:
+            self.steering_angle = value * self.max_rotation
+            self._last_angle = None  # Invalidate the cache when angle changes
+            self.update()  # Trigger a repaint
+        
+    def set_max_rotation(self, max_rotation):
+        """Set the maximum rotation angle in radians."""
+        if self.max_rotation != max_rotation:
+            self.max_rotation = max_rotation
+            self._last_angle = None  # Invalidate the cache
+            self.update()
+        
+    def paintEvent(self, event):
+        """Paint the steering wheel visualization."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        width = self.width()
+        height = self.height()
+        
+        # Enforce minimum size for proper rendering
+        if width < 100 or height < 100:
+            # Draw a simplified version for very small sizes
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(self.background_color))
+            painter.drawRect(0, 0, width, height)
+            
+            # Draw a simple line indicating steering direction
+            if width >= 40 and height >= 40:
+                center_x = width / 2
+                center_y = height / 2
+                line_length = min(width, height) / 2 - 5
+                
+                # Calculate the steering angle for visualization
+                angle = self.steering_angle
+                
+                # Line endpoint
+                end_x = center_x + line_length * math.sin(angle)
+                end_y = center_y - line_length * math.cos(angle)
+                
+                # Draw the line
+                painter.setPen(QPen(QColor(255, 255, 255), 2))
+                painter.drawLine(int(center_x), int(center_y), int(end_x), int(end_y))
+            
+            return
+        
+        # Regular rendering for normal sizes
+        # Calculate dimensions and center point
+        center_x = width / 2
+        center_y = height / 2
+        
+        # Check if we need to redraw the cached wheel
+        current_size = (width, height)
+        if self._cached_wheel is None or self._last_size != current_size or self._last_angle != self.steering_angle:
+            # Clear the old cache if size changed
+            if self._last_size != current_size:
+                self._cached_wheel = None
+                
+            self._last_size = current_size
+            self._last_angle = self.steering_angle
+            
+            # Create new pixmap cache for the wheel at current size and angle
+            self._cached_wheel = QPixmap(width, height)
+            self._cached_wheel.fill(Qt.transparent)
+            
+            # Create a painter for the cached wheel
+            cache_painter = QPainter(self._cached_wheel)
+            cache_painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Draw the wheel on the cached pixmap
+            self._draw_wheel(cache_painter, width, height, center_x, center_y)
+            
+            # End painting on the cache
+            cache_painter.end()
+        
+        # Draw the cached wheel to the widget
+        painter.drawPixmap(0, 0, self._cached_wheel)
+        
+        # Draw the steering angle indicator and bar - always draw these directly
+        self._draw_angle_indicator(painter, width, height, center_x, center_y)
+        
+    def _draw_wheel(self, painter, width, height, center_x, center_y):
+        """Draw the steering wheel on the given painter."""
+        wheel_radius = min(width, height) / 2 * 0.85  # 85% of the available space
+        
+        # Save the painter state to restore later
+        painter.save()
+        
+        # Set up transformation for wheel rotation
+        painter.translate(center_x, center_y)
+        painter.rotate(-self.steering_angle * 180 / math.pi)  # Convert to degrees for rotate()
+        
+        # Draw steering wheel outer rim
+        pen_width = max(2, min(5, wheel_radius / 20))
+        painter.setPen(QPen(self.wheel_rim_color, pen_width))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(0, 0), wheel_radius, wheel_radius)
+        
+        # Draw wheel spokes
+        spoke_width = max(2, min(4, wheel_radius / 30))
+        painter.setPen(QPen(self.wheel_rim_color, spoke_width))
+        
+        # Cross spokes
+        inner_radius = wheel_radius * 0.2  # Small central hub
+        
+        # Horizontal spoke
+        painter.drawLine(int(-wheel_radius), 0, int(-inner_radius), 0)
+        painter.drawLine(int(inner_radius), 0, int(wheel_radius), 0)
+        
+        # Vertical spoke
+        painter.drawLine(0, int(-wheel_radius), 0, int(-inner_radius))
+        painter.drawLine(0, int(inner_radius), 0, int(wheel_radius))
+        
+        # Diagonal spokes
+        angle = math.pi / 4  # 45 degrees
+        x1 = wheel_radius * math.cos(angle)
+        y1 = wheel_radius * math.sin(angle)
+        x2 = inner_radius * math.cos(angle)
+        y2 = inner_radius * math.sin(angle)
+        
+        # Draw 4 diagonal spokes
+        painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+        painter.drawLine(int(-x1), int(y1), int(-x2), int(y2))
+        painter.drawLine(int(x1), int(-y1), int(x2), int(-y2))
+        painter.drawLine(int(-x1), int(-y1), int(-x2), int(-y2))
+        
+        # Draw central hub
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(self.wheel_color))
+        painter.drawEllipse(QPointF(0, 0), inner_radius, inner_radius)
+        
+        # Draw center marker
+        painter.setPen(QPen(self.wheel_marker_color, spoke_width))
+        marker_size = inner_radius * 0.6
+        painter.drawLine(0, int(-marker_size), 0, int(marker_size))
+        
+        # Restore painter state
+        painter.restore()
+        
+    def _draw_angle_indicator(self, painter, width, height, center_x, center_y):
+        """Draw the angle indicator and steering bar."""
+        wheel_radius = min(width, height) / 2 * 0.85
+        
+        # Draw steering angle indicator outside the wheel
+        angle_text = f"{(self.steering_angle * 180 / math.pi):.1f}°"
+        painter.setPen(QPen(self.text_color))
+        painter.setFont(QFont("Arial", 10))
+        
+        # Position text below the wheel
+        text_y = center_y + wheel_radius + 20
+        painter.drawText(0, int(text_y), width, 20, Qt.AlignCenter, angle_text)
+        
+        # Draw title
+        title_font = painter.font()
+        title_font.setPointSize(12)
+        painter.setFont(title_font)
+        painter.drawText(0, 15, width, 20, Qt.AlignCenter, self.title)
+        
+        # Draw steering angle bar at the bottom
+        bar_width = width * 0.8
+        bar_height = max(8, min(12, height / 20))
+        bar_x = (width - bar_width) / 2
+        bar_y = height - bar_height - 10
+        
+        # Draw the bar background
+        painter.setPen(QPen(QColor(60, 60, 60)))
+        painter.setBrush(QBrush(QColor(30, 30, 30)))
+        painter.drawRect(int(bar_x), int(bar_y), int(bar_width), int(bar_height))
+        
+        # Draw the center line
+        center_line_x = bar_x + bar_width / 2
+        painter.setPen(QPen(QColor(150, 150, 150)))
+        painter.drawLine(int(center_line_x), int(bar_y - 3), int(center_line_x), int(bar_y + bar_height + 3))
+        
+        # Draw the current position indicator
+        # Apply a visualization scaling factor to make the bar more responsive 
+        # This makes the bar show more reasonable deflection for typical steering inputs
+        # Most racing games only use a fraction of the wheel's physical rotation range
+        visualization_scale = 0.4  # This means full bar deflection at 40% of max rotation
+        
+        # Map the range [-max_rotation*visualization_scale, +max_rotation*visualization_scale] to [0, 1]
+        # This provides better visual feedback for actual in-game steering
+        if self.max_rotation > 0:
+            scaled_rotation = self.max_rotation * visualization_scale
+            true_normalized = (self.steering_angle / scaled_rotation + 1.0) / 2.0
+            # Clamp to ensure the bar stays within bounds
+            true_normalized = max(0.0, min(1.0, true_normalized))
+        else:
+            true_normalized = 0.5 # Center if max_rotation is zero
+            
+        position = bar_x + bar_width * true_normalized
+        
+        # Use different colors for left and right
+        if self.steering_angle < 0:
+            indicator_color = QColor(0, 150, 255)  # Blue for left turns
+        else:
+            indicator_color = QColor(255, 100, 0)  # Orange for right turns
+            
+        indicator_width = bar_width / 10
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(indicator_color))
+        painter.drawRect(int(center_line_x), int(bar_y), int((position - center_line_x)), int(bar_height))
+
+# Import the required classes here
+import math
+
+class InputTraceWidget(QWidget):
+    """Widget to display a history of driver inputs as a small graph."""
+    
+    # Add a signal for safer threaded updates
+    data_updated = pyqtSignal()
+    
+    def __init__(self, parent=None, max_points=100):
+        """Initialize the input trace widget."""
+        super().__init__(parent)
+        
+        # Settings
+        self.max_points = max_points
+        self.throttle_color = QColor("#4CAF50")  # Green
+        self.brake_color = QColor("#FF5252")     # Red
+        self.clutch_color = QColor("#FFC107")    # Amber
+        self.background_color = QColor(30, 30, 30, 180)
+        self.grid_color = QColor(70, 70, 70, 100)
+        
+        # Initialize data arrays
+        self.throttle_data = np.zeros(max_points, dtype=float)
+        self.brake_data = np.zeros(max_points, dtype=float)
+        self.clutch_data = np.zeros(max_points, dtype=float)
+        
+        # Set minimum size
+        self.setMinimumSize(300, 120)
+        
+        # Visual settings
+        self.setAutoFillBackground(True)
+        palette = self.palette()
+        palette.setColor(QPalette.Window, self.background_color)
+        self.setPalette(palette)
+        
+        # Use a mutex to protect the data during updates
+        self._data_mutex = threading.Lock()
+        
+        # Connect our signal to trigger update
+        self.data_updated.connect(self.update)
+        
+    def add_data_point(self, throttle, brake, clutch):
+        """Add a new data point to the trace display.
+        
+        Args:
+            throttle: Throttle input (0-1)
+            brake: Brake input (0-1)
+            clutch: Clutch input (0-1)
+        """
+        # Lock the data during update
+        with self._data_mutex:
+            # Shift arrays and add new values
+            self.throttle_data = np.roll(self.throttle_data, -1)
+            self.brake_data = np.roll(self.brake_data, -1)
+            self.clutch_data = np.roll(self.clutch_data, -1)
+            
+            self.throttle_data[-1] = throttle
+            self.brake_data[-1] = brake
+            # Reverse clutch value to make it display in the same direction as throttle and brake
+            self.clutch_data[-1] = 1.0 - clutch  # Reverse the clutch value
+        
+        # Emit signal to trigger a repaint on the main thread
+        self.data_updated.emit()
+        
+    def clear_data(self):
+        """Clear all data from the trace display."""
+        with self._data_mutex:
+            self.throttle_data[:] = 0
+            self.brake_data[:] = 0
+            self.clutch_data[:] = 0
+            
+        # Emit signal to trigger a repaint on the main thread
+        self.data_updated.emit()
+        
+    def paintEvent(self, event):
+        """Paint the input trace visualization."""
+        # Create a copy of the data to avoid threading issues during paint
+        with self._data_mutex:
+            throttle_data = self.throttle_data.copy()
+            brake_data = self.brake_data.copy()
+            clutch_data = self.clutch_data.copy()
+        
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        width = self.width()
+        height = self.height()
+        
+        # Calculate drawing area - increase padding for better spacing
+        padding = 20
+        left_padding = 35  # More space for y-axis labels
+        right_padding = 15
+        top_padding = 20   # More space for title
+        bottom_padding = 25  # More space for x-axis label
+        
+        graph_width = width - (left_padding + right_padding)
+        graph_height = height - (top_padding + bottom_padding)
+        
+        # Draw background (already handled by palette)
+        
+        # Draw title text at top with better positioning
+        title_font = painter.font()
+        title_font.setPointSize(10)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.setPen(QPen(Qt.white))
+        painter.drawText(int(width/2 - 75), 15, "Input Trace")
+        
+        # Draw axis labels
+        axis_font = painter.font()
+        axis_font.setPointSize(8)
+        painter.setFont(axis_font)
+        
+        # Y-axis labels with better positioning
+        painter.drawText(5, top_padding - 5, "100%")
+        painter.drawText(5, int(top_padding + graph_height / 2), "50%")
+        painter.drawText(5, top_padding + graph_height + 5, "0%")
+        
+        # X-axis label - Time with better positioning
+        painter.drawText(int(width / 2 - 15), height - 5, "Time →")
+        
+        # Draw grid lines
+        painter.setPen(QPen(self.grid_color, 1, Qt.DashLine))
+        
+        # Horizontal grid lines at 25%, 50%, 75%
+        for y_pct in [0.25, 0.5, 0.75]:
+            y = top_padding + (1.0 - y_pct) * graph_height
+            painter.drawLine(left_padding, int(y), left_padding + graph_width, int(y))
+        
+        # Vertical grid lines every 25% of width
+        for x_pct in [0.25, 0.5, 0.75]:
+            x = left_padding + x_pct * graph_width
+            painter.drawLine(int(x), top_padding, int(x), top_padding + graph_height)
+            
+        # Draw border
+        painter.setPen(QPen(self.grid_color.lighter(120), 1))
+        painter.drawRect(left_padding, top_padding, graph_width, graph_height)
+        
+        # Draw data traces if we have any data
+        if np.max(throttle_data) > 0 or np.max(brake_data) > 0 or np.max(clutch_data) > 0:
+            # Calculate points for each data set
+            data_len = len(throttle_data)
+            x_step = graph_width / (data_len - 1) if data_len > 1 else graph_width
+            
+            # Draw throttle trace
+            throttle_pen = QPen(self.throttle_color, 2)
+            painter.setPen(throttle_pen)
+            
+            for i in range(data_len - 1):
+                x1 = left_padding + i * x_step
+                y1 = top_padding + graph_height - (throttle_data[i] * graph_height)
+                x2 = left_padding + (i + 1) * x_step
+                y2 = top_padding + graph_height - (throttle_data[i + 1] * graph_height)
+                painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+                
+            # Draw brake trace
+            brake_pen = QPen(self.brake_color, 2)
+            painter.setPen(brake_pen)
+            
+            for i in range(data_len - 1):
+                x1 = left_padding + i * x_step
+                y1 = top_padding + graph_height - (brake_data[i] * graph_height)
+                x2 = left_padding + (i + 1) * x_step
+                y2 = top_padding + graph_height - (brake_data[i + 1] * graph_height)
+                painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+                
+            # Draw clutch trace
+            clutch_pen = QPen(self.clutch_color, 2)
+            painter.setPen(clutch_pen)
+            
+            for i in range(data_len - 1):
+                x1 = left_padding + i * x_step
+                y1 = top_padding + graph_height - (clutch_data[i] * graph_height)
+                x2 = left_padding + (i + 1) * x_step
+                y2 = top_padding + graph_height - (clutch_data[i + 1] * graph_height)
+                painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+                
+        # Draw legend with better positioning and spacing
+        legend_width = 80
+        legend_padding = 10
+        legend_height = 15
+        legend_spacing = 15
+        # Move legend to top-left corner instead of right side
+        legend_x = left_padding + 10
+        legend_y = top_padding + 10
+        
+        # Draw legend background for better visibility
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(30, 30, 30, 180)))
+        painter.drawRect(legend_x - 5, legend_y - 5, legend_width, 3 * legend_height + 2 * legend_spacing + 10)
+        
+        # Throttle
+        painter.setPen(self.throttle_color)
+        painter.drawLine(legend_x, legend_y, legend_x + 15, legend_y)
+        painter.drawText(legend_x + 20, legend_y + 5, "Throttle")
+        
+        # Brake
+        painter.setPen(self.brake_color)
+        painter.drawLine(legend_x, legend_y + legend_height + legend_spacing, legend_x + 15, legend_y + legend_height + legend_spacing)
+        painter.drawText(legend_x + 20, legend_y + legend_height + legend_spacing + 5, "Brake")
+        
+        # Clutch
+        painter.setPen(self.clutch_color)
+        painter.drawLine(legend_x, legend_y + 2 * (legend_height + legend_spacing), legend_x + 15, legend_y + 2 * (legend_height + legend_spacing))
+        painter.drawText(legend_x + 20, legend_y + 2 * (legend_height + legend_spacing) + 5, "Clutch")
+
+# --- New Widget for Speed Trace Graph ---
+class SpeedTraceGraphWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.speed_data_left = []
+        self.speed_data_right = []
+        self.left_driver_color = QColor(255, 0, 0)
+        self.right_driver_color = QColor(255, 215, 0)
+        self.left_driver_name = "Driver 1"
+        self.right_driver_name = "Driver 2"
+        self.setMinimumHeight(200)
+        self.setStyleSheet("""
+            background-color: #111;
+            border: 1px solid #444;
+            border-radius: 5px;
+        """)
+
+    def set_data(self, speed_left, speed_right, left_color, right_color, left_name, right_name):
+        self.speed_data_left = speed_left
+        self.speed_data_right = speed_right
+        self.left_driver_color = left_color
+        self.right_driver_color = right_color
+        self.left_driver_name = left_name
+        self.right_driver_name = right_name
+        self.update() # Trigger repaint when data changes
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        width = self.width()
+        height = self.height()
+
+        # Define graph area (relative to this widget's coordinates)
+        speed_top = 0
+        speed_height = height
+        speed_bottom = height
+
+        # Draw background is handled by stylesheet
+
+        # Add subtle grid pattern for F1 style
+        painter.setPen(QPen(QColor(40, 40, 40, 180), 1))
+        grid_spacing_h = width / 20 if width > 0 else 0
+        for i in range(21):
+            x = i * grid_spacing_h
+            painter.drawLine(int(x), int(speed_top), int(x), int(speed_bottom))
+
+        # Draw speed trace labels (every 50 km/h)
+        max_speed = 350  # Default headroom
+        # Safely calculate max_speed
+        all_speeds = []
+        if self.speed_data_left: all_speeds.extend(filter(lambda x: isinstance(x, (int, float)), self.speed_data_left))
+        if self.speed_data_right: all_speeds.extend(filter(lambda x: isinstance(x, (int, float)), self.speed_data_right))
+        if all_speeds:
+             max_speed = max(max_speed, max(all_speeds) * 1.1)
+        max_speed = math.ceil(max_speed / 50.0) * 50 if max_speed > 0 else 50
+
+        painter.setPen(QPen(QColor(70, 70, 70)))
+        painter.setFont(QFont("Arial", 8))
+        if max_speed > 0:
+            for speed in range(0, int(max_speed) + 50, 50):
+                y = speed_bottom - (speed / max_speed) * speed_height
+                painter.drawLine(0, int(y), width, int(y))
+                painter.setPen(QPen(QColor(180, 180, 180)))
+                painter.drawText(5, int(y - 2), f"{speed}")
+                painter.setPen(QPen(QColor(70, 70, 70)))
+
+        # Label the speed trace
+        painter.setPen(QPen(QColor(220, 220, 220)))
+        painter.setFont(QFont("Arial", 10, QFont.Bold))
+        painter.drawText(10, int(speed_top + 20), "SPEED (km/h)")
+
+        # Draw segment labels for speed categories
+        segment_labels = ["LOW SPEED", "MEDIUM SPEED", "HIGH SPEED", "HIGH SPEED", "MEDIUM SPEED", "LOW SPEED"]
+        if width > 0 and len(segment_labels) > 0:
+            segment_width = width / len(segment_labels)
+            segment_colors = {
+                "LOW SPEED": QColor(200, 40, 40, 20),
+                "MEDIUM SPEED": QColor(200, 200, 40, 20),
+                "HIGH SPEED": QColor(40, 200, 40, 20)
+            }
+            painter.setFont(QFont("Arial", 8))
+            for i, label in enumerate(segment_labels):
+                x = i * segment_width
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(segment_colors.get(label, QColor(0,0,0,0))))
+                painter.drawRect(int(x), int(speed_top), int(segment_width), int(speed_height))
+                painter.setPen(QPen(QColor(180, 180, 180)))
+                text_width = painter.fontMetrics().width(label)
+                painter.drawText(int(x + (segment_width - text_width)/2), int(speed_top + 15), label)
+                if i > 0:
+                    painter.setPen(QPen(QColor(70, 70, 70), 1, Qt.DashLine))
+                    painter.drawLine(int(i * segment_width), int(speed_top), int(i * segment_width), int(speed_bottom))
+
+        # Draw speed traces with improved styling
+        line_width = 3
+        # Check if data exists and has enough points
+        has_left_data = self.speed_data_left and len(self.speed_data_left) > 1
+        has_right_data = self.speed_data_right and len(self.speed_data_right) > 1
+
+        if not has_left_data or not has_right_data:
+            painter.setPen(QPen(QColor(240, 240, 240)))
+            painter.setFont(QFont("Arial", 14, QFont.Bold))
+            painter.drawText(QRectF(0, speed_top, width, speed_height), Qt.AlignCenter, "Speed Comparison Data Missing")
+        else:
+            # Draw left driver's speed trace
+            if max_speed > 0:
+                try:
+                    points = []
+                    x_step = width / (len(self.speed_data_left) - 1)
+                    for i, speed in enumerate(self.speed_data_left):
+                        # Ensure speed is a number before calculating y
+                        if isinstance(speed, (int, float)):
+                             y = speed_bottom - (speed / max_speed) * speed_height
+                             points.append((i * x_step, y))
+                        else:
+                             logger.warning(f"Non-numeric speed value in left data at index {i}: {speed}")
+
+                    shadow_pen = QPen(QColor(0, 0, 0, 150), line_width + 2)
+                    painter.setPen(shadow_pen)
+                    for i in range(len(points) - 1):
+                        painter.drawLine(int(points[i][0]), int(points[i][1]) + 2, int(points[i+1][0]), int(points[i+1][1]) + 2)
+                    left_color = QColor(self.left_driver_color)
+                    left_color.setAlpha(255)
+                    painter.setPen(QPen(left_color, line_width))
+                    for i in range(len(points) - 1):
+                        painter.drawLine(int(points[i][0]), int(points[i][1]), int(points[i+1][0]), int(points[i+1][1]))
+                except Exception as e:
+                    logger.error(f"Error drawing left driver speed trace: {e}")
+            
+            # Draw right driver's speed trace
+            if max_speed > 0:
+                try:
+                    points = []
+                    x_step = width / (len(self.speed_data_right) - 1)
+                    for i, speed in enumerate(self.speed_data_right):
+                         # Ensure speed is a number before calculating y
+                        if isinstance(speed, (int, float)):
+                             y = speed_bottom - (speed / max_speed) * speed_height
+                             points.append((i * x_step, y))
+                        else:
+                             logger.warning(f"Non-numeric speed value in right data at index {i}: {speed}")
+
+                    shadow_pen = QPen(QColor(0, 0, 0, 150), line_width + 2)
+                    painter.setPen(shadow_pen)
+                    for i in range(len(points) - 1):
+                        painter.drawLine(int(points[i][0]), int(points[i][1]) + 2, int(points[i+1][0]), int(points[i+1][1]) + 2)
+                    right_color = QColor(self.right_driver_color)
+                    right_color.setAlpha(255)
+                    painter.setPen(QPen(right_color, line_width))
+                    for i in range(len(points) - 1):
+                        painter.drawLine(int(points[i][0]), int(points[i][1]), int(points[i+1][0]), int(points[i+1][1]))
+                except Exception as e:
+                    logger.error(f"Error drawing right driver speed trace: {e}")
+            
+            # Add driver color indicators
+            try:
+                legend_y = speed_top + 20
+                legend_width = 30
+                legend_height = 2
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(self.left_driver_color))
+                painter.drawRect(int(width - 120), int(legend_y), legend_width, legend_height)
+                painter.setPen(QPen(QColor(220, 220, 220)))
+                painter.drawText(int(width - 120 + legend_width + 5), int(legend_y + 4), self.left_driver_name)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(self.right_driver_color))
+                painter.drawRect(int(width - 120), int(legend_y + 15), legend_width, legend_height)
+                painter.setPen(QPen(QColor(220, 220, 220)))
+                painter.drawText(int(width - 120 + legend_width + 5), int(legend_y + 19), self.right_driver_name)
+            except Exception as e:
+                logger.error(f"Error drawing speed trace legend: {e}")
+# --- End New Widget ---
+
+class TelemetryComparisonWidget(QWidget):
+    """Widget to display F1-style telemetry comparison between two laps."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.left_driver = {}
+        self.right_driver = {}
+        self.track_map_points = []
+        self.track_turns = {}
+        self.track_sectors = {}
+        self.setup_ui()
+
+    def setup_ui(self):
+        """Set up the comparison layout UI."""
+        # Main layout
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(10)
+        
+        # Top section with track map
+        top_section = QHBoxLayout()
+        
+        # Track map widget in center
+        track_map_widget = QFrame()
+        track_map_widget.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        track_map_widget.setStyleSheet("""
+            background-color: #111;
+            border: 1px solid #444;
+            border-radius: 5px;
+        """)
+        
+        # Add track map to top layout - now it takes full width
+        top_section.addWidget(track_map_widget, 1)
+        
+        # Add top section to main layout
+        main_layout.addLayout(top_section)
+
+    def _format_time(self, time_in_seconds):
+        """Format time in seconds to MM:SS.mmm format."""
+        if time_in_seconds is None:
+            return "--:--.---"
+        minutes = int(time_in_seconds // 60)
+        seconds = time_in_seconds % 60
+        return f"{minutes:02d}:{seconds:06.3f}"
+
+    def get_track_length(self):
+        """Get the current track length in meters."""
+        # Try to get track length from session info
+        if hasattr(self, 'session_info') and self.session_info:
+            track_length = self.session_info.get('track_length', 0)
+            if track_length > 0:
+                return track_length
+                
+        # Fall back to checking context of currently loaded data
+        if hasattr(self, 'throttle_graph') and hasattr(self.throttle_graph, 'track_length'):
+            graph_track_length = self.throttle_graph.track_length
+            if graph_track_length > 0:
+                return graph_track_length
+                
+        # Default value if we can't find track length anywhere
+        return 1000  # 1000 meters default
+
+    def set_driver_data(self, is_left_driver, data):
+        """Set driver data and update display.
+        
+        Args:
+            is_left_driver: True if setting left driver data, False for right
+            data: Dictionary containing driver data
+        """
+        if is_left_driver:
+            self.left_driver = data
+        else:
+            self.right_driver = data
+        # No longer need to update driver display
+        
+    def update_driver_display(self, is_left_driver):
+        """Update the display for a driver's data.
+        
+        Args:
+            is_left_driver: True to update left driver display, False for right
+        """
+        # Method kept for backward compatibility but no longer updates UI
+        pass
+
+    def set_track_data(self, track_map_points, turn_data, sector_data):
+        """Set the track map data.
+        
+        Args:
+            track_map_points: List of (x, y) points defining the track outline
+            turn_data: Dictionary mapping turn numbers to track positions
+            sector_data: Dictionary defining speed sectors
+        """
+        self.track_map_points = track_map_points
+        self.track_turns = turn_data
+        self.track_sectors = sector_data
+        self.update()
+
+    def paintEvent(self, event):
+        """Paint the comparison widget with real data."""
+        try:
+            super().paintEvent(event)
+            
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Get widget dimensions
+            width = self.width()
+            height = self.height()
+            
+            # Draw track map in the center top area
+            track_map_top = height * 0.05
+            track_map_height = height * 0.45
+            track_map_bottom = track_map_top + track_map_height
+            track_map_left = width * 0.1  # Adjusted to use more width
+            track_map_width = width * 0.8  # Increased width for track map
+            track_map_right = track_map_left + track_map_width
+            
+            # Background for track map
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(25, 25, 25)))
+            painter.drawRect(int(track_map_left), int(track_map_top), int(track_map_width), int(track_map_height))
+            
+            # Draw track outline if we have points
+            if self.track_map_points:
+                # Calculate scale and offset to fit track in view
+                x_coords = [p[0] for p in self.track_map_points]
+                y_coords = [p[1] for p in self.track_map_points]
+                
+                track_width = max(x_coords) - min(x_coords)
+                track_height = max(y_coords) - min(y_coords)
+                
+                # Scale to fit with padding
+                padding = 20
+                scale_x = (track_map_width - padding*2) / track_width if track_width > 0 else 1
+                scale_y = (track_map_height - padding*2) / track_height if track_height > 0 else 1
+                scale = min(scale_x, scale_y)
+                
+                # Center the track
+                offset_x = track_map_left + track_map_width/2 - (max(x_coords) + min(x_coords))*scale/2
+                offset_y = track_map_top + track_map_height/2 - (max(y_coords) + min(y_coords))*scale/2
+                
+                # Draw track outline
+                track_path = QPainterPath()
+                first_point = True
+                for x, y in self.track_map_points:
+                    screen_x = offset_x + x * scale
+                    screen_y = offset_y + y * scale
+                    if first_point:
+                        track_path.moveTo(screen_x, screen_y)
+                        first_point = False
+                    else:
+                        track_path.lineTo(screen_x, screen_y)
+                track_path.closeSubpath()
+                
+                # Draw track with shadow effect
+                shadow_color = QColor(0, 0, 0, 100)
+                shadow_offset = 3
+                painter.setPen(QPen(shadow_color, 3))
+                painter.drawPath(track_path.translated(shadow_offset, shadow_offset))
+                
+                # Draw actual track
+                painter.setPen(QPen(QColor(200, 200, 200), 2))
+                painter.drawPath(track_path)
+                
+                # Draw turn markers and numbers
+                painter.setPen(QPen(QColor(220, 220, 220)))
+                painter.setFont(QFont("Arial", 8))
+                
+                for turn_num, turn_data in self.track_turns.items():
+                    if "position" in turn_data:
+                        x, y = turn_data["position"]
+                        screen_x = offset_x + x * scale
+                        screen_y = offset_y + y * scale
+                        
+                        # Draw turn marker
+                        painter.setBrush(QBrush(QColor(200, 200, 200)))
+                        painter.drawEllipse(int(screen_x - 3), int(screen_y - 3), 6, 6)
+                        
+                        # Draw turn number
+                        painter.drawText(int(screen_x + 5), int(screen_y + 3), str(turn_num))
+            
+        except Exception as e:
+            # Log error but don't crash the application
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in TelemetryComparisonWidget.paintEvent: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+# --- New Widget for Delta Graph ---
+class DeltaGraphWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.delta_data = []
+        self.setMinimumHeight(50)
+        self.setStyleSheet("""
+            background-color: #111;
+            border: 1px solid #444;
+            border-radius: 5px;
+        """)
+
+    def set_data(self, delta_data):
+        # Ensure delta_data is a list of numbers, handle potential None or non-numeric values
+        if isinstance(delta_data, list):
+            self.delta_data = [d for d in delta_data if isinstance(d, (int, float))]
+        else:
+            self.delta_data = []
+            logger.warning(f"Received non-list delta_data: {type(delta_data)}")
+        self.update() # Trigger repaint when data changes
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        width = self.width()
+        height = self.height()
+        
+        # Define graph area (relative to this widget's coordinates)
+        delta_top = 0
+        delta_height = height
+        delta_bottom = height
+        
+        # Draw background is handled by stylesheet
+
+        # Add subtle grid pattern for delta graph too
+        painter.setPen(QPen(QColor(40, 40, 40, 180), 1))
+        grid_spacing_h = width / 20 if width > 0 else 0
+        for i in range(21):
+            x = i * grid_spacing_h
+            painter.drawLine(int(x), int(delta_top), int(x), int(delta_bottom))
+
+        # Draw delta graph with F1-style enhancements
+        line_width = 3
+        # Check if delta_data exists and has enough points
+        if not self.delta_data or len(self.delta_data) <= 1:
+            painter.setPen(QPen(QColor(240, 240, 240)))
+            painter.setFont(QFont("Arial", 14, QFont.Bold))
+            painter.drawText(QRectF(0, delta_top, width, delta_height), Qt.AlignCenter, "Delta Time Data Missing")
+        else:
+            # Find max delta for scaling
+            max_delta = 0.5 # Default scale
+            try: 
+                 min_val = min(self.delta_data)
+                 max_val = max(self.delta_data)
+                 max_abs_delta = max(abs(min_val), abs(max_val))
+                 max_delta = max(max_abs_delta, 0.5) 
+                 max_delta = math.ceil(max_delta / 0.5) * 0.5 
+            except (ValueError, TypeError): 
+                 logger.warning(f"Could not calculate max delta from data: {self.delta_data[:10]}...")
+                 pass # Keep default max_delta
+            
+            # Draw horizontal bands
+            band_colors = [
+                QColor(0, 150, 0, 15),  # Green band for faster
+                QColor(150, 0, 0, 15)   # Red band for slower
+            ]
+            painter.setPen(Qt.NoPen)
+            zero_y = delta_top + delta_height / 2
+            painter.setBrush(band_colors[0]) 
+            painter.drawRect(0, int(zero_y), int(width), int(delta_height / 2))
+            painter.setBrush(band_colors[1]) 
+            painter.drawRect(0, int(delta_top), int(width), int(delta_height / 2))
+            
+            # Draw horizontal line at zero
+            painter.setPen(QPen(QColor(220, 220, 220), 1))
+            painter.drawLine(0, int(zero_y), width, int(zero_y))
+            
+            # Labels
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(10, int(delta_top + 15), "DELTA (seconds)")
+            painter.setFont(QFont("Arial", 8))
+            painter.setPen(QPen(QColor(0, 200, 0)))
+            painter.drawText(int(width - 70), int(delta_bottom - 5), "FASTER")
+            painter.setPen(QPen(QColor(200, 0, 0)))
+            painter.drawText(int(width - 70), int(delta_top + 15), "SLOWER")
+            painter.setPen(QPen(QColor(200, 200, 200)))
+            painter.drawText(5, int(delta_top + 15), f"+{max_delta:.2f}")
+            painter.drawText(5, int(delta_bottom - 5), f"-{max_delta:.2f}")
+            painter.drawText(5, int(zero_y + 4), "0.00")
+            
+            # Horizontal grid lines
+            painter.setPen(QPen(QColor(70, 70, 70), 1, Qt.DashLine))
+            if max_delta > 0: 
+                step = max_delta / 2
+                for i in range(1, 3):
+                    y_pos = zero_y - (i * step / max_delta) * (delta_height / 2)
+                    painter.drawLine(0, int(y_pos), width, int(y_pos))
+                    y_neg = zero_y + (i * step / max_delta) * (delta_height / 2)
+                    painter.drawLine(0, int(y_neg), width, int(y_neg))
+            
+            # Draw the delta line segments
+            if width > 0 and max_delta > 0:
+                x_step = width / (len(self.delta_data) - 1) if len(self.delta_data) > 1 else 0
+                current_segment = []
+                last_state = None
+
+                for i, delta in enumerate(self.delta_data):
+                     x = i * x_step
+                     # Calculate y-position: zero in the middle, negative (faster) below, positive (slower) above
+                     y = zero_y - (delta / max_delta) * (delta_height / 2)
+                     
+                     # Determine point state for coloring
+                     state = "zero" if abs(delta) < 0.01 else "positive" if delta > 0 else "negative"
+                     
+                     # If state changes or first point, start a new segment
+                     if state != last_state or i == 0:
+                         if current_segment:
+                             # Draw the segment with a color based on its state
+                             if last_state == "positive":
+                                 painter.setPen(QPen(QColor(200, 50, 50), line_width, Qt.SolidLine, Qt.RoundCap))
+                             elif last_state == "negative":
+                                 painter.setPen(QPen(QColor(50, 200, 50), line_width, Qt.SolidLine, Qt.RoundCap))
+                             else:
+                                 painter.setPen(QPen(QColor(200, 200, 200), line_width, Qt.SolidLine, Qt.RoundCap))
+                             
+                             # Draw lines between points in the segment
+                             for j in range(len(current_segment) - 1):
+                                 p1, p2 = current_segment[j], current_segment[j+1]
+                                 painter.drawLine(int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1]))
+                         
+                         # Start new segment
+                         current_segment = [(x, y)]
+                         last_state = state
+                     else:
+                         # Continue the segment
+                         current_segment.append((x, y))
+                
+                # Draw the final segment if any
+                if current_segment:
+                    if last_state == "positive":
+                        painter.setPen(QPen(QColor(200, 50, 50), line_width, Qt.SolidLine, Qt.RoundCap))
+                    elif last_state == "negative":
+                        painter.setPen(QPen(QColor(50, 200, 50), line_width, Qt.SolidLine, Qt.RoundCap))
+                    else:
+                        painter.setPen(QPen(QColor(200, 200, 200), line_width, Qt.SolidLine, Qt.RoundCap))
+                    
+                    for j in range(len(current_segment) - 1):
+                        p1, p2 = current_segment[j], current_segment[j+1]
+                        painter.drawLine(int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1]))
+
+    def load_demo_data(self):
+        """Load demo telemetry data for visualization testing."""
+        try:
+            import random
+            import math
+            
+            logger.info("Loading F1-style demo visualization data")
+            
+            # Set driver information
+            left_driver_info = {
+                "name": "CHARLES", "lastname": "LECLERC", "team": "FERRARI", "position": "1",
+                "lap_time": 83.456, "gap": -0.321, "full_throttle": 81, "heavy_braking": 5,
+                "cornering": 14, "color": QColor(255, 0, 0)
+            }
+            right_driver_info = {
+                "name": "CARLOS", "lastname": "SAINZ", "team": "FERRARI", "position": "2",
+                "lap_time": 83.777, "gap": 0.321, "full_throttle": 79, "heavy_braking": 6,
+                "cornering": 15, "color": QColor(255, 215, 0)
+            }
+            
+            # Update the driver displays
+            self.set_driver_data(True, left_driver_info)
+            self.set_driver_data(False, right_driver_info)
+
+            # Generate track data
+            track_points = []
+            num_points = 100
+            for i in range(num_points):
+                angle = 2 * math.pi * i / num_points
+                x = 200 * math.cos(angle) * (1 + 0.3 * math.cos(2 * angle))
+                y = 150 * math.sin(angle) * (1 + 0.1 * math.sin(2 * angle))
+                track_points.append((x, y))
+            
+            # Generate turn data
+            turn_data = {}
+            for turn in range(1, 12):
+                idx = (turn - 1) * (num_points // 11)
+                turn_data[turn] = {"position": track_points[idx], "name": f"Turn {turn}"}
+            
+            # Set track data
+            sector_data = {}  # Would populate in a real implementation
+            self.set_track_data(track_points, turn_data, sector_data)
+            
+            # Generate speed data
+            base_profile = []
+            num_speed_points = 200
+            for i in range(num_speed_points):
+                angle = i / num_speed_points * 2 * math.pi
+                speed = 250 + 70 * math.sin(angle) - 50 * math.sin(2 * angle)
+                speed += random.uniform(-5, 5)
+                speed = max(speed, 80)
+                base_profile.append(speed)
+            
+            speed_data_left = base_profile[:]
+            speed_data_right = [s + math.sin(i/num_speed_points*2*math.pi*3)*10 for i, s in enumerate(base_profile)]
+            
+            # Generate delta data
+            delta_data = [0]
+            if speed_data_left and speed_data_right:
+                min_len = min(len(speed_data_left), len(speed_data_right))
+                for i in range(1, min_len):
+                    # Avoid division by zero for delta calculation
+                    speed_l = max(1, speed_data_left[i])
+                    speed_r = max(1, speed_data_right[i])
+                    segment_time_left = 1 / speed_l
+                    segment_time_right = 1 / speed_r
+                    segment_delta = segment_time_right - segment_time_left
+                    delta_data.append(delta_data[-1] + segment_delta)
+                
+                # Scale delta
+                max_abs_delta = max(abs(min(delta_data)), abs(max(delta_data)))
+                if max_abs_delta > 0:
+                    scale = 0.5 / max_abs_delta
+                    delta_data = [d * scale for d in delta_data]
+            
+            # Pass data to the child widgets
+            if hasattr(self, 'speed_trace_widget') and self.speed_trace_widget:
+                self.speed_trace_widget.set_data(
+                    speed_data_left,
+                    speed_data_right,
+                    left_driver_info["color"],
+                    right_driver_info["color"],
+                    left_driver_info["name"],
+                    right_driver_info["name"]
+                )
+            
+            if hasattr(self, 'delta_widget') and self.delta_widget:
+                self.delta_widget.set_data(delta_data)
+            
+            # Update display
+            self.update()
+            QApplication.processEvents()
+            
+            logger.info("F1-style demo visualization data loaded")
+            
+        except Exception as e:
+            logger.error(f"Error in load_demo_data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+# --- End New Widget ---
+
+class VideosTab(QWidget):
+    """Tab for displaying video courses in a Kajabi-like interface."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # COMPLETELY SIMPLIFIED UI FOR DEBUGGING - JUST A DIRECT LABEL TO SEE IF IT DISPLAYS
+        layout = QVBoxLayout(self)
+        
+        # Add extremely visible debug label
+        test_label = QLabel("CRITICAL DEBUG: THIS SHOULD BE VISIBLE")
+        test_label.setStyleSheet("""
+            background-color: red; 
+            color: white; 
+            font-size: 24px;
+            padding: 20px;
+            margin: 20px;
+        """)
+        test_label.setFixedHeight(100)
+        test_label.setAlignment(Qt.AlignCenter)
+        
+        # Button to test interaction
+        test_button = QPushButton("CLICK ME TO PROVE INTERACTION WORKS")
+        test_button.setStyleSheet("""
+            background-color: green;
+            color: white;
+            font-size: 18px;
+            padding: 10px;
+            margin: 20px;
+        """)
+        test_button.setFixedHeight(50)
+        test_button.clicked.connect(lambda: test_label.setText("Button clicked! UI is working!"))
+        
+        # Add widgets directly to layout
+        layout.addWidget(test_label)
+        layout.addWidget(test_button)
+        
+        # Print to console for verification
+        print("VideosTab COMPLETELY SIMPLIFIED UI CREATED")
+        
+        # Skip all the complex UI setup for now to isolate the problem
+
+
+class CourseCard(QFrame):
+    """Widget for displaying a course card in the grid."""
+    
+    # Signal emitted when card is clicked
+    clicked = pyqtSignal(bool)
+    
+    def __init__(self, course_data, parent=None):
+        super().__init__(parent)
+        self.course_data = course_data
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Creating CourseCard for: {course_data['title']}")
+        
+        # Set fixed size to ensure consistent layout
+        self.setFixedSize(300, 280)
+        self.setStyleSheet("""
+            CourseCard {
+                background-color: #333;
+                border-radius: 10px;
+                margin: 5px;
+                border: 2px solid #FF0000; /* RED DEBUGGING BORDER */
+            }
+            CourseCard:hover {
+                background-color: #444;
+                border: 2px solid #3498db;
+            }
+        """)
+        
+        # Make clickable
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Set up layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Thumbnail area
+        thumbnail = QLabel()
+        thumbnail.setFixedHeight(150)
+        thumbnail.setStyleSheet("""
+            background-color: #555;
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
+            padding: 0;
+            margin: 0;
+        """)
+        
+        # Create thumbnail image with consistent color based on course ID
+        thumbnail_pixmap = self.create_thumbnail(course_data)
+        thumbnail.setPixmap(thumbnail_pixmap)
+        
+        # Content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(15, 12, 15, 12)
+        content_layout.setSpacing(5)
+        
+        # Title
+        title = QLabel(course_data["title"])
+        title.setStyleSheet("font-weight: bold; color: white; font-size: 16px;")
+        title.setWordWrap(True)
+        title.setFixedHeight(40)
+        
+        # Description (limited height)
+        description = QLabel(course_data["description"])
+        description.setStyleSheet("color: #CCC; font-size: 12px;")
+        description.setWordWrap(True)
+        description.setFixedHeight(40)
+        
+        # Meta info
+        meta_widget = QWidget()
+        meta_layout = QHBoxLayout(meta_widget)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(10)
+        
+        # Level badge
+        level_label = QLabel(course_data["level"].capitalize())
+        level_badge_style = {
+            "beginner": "background-color: #27ae60;",
+            "intermediate": "background-color: #f39c12;",
+            "advanced": "background-color: #c0392b;"
+        }
+        level_style = level_badge_style.get(course_data["level"], "background-color: #3498db;")
+        level_label.setStyleSheet(f"""
+            padding: 3px 8px;
+            {level_style}
+            color: white;
+            border-radius: 3px;
+            font-size: 10px;
+        """)
+        
+        # Duration
+        duration_label = QLabel(f"🕒 {course_data['duration']}")
+        duration_label.setStyleSheet("color: #999; font-size: 12px;")
+        
+        # Lessons
+        lessons_label = QLabel(f"📚 {course_data['lessons']} Lessons")
+        lessons_label.setStyleSheet("color: #999; font-size: 12px;")
+        
+        meta_layout.addWidget(level_label)
+        meta_layout.addWidget(duration_label)
+        meta_layout.addWidget(lessons_label)
+        meta_layout.addStretch()
+        
+        # Add everything to the content layout
+        content_layout.addWidget(title)
+        content_layout.addWidget(description)
+        content_layout.addWidget(meta_widget)
+        
+        # Add thumbnail and content to main layout
+        layout.addWidget(thumbnail)
+        layout.addWidget(content)
+        
+        # Ensure card is visible
+        self.setVisible(True)
+        
+    def create_thumbnail(self, course_data):
+        """Create a thumbnail for the course card."""
+        try:
+            # Generate a consistent color based on the course ID
+            color_seed = course_data["id"] % 10
+            colors = [
+                QColor(255, 100, 100),  # Red
+                QColor(100, 200, 100),  # Green
+                QColor(100, 100, 255),  # Blue
+                QColor(255, 200, 100),  # Orange
+                QColor(200, 100, 255),  # Purple
+                QColor(100, 200, 255),  # Light blue
+                QColor(255, 100, 200),  # Pink
+                QColor(200, 255, 100),  # Lime
+                QColor(255, 200, 200),  # Light pink
+                QColor(200, 200, 255)   # Light purple
+            ]
+            
+            # Create a gradient for the thumbnail
+            base_color = colors[color_seed]
+            darker_color = QColor(int(base_color.red() * 0.7), int(base_color.green() * 0.7), int(base_color.blue() * 0.7))
+            
+            # Create the pixmap
+            thumbnail_pixmap = QPixmap(300, 150)
+            thumbnail_pixmap.fill(base_color)  # Fill with solid color first as fallback
+            
+            # Then try to add gradient and icon
+            painter = QPainter(thumbnail_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Create and draw gradient
+            gradient = QLinearGradient(0, 0, 300, 150)
+            gradient.setColorAt(0, base_color)
+            gradient.setColorAt(1, darker_color)
+            painter.fillRect(0, 0, 300, 150, gradient)
+            
+            # Draw course icon
+            icon_color = QColor(255, 255, 255, 180)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(icon_color))
+            
+            # Draw different icon based on course level
+            if course_data["level"] == "beginner":
+                # Draw a flag icon for beginner courses
+                painter.drawRect(135, 55, 30, 5)  # Flag pole
+                painter.drawRect(135, 55, 5, 40)  # Flag pole
+                painter.drawRect(140, 55, 25, 20)  # Flag
+            elif course_data["level"] == "intermediate":
+                # Draw a steering wheel for intermediate courses
+                painter.drawEllipse(125, 45, 50, 50)  # Outer circle
+                painter.setBrush(QBrush(darker_color))
+                painter.drawEllipse(140, 60, 20, 20)  # Inner circle
+            else:
+                # Draw a trophy for advanced courses
+                painter.drawRect(135, 60, 30, 35)  # Trophy cup
+                painter.drawRect(145, 95, 10, 10)  # Trophy base
+                painter.drawRect(140, 105, 20, 5)  # Trophy bottom
+                
+            # Add text label for type
+            painter.setPen(QPen(Qt.white))
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            if course_data["level"] == "beginner":
+                painter.drawText(10, 20, "BEGINNER")
+            elif course_data["level"] == "intermediate":
+                painter.drawText(10, 20, "INTERMEDIATE")
+            else:
+                painter.drawText(10, 20, "ADVANCED")
+            
+            painter.end()
+            return thumbnail_pixmap
+            
+        except Exception as e:
+            self.logger.error(f"Error creating thumbnail: {e}")
+            # Use a solid color as fallback
+            thumbnail_pixmap = QPixmap(300, 150)
+            thumbnail_pixmap.fill(QColor(80, 80, 80))
+            return thumbnail_pixmap
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press events to emit clicked signal."""
+        super().mousePressEvent(event)
+        self.clicked.emit(True)
+
+
+class CourseView(QWidget):
+    """Widget for displaying detailed course information and video player."""
+    
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Main layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Header with back button
+        header = QWidget()
+        header.setStyleSheet("background-color: #333;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 15, 20, 15)
+        
+        self.back_button = QPushButton("← Back to Courses")
+        self.back_button.setCursor(Qt.PointingHandCursor)
+        self.back_button.setStyleSheet("""
+            background: none;
+            border: none;
+            color: #3498db;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 5px;
+            text-align: left;
+        """)
+        
+        header_layout.addWidget(self.back_button)
+        header_layout.addStretch()
+        
+        # Course content area
+        content_area = QWidget()
+        content_layout = QHBoxLayout(content_area)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        content_layout.setSpacing(20)
+        
+        # Video player area (left side)
+        video_area = QWidget()
+        video_area.setMinimumWidth(640)
+        video_layout = QVBoxLayout(video_area)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(15)
+        
+        # Video player placeholder
+        self.video_player = QWebEngineView()
+        self.video_player.setMinimumHeight(360)
+        self.video_player.setStyleSheet("background-color: #111; border-radius: 5px;")
+        # Load a placeholder initially
+        self.video_player.setHtml("""
+            <html>
+                <body style="margin:0;padding:0;display:flex;justify-content:center;align-items:center;height:100%;background:#111;">
+                    <div style="text-align:center;color:#666;font-family:Arial,sans-serif;">
+                        <div style="font-size:48px;margin-bottom:10px;">▶️</div>
+                        <div style="font-size:18px;">Select a lesson to start</div>
+                    </div>
+                </body>
+            </html>
+        """)
+        
+        # Current video info
+        self.current_title = QLabel("Select a lesson to start")
+        self.current_title.setStyleSheet("font-size: 18px; font-weight: bold; color: white;")
+        
+        video_layout.addWidget(self.video_player)
+        video_layout.addWidget(self.current_title)
+        
+        # Course modules area (right side)
+        modules_area = QWidget()
+        modules_layout = QVBoxLayout(modules_area)
+        modules_layout.setContentsMargins(0, 0, 0, 0)
+        modules_layout.setSpacing(5)
+        
+        # Course title
+        self.course_title = QLabel("Course Title")
+        self.course_title.setStyleSheet("font-size: 24px; font-weight: bold; color: white;")
+        
+        # Instructor
+        self.instructor = QLabel("Instructor: Instructor Name")
+        self.instructor.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        # Course stats
+        stats_widget = QWidget()
+        stats_layout = QHBoxLayout(stats_widget)
+        stats_layout.setContentsMargins(0, 10, 0, 10)
+        stats_layout.setSpacing(15)
+        
+        self.level_label = QLabel("Level: Beginner")
+        self.level_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        self.duration_label = QLabel("Duration: 3h 20m")
+        self.duration_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        self.lessons_label = QLabel("Lessons: 12")
+        self.lessons_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        
+        stats_layout.addWidget(self.level_label)
+        stats_layout.addWidget(self.duration_label)
+        stats_layout.addWidget(self.lessons_label)
+        stats_layout.addStretch()
+        
+        # Modules title
+        modules_title = QLabel("Course Modules")
+        modules_title.setStyleSheet("font-size: 18px; font-weight: bold; color: white; margin-top: 10px;")
+        
+        # Modules list
+        modules_scroll = QScrollArea()
+        modules_scroll.setWidgetResizable(True)
+        modules_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background: #333;
+                width: 10px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background: #666;
+                border-radius: 5px;
+            }
+        """)
+        
+        self.modules_list = QWidget()
+        self.modules_layout = QVBoxLayout(self.modules_list)
+        self.modules_layout.setContentsMargins(0, 0, 0, 0)
+        self.modules_layout.setSpacing(10)
+        # self.modules_layout.addStretch() # REMOVED THIS LINE
+        
+        modules_scroll.setWidget(self.modules_list)
+        
+        # Add elements to modules area
+        modules_layout.addWidget(self.course_title)
+        modules_layout.addWidget(self.instructor)
+        modules_layout.addWidget(stats_widget)
+        modules_layout.addWidget(modules_title)
+        modules_layout.addWidget(modules_scroll)
+        
+        # Add areas to content layout
+        content_layout.addWidget(video_area, 2)
+        content_layout.addWidget(modules_area, 1)
+        
+        # Add header and content to main layout
+        layout.addWidget(header)
+        layout.addWidget(content_area)
+        
+    def set_course(self, course_data):
+        """Update the course view with new course data."""
+        # Update course info
+        self.course_title.setText(course_data["title"])
+        self.instructor.setText(f"Instructor: {course_data['instructor']}")
+        self.level_label.setText(f"Level: {course_data['level'].capitalize()}")
+        self.duration_label.setText(f"Duration: {course_data['duration']}")
+        self.lessons_label.setText(f"Lessons: {course_data['lessons']} lessons")
+        
+        # Clear existing modules
+        # First, remove all widgets from the layout
+        while self.modules_layout.count() > 0:
+            item = self.modules_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Add new modules
+        for i, module in enumerate(course_data["modules"]):
+            module_card = ModuleCard(module, i+1)
+            module_card.clicked.connect(lambda checked, m=module: self.play_module(m))
+            self.modules_layout.addWidget(module_card)
+        
+        # Add stretch at the end
+        self.modules_layout.addStretch()
+    
+    def play_module(self, module):
+        """Play the selected module video."""
+        # Update the current title
+        self.current_title.setText(module["title"])
+        
+        # Get the YouTube video ID
+        video_id = module.get("video_id", "")
+        
+        # Create HTML for embedding YouTube video
+        if video_id:
+            # HTML template with YouTube embed
+            html_content = f"""
+            <html>
+                <head>
+                    <style>
+                        body, html {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }}
+                        .container {{ display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; }}
+                        .video-container {{ width: 100%; height: 100%; position: relative; }}
+                        iframe {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }}
+                        .error-message {{ display: none; color: #FFF; text-align: center; padding: 20px; }}
+                    </style>
+                    <script>
+                        // Add error handling for video loading
+                        function showError() {{
+                            document.getElementById('videoContainer').style.display = 'none';
+                            document.getElementById('errorMessage').style.display = 'block';
+                        }}
+                        
+                        // Check connection status
+                        window.addEventListener('load', function() {{
+                            if (!navigator.onLine) {{
+                                showError();
+                            }}
+                        }});
+                    </script>
+                </head>
+                <body>
+                    <div class="container">
+                        <div id="videoContainer" class="video-container">
+                            <iframe 
+                                src="https://www.youtube.com/embed/{video_id}?autoplay=0&rel=0" 
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                                allowfullscreen
+                                onerror="showError()">
+                            </iframe>
+                        </div>
+                        <div id="errorMessage" class="error-message">
+                            <h3>Unable to load video</h3>
+                            <p>Please check your internet connection and try again.</p>
+                        </div>
+                    </div>
+                </body>
+            </html>
+            """
+            
+            self.video_player.setHtml(html_content)
+            
+        else:
+            # Fallback if no video ID is provided
+            self.video_player.setHtml(f"""
+                <html>
+                    <body style="margin:0;padding:0;display:flex;justify-content:center;align-items:center;height:100%;background:#111;">
+                        <div style="text-align:center;color:#EEE;font-family:Arial,sans-serif;">
+                            <div style="font-size:24px;margin-bottom:20px;">{module["title"]}</div>
+                            <div style="font-size:48px;margin-bottom:20px;">▶️</div>
+                            <div style="font-size:16px;">Duration: {module["duration"]}</div>
+                            <div style="font-size:14px;color:#999;margin-top:20px;">Video not available</div>
+                        </div>
+                    </body>
+                </html>
+            """)
+
+
+class ModuleCard(QFrame):
+    """Widget for displaying a module in the course view."""
+    
+    # Signal emitted when card is clicked
+    clicked = pyqtSignal(bool)
+    
+    def __init__(self, module_data, module_number, parent=None):
+        super().__init__(parent)
+        self.module_data = module_data
+        
+        self.setStyleSheet("""
+            ModuleCard {
+                background-color: #333;
+                border-radius: 5px;
+                padding: 10px;
+            }
+            ModuleCard:hover {
+                background-color: #444;
+            }
+        """)
+        
+        # Make clickable
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Set up layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Module number
+        number = QLabel(str(module_number))
+        number.setStyleSheet("""
+            background-color: #3498db;
+            color: white;
+            border-radius: 15px;
+            min-width: 30px;
+            min-height: 30px;
+            max-width: 30px;
+            max-height: 30px;
+            font-weight: bold;
+            qproperty-alignment: AlignCenter;
+        """)
+        
+        # Module info
+        info = QWidget()
+        info_layout = QVBoxLayout(info)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(5)
+        
+        title = QLabel(module_data["title"])
+        title.setStyleSheet("color: white; font-weight: bold;")
+        
+        duration = QLabel(f"Duration: {module_data['duration']}")
+        duration.setStyleSheet("color: #CCC; font-size: 12px;")
+        
+        info_layout.addWidget(title)
+        info_layout.addWidget(duration)
+        
+        # Play icon
+        play = QLabel("▶")
+        play.setStyleSheet("color: #3498db; font-size: 16px;")
+        
+        # Add everything to the layout
+        layout.addWidget(number)
+        layout.addWidget(info, 1)
+        layout.addWidget(play)
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press events to emit clicked signal."""
+        super().mousePressEvent(event)
+        self.clicked.emit(True)
+
+
+class RaceCoachWidget(QWidget):
+    """Main container widget for Race Coach functionality.
+    
+    This widget integrates iRacing telemetry data with AI-powered analysis and visualization.
+    """
+    
+    def __init__(self, parent=None, iracing_api=None):
+        super().__init__(parent)
+        self.setObjectName("RaceCoachWidget")
+        
+        # Store reference to the iRacing API
+        self.iracing_api = iracing_api
+        
+        # Track connection state
+        self.is_connected = False
+        self.session_info = {}
+
+        # Attributes for background telemetry fetching
+        self.telemetry_fetch_thread = None
+        self.telemetry_fetch_worker = None
+
+        # Attributes for background initial data loading
+        self.initial_load_thread = None
+        self.initial_load_worker = None
+        self._is_initial_loading = False
+
+        # Flag to track if initial lap list load has happened
+        self._initial_lap_load_done = False
+
+        # Initialize UI
+        self.setup_ui()
+        
+        # Connect to iRacing API if available
+        if self.iracing_api is not None:
+            try:
+                # Try SimpleIRacingAPI method names first
+                if hasattr(self.iracing_api, 'register_on_connection_changed'):
+                    logger.info("Using SimpleIRacingAPI callback methods")
+                    self.iracing_api.register_on_connection_changed(self.on_iracing_connected)
+                    # self.iracing_api.register_on_session_info_changed(self.on_session_info_changed) # Legacy callback, use signal now
+                    self.iracing_api.register_on_telemetry_data(self.on_telemetry_data)
+
+                    # --- Connect the new signal --- #
+                    if hasattr(self.iracing_api, 'sessionInfoUpdated'):
+                        logger.info("Connecting sessionInfoUpdated signal to UI update slot.")
+                        # Pass the dictionary payload from the signal to the slot
+                        self.iracing_api.sessionInfoUpdated.connect(self._update_connection_status)
+                    else:
+                        logger.warning("iRacing API instance does not have sessionInfoUpdated signal.")
+                    # ----------------------------- #
+
+                    # Explicitly connect to iRacing
+                    self.iracing_api.connect()
+
+                # Fall back to IRacingAPI method names (This path likely won't be used anymore)
+                elif hasattr(self.iracing_api, 'register_connection_callback'):
+                    # logger.info("Using IRacingAPI callback methods")
+                    # self.iracing_api.register_connection_callback(self.on_iracing_connected)
+                    # self.iracing_api.register_session_info_callback(self.on_session_info_changed)
+                    # self.iracing_api.register_telemetry_callback(self.on_telemetry_data)
+                    logger.warning("Legacy IRacingAPI callback registration attempted - this might not work as expected.")
+                else:
+                    logger.warning("Unable to register callbacks with iRacing API - incompatible implementation")
+            except Exception as e:
+                logger.error(f"Error setting up callbacks for iRacing API: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+    
+    def setup_ui(self):
+        """Set up the race coach UI components."""
+        main_layout = QVBoxLayout(self)
+        
+        # Status bar at the top
+        self.status_bar = QWidget()
+        status_layout = QHBoxLayout(self.status_bar)
+        status_layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.connection_label = QLabel("iRacing: Disconnected")
+        self.connection_label.setStyleSheet("""
+            color: red;
+            font-weight: bold;
+        """)
+        status_layout.addWidget(self.connection_label)
+        
+        self.driver_label = QLabel("No Driver")
+        status_layout.addWidget(self.driver_label)
+        
+        self.track_label = QLabel("No Track")
+        status_layout.addWidget(self.track_label)
+        
+        status_layout.addStretch()
+        
+        # Add diagnostic mode toggle button
+        self.diagnostic_mode_button = QPushButton("🔍 Diagnostics: OFF")
+        self.diagnostic_mode_button.setStyleSheet("""
+            background-color: #333;
+            color: #AAA;
+            padding: 5px 10px;
+            border-radius: 3px;
+        """)
+        self.diagnostic_mode_button.setToolTip("Toggle detailed lap detection diagnostics")
+        self.diagnostic_mode_button.clicked.connect(self.toggle_diagnostic_mode)
+        status_layout.addWidget(self.diagnostic_mode_button)
+        
+        # Add lap debug button
+        self.lap_debug_button = QPushButton("🏁 Lap Debug")
+        self.lap_debug_button.setStyleSheet("""
+            background-color: #333;
+            color: #AAA;
+            padding: 5px 10px;
+            border-radius: 3px;
+        """)
+        self.lap_debug_button.setToolTip("View lap recording status and save partial laps")
+        self.lap_debug_button.clicked.connect(self.show_lap_debug_dialog)
+        status_layout.addWidget(self.lap_debug_button)
+        
+        main_layout.addWidget(self.status_bar)
+        
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #444;
+                background-color: #222;
+                border-radius: 3px;
+            }
+            QTabBar::tab {
+                background-color: #333;
+                color: #CCC;
+                padding: 8px 12px;
+                margin-right: 2px;
+                border-top-left-radius: 3px;
+                border-top-right-radius: 3px;
+            }
+            QTabBar::tab:selected {
+                background-color: #444;
+                color: white;
+            }
+        """)
+        
+        # Create the Overview Tab
+        overview_tab = QWidget()
+        overview_layout = QVBoxLayout(overview_tab)
+        
+        # Add some basic information to the overview tab
+        overview_info = QLabel("Race Coach Overview")
+        overview_info.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            padding: 10px;
+        """)
+        overview_layout.addWidget(overview_info)
+        
+        # Add a simple dashboard to the overview tab
+        dashboard_frame = QFrame()
+        dashboard_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        dashboard_frame.setStyleSheet("background-color: #2D2D30; border-radius: 5px;")
+        dashboard_layout = QVBoxLayout(dashboard_frame)
+        
+        # Create a descriptive text - update to remove mention of demo button
+        dashboard_info = QLabel("Connect to iRacing to see telemetry visualization in the Telemetry tab.")
+        dashboard_info.setWordWrap(True)
+        dashboard_info.setStyleSheet("color: #CCC; font-size: 14px;")
+        dashboard_layout.addWidget(dashboard_info)
+        
+        # Add dashboard to overview layout
+        overview_layout.addWidget(dashboard_frame)
+
+        # --- Add Gamification Overview Widget ---
+        self.gamification_overview = GamificationOverviewWidget(self)
+        # You might want to set a fixed height or size policy depending on layout needs
+        # self.gamification_overview.setFixedHeight(300) 
+        overview_layout.addWidget(self.gamification_overview)
+        # ---------------------------------------
+
+        overview_layout.addStretch()
+        
+        # Create the Telemetry Tab
+        overview_layout.addStretch()
+        
+        # Create the Telemetry Tab
+        telemetry_tab = QWidget()
+        telemetry_layout = QVBoxLayout(telemetry_tab)
+        telemetry_layout.setSpacing(8)  # Reduce the default spacing from 15 to 8
+        telemetry_layout.setContentsMargins(8, 8, 8, 8)  # Reduce margins from 10 to 8
+
+        # -------- Lap selection controls (Phase 2, Step 4) --------
+        controls_frame = QFrame() # Changed from lap_select_frame
+        controls_layout = QGridLayout(controls_frame) # Use GridLayout for better arrangement
+        controls_layout.setContentsMargins(5, 5, 5, 5)
+        controls_layout.setHorizontalSpacing(15) # Add horizontal spacing
+
+        # -- Row 0: Session Selection --
+        session_label = QLabel("Session:")
+        session_label.setStyleSheet("color:#DDD")
+        self.session_combo = QComboBox()
+        self.session_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
+        self.session_combo.setMinimumWidth(400) # Give session combo more space
+        self.session_combo.currentIndexChanged.connect(self.on_session_changed) # Connect signal
+
+        self.refresh_button = QPushButton("🔄 Refresh All") # Combined refresh button
+        self.refresh_button.setToolTip("Refresh session and lap lists from database")
+        self.refresh_button.setStyleSheet("padding: 5px 10px;")
+        self.refresh_button.clicked.connect(self.refresh_session_and_lap_lists) # Updated connection
+
+        controls_layout.addWidget(session_label, 0, 0)
+        controls_layout.addWidget(self.session_combo, 0, 1, 1, 3) # Span 3 columns
+        controls_layout.addWidget(self.refresh_button, 0, 4)
+
+        # Add warning label for incomplete lap data directly under the refresh button
+        self.graph_status_label = QLabel()
+        self.graph_status_label.setAlignment(Qt.AlignLeft)
+        self.graph_status_label.setStyleSheet("color: #FFA500; font-weight: bold; padding-left: 10px;")
+        self.graph_status_label.setVisible(False)  # Hidden by default
+        controls_layout.addWidget(self.graph_status_label, 0, 5)
+
+        # -- Row 1: Lap Selection --
+        left_label = QLabel("Lap A:")
+        left_label.setStyleSheet("color:#DDD")
+        self.left_lap_combo = QComboBox()
+        self.left_lap_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
+        self.left_lap_combo.setMinimumWidth(200)
+        self.left_lap_combo.currentIndexChanged.connect(self.on_lap_selection_changed)  # Add this line
+
+        right_label = QLabel("Lap B:")
+        right_label.setStyleSheet("color:#DDD")
+        self.right_lap_combo = QComboBox()
+        self.right_lap_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
+        self.right_lap_combo.setMinimumWidth(200)
+        self.right_lap_combo.currentIndexChanged.connect(self.on_lap_selection_changed)  # Add this line
+
+        # Restore compare button (but keep it hidden)
+        self.compare_button = QPushButton("Compare Laps")
+        self.compare_button.setStyleSheet("padding: 5px 10px;")
+        self.compare_button.clicked.connect(self.on_compare_clicked)
+        self.compare_button.setVisible(False)  # Hide the compare button
+
+        # Adjust the layout to keep controls closer together
+        controls_layout.addWidget(left_label, 1, 0)
+        controls_layout.addWidget(self.left_lap_combo, 1, 1)
+        controls_layout.addWidget(right_label, 1, 2)
+        controls_layout.addWidget(self.right_lap_combo, 1, 3, 1, 2)  # Span 2 columns for better spacing
+        # Don't add the compare button to the layout since it's hidden
+        # controls_layout.addWidget(self.compare_button, 1, 5)
+
+        telemetry_layout.addWidget(controls_frame) # Add the controls frame
+
+        # Telemetry comparison widget
+        self.telemetry_widget = TelemetryComparisonWidget(self)
+        telemetry_layout.addWidget(self.telemetry_widget)
+
+        # --- Loading Indicator (Phase 2 adjustment) ---
+        self.loading_label = QLabel("🔄 Loading sessions...")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("color: #AAA; font-style: italic; padding: 10px;")
+        self.loading_label.setVisible(False) # Hidden initially
+        telemetry_layout.insertWidget(1, self.loading_label) # Insert below controls
+        # --- End Loading Indicator ---
+
+        # Add telemetry graph settings - common setup for proper scaling in small windows
+        plot_settings = """
+            padding-left: 5px;
+            padding-right: 5px;
+            padding-top: 5px;
+            padding-bottom: 5px;
+        """
+        
+        # UNIFORM SETTINGS FOR ALL GRAPHS
+        uniform_min_height = 180  # New LARGER minimum height
+        uniform_max_height = 200  # New LARGER maximum height
+        uniform_spacing = 15
+        uniform_margins = (5, 5, 5, 5) # top, right, bottom, left
+        uniform_stretch_factor = 1
+        
+        # Add throttle graph widget
+        self.throttle_graph = ThrottleGraphWidget(self)
+        self.throttle_graph.setMinimumHeight(uniform_min_height)
+        self.throttle_graph.setMaximumHeight(uniform_max_height)
+        self.throttle_graph.setContentsMargins(*uniform_margins)
+        self.throttle_graph.setStyleSheet(f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}")
+        telemetry_layout.addWidget(self.throttle_graph, uniform_stretch_factor)
+        
+        telemetry_layout.addSpacing(uniform_spacing)
+        
+        # Add brake graph widget
+        self.brake_graph = BrakeGraphWidget(self)
+        self.brake_graph.setMinimumHeight(uniform_min_height)
+        self.brake_graph.setMaximumHeight(uniform_max_height)
+        self.brake_graph.setContentsMargins(*uniform_margins)
+        self.brake_graph.setStyleSheet(f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}")
+        telemetry_layout.addWidget(self.brake_graph, uniform_stretch_factor)
+        
+        telemetry_layout.addSpacing(uniform_spacing)
+        
+        # Add the steering graph widget
+        self.steering_graph = SteeringGraphWidget(self)
+        self.steering_graph.setMinimumHeight(uniform_min_height)
+        self.steering_graph.setMaximumHeight(uniform_max_height)
+        self.steering_graph.setContentsMargins(*uniform_margins)
+        self.steering_graph.setStyleSheet(f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}")
+        telemetry_layout.addWidget(self.steering_graph, uniform_stretch_factor)
+        
+        telemetry_layout.addSpacing(uniform_spacing)
+        
+        # Add the speed graph widget
+        self.speed_graph = SpeedGraphWidget(self)
+        self.speed_graph.setMinimumHeight(uniform_min_height)
+        self.speed_graph.setMaximumHeight(uniform_max_height)
+        self.speed_graph.setContentsMargins(*uniform_margins)
+        self.speed_graph.setStyleSheet(f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}")
+        telemetry_layout.addWidget(self.speed_graph, uniform_stretch_factor)
+        
+        # Add a stretchable spacer at the end to push graphs together in small windows
+        telemetry_layout.addStretch(1) # Stretch factor 1 is fine here, can be 0 if preferred
+        
+        # Set size policies for all graphs to make them shrink/grow properly
+        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.throttle_graph.setSizePolicy(size_policy)
+        self.brake_graph.setSizePolicy(size_policy)
+        self.steering_graph.setSizePolicy(size_policy)
+        self.speed_graph.setSizePolicy(size_policy)
+
+        # Create the Live Telemetry Tab
+        # Live telemetry window
+        live_telemetry_tab = QWidget()
+        live_telemetry_tab_layout = QVBoxLayout(live_telemetry_tab)
+        
+        self.live_telemetry_frame = QFrame()
+        self.live_telemetry_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        self.live_telemetry_frame.setStyleSheet("""
+            background-color: #111;
+            border: 1px solid #444;
+            border-radius: 5px;
+        """)
+        
+        live_telemetry_layout = QHBoxLayout(self.live_telemetry_frame)
+        
+        # Left side - Input trace visualization
+        self.input_trace = InputTraceWidget(self)
+        live_telemetry_layout.addWidget(self.input_trace, 2)
+        
+        # Right side - Current values
+        values_frame = QFrame()
+        values_layout = QFormLayout(values_frame)
+        values_layout.setContentsMargins(15, 10, 15, 10)
+        values_layout.setSpacing(5)
+        values_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        
+        # Style for labels
+        label_style = """
+            color: #DDD;
+            font-weight: bold;
+            font-size: 11px;
+        """
+        
+        value_style = """
+            color: #FFF;
+            font-size: 14px;
+            font-weight: bold;
+        """
+        
+        # Create value displays
+        self.speed_value = QLabel("0")
+        self.speed_value.setStyleSheet(value_style)
+        speed_label = QLabel("Speed:")
+        speed_label.setStyleSheet(label_style)
+        values_layout.addRow(speed_label, self.speed_value)
+        
+        self.throttle_value = QLabel("0%")
+        self.throttle_value.setStyleSheet(value_style)
+        throttle_label = QLabel("Throttle:")
+        throttle_label.setStyleSheet(label_style)
+        values_layout.addRow(throttle_label, self.throttle_value)
+        
+        self.brake_value = QLabel("0%")
+        self.brake_value.setStyleSheet(value_style)
+        brake_label = QLabel("Brake:")
+        brake_label.setStyleSheet(label_style)
+        values_layout.addRow(brake_label, self.brake_value)
+        
+        self.clutch_value = QLabel("0%")
+        self.clutch_value.setStyleSheet(value_style)
+        clutch_label = QLabel("Clutch:")
+        clutch_label.setStyleSheet(label_style)
+        values_layout.addRow(clutch_label, self.clutch_value)
+        
+        self.gear_value = QLabel("N")
+        self.gear_value.setStyleSheet(value_style)
+        gear_label = QLabel("Gear:")
+        gear_label.setStyleSheet(label_style)
+        values_layout.addRow(gear_label, self.gear_value)
+        
+        self.rpm_value = QLabel("0")
+        self.rpm_value.setStyleSheet(value_style)
+        rpm_label = QLabel("RPM:")
+        rpm_label.setStyleSheet(label_style)
+        values_layout.addRow(rpm_label, self.rpm_value)
+        
+        self.lap_value = QLabel("0")
+        self.lap_value.setStyleSheet(value_style)
+        lap_label = QLabel("Lap:")
+        lap_label.setStyleSheet(label_style)
+        values_layout.addRow(lap_label, self.lap_value)
+        
+        self.laptime_value = QLabel("00:00.000")
+        self.laptime_value.setStyleSheet(value_style)
+        laptime_label = QLabel("Lap Time:")
+        laptime_label.setStyleSheet(label_style)
+        values_layout.addRow(laptime_label, self.laptime_value)
+        
+        live_telemetry_layout.addWidget(values_frame, 1)
+        
+        # Right side - Gauges
+        gauges_frame = QFrame()
+        gauges_layout = QVBoxLayout(gauges_frame)
+        
+        self.speed_gauge = SpeedGauge()
+        self.rpm_gauge = RPMGauge()
+        
+        gauges_layout.addWidget(self.speed_gauge)
+        gauges_layout.addWidget(self.rpm_gauge)
+        
+        live_telemetry_layout.addWidget(gauges_frame, 2)
+        
+        # Add live telemetry frame to the tab
+        live_telemetry_tab_layout.addWidget(self.live_telemetry_frame)
+
+        # Add a steering wheel widget to the live telemetry tab
+        steering_frame = QFrame()
+        steering_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        steering_frame.setStyleSheet("""
+            background-color: #111;
+            border: 1px solid #444;
+            border-radius: 5px;
+        """)
+        steering_layout = QHBoxLayout(steering_frame)
+        
+        # Create steering wheel widget
+        self.steering_wheel = SteeringWheelWidget(self)
+        steering_layout.addWidget(self.steering_wheel)
+        
+        # Add steering frame to live telemetry tab
+        live_telemetry_tab_layout.addWidget(steering_frame)
+        
+        # --- Loading Indicator (Phase 2 adjustment) ---
+        self.loading_label = QLabel("🔄 Loading sessions...")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("color: #AAA; font-style: italic; padding: 10px;")
+        self.loading_label.setVisible(False) # Hidden initially
+        telemetry_layout.insertWidget(1, self.loading_label) # Insert below controls
+        # --- End Loading Indicator ---
+
+        # Create the Videos Tab
+        videos_tab = VideosTab(self)
+
+        # Add tabs to the tab widget
+        self.tab_widget.addTab(overview_tab, "Overview")
+        self.tab_widget.addTab(telemetry_tab, "Telemetry")
+        self.tab_widget.addTab(live_telemetry_tab, "Live Telemetry")
+        self.tab_widget.addTab(videos_tab, "RaceFlix") # Renamed tab
+
+        # Add tab widget to main layout
+        main_layout.addWidget(self.tab_widget)
+        
+        # Initialize with demo data if not connected
+        if not self.is_connected:
+            # QTimer.singleShot(500, self.load_demo_data) # Demo data loading disabled
+            pass
+            
+        # Add lap telemetry coverage monitoring
+        coverage_frame = QFrame()
+        coverage_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        coverage_frame.setStyleSheet("""
+            background-color: #111;
+            border: 1px solid #444;
+            border-radius: 5px;
+        """)
+        coverage_layout = QHBoxLayout(coverage_frame)
+        
+        coverage_label = QLabel("Lap Coverage:")
+        coverage_label.setStyleSheet("color: #CCC; font-size: 14px;")
+        coverage_layout.addWidget(coverage_label)
+        
+        self.coverage_indicator = QProgressBar()
+        self.coverage_indicator.setRange(0, 100)
+        self.coverage_indicator.setValue(0)
+        self.coverage_indicator.setFormat("%p%")
+        self.coverage_indicator.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #555;
+                border-radius: 5px;
+                background-color: #333;
+                color: white;
+                text-align: center;
+                font-weight: bold;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: #3498db;
+                border-radius: 5px;
+            }
+        """)
+        coverage_layout.addWidget(self.coverage_indicator, 1)
+        
+        self.coverage_status = QLabel("No telemetry data")
+        self.coverage_status.setStyleSheet("color: #CCC; font-size: 12px;")
+        coverage_layout.addWidget(self.coverage_status)
+        
+        self.save_lap_button = QPushButton("Save Current Lap")
+        self.save_lap_button.setEnabled(False)
+        self.save_lap_button.clicked.connect(self.on_save_lap_clicked)
+        coverage_layout.addWidget(self.save_lap_button)
+        
+        # Add auth test button for debugging authentication issues
+        self.auth_test_button = QPushButton("🔑 Test Auth")
+        self.auth_test_button.setStyleSheet("""
+            background-color: #333;
+            color: #AAA;
+            padding: 5px;
+            border-radius: 3px;
+        """)
+        self.auth_test_button.setToolTip("Test authentication and data fetching")
+        self.auth_test_button.clicked.connect(self.test_authentication)
+        coverage_layout.addWidget(self.auth_test_button)
+        
+        # Add coverage frame to live telemetry tab
+        live_telemetry_tab_layout.addWidget(coverage_frame)
+        
+        # Initialize telemetry monitoring
+        self.telemetry_monitor = TelemetryMonitorWorker()
+        self.telemetry_monitor_thread = QThread()
+        self.telemetry_monitor.moveToThread(self.telemetry_monitor_thread)
+        self.telemetry_monitor.coverage_updated.connect(self.on_coverage_updated)
+        self.telemetry_monitor_thread.start()
+        
+        # Save operation progress indicator
+        self.save_progress_dialog = None
+            
+    def _update_telemetry(self, telemetry_data):
+        """Process telemetry data and update visualizations."""
+        try:
+            # Stop demo steering timer if it's running and we receive real data
+            # if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer.isActive():
+            #     logger.info("Stopping demo steering animation timer.")
+            #     # Queue the stop call on the main thread to avoid cross-thread issues
+            #     QTimer.singleShot(0, self._demo_steer_timer.stop)
+            
+            # Log telemetry data periodically to check if it's being received properly
+            if not hasattr(self, '_telemetry_log_count'):
+                self._telemetry_log_count = 0
+            
+            self._telemetry_log_count += 1
+            if self._telemetry_log_count % 60 == 0:  # Log once per second at 60Hz
+                logger.info(f"Received telemetry data: {telemetry_data}")
+                
+            # Update input trace
+            if hasattr(self, 'input_trace') and telemetry_data:
+                # Make sure we're using the right keys for the telemetry data  
+                throttle = telemetry_data.get('Throttle', telemetry_data.get('throttle', 0))
+                brake = telemetry_data.get('Brake', telemetry_data.get('brake', 0))
+                clutch = telemetry_data.get('Clutch', telemetry_data.get('clutch', 0))
+                
+                # Log telemetry values 
+                if self._telemetry_log_count % 60 == 0:
+                    logger.info(f"Driver inputs: Throttle={throttle:.2f}, Brake={brake:.2f}, Clutch={clutch:.2f}")
+                
+                self.input_trace.add_data_point(throttle, brake, clutch)
+                
+                # Update current values and gauges
+                speed = telemetry_data.get('Speed', telemetry_data.get('speed', 0))
+                if isinstance(speed, (int, float)) and speed > 0:
+                    speed *= 3.6  # Convert to km/h
+                
+                rpm = telemetry_data.get('RPM', telemetry_data.get('rpm', 0))
+                gear = telemetry_data.get('Gear', telemetry_data.get('gear', 0))
+                gear_text = "R" if gear == -1 else "N" if gear == 0 else str(gear)
+                lap = telemetry_data.get('Lap', telemetry_data.get('lap_count', 0))
+                laptime = telemetry_data.get('LapCurrentLapTime', telemetry_data.get('lap_time', 0))
+                
+                # Get steering data - keys could be different depending on source
+                steering = telemetry_data.get('steering', 
+                           telemetry_data.get('SteeringWheelAngle', 
+                           telemetry_data.get('Steer', 
+                           telemetry_data.get('steer', 0))))
+                
+                # Update text values
+                self.speed_value.setText(f"{speed:.1f} km/h")
+                self.throttle_value.setText(f"{throttle*100:.0f}%")
+                self.brake_value.setText(f"{brake*100:.0f}%")
+                self.clutch_value.setText(f"{(1-clutch)*100:.0f}%")  # Invert clutch for display
+                self.gear_value.setText(gear_text)
+                self.rpm_value.setText(f"{rpm:.0f}")
+                self.lap_value.setText(str(lap))
+                self.laptime_value.setText(self._format_time(laptime))
+                
+                # Update gauges
+                if hasattr(self, 'speed_gauge'):
+                    self.speed_gauge.set_value(speed)
+                    
+                if hasattr(self, 'rpm_gauge'):
+                    self.rpm_gauge.set_value(rpm)
+                    # Check if we have session info for redline
+                    if hasattr(self, 'session_info') and 'DriverInfo' in self.session_info:
+                        driver_info = self.session_info['DriverInfo']
+                        if 'DriverCarRedLine' in driver_info:
+                            redline = driver_info['DriverCarRedLine']
+                            self.rpm_gauge.set_redline(redline)
+            
+                # Update steering wheel widget
+                if hasattr(self, 'steering_wheel'):
+                    # Normalize steering value to -1.0 to 1.0 range if needed
+                    # Some APIs provide steering in radians, others in a normalized range
+                    if abs(steering) > 1.0:
+                        # Convert from radians to normalized value
+                        # For 1080-degree wheels (3 full rotations), max rotation is 3*pi radians
+                        # Use max rotation value from the SteeringWheelAngleMax if available, 
+                        # or calculate based on 1080 degrees (3*pi) as default for sim racing wheels
+                        max_rotation = telemetry_data.get('SteeringWheelAngleMax', 
+                                                         telemetry_data.get('steering_max', 3.0 * math.pi))
+                        
+                        # Ensure max_rotation is positive and reasonable
+                        if max_rotation > 0:
+                            # Clamp steering angle to max_rotation to prevent bar overflow
+                            clamped_steering = max(-max_rotation, min(max_rotation, steering))
+                            steering_normalized = clamped_steering / max_rotation
+                            
+                            # Make sure steering_normalized stays in [-1, 1] range
+                            steering_normalized = max(-1.0, min(1.0, steering_normalized))
+                            
+                            self.steering_wheel.set_max_rotation(max_rotation)
+                            self.steering_wheel.set_value(steering_normalized)
+                            
+                            # Add logging
+                            if self._telemetry_log_count % 60 == 0:
+                                logger.info(f"Steering (rad): {steering:.2f}, MaxRotation: {max_rotation:.2f}, " +
+                                           f"Normalized: {steering_normalized:.2f}, Clamped: {clamped_steering:.2f}")
+                    else:
+                        # Already normalized between -1 and 1
+                        # Still clamp to ensure it's within range
+                        steering_normalized = max(-1.0, min(1.0, steering))
+                        self.steering_wheel.set_value(steering_normalized)
+                        
+                        # Add logging
+                        if self._telemetry_log_count % 60 == 0:
+                            logger.info(f"Steering (normalized): {steering_normalized:.2f}")
+            
+            # TODO: Process telemetry for telemetry comparison if needed
+            
+        except Exception as e:
+            logger.error(f"Error updating telemetry: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def on_iracing_connected(self, is_connected, session_info=None):
+        """Handle connection status changes from iRacing API."""
+        # This can still be called by the API's connection logic (e.g., via update_info_from_monitor)
+        logger.info(f"UI: on_iracing_connected called with is_connected={is_connected}")
+        self.is_connected = is_connected
+        # No longer need to update session_info here, signal handler does it
+        # if session_info:
+        #     self.session_info = session_info
+        self._update_connection_status() # Update UI based on new connection state
+
+    def on_session_info_changed(self, session_info):
+        """(Legacy/Fallback) Handle session info changes from iRacing API callbacks."""
+        logger.info("UI: on_session_info_changed (legacy callback) called.")
+        self.session_info = session_info # Store locally just in case
+        # Let the signal handler _update_connection_status handle the UI update
+        # self._update_session_info_ui(session_info)
+
+    def _update_connection_status(self, payload: dict):
+        """Update UI based on connection status and session info signal payload."""
+        logger.debug(f"UI received update signal with payload: {payload}")
+        # Extract info from the payload sent by the signal
+        is_connected = payload.get('is_connected', False)
+        session_info = payload.get('session_info', {})
+
+        # Update internal state
+        self.is_connected = is_connected
+        self.session_info = session_info # Store the latest info
+
+        if self.is_connected:
+            self.connection_label.setText("iRacing: Connected")
+            self.connection_label.setStyleSheet("color: green; font-weight: bold;")
+
+            # Get latest track/car/config from the received session_info dictionary
+            track_name = session_info.get('current_track', "No Track")
+            config_name = session_info.get('current_config') # Get config name (might be None or empty)
+            car_name = session_info.get('current_car', "No Car")
+            # TODO: Get driver name if added to session_info
+            driver_name = "N/A" # Placeholder
+
+            # Format track display text
+            track_display_text = f"Track: {track_name}"
+            if config_name and config_name != 'Default': # Don't show (Default)
+                track_display_text += f" ({config_name})" # Add config in parentheses if it exists
+                
+            # Also update any track-related fields in the main UI if they exist
+            if hasattr(self, 'track_info_label') and self.track_info_label:
+                self.track_info_label.setText(track_display_text)
+                
+            # If there's a session header or title that displays track info, update it too
+            if hasattr(self, 'session_title_label') and self.session_title_label:
+                session_type = session_info.get('session_type', 'Session')
+                self.session_title_label.setText(f"{session_type} at {track_name}{' ('+config_name+')' if config_name and config_name != 'Default' else ''}")
+
+            # Update labels in the status bar
+            self.track_label.setText(track_display_text) # Ensure this is the correct label for the status bar
+            self.driver_label.setText(f"Car: {car_name}")
+
+        else:
+            # Disconnected state
+            self.connection_label.setText("iRacing: Disconnected")
+            self.driver_label.setText("No Driver")
+            self.track_label.setText("No Track")
+            
+            # Clear additional UI elements if they exist
+            if hasattr(self, 'track_info_label') and self.track_info_label:
+                self.track_info_label.setText("No Track")
+                
+            if hasattr(self, 'session_title_label') and self.session_title_label:
+                self.session_title_label.setText("Not Connected")
+
+    # def _update_session_info_ui(self, session_info):
+    #    """(Deprecated) Update UI with session information."""
+    #    # This logic is now merged into _update_connection_status
+    #    pass
+
+    def set_driver_data(self, is_left_driver, data):
+        """Update driver data and refresh display.
+        
+        Args:
+            is_left_driver: True for left driver, False for right driver
+            data: Dictionary with driver data
+        """
+        driver = self.left_driver if is_left_driver else self.right_driver
+        
+        # Update driver data
+        if "name" in data:
+            name_parts = data["name"].split()
+            if len(name_parts) > 1:
+                driver["name"] = name_parts[0]
+                driver["lastname"] = " ".join(name_parts[1:])
+            else:
+                driver["name"] = data["name"]
+                driver["lastname"] = ""
+                
+        if "team" in data:
+            driver["team"] = data["team"]
+            
+        if "position" in data:
+            driver["position"] = data["position"]
+            
+        if "lap_time" in data:
+            driver["lap_time"] = data["lap_time"]
+            
+        if "gap" in data:
+            driver["gap"] = data["gap"]
+            
+        if "full_throttle" in data:
+            driver["full_throttle"] = data["full_throttle"]
+            
+        if "heavy_braking" in data:
+            driver["heavy_braking"] = data["heavy_braking"]
+            
+        if "cornering" in data:
+            driver["cornering"] = data["cornering"]
+            
+        # Refresh UI
+        self.update_driver_display(is_left_driver)
+        
+    def update_driver_display(self, is_left_driver):
+        """Update the UI display for a driver.
+        
+        Args:
+            is_left_driver: True for left driver, False for right driver
+        """
+        driver = self.left_driver if is_left_driver else self.right_driver
+        
+        if is_left_driver:
+            # Update left driver display
+            self.left_position_label.setText(str(driver["position"]))
+            self.left_driver_name.setText(driver["name"].upper())
+            self.left_driver_lastname.setText(driver["lastname"].upper())
+            self.left_driver_team.setText(driver["team"].upper())
+            
+            # Format lap time as M:SS.MMM
+            self.left_lap_time.setText(self._format_time(driver["lap_time"]))
+            
+            # Format gap
+            if driver["gap"] <= 0:
+                self.left_gap.setText(f"{driver['gap']:.3f}s")
+            else:
+                self.left_gap.setText(f"+{driver['gap']:.3f}s")
+                
+            # Update stats
+            self.left_throttle_value.setText(f"{driver['full_throttle']}%")
+            self.left_braking_value.setText(f"{driver['heavy_braking']}%")
+            self.left_cornering_value.setText(f"{driver['cornering']}%")
+        else:
+            # Update right driver display
+            self.right_position_label.setText(str(driver["position"]))
+            self.right_driver_name.setText(driver["name"].upper())
+            self.right_driver_lastname.setText(driver["lastname"].upper())
+            self.right_driver_team.setText(driver["team"].upper())
+            
+            # Format lap time as M:SS.MMM
+            self.right_lap_time.setText(self._format_time(driver["lap_time"]))
+            
+            # Format gap
+            if driver["gap"] <= 0:
+                self.right_gap.setText(f"{driver['gap']:.3f}s")
+            else:
+                self.right_gap.setText(f"+{driver['gap']:.3f}s")
+                
+            # Update stats
+            self.right_throttle_value.setText(f"{driver['full_throttle']}%")
+            self.right_braking_value.setText(f"{driver['heavy_braking']}%")
+            self.right_cornering_value.setText(f"{driver['cornering']}%")
+    
+    def _format_time(self, time_in_seconds):
+        """Format time in seconds to MM:SS.mmm format."""
+        minutes = int(time_in_seconds // 60)
+        seconds = int(time_in_seconds % 60)
+        milliseconds = int((time_in_seconds % 1) * 1000)
+        return f"{minutes}:{seconds:02d}.{milliseconds:03d}"
+        
+    def _format_lap_display(self, lap_num, lap_time):
+        """Format lap number and time for display in UI, showing 'Out lap' instead of 'Lap 0'."""
+        # Handle negative times (invalid laps) or None
+        if lap_time is None or lap_time < 0:
+            time_str = "(Invalid)"
+        else:
+            time_str = self._format_time(lap_time) if lap_time else "(No Time)"
+        
+        # Format special laps differently
+        if lap_num == 0:
+            return f"Out lap  -  {time_str}"
+        else:
+            return f"Lap {lap_num}  -  {time_str}"
+    
+    def set_speed_data(self, left_data, right_data):
+        """Set the speed data for both drivers and update the child widget."""
+        self.speed_data_left = left_data
+        self.speed_data_right = right_data
+        
+        # Pass data to the child widget
+        if hasattr(self, 'speed_trace_widget'):
+            self.speed_trace_widget.set_data(
+                self.speed_data_left,
+                self.speed_data_right,
+                self.left_driver.get("color", QColor(255,0,0)),
+                self.right_driver.get("color", QColor(255,215,0)),
+                self.left_driver.get("name", "Driver 1"),
+                self.right_driver.get("name", "Driver 2")
+            )
+        
+        # Auto analyze the telemetry when new data is set (if needed)
+        # self.analyze_telemetry() 
+        self.update() # Update parent widget if necessary
+        
+    def set_delta_data(self, delta_data):
+        """Set the delta time data and update the child widget."""
+        self.delta_data = delta_data
+        
+        # Pass data to the child widget
+        if hasattr(self, 'delta_widget'):
+            self.delta_widget.set_data(delta_data)
+            
+        # Re-analyze with new delta data (if needed)
+        # self.analyze_telemetry()
+        self.update() # Update parent widget if necessary
+
+    def set_track_data(self, track_map_points, turn_data, sector_data):
+        """Set the track map data.
+        
+        Args:
+            track_map_points: List of (x, y) points defining the track outline
+            turn_data: Dictionary mapping turn numbers to track positions
+            sector_data: Dictionary defining speed sectors
+        """
+        self.track_map_points = track_map_points
+        self.track_turns = turn_data
+        self.track_sectors = sector_data
+        self.update()
+        
+    def analyze_telemetry(self):
+        """Analyze the speed data to generate enhanced telemetry visualization.
+        
+        This method:
+        1. Identifies key sections of the track based on speed profiles
+        2. Calculates sector-specific delta times
+        3. Auto-categorizes track sections by speed (LOW/MEDIUM/HIGH)
+        """
+        if not hasattr(self, 'speed_data_left') or not self.speed_data_left:
+            return
+            
+        if not hasattr(self, 'speed_data_right') or not self.speed_data_right:
+            return
+            
+        # Normalize data lengths if needed
+        min_length = min(len(self.speed_data_left), len(self.speed_data_right))
+        if min_length == 0:
+            return
+            
+        self.speed_data_left = self.speed_data_left[:min_length]
+        self.speed_data_right = self.speed_data_right[:min_length]
+        
+        # Calculate the average speed at each point
+        avg_speeds = [(self.speed_data_left[i] + self.speed_data_right[i]) / 2 
+                     for i in range(min_length)]
+        
+        # Find the max speed to determine thresholds
+        max_speed = max(avg_speeds)
+        
+        # Define thresholds for speed categories
+        low_speed_threshold = max_speed * 0.4  # Below 40% of max speed
+        high_speed_threshold = max_speed * 0.8  # Above 80% of max speed
+        
+        # Identify continuous sections by speed category
+        current_category = "MEDIUM SPEED"  # Default
+        section_start = 0
+        sections = []
+        
+        for i, speed in enumerate(avg_speeds):
+            category = "MEDIUM SPEED"
+            if speed < low_speed_threshold:
+                category = "LOW SPEED"
+            elif speed > high_speed_threshold:
+                category = "HIGH SPEED"
+                
+            # If category changes, end the previous section
+            if category != current_category or i == len(avg_speeds) - 1:
+                sections.append({
+                    "start": section_start,
+                    "end": i - 1 if i < len(avg_speeds) - 1 else i,
+                    "category": current_category
+                })
+                section_start = i
+                current_category = category
+        
+        # Combine small sections (less than 5% of track) with neighbors
+        min_section_size = min_length * 0.05
+        cleaned_sections = []
+        i = 0
+        
+        while i < len(sections):
+            section = sections[i]
+            size = section["end"] - section["start"] + 1
+            
+            # If section is too small and not the only section
+            if size < min_section_size and len(sections) > 1:
+                # If not the first section, merge with previous
+                if i > 0:
+                    prev_section = cleaned_sections[-1]
+                    prev_section["end"] = section["end"]
+                # If last section, merge with next
+                elif i < len(sections) - 1:
+                    next_section = sections[i+1]
+                    next_section["start"] = section["start"]
+                    cleaned_sections.append(next_section)
+                    i += 1
+            else:
+                cleaned_sections.append(section)
+            i += 1
+            
+        # Update the track sectors data structure
+        self.track_sectors = {}
+        
+        for i, section in enumerate(cleaned_sections):
+            start_idx = section["start"]
+            end_idx = section["end"]
+            category = section["category"]
+            
+            # Create track sector data
+            # In a real implementation, we'd map this to actual track points
+            self.track_sectors[i] = {
+                "speed_category": category,
+                "start_idx": start_idx,
+                "end_idx": end_idx,
+                "points": [] # This would be filled with actual track points in a full implementation
+            }
+            
+        # Now calculate delta time per section
+        if hasattr(self, 'delta_data') and self.delta_data:
+            for sector_id, sector in self.track_sectors.items():
+                start_idx = sector["start_idx"]
+                end_idx = sector["end_idx"]
+                
+                if start_idx < len(self.delta_data) and end_idx < len(self.delta_data):
+                    # Calculate delta gain/loss in this sector
+                    sector_delta = self.delta_data[end_idx] - (self.delta_data[start_idx] if start_idx > 0 else 0)
+                    self.track_sectors[sector_id]["delta"] = sector_delta
+        
+        self.update()  # Refresh the display
+        
+    def paintEvent(self, event):
+        """Paint the comparison widget with real data.
+        
+        This will draw:
+        1. Speed trace with custom rendering
+        2. Track map (when implemented)
+        3. Delta time graph
+        """
+        try:
+            super().paintEvent(event)
+            
+            # Only proceed if we have data to display
+            if not hasattr(self, 'speed_data_left') or not hasattr(self, 'speed_data_right'):
+                return
+                
+            if not self.speed_data_left or not self.speed_data_right:
+                return
+                
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Get widget dimensions
+            width = self.width()
+            height = self.height()
+            
+            # Draw track map in the center top area
+            track_map_top = height * 0.05
+            track_map_height = height * 0.45
+            track_map_bottom = track_map_top + track_map_height
+            track_map_left = width * 0.1  # Adjusted to use more width
+            track_map_width = width * 0.8  # Increased width for track map
+            track_map_right = track_map_left + track_map_width
+            
+            # Background for track map
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(25, 25, 25)))
+            painter.drawRect(int(track_map_left), int(track_map_top), int(track_map_width), int(track_map_height))
+            
+            # Draw track outline if we have points
+            if self.track_map_points:
+                # Calculate scale and offset to fit track in view
+                x_coords = [p[0] for p in self.track_map_points]
+                y_coords = [p[1] for p in self.track_map_points]
+                
+                track_width = max(x_coords) - min(x_coords)
+                track_height = max(y_coords) - min(y_coords)
+                
+                # Scale to fit with padding
+                padding = 20
+                scale_x = (track_map_width - padding*2) / track_width if track_width > 0 else 1
+                scale_y = (track_map_height - padding*2) / track_height if track_height > 0 else 1
+                scale = min(scale_x, scale_y)
+                
+                # Center the track
+                offset_x = track_map_left + track_map_width/2 - (max(x_coords) + min(x_coords))*scale/2
+                offset_y = track_map_top + track_map_height/2 - (max(y_coords) + min(y_coords))*scale/2
+                
+                # Draw track outline
+                track_path = QPainterPath()
+                first_point = True
+                
+                for x, y in self.track_map_points:
+                    screen_x = offset_x + x * scale
+                    screen_y = offset_y + y * scale
+                    
+                    if first_point:
+                        try:
+                            track_path.moveTo(screen_x, screen_y)
+                        except Exception as e:
+                            # If our fallback implementation fails, draw directly
+                            first_point_coords = (screen_x, screen_y)
+                            polygon_points = [first_point_coords]
+                            break
+                        first_point = False
+                    else:
+                        try:
+                            track_path.lineTo(screen_x, screen_y)
+                        except Exception as e:
+                            # If our fallback implementation fails, collect points for direct drawing
+                            polygon_points.append((screen_x, screen_y))
+                
+                # Close the path
+                try:
+                    track_path.closeSubpath()
+                    
+                    # Draw track outline
+                    painter.setPen(QPen(QColor(100, 100, 100), 2))
+                    painter.setBrush(QBrush(QColor(40, 40, 40)))
+                    painter.drawPath(track_path)
+                except Exception as e:
+                    # Fallback: Draw as polygon if QPainterPath fails
+                    if 'polygon_points' in locals():
+                        # Close the polygon
+                        if polygon_points[0] != polygon_points[-1]:
+                            polygon_points.append(polygon_points[0])
+                        
+                        # Draw as lines
+                        painter.setPen(QPen(QColor(100, 100, 100), 2))
+                        painter.setBrush(QBrush(QColor(40, 40, 40)))
+                        
+                        # Draw the polygon as a series of lines
+                        for i in range(len(polygon_points) - 1):
+                            painter.drawLine(
+                                int(polygon_points[i][0]), int(polygon_points[i][1]),
+                                int(polygon_points[i+1][0]), int(polygon_points[i+1][1])
+                            )
+                
+                # Draw speed sectors if available
+                if hasattr(self, 'track_sectors') and self.track_sectors:
+                    # Define colors for different speed categories
+                    speed_colors = {
+                        "LOW": QColor(255, 0, 0, 60),     # Red with transparency
+                        "MEDIUM": QColor(255, 165, 0, 60), # Orange with transparency
+                        "HIGH": QColor(0, 255, 0, 60)      # Green with transparency
+                    }
+                    
+                    # Draw each sector with appropriate color
+                    for sector_id, sector_data in self.track_sectors.items():
+                        if "speed_category" in sector_data and "points" in sector_data:
+                            category = sector_data["speed_category"]
+                            sector_points = sector_data["points"]
+                            
+                            if category in speed_colors and len(sector_points) > 2:
+                                # Create path for this sector
+                                sector_path = QPainterPath()
+                                first_point = True
+                                
+                                for x, y in sector_points:
+                                    screen_x = offset_x + x * scale
+                                    screen_y = offset_y + y * scale
+                                    
+                                    if first_point:
+                                        sector_path.moveTo(screen_x, screen_y)
+                                        first_point = False
+                                    else:
+                                        sector_path.lineTo(screen_x, screen_y)
+                                
+                                sector_path.closeSubpath()
+                                
+                                # Draw colored sector
+                                painter.setPen(Qt.NoPen)
+                                painter.setBrush(QBrush(speed_colors[category]))
+                                painter.drawPath(sector_path)
+                
+                # Draw turn markers and numbers if available
+                if hasattr(self, 'track_turns') and self.track_turns:
+                    painter.setPen(QPen(QColor(255, 255, 255)))
+                    painter.setFont(QFont("Arial", 8, QFont.Bold))
+                    
+                    for turn_num, turn_data in self.track_turns.items():
+                        if "position" in turn_data:
+                            x, y = turn_data["position"]
+                            screen_x = offset_x + x * scale
+                            screen_y = offset_y + y * scale
+                            
+                            # Draw turn marker
+                            painter.setBrush(QBrush(QColor(200, 200, 200)))
+                            painter.drawEllipse(int(screen_x - 3), int(screen_y - 3), 6, 6)
+                            
+                            # Draw turn number
+                            painter.drawText(int(screen_x + 5), int(screen_y + 3), str(turn_num))
+            
+            # Define areas for speed and delta graphs (These are now handled by child widgets)
+            # speed_top = track_map_bottom + 20
+            # speed_height = height * 0.25
+            # speed_bottom = speed_top + speed_height
+            
+            # delta_top = speed_bottom + 10
+            # delta_height = height * 0.15
+            # delta_bottom = delta_top + delta_height
+            
+            # --- Speed and Delta graph drawing logic is now in child widgets ---
+            # --- REMOVED all drawing code from here down related to speed/delta graphs --- 
+            
+        except Exception as e:
+            # Log error but don't crash the application
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in TelemetryComparisonWidget.paintEvent: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def on_telemetry_data(self, telemetry_data):
+        """Handle telemetry data updates from iRacing API."""
+        # First, update the existing telemetry visuals
+        self._update_telemetry(telemetry_data)
+        
+        # Then feed telemetry to the monitor for coverage tracking
+        # Convert the telemetry data format to the expected format for the monitor
+        track_position = telemetry_data.get('track_position', 
+                          telemetry_data.get('LapDist', 0))
+        
+        # Normalize track position if LapDist is used (convert from meters to 0-1 range)
+        if 'LapDist' in telemetry_data and 'TrackLength' in telemetry_data:
+            try:
+                track_length = float(telemetry_data['TrackLength'])
+                if track_length > 0:
+                    track_position = float(telemetry_data['LapDist']) / track_length
+            except (ValueError, TypeError):
+                pass
+        
+        # Create a telemetry point in our internal format
+        telemetry_point = {
+            'timestamp': telemetry_data.get('timestamp', time.time()),
+            'track_position': track_position,
+            'throttle': telemetry_data.get('Throttle', telemetry_data.get('throttle', 0)),
+            'brake': telemetry_data.get('Brake', telemetry_data.get('brake', 0)),
+            'steering': telemetry_data.get('steering', 
+                        telemetry_data.get('SteeringWheelAngle', 
+                        telemetry_data.get('Steer', 
+                        telemetry_data.get('steer', 0)))),
+            'speed': telemetry_data.get('Speed', telemetry_data.get('speed', 0)),
+            'rpm': telemetry_data.get('RPM', telemetry_data.get('rpm', 0)),
+            'gear': telemetry_data.get('Gear', telemetry_data.get('gear', 0)),
+            'lap_number': telemetry_data.get('Lap', telemetry_data.get('lap_count', 0))
+        }
+        
+        # Add any other fields that might be useful
+        for key, value in telemetry_data.items():
+            if key not in telemetry_point and isinstance(value, (int, float, str, bool)):
+                telemetry_point[key] = value
+        
+        # Add to monitoring buffer
+        self.telemetry_monitor.add_telemetry_point(telemetry_point)
+    
+    def on_save_lap_clicked(self):
+        """Handle the save lap button click."""
+        # Disable the save button to prevent double-saving
+        self.save_lap_button.setEnabled(False)
+        
+        # Get the current telemetry buffer
+        telemetry_buffer = self.telemetry_monitor.get_buffer_copy()
+        
+        # Validate the telemetry data
+        is_valid, message, diagnostics = validate_lap_telemetry(telemetry_buffer)
+        
+        if not is_valid:
+            QMessageBox.warning(
+                self, 
+                "Incomplete Lap Data", 
+                f"This lap has incomplete telemetry data and cannot be saved:\n\n{message}"
+            )
+            self.save_lap_button.setEnabled(True)
+            return
+        
+        # Prepare lap data header
+        current_time = datetime.now().isoformat()
+        
+        # Check if we have session and driver info
+        track_name = "Unknown Track"
+        car_name = "Unknown Car"
+        driver_name = "Unknown Driver"
+        
+        if hasattr(self, 'session_info') and self.session_info:
+            track_name = self.session_info.get('current_track', 
+                         self.session_info.get('TrackName', track_name))
+            car_name = self.session_info.get('current_car',
+                       self.session_info.get('CarName', car_name))
+            driver_name = self.session_info.get('DriverName', driver_name)
+        
+        # Get a representative telemetry point for additional data
+        sample_point = telemetry_buffer[-1] if telemetry_buffer else {}
+        
+        # Create session record (if needed)
+        # In a full implementation, you would check if the current session already exists
+        # and reference it, but for simplicity we'll create a new one here
+        session_data = {
+            'created_at': current_time,
+            'track_name': track_name,
+            'car_name': car_name,
+            'driver_name': driver_name,
+            # Add other session fields as needed
+        }
+        
+        # Create lap record
+        lap_data = {
+            'created_at': current_time,
+            'lap_number': sample_point.get('lap_number', 0),
+            'lap_time': sample_point.get('lap_time', 0),
+            'track_name': track_name,
+            'car_name': car_name,
+            'driver_name': driver_name,
+            'session_id': None,  # Will be populated by the save worker after session is created
+            # Add other lap fields as needed
+        }
+        
+        # Create and show progress dialog
+        self.save_progress_dialog = QMessageBox()
+        self.save_progress_dialog.setWindowTitle("Saving Lap Data")
+        self.save_progress_dialog.setText("Preparing to save lap data...")
+        self.save_progress_dialog.setStandardButtons(QMessageBox.Cancel)
+        self.save_progress_dialog.setIcon(QMessageBox.Information)
+        
+        # Create and start the save worker
+        self.save_thread = QThread()
+        self.save_worker = TelemetrySaveWorker(lap_data, telemetry_buffer)
+        self.save_worker.moveToThread(self.save_thread)
+        
+        # Connect signals
+        self.save_thread.started.connect(self.save_worker.run)
+        self.save_worker.finished.connect(self.on_save_lap_finished)
+        self.save_worker.progress.connect(self.on_save_progress)
+        
+        # Handle cleanup
+        self.save_worker.finished.connect(self.save_thread.quit)
+        self.save_worker.finished.connect(self.save_worker.deleteLater)
+        self.save_thread.finished.connect(self.save_thread.deleteLater)
+        
+        # Connect cancel button
+        cancel_button = self.save_progress_dialog.button(QMessageBox.Cancel)
+        cancel_button.clicked.connect(self.on_save_cancelled)
+        
+        # Start the thread and show dialog
+        self.save_thread.start()
+    
+    def on_save_progress(self, percentage, message):
+        """Update the save progress dialog."""
+        if self.save_progress_dialog:
+            self.save_progress_dialog.setText(f"{message} ({percentage}%)")
+    
+    def on_save_cancelled(self):
+        """Handle cancellation of the save operation."""
+        if hasattr(self, 'save_worker') and self.save_worker:
+            self.save_worker.cancel()
+    
+    def on_save_lap_finished(self, success, message, diagnostics):
+        """Handle completion of the lap save operation."""
+        # Close the progress dialog
+        if self.save_progress_dialog:
+            self.save_progress_dialog.accept()
+            self.save_progress_dialog = None
+        
+        # Re-enable the save button
+        self.save_lap_button.setEnabled(True)
+        
+        # Show appropriate message
+        if success:
+            lap_id = diagnostics.get("lap_id", "Unknown")
+            points_saved = diagnostics.get("points_saved", 0)
+            
+            QMessageBox.information(
+                self, 
+                "Lap Saved", 
+                f"Lap data saved successfully.\n\nLap ID: {lap_id}\nTelemetry Points: {points_saved}"
+            )
+            
+            # Optionally clear buffer after successful save
+            self.telemetry_monitor.clear_buffer()
+            self.coverage_indicator.setValue(0)
+            self.coverage_status.setText("Telemetry buffer cleared")
+        else:
+            QMessageBox.critical(
+                self, 
+                "Save Failed", 
+                f"Failed to save lap data:\n\n{message}"
+            )
+
+    # Update closeEvent to clean up telemetry monitor
+    def closeEvent(self, event):
+        """Handle widget close event to properly clean up resources."""
+        try:
+            logger.info("RaceCoachWidget closeEvent triggered - cleaning up resources")
+            
+            # Stop telemetry monitor thread if it exists
+            if hasattr(self, 'telemetry_monitor_thread') and self.telemetry_monitor_thread and self.telemetry_monitor_thread.isRunning():
+                logger.info("Stopping telemetry monitor thread")
+                if hasattr(self, 'telemetry_monitor'):
+                    self.telemetry_monitor.stop_monitoring()
+                self.telemetry_monitor_thread.quit()
+                self.telemetry_monitor_thread.wait(1000)  # Wait up to 1 second
+                
+            # Rest of the original closeEvent code...
+            if hasattr(self, 'iracing_api') and self.iracing_api:
+                logger.info("Disconnecting from iRacing API")
+                self.iracing_api.disconnect()
+                
+            # Accept the event to allow the widget to be closed
+            event.accept()
+        except Exception as e:
+            logger.error(f"Error during RaceCoachWidget closeEvent: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            event.accept()  # Still accept the event even if there's an error
+    
+    def hideEvent(self, event):
+        """Handle widget hide event (happens when switching tabs)."""
+        try:
+            logger.info("RaceCoachWidget hideEvent triggered - pausing resources")
+            
+            # Stop the demo steering timer if it's running
+            # if hasattr(self, '_demo_steer_timer') and self._demo_steer_timer and self._demo_steer_timer.isActive():
+            #     logger.info("Pausing demo steering animation timer")
+            #     self._demo_steer_timer.stop()
+                
+            # Leave API connection active but log the state change
+            if hasattr(self, 'iracing_api') and self.iracing_api:
+                logger.info("Race Coach widget hidden but keeping iRacing API connection active")
+        except Exception as e:
+            logger.error(f"Error during RaceCoachWidget hideEvent: {e}")
+        
+        # Call the parent class implementation
+        super().hideEvent(event)
+    
+    def showEvent(self, event):
+        """Handle widget show event (happens when switching back to this tab)."""
+        try:
+            logger.info("RaceCoachWidget showEvent triggered - resuming resources")
+            
+            # Check connection status and reconnect if needed
+            if hasattr(self, 'iracing_api') and self.iracing_api:
+                logger.info("Reconnecting to iRacing API")
+                self.iracing_api.connect(
+                    on_connected=self.on_iracing_connected,
+                    on_disconnected=lambda: self.on_iracing_connected(False),
+                    on_session_info_changed=self.on_session_info_changed,
+                    on_telemetry_update=self.on_telemetry_data
+                )
+                
+                # Force a direct connection attempt to iRacing
+                try:
+                    from .iracing_session_monitor import is_iracing_available, run_irsdk_parse
+                    
+                    # Log that we're attempting direct connection
+                    logger.info("Attempting direct connection to iRacing...")
+                    
+                    # Try to connect and get status
+                    is_connected = is_iracing_available()
+                    logger.info(f"Direct iRacing connection test result: {is_connected}")
+                    
+                    # If connected, try to parse data
+                    if is_connected:
+                        parse_result = run_irsdk_parse()
+                        logger.info(f"iRacing data parse result: {parse_result}")
+                    
+                except Exception as e:
+                    logger.error(f"Error during direct iRacing connection attempt: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+        except Exception as e:
+            logger.error(f"Error during RaceCoachWidget showEvent: {e}")
+        
+        # Call the parent class implementation
+        super().showEvent(event)
+
+        # Trigger initial load in background if not already done or in progress
+        if not self._initial_lap_load_done and not self._is_initial_loading:
+            self.start_initial_load()
+
+    def start_initial_load(self):
+        """Starts the background worker to load initial session/lap data."""
+        if self.initial_load_thread is not None and self.initial_load_thread.isRunning():
+            logger.warning("Initial load already in progress.")
+            return
+
+        logger.info("Starting initial background data load...")
+        self._is_initial_loading = True
+
+        # Update UI to show loading state
+        self.loading_label.setText("🔄 Loading sessions...")
+        self.loading_label.setVisible(True)
+        self.session_combo.setEnabled(False)
+        self.left_lap_combo.setEnabled(False)
+        self.right_lap_combo.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.compare_button.setEnabled(False)
+
+        # Create worker and thread
+        self.initial_load_worker = InitialLoadWorker()
+        self.initial_load_thread = QThread()
+        self.initial_load_worker.moveToThread(self.initial_load_thread)
+
+        # Connect signals
+        self.initial_load_worker.sessions_loaded.connect(self._on_initial_sessions_loaded)
+        self.initial_load_worker.laps_loaded.connect(self._on_initial_laps_loaded)
+        self.initial_load_worker.error.connect(self._on_initial_load_error)
+        self.initial_load_worker.finished.connect(self._on_initial_load_finished)
+        self.initial_load_thread.started.connect(self.initial_load_worker.run)
+
+        # Cleanup connections
+        # When the worker finishes its task, tell the thread to quit
+        self.initial_load_worker.finished.connect(self.initial_load_thread.quit)
+        # Schedule the worker object for deletion once the thread's event loop finishes
+        self.initial_load_worker.finished.connect(self.initial_load_worker.deleteLater)
+        # Schedule the thread object for deletion once it has finished executing
+        self.initial_load_thread.finished.connect(self.initial_load_thread.deleteLater)
+        # Nullify references only after the thread has fully finished
+        self.initial_load_thread.finished.connect(self._cleanup_initial_load_references)
+
+        # Start the thread
+        self.initial_load_thread.start()
+
+    def _on_initial_sessions_loaded(self, sessions, message):
+        """Slot to handle the loaded sessions from the background worker."""
+        logger.info(f"Received {len(sessions)} initial sessions. Message: {message}")
+
+        self.session_combo.clear()
+
+        if message == "User not logged in":
+            self.session_combo.addItem("Log in to view sessions", None)
+            return # Laps will also be handled by logged-out state
+
+        if not sessions:
+            self.session_combo.addItem(message or "No sessions with laps found", None)
+            return
+
+        # Populate the session combo box
+        for session in sessions:
+            session_id = session.get("id")
+            created_at_str = session.get("created_at", "")
+            track_name = session.get("track_name", "Unknown Track")
+            car_name = session.get("car_name", "Unknown Car")
+
+            try:
+                timestamp = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                display_text = f"{timestamp.strftime('%Y-%m-%d %H:%M')} - {track_name} ({car_name})"
+            except (ValueError, TypeError):
+                 display_text = f"{created_at_str} - {track_name} ({car_name})"
+
+            self.session_combo.addItem(display_text, session_id)
+
+        # Update loading label
+        self.loading_label.setText("🔄 Loading laps for first session...")
+
+    def _on_initial_laps_loaded(self, laps, message):
+        """Slot to handle the loaded laps for the first session."""
+        logger.info(f"Received {len(laps)} initial laps. Message: {message}")
+
+        self.left_lap_combo.clear()
+        self.right_lap_combo.clear()
+
+        if message == "User not logged in":
+            self.left_lap_combo.addItem("Log in first", None)
+            self.right_lap_combo.addItem("Log in first", None)
+            return
+
+        if not laps:
+            # Check if sessions were loaded - if not, the session combo already shows the right message
+            if self.session_combo.count() > 0 and self.session_combo.itemData(0) is not None:
+                self.left_lap_combo.addItem(message or "No laps for this session", None)
+                self.right_lap_combo.addItem(message or "No laps for this session", None)
+            # Else, the session combo shows 'Log in' or 'No sessions', so leave lap combos empty or show appropriate message
+            elif self.session_combo.count() == 0 or self.session_combo.itemData(0) is None:
+                self.left_lap_combo.addItem("Select session", None)
+                self.right_lap_combo.addItem("Select session", None)
+            return
+
+        # Display lap number and time
+        for lap in laps:
+            lap_id = lap.get("id")
+            lap_num = lap.get("lap_number", "N/A")
+            lap_time = lap.get("lap_time")
+            
+            # Use the new lap display formatting function
+            display_text = self._format_lap_display(lap_num, lap_time)
+            
+            self.left_lap_combo.addItem(display_text, lap_id)
+            self.right_lap_combo.addItem(display_text, lap_id)
+        logger.info(f"Populated initial lap lists with {len(laps)} laps.")
+
+    def _on_initial_load_error(self, error_message):
+        """Slot to handle errors during initial load."""
+        logger.error(f"Initial load failed: {error_message}")
+        QMessageBox.critical(self, "Error Loading Data", f"Failed to load initial Race Coach data:\n\n{error_message}")
+        # Update UI to show error state
+        self.loading_label.setText(f"❌ Error loading data: {error_message}")
+        self.loading_label.setStyleSheet("color: #FF6666; font-style: italic; padding: 10px;")
+        self.session_combo.clear()
+        self.session_combo.addItem("Error loading sessions", None)
+        self.left_lap_combo.clear()
+        self.left_lap_combo.addItem("Error", None)
+        self.right_lap_combo.clear()
+        self.right_lap_combo.addItem("Error", None)
+        # Keep controls disabled until user manually refreshes
+        self.session_combo.setEnabled(False)
+        self.left_lap_combo.setEnabled(False)
+        self.right_lap_combo.setEnabled(False)
+        self.compare_button.setEnabled(False)
+        # BUT re-enable refresh button so user can retry
+        self.refresh_button.setEnabled(True)
+
+    def _on_initial_load_finished(self):
+        """Slot called when the initial load worker finishes its task (success or error)."""
+        logger.info("Initial load worker finished task.") # Changed log message
+        self._is_initial_loading = False
+        self._initial_lap_load_done = True # Mark initial load as attempted/done
+        # Keep loading label visible if there was an error, otherwise hide it
+        if "Error" not in self.loading_label.text():
+             self.loading_label.setVisible(False)
+
+        # Re-enable controls (unless there was an error where refresh is the only one enabled)
+        if "Error" not in self.loading_label.text():
+            self.session_combo.setEnabled(True)
+            self.left_lap_combo.setEnabled(True)
+            self.right_lap_combo.setEnabled(True)
+            self.refresh_button.setEnabled(True)
+            self.compare_button.setEnabled(True)
+        else:
+             # Ensure refresh is enabled even if error occurred
+             self.refresh_button.setEnabled(True)
+
+    def _cleanup_initial_load_references(self):
+        """Slot called AFTER the initial load thread has finished executing."""
+        logger.info("Cleaning up initial load thread references.")
+        self.initial_load_thread = None
+        self.initial_load_worker = None
+
+    # -------- Lap Comparison Methods (Phase 2) --------
+
+    def refresh_session_and_lap_lists(self):
+        """Refreshes both the session list and the laps for the currently selected session."""
+        # Check if initial load is already running
+        if self._is_initial_loading:
+            logger.warning("Initial load in progress, skipping manual refresh.")
+            return
+            
+        logger.info("Refreshing session and lap lists...")
+        
+        # Update UI to show loading state (similar to initial load)
+        self.loading_label.setText("🔄 Refreshing sessions...")
+        self.loading_label.setStyleSheet("color: #AAA; font-style: italic; padding: 10px;") # Reset style
+        self.loading_label.setVisible(True)
+        self.session_combo.setEnabled(False)
+        self.left_lap_combo.setEnabled(False)
+        self.right_lap_combo.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.compare_button.setEnabled(False)
+        QApplication.processEvents() # Ensure UI updates immediately
+
+        # Explicitly check auth using the main client
+        try:
+            from trackpro.database.supabase_client import supabase as main_supabase
+            is_authenticated = main_supabase.is_authenticated()
+            logger.info(f"refresh_session_and_lap_lists: Auth check via main client: {is_authenticated}")
+        except Exception as e:
+            logger.error(f"Error checking auth state in refresh_session_and_lap_lists: {e}")
+            is_authenticated = False # Assume not logged in if check fails
+
+        if not is_authenticated:
+            logger.warning("User not logged in (checked via main client). Cannot refresh sessions or laps.")
+            self.session_combo.clear()
+            self.session_combo.addItem("Log in to view sessions", None)
+            self.left_lap_combo.clear()
+            self.left_lap_combo.addItem("Log in first", None)
+            self.right_lap_combo.clear()
+            self.right_lap_combo.addItem("Log in first", None)
+            # Restore UI
+            self.loading_label.setVisible(False)
+            self.session_combo.setEnabled(True) # Enable even if logged out
+            self.left_lap_combo.setEnabled(True)
+            self.right_lap_combo.setEnabled(True)
+            self.refresh_button.setEnabled(True)
+            self.compare_button.setEnabled(True)
+            return
+
+        # Fetch and populate sessions (directly, not in thread for manual refresh)
+        self.refresh_session_list()
+        self.loading_label.setText("🔄 Refreshing laps...")
+        QApplication.processEvents()
+
+        # After sessions are loaded, trigger lap list refresh for the selected session
+        current_session_id = self.session_combo.currentData()
+        if current_session_id:
+            self.refresh_lap_list(current_session_id)
+        else:
+            # No session selected or available, clear lap lists
+            self.left_lap_combo.clear()
+            self.left_lap_combo.addItem("Select a session", None)
+            self.right_lap_combo.clear()
+            self.right_lap_combo.addItem("Select a session", None)
+        
+        # Restore UI after refresh
+        self.loading_label.setVisible(False)
+        self.session_combo.setEnabled(True)
+        self.left_lap_combo.setEnabled(True)
+        self.right_lap_combo.setEnabled(True)
+        self.refresh_button.setEnabled(True)
+        self.compare_button.setEnabled(True)
+
+    def refresh_session_list(self):
+        """Fetch latest sessions from Supabase and populate the session combo box, filtering for sessions with laps."""
+        logger.info("Refreshing session list...")
+        # Store current selection to try and restore it
+        current_id = self.session_combo.currentData()
+        self.session_combo.clear()
+
+        # Check auth directly
+        from trackpro.database.supabase_client import supabase as main_supabase
+        if not main_supabase.is_authenticated():
+            logger.warning("Refresh session list: User not authenticated.")
+            self.session_combo.addItem("Log in to view sessions", None)
+            return
+
+        # 1. Fetch all user sessions
+        sessions, msg = get_sessions(limit=100, user_only=True)
+
+        if sessions is None:
+            logger.error(f"Failed to fetch sessions during refresh: {msg}")
+            self.session_combo.addItem(f"Error: {msg}", None)
+            return
+
+        if not sessions:
+            self.session_combo.addItem("No sessions found", None)
+            return
+
+        # 2. Efficiently Find Session IDs with Laps
+        session_ids = [s['id'] for s in sessions if s.get('id')]
+        lap_session_ids = set()
+        if session_ids:
+            try:
+                laps_query = main_supabase.client.table('laps') \
+                    .select('session_id') \
+                    .in_('session_id', session_ids) \
+                    .execute()
+                if laps_query.data:
+                    lap_session_ids = {lap['session_id'] for lap in laps_query.data if lap.get('session_id')}
+                    logger.info(f"Refresh session list: Found {len(lap_session_ids)} session IDs with laps.")
+                else:
+                    logger.info("Refresh session list: No laps found for any fetched sessions.")
+            except Exception as lap_fetch_err:
+                logger.error(f"Refresh session list: Error fetching lap session IDs: {lap_fetch_err}")
+                # If the check fails, show all sessions as a fallback
+                lap_session_ids = set(session_ids)
+
+        # 3. Filter Sessions
+        valid_sessions = [s for s in sessions if s.get('id') in lap_session_ids]
+
+        if not valid_sessions:
+            self.session_combo.addItem("No sessions with laps found", None)
+            return
+
+        # 4. Populate the combo box with filtered sessions
+        logger.info(f"Populating session list with {len(valid_sessions)} sessions that have laps.")
+        new_index_to_select = -1
+        for index, session in enumerate(valid_sessions):
+            session_id = session.get("id")
+            created_at_str = session.get("created_at", "")
+            track_name = session.get("track_name", "Unknown Track")
+            car_name = session.get("car_name", "Unknown Car")
+
+            try:
+                timestamp = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')) # Handle Z timezone
+                display_text = f"{timestamp.strftime('%Y-%m-%d %H:%M')} - {track_name} ({car_name})"
+            except (ValueError, TypeError):
+                 display_text = f"{created_at_str} - {track_name} ({car_name})" # Fallback
+
+            self.session_combo.addItem(display_text, session_id)
+            if session_id == current_id:
+                new_index_to_select = index
+
+        # Try to restore previous selection
+        if new_index_to_select != -1:
+            self.session_combo.setCurrentIndex(new_index_to_select)
+        elif self.session_combo.count() > 0:
+            self.session_combo.setCurrentIndex(0) # Select first item if previous not found
+
+    def refresh_lap_list(self, session_id):
+        """Fetch latest laps from Supabase and populate combo boxes."""
+        logger.info(f"Refreshing lap list for session: {session_id}")
+        
+        # Store current selections
+        current_left_id = self.left_lap_combo.currentData()
+        current_right_id = self.right_lap_combo.currentData()
+
+        # Clear combo boxes before fetching
+        self.left_lap_combo.clear()
+        self.right_lap_combo.clear()
+
+        laps = None
+        msg = ""
+
+        # 1. Check Authentication (use main client for robustness during refresh)
+        try:
+            from trackpro.database.supabase_client import supabase as main_supabase
+            if not main_supabase.is_authenticated():
+                logger.warning("User not logged in. Cannot refresh laps.")
+                self.left_lap_combo.addItem("Log in first", None)
+                self.right_lap_combo.addItem("Log in first", None)
+                return
+        except Exception as e:
+            logger.error(f"Error checking auth state during lap refresh: {e}")
+            self.left_lap_combo.addItem("Auth Error", None)
+            self.right_lap_combo.addItem("Auth Error", None)
+            return
+
+        # 2. Fetch Laps (Prefer main client for refresh robustness)
+        try:
+            response = main_supabase.client.table("laps").select("*").eq('session_id', session_id).order('lap_number').limit(100).execute() # Increased limit
+            if response and hasattr(response, 'data'):
+                laps = response.data
+                logger.info(f"Successfully fetched {len(laps)} laps for session {session_id} using main app client")
+                msg = "Laps loaded successfully"
+            else:
+                logger.warning(f"Failed to fetch laps for session {session_id} using main app client. Response: {response}")
+                msg = "Failed to fetch laps"
+        except Exception as e:
+            logger.error(f"Error fetching laps with main client: {e}", exc_info=True)
+            msg = f"Error fetching laps: {e}"
+
+                # Handle fetch results
+        if not laps:
+            logger.warning(f"No laps fetched for session {session_id}. Message: {msg}")
+            self.left_lap_combo.addItem(msg or "No laps for this session", None)
+            self.right_lap_combo.addItem(msg or "No laps for this session", None)
+            return
+
+        # Success! Update the combo boxes
+        new_left_index = 0
+        new_right_index = 0
+
+        for index, lap in enumerate(laps):
+            lap_id = lap.get("id")
+            lap_num = lap.get("lap_number", "N/A")
+            lap_time = lap.get("lap_time")
+            is_valid = lap.get("is_valid", True)
+            
+            # Use the new lap display formatting function
+            display_text = self._format_lap_display(lap_num, lap_time)
+            
+            # Add visual indicator for invalid laps
+            if not is_valid:
+                display_text = f"{display_text} ⚠"
+                
+            # Add metadata info to tooltip
+            tooltip = ""
+            try:
+                metadata = json.loads(lap.get("metadata", "{}"))
+                if metadata and "validation_message" in metadata:
+                    tooltip = metadata["validation_message"]
+            except Exception:
+                pass
+            
+            # Add item to combo box
+            self.left_lap_combo.addItem(display_text, lap_id)
+            if tooltip:
+                self.left_lap_combo.setItemData(self.left_lap_combo.count()-1, tooltip, Qt.ToolTipRole)
+                
+            self.right_lap_combo.addItem(display_text, lap_id)
+            if tooltip:
+                self.right_lap_combo.setItemData(self.right_lap_combo.count()-1, tooltip, Qt.ToolTipRole)
+
+            # Check if this lap was the previously selected one
+            if lap_id == current_left_id:
+                new_left_index = index
+            if lap_id == current_right_id:
+                new_right_index = index
+
+        logger.info(f"Populated lap lists with {len(laps)} laps.")
+
+        # Restore previous selections if possible
+        if self.left_lap_combo.count() > new_left_index:
+            self.left_lap_combo.setCurrentIndex(new_left_index)
+        if self.right_lap_combo.count() > new_right_index:
+            self.right_lap_combo.setCurrentIndex(new_right_index)
+
+    def on_compare_clicked(self):
+        """Initiates the background fetch for selected lap telemetry."""
+        # Check if any telemetry loading is already running (either comparison or single lap)
+        if (hasattr(self, 'telemetry_fetch_thread') and self.telemetry_fetch_thread is not None 
+            and self.telemetry_fetch_thread.isRunning()):
+            logger.warning("Comparison already in progress. Please wait.")
+            self.compare_button.setText("Loading...")
+            return
+            
+        # Also check if single lap loading is in progress
+        if hasattr(self, 'telemetry_load_thread') and self.telemetry_load_thread and self.telemetry_load_thread.isRunning():
+            logger.warning("Single lap load in progress. Please wait.")
+            self.compare_button.setText("Loading...")
+            return
+
+        left_lap_id = self.left_lap_combo.currentData()
+        right_lap_id = self.right_lap_combo.currentData()
+
+        if not left_lap_id or not right_lap_id or left_lap_id == "ALL_LAPS" or right_lap_id == "ALL_LAPS":
+            logger.warning("Please select two specific laps (not 'All Laps') to compare.")
+            QMessageBox.warning(self, "Lap Selection", "Please select two specific laps to compare.")
+            return
+
+        logger.info(f"Starting telemetry fetch for Lap A ({left_lap_id}) and Lap B ({right_lap_id})")
+
+        # Provide feedback and disable UI
+        self.compare_button.setEnabled(False)
+        self.compare_button.setText("Loading...")
+        self.left_lap_combo.setEnabled(False)
+        self.right_lap_combo.setEnabled(False)
+        self.session_combo.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        
+        # Show loading indicator
+        if hasattr(self, 'graph_status_label'):
+            self.graph_status_label.setText("🔄 Loading comparison data...")
+            self.graph_status_label.setStyleSheet("color: #3498db; font-style: italic;")
+            self.graph_status_label.setVisible(True)
+
+        # Refresh auth (best effort)
+        try:
+            self.refresh_supabase_auth()
+        except Exception as e:
+            logger.warning(f"Auth refresh failed, continuing anyway: {e}")
+
+        # Create worker and thread
+        self.telemetry_fetch_worker = TelemetryFetchWorker(left_lap_id, right_lap_id)
+        self.telemetry_fetch_thread = QThread()
+        self.telemetry_fetch_worker.moveToThread(self.telemetry_fetch_thread)
+
+        # --- Revised Connections for Proper Cleanup ---
+        # 1. Start worker when thread starts
+        self.telemetry_fetch_thread.started.connect(self.telemetry_fetch_worker.run)
+
+        # 2. Handle results/errors from worker
+        self.telemetry_fetch_worker.finished.connect(self._on_telemetry_fetch_finished)
+        self.telemetry_fetch_worker.error.connect(self._on_telemetry_fetch_error)
+
+        # 3. When worker is done (success or error), tell the thread to quit its event loop
+        self.telemetry_fetch_worker.finished.connect(self.telemetry_fetch_thread.quit)
+        self.telemetry_fetch_worker.error.connect(self.telemetry_fetch_thread.quit)
+
+        # 4. When the thread's event loop actually finishes, perform final cleanup
+        self.telemetry_fetch_worker.finished.connect(self.telemetry_fetch_worker.deleteLater) # Schedule worker deletion
+        self.telemetry_fetch_thread.finished.connect(self.telemetry_fetch_thread.deleteLater) # Schedule thread deletion
+        self.telemetry_fetch_thread.finished.connect(self._cleanup_telemetry_fetch_references) # Nullify references
+        # --- End Revised Connections ---
+
+        # Start the thread
+        self.telemetry_fetch_thread.start()
+
+    def _on_telemetry_fetch_finished(self, left_data, right_data):
+        """Handle the finished signal from the telemetry fetch worker."""
+        logger.info("Telemetry fetch finished. Processing results...")
+        # Re-enable UI elements
+        self.compare_button.setEnabled(True)
+        self.compare_button.setText("Compare Laps")
+        self.left_lap_combo.setEnabled(True)
+        self.right_lap_combo.setEnabled(True)
+        self.session_combo.setEnabled(True)
+        QApplication.restoreOverrideCursor() # Restore cursor
+        
+        # Hide loading indicator
+        if hasattr(self, 'graph_status_label'):
+            self.graph_status_label.setVisible(False)
+
+        # --- Process fetched data --- #
+        success_left = left_data is not None and left_data.get('points')
+        success_right = right_data is not None and right_data.get('points')
+
+        if not success_left and not success_right:
+            logger.error("Failed to fetch telemetry for either lap.")
+            QMessageBox.warning(self, "Error", "Could not fetch telemetry for either lap.")
+            return
+
+        if not success_left:
+            logger.warning("No left lap telemetry found.")
+        if not success_right:
+            logger.warning("No right lap telemetry found.")
+
+        # --- Calculate statistics for both laps to display ---
+        if success_left:
+            left_points = left_data['points']
+            left_throttle_avg = sum(point.get('Throttle', point.get('throttle', 0)) for point in left_points) / len(left_points) * 100 if left_points else 0
+            left_brake_avg = sum(point.get('Brake', point.get('brake', 0)) for point in left_points) / len(left_points) * 100 if left_points else 0
+            logger.info(f"Lap A throttle avg: {left_throttle_avg:.1f}%, Lap A brake avg: {left_brake_avg:.1f}%")
+
+        if success_right:
+            right_points = right_data['points']
+            right_throttle_avg = sum(point.get('Throttle', point.get('throttle', 0)) for point in right_points) / len(right_points) * 100 if right_points else 0
+            right_brake_avg = sum(point.get('Brake', point.get('brake', 0)) for point in right_points) / len(right_points) * 100 if right_points else 0
+            logger.info(f"Lap B throttle avg: {right_throttle_avg:.1f}%, Lap B brake avg: {right_brake_avg:.1f}%")
+
+        # --- SupaBase Format Data Processing - Convert track_position to LapDist  ---
+        def ensure_lap_dist_field(lap_data):
+            if not lap_data or not lap_data.get('points'): return lap_data
+            
+            track_length = lap_data.get('track_length', 0)
+            if track_length <= 0:
+                # Try to get track length from UI
+                track_length = self.get_track_length() 
+                lap_data['track_length'] = track_length
+            
+            # Make sure LapDist exists for each point
+            for point in lap_data['points']:
+                if 'LapDist' not in point and 'track_position' in point:
+                    # Convert normalized position to meters
+                    point['LapDist'] = point['track_position'] * track_length if track_length > 0 else point['track_position'] * 1000
+            
+            return lap_data
+        
+        # Ensure LapDist field exists in both sets
+        left_data = ensure_lap_dist_field(left_data)
+        right_data = ensure_lap_dist_field(right_data)
+        
+        # --- NEW: Pre-process and filter data consistently with single-lap mode ---
+        def preprocess_lap_data(lap_data):
+            if not lap_data or not lap_data.get('points'): return lap_data
+            
+            valid_points = []
+            track_length = lap_data.get('track_length', 0)
+            
+            for point in lap_data.get('points', []):
+                # Skip points with missing critical data
+                if any(key not in point for key in ['LapDist', 'throttle', 'brake', 'steering']):
+                    continue
+                
+                try:
+                    # Ensure numeric values
+                    dist_m = float(point['LapDist'])
+                    throttle = float(point.get('Throttle', point.get('throttle', 0)))
+                    brake = float(point.get('Brake', point.get('brake', 0)))
+                    steering = float(point.get('SteeringWheelAngle', point.get('steering', 0)))
+                    speed = float(point.get('Speed', point.get('speed', 0)))
+                    
+                    # Add processed point
+                    valid_points.append({
+                        'LapDist': dist_m,
+                        'throttle': throttle,
+                        'brake': brake,
+                        'steering': steering,
+                        'speed': speed
+                    })
+                except (ValueError, TypeError):
+                    # Skip invalid numeric values
+                    continue
+            
+            # Sort by distance for consistent display
+            if valid_points:
+                valid_points.sort(key=lambda p: p['LapDist'])
+                
+            # Replace original points with processed points
+            lap_data['points'] = valid_points
+            logger.info(f"Preprocessed lap data: {len(valid_points)} valid points from {len(lap_data.get('points', []))} raw points")
+            
+            return lap_data
+        
+        # Apply preprocessing to both lap datasets
+        left_data = preprocess_lap_data(left_data)
+        right_data = preprocess_lap_data(right_data)
+        # --- END NEW PREPROCESSING ---
+
+        # --- Update UI with fetched data --- #
+        logger.info("Updating throttle graph with comparison data")
+        self.throttle_graph.update_graph_comparison(left_data, right_data, self.get_track_length())
+        
+        # Add call for brake graph
+        logger.info("Updating brake graph with comparison data")
+        self.brake_graph.update_graph_comparison(left_data, right_data, self.get_track_length())
+        
+        logger.info("Updating steering graph with comparison data")
+        self.steering_graph.update_graph_comparison(left_data, right_data, self.get_track_length())
+
+        # Update speed graph
+        logger.info("Updating speed graph with comparison data")
+        self.speed_graph.update_graph_comparison(left_data, right_data, self.get_track_length())
+
+        # --- Additional debug info --- #
+        self._debug_check_curve_state()
+
+        logger.info("Lap comparison completed successfully.")
+
+    def _debug_check_curve_state(self):
+        """Check and log the state of plot curves to help diagnose visibility issues."""
+        try:
+            # Check throttle graph curves
+            throttle_a_visible = self.throttle_graph.throttle_curve.isVisible()
+            throttle_b_visible = self.throttle_graph.throttle_curve_b.isVisible()
+            throttle_a_points = len(self.throttle_graph.throttle_curve.xData) if self.throttle_graph.throttle_curve.xData is not None else 0
+            throttle_b_points = len(self.throttle_graph.throttle_curve_b.xData) if self.throttle_graph.throttle_curve_b.xData is not None else 0
+            
+            # Check steering graph curves
+            steering_a_visible = self.steering_graph.steering_curve.isVisible()
+            steering_b_visible = self.steering_graph.steering_curve_b.isVisible()
+            steering_a_points = len(self.steering_graph.steering_curve.xData) if self.steering_graph.steering_curve.xData is not None else 0
+            steering_b_points = len(self.steering_graph.steering_curve_b.xData) if self.steering_graph.steering_curve_b.xData is not None else 0
+            
+            # Check speed graph curves
+            speed_a_visible = self.speed_graph.speed_curve.isVisible()
+            speed_b_visible = self.speed_graph.speed_curve_b.isVisible()
+            speed_a_points = len(self.speed_graph.speed_curve.xData) if self.speed_graph.speed_curve.xData is not None else 0
+            speed_b_points = len(self.speed_graph.speed_curve_b.xData) if self.speed_graph.speed_curve_b.xData is not None else 0
+            
+            logger.info("=== CURVE DEBUG INFO ===")
+            logger.info(f"Throttle A: visible={throttle_a_visible}, points={throttle_a_points}")
+            logger.info(f"Throttle B: visible={throttle_b_visible}, points={throttle_b_points}")
+            logger.info(f"Steering A: visible={steering_a_visible}, points={steering_a_points}")
+            logger.info(f"Steering B: visible={steering_b_visible}, points={steering_b_points}")
+            logger.info(f"Speed A: visible={speed_a_visible}, points={speed_a_points}")
+            logger.info(f"Speed B: visible={speed_b_visible}, points={speed_b_points}")
+            
+            # Add sample of data points if available
+            if throttle_a_points > 0:
+                first_x = self.throttle_graph.throttle_curve.xData[0]
+                last_x = self.throttle_graph.throttle_curve.xData[-1]
+                first_y = self.throttle_graph.throttle_curve.yData[0]
+                last_y = self.throttle_graph.throttle_curve.yData[-1]
+                logger.info(f"Throttle A data: first=({first_x:.1f}, {first_y:.2f}), last=({last_x:.1f}, {last_y:.2f})")
+            
+            if throttle_b_points > 0:
+                first_x = self.throttle_graph.throttle_curve_b.xData[0]
+                last_x = self.throttle_graph.throttle_curve_b.xData[-1]
+                first_y = self.throttle_graph.throttle_curve_b.yData[0]
+                last_y = self.throttle_graph.throttle_curve_b.yData[-1]
+                logger.info(f"Throttle B data: first=({first_x:.1f}, {first_y:.2f}), last=({last_x:.1f}, {last_y:.2f})")
+            
+            # Show graph sizes to detect if the plot area is too small
+            throttle_size = self.throttle_graph.size()
+            steering_size = self.steering_graph.size()
+            logger.info(f"Throttle graph size: {throttle_size.width()}x{throttle_size.height()}")
+            logger.info(f"Steering graph size: {steering_size.width()}x{steering_size.height()}")
+            
+            # Check viewport ranges
+            throttle_xrange = self.throttle_graph.plot_widget.getViewBox().viewRange()[0]
+            throttle_yrange = self.throttle_graph.plot_widget.getViewBox().viewRange()[1]
+            logger.info(f"Throttle viewport: x={throttle_xrange}, y={throttle_yrange}")
+            
+            logger.info("=======================")
+            
+            # Check if the widgets are in comparison mode
+            logger.info(f"Throttle graph comparison_mode: {self.throttle_graph.comparison_mode}")
+            logger.info(f"Steering graph comparison_mode: {self.steering_graph.comparison_mode}")
+        except Exception as e:
+            logger.error(f"Error in debug curve check: {e}")
+
+    def _on_telemetry_fetch_error(self, msg_left, msg_right):
+        """Handle errors from the TelemetryFetchWorker."""
+        logger.error(f"Telemetry fetch failed. Left: '{msg_left}', Right: '{msg_right}'")
+        
+        # Re-enable UI elements
+        self.compare_button.setEnabled(True)
+        self.compare_button.setText("Compare Laps")
+        self.left_lap_combo.setEnabled(True)
+        self.right_lap_combo.setEnabled(True)
+        self.session_combo.setEnabled(True)
+        QApplication.restoreOverrideCursor()
+        
+        # Show error in status label
+        if hasattr(self, 'graph_status_label'):
+            self.graph_status_label.setText(f"⚠️ Error loading comparison data")
+            self.graph_status_label.setStyleSheet("color: #FF6666;")
+            self.graph_status_label.setVisible(True)
+            
+        # Show error dialog
+        QMessageBox.critical(self, "Telemetry Error",
+                             f"Could not load telemetry data.\n\nLap A: {msg_left}\nLap B: {msg_right}")
+        
+        # Don't return here, let cleanup happen via finished signal
+
+    def _cleanup_telemetry_fetch_references(self):
+        """Slot called AFTER the telemetry fetch thread has finished executing."""
+        logger.info("Cleaning up telemetry fetch thread references.")
+        # Nullify references only AFTER thread has finished and deleteLater is scheduled
+        self.telemetry_fetch_thread = None
+        self.telemetry_fetch_worker = None
+        # Restore cursor just in case it wasn't restored earlier
+        QApplication.restoreOverrideCursor()
+
+    def update_comparison_driver_display(self, is_left_driver, stats):
+        """Update the comparison stats display for a driver.
+           (Placeholder - requires UI elements for comparison stats)
+        """
+        # TODO: Implement this based on the actual UI elements added for comparison
+        # Example:
+        # if is_left_driver:
+        #     header = self.left_comparison_header
+        #     throttle_val_label = self.left_comparison_throttle_value
+        #     throttle_bar = self.left_comparison_throttle_bar
+        #     # ... etc
+        # else:
+        #     header = self.right_comparison_header
+        #     # ... etc
+        #
+        # name = stats.get("name", "Driver") # Need to fetch/pass name
+        # lap_time = stats.get("lap_time")
+        # throttle_pct = stats.get("full_throttle", 0)
+        # braking_pct = stats.get("heavy_braking", 0)
+        # cornering_pct = stats.get("cornering", 0)
+        #
+        # header.setText(f"{name} - {self._format_time(lap_time) if lap_time else 'N/A'}")
+        # throttle_val_label.setText(f"{throttle_pct:.0f}%")
+        # throttle_bar.setValue(int(throttle_pct))
+        # ... update other stats ...
+        logger.debug(f"Updating comparison display (Placeholder) - Left: {is_left_driver}, Stats: {stats}")
+        pass
+
+    def on_session_changed(self, index):
+        """Handle session selection changes from the combo box."""
+        session_id = self.session_combo.itemData(index)
+        if session_id:
+            logger.info(f"Session changed to: {session_id}")
+            # Refresh laps for the new session
+            self.refresh_lap_list(session_id)
+            # Clear the comparison display when session changes?
+            # self.clear_comparison_display() # Optional
+            # Clear the throttle graph?
+            if hasattr(self, 'throttle_graph'):
+                 self.throttle_graph.update_graph([], 0, {}) # Clear graph
+            if hasattr(self, 'brake_graph'):
+                 self.brake_graph.update_graph([], 0, {}) # Clear brake graph
+            if hasattr(self, 'steering_graph'):
+                 self.steering_graph.update_graph([], 0, {}) # Clear steering graph
+            if hasattr(self, 'speed_graph'):
+                 self.speed_graph.update_graph([], 0, {}) # Clear speed graph
+        else:
+            logger.info("Invalid session selected or no sessions available.")
+            self.left_lap_combo.clear()
+            self.right_lap_combo.clear()
+            self.left_lap_combo.addItem("Select session first", None)
+            self.right_lap_combo.addItem("Select session first", None)
+            if hasattr(self, 'throttle_graph'):
+                self.throttle_graph.update_graph([], 0, {})
+            if hasattr(self, 'brake_graph'):
+                self.brake_graph.update_graph([], 0, {})
+            if hasattr(self, 'steering_graph'):
+                self.steering_graph.update_graph([], 0, {})
+            if hasattr(self, 'speed_graph'):
+                self.speed_graph.update_graph([], 0, {})
+
+        
+        # Check if a load is already in progress
+        if hasattr(self, 'telemetry_load_thread') and self.telemetry_load_thread and self.telemetry_load_thread.isRunning():
+            logger.warning(f"Telemetry load already in progress, ignoring request for lap {lap_id}")
+            return
+            
+        logger.info(f"Starting background loading of telemetry data for lap: {lap_id}")
+        
+        # Show loading indicator
+        if hasattr(self, 'graph_status_label'):
+            self.graph_status_label.setText("🔄 Loading telemetry data...")
+            self.graph_status_label.setStyleSheet("color: #3498db; font-style: italic;")
+            self.graph_status_label.setVisible(True)
+        
+        # Disable lap selection while loading
+        if hasattr(self, 'left_lap_combo'):
+            self.left_lap_combo.setEnabled(False)
+        if hasattr(self, 'right_lap_combo'):
+            self.right_lap_combo.setEnabled(False)
+
+        # Create worker and thread
+        self.telemetry_load_thread = QThread()
+        self.telemetry_load_worker = TelemetryLoadWorker(lap_id)
+        self.telemetry_load_worker.moveToThread(self.telemetry_load_thread)
+        
+        # Connect signals
+        self.telemetry_load_thread.started.connect(self.telemetry_load_worker.run)
+        self.telemetry_load_worker.finished.connect(self._on_telemetry_load_finished)
+        self.telemetry_load_worker.error.connect(self._on_telemetry_load_error)
+        
+        # Handle cleanup
+        self.telemetry_load_worker.finished.connect(self.telemetry_load_thread.quit)
+        self.telemetry_load_worker.error.connect(self.telemetry_load_thread.quit)
+        self.telemetry_load_worker.finished.connect(self.telemetry_load_worker.deleteLater)
+        self.telemetry_load_thread.finished.connect(self.telemetry_load_thread.deleteLater)
+        self.telemetry_load_thread.finished.connect(self._cleanup_telemetry_load_references)
+        
+        # Start the thread
+        self.telemetry_load_thread.start()
+
+    def _on_telemetry_load_finished(self, data_to_plot, track_length, track_context):
+        """Handle completion of telemetry data loading."""
+        logger.info(f"Telemetry data loading completed successfully")
+        
+        # Update all graphs with the loaded data
+        if hasattr(self, 'throttle_graph'):
+            self.throttle_graph.update_graph(data_to_plot, track_length, track_context)
+        if hasattr(self, 'brake_graph'):
+            self.brake_graph.update_graph(data_to_plot, track_length, track_context)
+        if hasattr(self, 'steering_graph'):
+            self.steering_graph.update_graph(data_to_plot, track_length, track_context)
+        if hasattr(self, 'speed_graph'):
+            self.speed_graph.update_graph(data_to_plot, track_length, track_context)
+        
+        # Check data for potential issues and update UI
+        if data_to_plot and data_to_plot.get('points'):
+            # Check for data quality issues
+            points = data_to_plot.get('points', [])
+            is_incomplete, stopped_sections, log_msg = self._check_lap_completeness(points, track_length, self.lap_id)
+            if log_msg:
+                logger.warning(log_msg)
+            
+            if hasattr(self, 'graph_status_label'):
+                if is_incomplete:
+                    status_text = "⚠️ Lap data may be incomplete"
+                    if stopped_sections:
+                        stops_text = f"{len(stopped_sections)} location(s)" if len(stopped_sections) > 1 else "1 location"
+                        status_text = f"⚠️ Lap data shows car stopped at {stops_text}"
+                    self.graph_status_label.setText(status_text)
+                    self.graph_status_label.setStyleSheet("color: #FFA500; font-weight: bold;")
+                    self.graph_status_label.setVisible(True)
+                else:
+                    self.graph_status_label.setVisible(False)
+        else:
+            # No data loaded
+            if hasattr(self, 'graph_status_label'):
+                self.graph_status_label.setText("No telemetry data found")
+                self.graph_status_label.setStyleSheet("color: #FF6666;")
+                self.graph_status_label.setVisible(True)
+        
+        # Re-enable UI elements
+        if hasattr(self, 'left_lap_combo'):
+            self.left_lap_combo.setEnabled(True)
+        if hasattr(self, 'right_lap_combo'):
+            self.right_lap_combo.setEnabled(True)
+
+
+    def on_lap_selection_changed(self):
+        """Handle lap selection changes from either combo box."""
+        # Prevent running if we're currently loading data
+        if hasattr(self, 'telemetry_load_thread') and self.telemetry_load_thread and self.telemetry_load_thread.isRunning():
+            logger.info("Ignoring lap selection change while telemetry data is loading")
+            return
+            
+        left_lap_id = self.left_lap_combo.currentData()
+        right_lap_id = self.right_lap_combo.currentData()
+        
+        # Get sender to determine which combo changed
+        sender = self.sender()
+        
+        # Route to the appropriate handler based on which combo was changed
+        if sender == self.left_lap_combo:
+            logger.info("Left lap combo changed, delegating to _on_left_lap_changed")
+            if hasattr(self, '_on_left_lap_changed'):
+                self._on_left_lap_changed(self.left_lap_combo.currentIndex())
+            else:
+                # Fallback if handler method doesn't exist
+                self._handle_left_lap_change(left_lap_id)
+        elif sender == self.right_lap_combo:
+            logger.info("Right lap combo changed, delegating to _on_right_lap_changed")
+            if hasattr(self, '_on_right_lap_changed'):
+                self._on_right_lap_changed(self.right_lap_combo.currentIndex())
+            else:
+                # Fallback if handler method doesn't exist
+                self._handle_right_lap_change(left_lap_id, right_lap_id)
+        else:
+            # If we can't determine which combo changed, use the old logic
+            logger.info("Unknown sender for lap selection change, using default logic")
+            self._handle_lap_selection_change(left_lap_id, right_lap_id)
+    
+    def _handle_lap_selection_change(self, left_lap_id, right_lap_id):
+        """Legacy handler for lap selection changes."""
+        session_id = self.session_combo.currentData() if hasattr(self, 'session_combo') else None
+
+        # Basic validation
+        if not session_id:
+            logger.warning("Lap selection changed but no session selected.")
+            return
+
+        # Determine if a valid comparison can be made *now*
+        can_compare = (left_lap_id and right_lap_id and 
+                       left_lap_id != "ALL_LAPS" and right_lap_id != "ALL_LAPS" and 
+                       left_lap_id != right_lap_id)
+
+        if can_compare:
+            # If valid selections for comparison, trigger the comparison logic
+            logger.info(f"Lap selection changed. Triggering comparison for Laps {left_lap_id} and {right_lap_id}")
+            self.on_compare_clicked() # Call the comparison function directly
+        else:
+            # If comparison is not possible, default to showing Lap A data if valid
+            logger.info(f"Lap selection changed. Comparison not possible (Left: {left_lap_id}, Right: {right_lap_id}). Trying single view for Lap A.")
+            
+            # Clear comparison elements in graphs
+            self.throttle_graph.comparison_mode = False
+            self.brake_graph.comparison_mode = False
+            self.steering_graph.comparison_mode = False
+            self.speed_graph.comparison_mode = False
+            # Clear B curves explicitly
+            if hasattr(self.throttle_graph, 'throttle_curve_b'): self.throttle_graph.throttle_curve_b.setData([], [])
+            if hasattr(self.brake_graph, 'brake_curve_b'): self.brake_graph.brake_curve_b.setData([], [])
+            if hasattr(self.steering_graph, 'steering_curve_b'): self.steering_graph.steering_curve_b.setData([], [])
+            if hasattr(self.speed_graph, 'speed_curve_b'): self.speed_graph.speed_curve_b.setData([], [])
+            # Reset titles
+            self.throttle_graph.plot_widget.setTitle("Throttle vs Distance")
+            self.brake_graph.plot_widget.setTitle("Brake vs Distance")
+            self.steering_graph.plot_widget.setTitle("Steering vs Distance")
+            self.speed_graph.plot_widget.setTitle("Speed vs Distance")
+
+            if left_lap_id and left_lap_id != "ALL_LAPS":
+                logger.info(f"Updating single lap view for Lap ID: {left_lap_id}")
+                # Call the method that loads data for a single lap (including brake/steering now)
+                self.load_throttle_data(left_lap_id) 
+            else:
+                # Clear all graphs if Lap A is also invalid/not selected
+                logger.info("No valid single lap selected (Lap A invalid), clearing graphs.")
+                self.throttle_graph.update_graph([], 0, {}) 
+                self.brake_graph.update_graph([], 0, {}) 
+                self.steering_graph.update_graph([], 0, {}) 
+                self.speed_graph.update_graph([], 0, {})
+                self.graph_status_label.setVisible(False)
+                
+    def _handle_left_lap_change(self, left_lap_id):
+        """Simple handler for left lap changes."""
+        if left_lap_id and left_lap_id != "ALL_LAPS":
+            logger.info(f"Updating single lap view for Lap ID: {left_lap_id}")
+            self.load_throttle_data(left_lap_id)
+            
+    def _handle_right_lap_change(self, left_lap_id, right_lap_id):
+        """Simple handler for right lap changes."""
+        # Only trigger comparison if both laps are valid
+        if (left_lap_id and right_lap_id and 
+            left_lap_id != "ALL_LAPS" and right_lap_id != "ALL_LAPS" and
+            left_lap_id != right_lap_id):
+            logger.info(f"Triggering comparison for Laps {left_lap_id} and {right_lap_id}")
+            self.on_compare_clicked()
+
+    def load_throttle_data(self, lap_id: str):
+        """Load throttle data for a specific lap and update the throttle graph.""" # INDENTED
+        if not lap_id:
+            logger.warning("Cannot load throttle data: No lap ID provided")
+            return
+
+        # If a thread is already running for a *different* lap, cancel it.
+        # If it's for the *same* lap, let it continue (or it will be ignored by _on_telemetry_load_finished if stale)
+        if hasattr(self, 'telemetry_load_thread') and self.telemetry_load_thread and self.telemetry_load_thread.isRunning():
+            worker_lap_id = getattr(self.telemetry_load_worker, 'lap_id', None)
+            if worker_lap_id and worker_lap_id != lap_id:
+                logger.info(f"Telemetry load for lap {worker_lap_id} in progress. Cancelling to load new lap {lap_id}.")
+                if self.telemetry_load_worker:
+                    self.telemetry_load_worker.cancel()
+                # self.telemetry_load_thread.quit() # Let it quit via its own signals
+                # self.telemetry_load_thread.wait(1000) # Give a bit of time to process cancellation
+            elif worker_lap_id == lap_id:
+                 logger.info(f"Request to load lap {lap_id} which is already in the process of loading. Current request will be ignored if it finishes first.")
+                 # No action needed, the existing load will either complete or this new one will supersede.
+                 # The _current_requested_lap_id will handle which result is used.
+
+
+        # This attribute tracks the MOST RECENTLY requested lap_id by the UI.
+        # It's used by _on_telemetry_load_finished to discard stale results.
+        self._current_requested_lap_id = lap_id
+        
+        logger.info(f"Initiating background loading of telemetry data for lap: {self._current_requested_lap_id}")
+        
+        if hasattr(self, 'graph_status_label'):
+            self.graph_status_label.setText("🔄 Loading telemetry data...")
+            self.graph_status_label.setStyleSheet("color: #3498db; font-style: italic;")
+            self.graph_status_label.setVisible(True)
+        
+        if hasattr(self, 'left_lap_combo'): self.left_lap_combo.setEnabled(False)
+        if hasattr(self, 'right_lap_combo'): self.right_lap_combo.setEnabled(False)
+
+        # Create a new thread and worker for this request
+        self.telemetry_load_thread = QThread()
+        self.telemetry_load_worker = TelemetryLoadWorker(self._current_requested_lap_id) 
+        self.telemetry_load_worker.moveToThread(self.telemetry_load_thread)
+        
+        self.telemetry_load_thread.started.connect(self.telemetry_load_worker.run)
+        self.telemetry_load_worker.finished.connect(self._on_telemetry_load_finished)
+        self.telemetry_load_worker.error.connect(self._on_telemetry_load_error)
+        
+        # Robust cleanup connections
+        self.telemetry_load_worker.finished.connect(self.telemetry_load_thread.quit)
+        self.telemetry_load_worker.error.connect(self.telemetry_load_thread.quit)
+        # deleteLater is called on the objects themselves when their event loop (thread) finishes
+        self.telemetry_load_thread.finished.connect(self.telemetry_load_worker.deleteLater) 
+        self.telemetry_load_thread.finished.connect(self.telemetry_load_thread.deleteLater)
+        # Ensure our custom cleanup is also called.
+        self.telemetry_load_thread.finished.connect(self._cleanup_telemetry_load_references)
+        
+        self.telemetry_load_thread.start()
+
+    def _on_telemetry_load_finished(self, loaded_lap_id, data_to_plot, track_length, track_context):
+        """Handle completion of telemetry data loading."""
+        
+        # Crucially, check if this loaded_lap_id matches the _current_requested_lap_id.
+        # This prevents an older, slower request from overwriting a newer, faster one.
+        if not hasattr(self, '_current_requested_lap_id') or self._current_requested_lap_id != loaded_lap_id:
+            logger.warning(f"Received telemetry data for STALE lap {loaded_lap_id} (expected {getattr(self, '_current_requested_lap_id', 'None')}). Discarding.")
+            # If this stale load was the *only* thing running, we might need to re-enable UI.
+            # However, _cleanup_telemetry_load_references should handle UI re-enabling if no other thread is active.
+            # So, typically, no action needed here for UI enabling for stale results.
+            return
+
+        logger.info(f"Telemetry data loading completed for currently requested lap: {loaded_lap_id}")
+        
+        if hasattr(self, 'throttle_graph'): self.throttle_graph.update_graph(data_to_plot, track_length, track_context)
+        if hasattr(self, 'brake_graph'): self.brake_graph.update_graph(data_to_plot, track_length, track_context)
+        if hasattr(self, 'steering_graph'): self.steering_graph.update_graph(data_to_plot, track_length, track_context)
+        if hasattr(self, 'speed_graph'): self.speed_graph.update_graph(data_to_plot, track_length, track_context)
+        
+        if data_to_plot and data_to_plot.get('points'):
+            points = data_to_plot.get('points', [])
+            is_incomplete, stopped_sections, log_msg = self._check_lap_completeness(points, track_length, loaded_lap_id) # Use loaded_lap_id
+            if log_msg: logger.warning(log_msg)
+            
+            if hasattr(self, 'graph_status_label'):
+                if is_incomplete:
+                    status_text = "⚠️ Lap data may be incomplete"
+                    if stopped_sections:
+                        stops_text = f"{len(stopped_sections)} location(s)" if len(stopped_sections) > 1 else "1 location"
+                        status_text = f"⚠️ Lap data shows car stopped at {stops_text}"
+                    self.graph_status_label.setText(status_text)
+                    self.graph_status_label.setStyleSheet("color: #FFA500; font-weight: bold;")
+                    self.graph_status_label.setVisible(True)
+                else:
+                    self.graph_status_label.setVisible(False) 
+        else:
+            if hasattr(self, 'graph_status_label'):
+                self.graph_status_label.setText(f"No telemetry data found for lap {loaded_lap_id}")
+                self.graph_status_label.setStyleSheet("color: #FF6666;")
+                self.graph_status_label.setVisible(True)
+        
+        # Re-enable UI elements as this successful load was for the _current_requested_lap_id
+        if hasattr(self, 'left_lap_combo'): self.left_lap_combo.setEnabled(True)
+        if hasattr(self, 'right_lap_combo'): self.right_lap_combo.setEnabled(True)
+            
+        # This load is complete and was for the _current_requested_lap_id.
+        # We can clear _current_requested_lap_id, or set to None, to indicate no specific lap is actively being waited for from THIS exact request.
+        # If another request comes in, load_throttle_data will set it again.
+        if hasattr(self, '_current_requested_lap_id') and self._current_requested_lap_id == loaded_lap_id:
+            self._current_requested_lap_id = None 
+            logger.debug(f"_current_requested_lap_id cleared after processing lap {loaded_lap_id}")
+
+    def _on_telemetry_load_error(self, error_message):
+        """Handle errors during telemetry data loading."""
+        logger.error(f"Telemetry load error: {error_message}")
+        
+        # Update UI to show error
+        if hasattr(self, 'graph_status_label'):
+            self.graph_status_label.setText(f"Error: {error_message}")
+            self.graph_status_label.setStyleSheet("color: #FF6666;")
+            self.graph_status_label.setVisible(True)
+        
+        # Clear all graphs
+        empty_data = {"points": []}
+        if hasattr(self, 'throttle_graph'):
+            self.throttle_graph.update_graph(empty_data, 0, {})
+        if hasattr(self, 'brake_graph'):
+            self.brake_graph.update_graph(empty_data, 0, {})
+        if hasattr(self, 'steering_graph'):
+            self.steering_graph.update_graph(empty_data, 0, {})
+        if hasattr(self, 'speed_graph'):
+            self.speed_graph.update_graph(empty_data, 0, {})
+        
+        # Re-enable UI elements
+        if hasattr(self, 'left_lap_combo'):
+            self.left_lap_combo.setEnabled(True)
+        if hasattr(self, 'right_lap_combo'):
+            self.right_lap_combo.setEnabled(True)
+
+    def _cleanup_telemetry_load_references(self):
+        """Clean up references to telemetry load thread and worker."""
+        logger.info("Cleaning up telemetry load thread references")
+        # Make sure we wait for thread to finish (if it hasn't already)
+        if hasattr(self, 'telemetry_load_thread') and self.telemetry_load_thread:
+            if self.telemetry_load_thread.isRunning():
+                logger.warning("Thread still running during cleanup - waiting to finish")
+                self.telemetry_load_thread.wait(1000)  # Wait up to 1 second
+            self.telemetry_load_thread = None
+            
+        if hasattr(self, 'telemetry_load_worker'):
+            self.telemetry_load_worker = None
+            
+    def _fetch_track_context(self, client, track_id, track_length):
+        """Helper to fetch corners and markers for track context."""
+        context = {'start_finish': 0}
+        if not client or not track_id or not track_length > 0:
+            return context
+        try:
+            # Corners
+            corner_result = client.table("track_corners").select("track_position,corner_number").eq("track_id", track_id).order("corner_number").execute()
+            if corner_result.data:
+                corners = []
+                for c in corner_result.data:
+                    pos, num = c.get("track_position"), c.get("corner_number")
+                    if isinstance(pos, (int, float)) and 0 <= pos <= 1 and num is not None:
+                        corners.append((pos * track_length, num))
+                if corners: context['corners'] = corners
+            # Markers
+            marker_result = client.table("track_markers").select("track_position,label").eq("track_id", track_id).execute()
+            if marker_result.data:
+                markers = []
+                for m in marker_result.data:
+                    pos, lbl = m.get("track_position"), m.get("label")
+                    if isinstance(pos, (int, float)) and 0 <= pos <= 1:
+                        markers.append((pos * track_length, lbl or "")) # Use empty string if label is None
+                if markers: context['markers'] = markers
+            logger.info(f"Fetched track context for {track_id}: {len(context.get('corners',[]))} corners, {len(context.get('markers',[]))} markers")
+        except Exception as ctx_error:
+            logger.warning(f"Error fetching track context for {track_id}: {ctx_error}")
+        return context
+        
+        
+
+    def _check_lap_completeness(self, points, track_length, lap_id):
+        """Checks if lap data covers the full track and detects stops."""
+        if not points or len(points) < 2 or track_length <= 0:
+            return False, [], None # Cannot determine completeness
+
+        min_dist = min(p["LapDist"] for p in points)
+        max_dist = max(p["LapDist"] for p in points)
+        start_thresh = track_length * 0.02
+        end_thresh = track_length * 0.98
+        is_incomplete = (min_dist > start_thresh or max_dist < end_thresh)
+
+        stopped_sections = []
+        MIN_POINTS_STOP = 10
+        POS_TOLERANCE = 0.5 # meters
+        pos_counts = {}
+        for p in points:
+            bin_pos = round(p["LapDist"] / POS_TOLERANCE) * POS_TOLERANCE
+            pos_counts[bin_pos] = pos_counts.get(bin_pos, 0) + 1
+        for pos, count in pos_counts.items():
+            if count >= MIN_POINTS_STOP:
+                stopped_sections.append((pos, count))
+
+        log_msg = None
+        if is_incomplete or stopped_sections:
+            range_pct = ((max_dist - min_dist) / track_length) * 100
+            log_msg = f"Lap {lap_id} data issue. Range: {min_dist:.1f}m - {max_dist:.1f}m ({range_pct:.1f}% of {track_length:.1f}m)."
+            if stopped_sections:
+                total_stopped = sum(c for _, c in stopped_sections)
+                stops_str = f" {len(stopped_sections)} stopped section(s) with {total_stopped} points."
+                log_msg += stops_str
+            elif is_incomplete:
+                 log_msg += " Appears incomplete."
+        
+        return is_incomplete, stopped_sections, log_msg
+
+    def load_all_laps_for_session(self, session_id):
+        """Loads and combines telemetry for all laps in a session for the throttle graph."""
+        logger.info(f"Loading all laps data for session {session_id}")
+        try:
+            client = get_supabase_client()
+            if not client:
+                logger.error("Cannot load all laps: No Supabase client available")
+                if hasattr(self, 'throttle_graph'): self.throttle_graph.update_graph([], 0, {})
+                return
+
+            # Get track length and context for the session - avoid joining tables
+            track_length = 0
+            track_context = {}
+            
+            try:
+                # Get the session first
+                session_result = client.table("sessions").select("*").eq("id", session_id).single().execute()
+                
+                # Then get the track in a separate query
+                if session_result.data:
+                    track_id = session_result.data.get("track_id")
+                    if track_id:
+                        track_result = client.table("tracks").select("*").eq("id", track_id).single().execute()
+                        if track_result.data:
+                            track_data = track_result.data
+                            track_length = track_data.get("length_meters", 0)
+                            track_context = {
+                                "name": track_data.get("name", "Unknown Track"),
+                                "country": track_data.get("country", ""),
+                                "corners": track_data.get("corners", [])
+                            }
+                        else: 
+                            logger.warning(f"Track {track_id} not found")
+                    else: 
+                        logger.warning(f"Session {session_id} has no associated track")
+                else: 
+                    logger.warning(f"Session {session_id} not found")
+            except Exception as track_error:
+                logger.warning(f"Error retrieving track data: {track_error}")
+            
+            # Get all laps for the session
+            laps_result = client.table("laps").select("id,lap_number").eq("session_id", session_id).order("lap_number").execute()
+            
+            if not laps_result.data:
+                logger.warning(f"No laps found for session {session_id}")
+                if hasattr(self, 'throttle_graph'): self.throttle_graph.update_graph([], track_length, track_context)
+                if hasattr(self, 'graph_status_label'): 
+                    self.graph_status_label.setText("No laps found for this session")
+                    self.graph_status_label.setStyleSheet("color: #FF6666;")
+                    self.graph_status_label.setVisible(True)
+                return
+            
+            # Process each lap
+            combined = []
+            processed_laps = 0
+            skipped_points = 0
+            total_points = 0
+
+            for lap_data in laps_result.data:
+                lap_id = lap_data.get("id")
+                lap_num = lap_data.get("lap_number", "?")
+                if not lap_id: continue
+
+                try:
+                    telemetry_result = client.table("telemetry_points") \
+                        .select("timestamp,throttle,brake,track_position,steering,speed") \
+                        .eq("lap_id", lap_id) \
+                        .order("timestamp") \
+                        .execute()
+                    if not telemetry_result.data: continue
+
+                    lap_points = []
+                    for point in telemetry_result.data:
+                        time_val = point.get("timestamp")
+                        thr_val = point.get("throttle")
+                        brk_val = point.get("brake")
+                        trk_pos = point.get("track_position")
+                        steer_val = point.get("steering", 0)  # Get steering value with default 0
+                        speed_val = point.get("speed", 0)  # Get speed value with default 0
+                        if any(v is None for v in [time_val, thr_val, brk_val, trk_pos]):
+                             skipped_points += 1
+                             continue
+                        try:
+                             dist_m = float(trk_pos) * track_length if track_length > 0 else float(trk_pos)
+                             lap_points.append({
+                                "timestamp": float(time_val),
+                                "throttle": float(thr_val),
+                                "brake": float(brk_val),
+                                "steering": float(steer_val),  # Add steering to points
+                                "speed": float(speed_val),  # Add speed to points
+                                "LapDist": dist_m
+                             })
+                        except (ValueError, TypeError) as e:
+                             skipped_points += 1
+                             continue
+                             
+                    if lap_points:
+                        # Sort by distance within each lap
+                        lap_points.sort(key=lambda p: p.get("LapDist", 0))
+                        
+                        # Add lap label to identify data source
+                        for point in lap_points:
+                            point["lap_number"] = lap_num
+                            
+                        # Add points to combined data
+                        combined.extend(lap_points)
+                        processed_laps += 1
+                        total_points += len(lap_points)
+                        
+                except Exception as e:
+                    logger.error(f"Error loading telemetry for lap {lap_id}: {e}")
+                    continue
+
+            # Update graphs with combined data
+            if combined:
+                logger.info(f"Displaying {total_points} points from {processed_laps} laps in session {session_id}")
+                if hasattr(self, 'graph_status_label'):
+                    # For 'All Laps' view, show info about laps loaded
+                    status_text = f"ℹ️ Showing telemetry for {processed_laps} laps"
+                    if skipped_points > 0:
+                        status_text += f" ({skipped_points} invalid points skipped)"
+                    self.graph_status_label.setText(status_text)
+                    self.graph_status_label.setStyleSheet("color: #3498db; font-style: italic;")
+                    self.graph_status_label.setVisible(True)
+                if hasattr(self, 'throttle_graph'):
+                    # Pass empty track_length (0) to use auto-ranging for multi-lap view
+                    # We'll use combined max distance instead of fixed track length
+                    self.throttle_graph.update_graph(combined, 0, track_context)
+                if hasattr(self, 'steering_graph'):
+                    # Also update the steering graph
+                    self.steering_graph.update_graph(combined, 0, track_context)
+                # ADD THIS CALL FOR BRAKE GRAPH
+                if hasattr(self, 'brake_graph'):
+                    self.brake_graph.update_graph(combined, 0, track_context)
+                # END ADDITION
+                # Add speed graph update
+                if hasattr(self, 'speed_graph'):
+                    self.speed_graph.update_graph(combined, 0, track_context)
+            else:
+                logger.warning(f"No valid telemetry points for any laps in session {session_id}")
+                if hasattr(self, 'throttle_graph'): 
+                    self.throttle_graph.update_graph([], 0, track_context)
+                if hasattr(self, 'steering_graph'): 
+                    self.steering_graph.update_graph([], 0, track_context)
+                # ADD THIS CALL FOR BRAKE GRAPH
+                if hasattr(self, 'brake_graph'): 
+                    self.brake_graph.update_graph([], 0, track_context)
+                # END ADDITION
+                # Add speed graph update
+                if hasattr(self, 'speed_graph'): 
+                    self.speed_graph.update_graph([], 0, track_context)
+                if hasattr(self, 'graph_status_label'):
+                    self.graph_status_label.setText("No valid telemetry data found")
+                    self.graph_status_label.setStyleSheet("color: #FF6666;")
+                    self.graph_status_label.setVisible(True)
+        except Exception as e:
+            logger.exception(f"Error loading all laps data: {e}")
+            if hasattr(self, 'throttle_graph'): self.throttle_graph.update_graph([], 0, {})
+            if hasattr(self, 'steering_graph'): self.steering_graph.update_graph([], 0, {})
+            # ADD THIS CALL FOR BRAKE GRAPH
+            if hasattr(self, 'brake_graph'): self.brake_graph.update_graph([], 0, {})
+            # END ADDITION
+            if hasattr(self, 'graph_status_label'): self.graph_status_label.setVisible(False)
+
+    def on_coverage_updated(self, coverage, diagnostics):
+        """Update the UI with current telemetry coverage information."""
+        # Update progress bar
+        self.coverage_indicator.setValue(int(coverage))
+        
+        # Update color based on coverage
+        if coverage < 60:
+            self.coverage_indicator.setStyleSheet("""
+                QProgressBar { background-color: #333; color: white; border: 1px solid #555; border-radius: 5px; }
+                QProgressBar::chunk { background-color: #e74c3c; border-radius: 5px; }
+            """)
+        elif coverage < 95:
+            self.coverage_indicator.setStyleSheet("""
+                QProgressBar { background-color: #333; color: white; border: 1px solid #555; border-radius: 5px; }
+                QProgressBar::chunk { background-color: #f39c12; border-radius: 5px; }
+            """)
+        else:
+            self.coverage_indicator.setStyleSheet("""
+                QProgressBar { background-color: #333; color: white; border: 1px solid #555; border-radius: 5px; }
+                QProgressBar::chunk { background-color: #2ecc71; border-radius: 5px; }
+            """)
+        
+        # Update status text
+        min_pos = diagnostics.get("min_pos")
+        max_pos = diagnostics.get("max_pos")
+        total_points = diagnostics.get("total_points", 0)
+        
+        if min_pos is None or max_pos is None:
+            status_text = "No valid telemetry data"
+            self.save_lap_button.setEnabled(False)
+        else:
+            status_text = f"Track: {min_pos:.0%} to {max_pos:.0%} ({total_points} points)"
+            
+            # Enable save button if we have sufficient coverage
+            is_complete = diagnostics.get("is_complete", False)
+            self.save_lap_button.setEnabled(is_complete and total_points >= 100)
+            
+            if not is_complete:
+                if min_pos > 0.02:
+                    status_text += " - Missing start"
+                if max_pos < 0.98:
+                    status_text += " - Missing end"
+        
+        self.coverage_status.setText(status_text)
+    
+    def on_telemetry_data(self, telemetry_data):
+        """Handle telemetry data updates from iRacing API."""
+        # First, update the existing telemetry visuals
+        self._update_telemetry(telemetry_data)
+        
+        # Then feed telemetry to the monitor for coverage tracking
+        # Convert the telemetry data format to the expected format for the monitor
+        track_position = telemetry_data.get('track_position', 
+                          telemetry_data.get('LapDist', 0))
+        
+        # Normalize track position if LapDist is used (convert from meters to 0-1 range)
+        if 'LapDist' in telemetry_data and 'TrackLength' in telemetry_data:
+            try:
+                track_length = float(telemetry_data['TrackLength'])
+                if track_length > 0:
+                    track_position = float(telemetry_data['LapDist']) / track_length
+            except (ValueError, TypeError):
+                pass
+        
+        # Create a telemetry point in our internal format
+        telemetry_point = {
+            'timestamp': telemetry_data.get('timestamp', time.time()),
+            'track_position': track_position,
+            'throttle': telemetry_data.get('Throttle', telemetry_data.get('throttle', 0)),
+            'brake': telemetry_data.get('Brake', telemetry_data.get('brake', 0)),
+            'steering': telemetry_data.get('steering', 
+                        telemetry_data.get('SteeringWheelAngle', 
+                        telemetry_data.get('Steer', 
+                        telemetry_data.get('steer', 0)))),
+            'speed': telemetry_data.get('Speed', telemetry_data.get('speed', 0)),
+            'rpm': telemetry_data.get('RPM', telemetry_data.get('rpm', 0)),
+            'gear': telemetry_data.get('Gear', telemetry_data.get('gear', 0)),
+            'lap_number': telemetry_data.get('Lap', telemetry_data.get('lap_count', 0))
+        }
+        
+        # Add any other fields that might be useful
+        for key, value in telemetry_data.items():
+            if key not in telemetry_point and isinstance(value, (int, float, str, bool)):
+                telemetry_point[key] = value
+        
+        # Add to monitoring buffer
+        self.telemetry_monitor.add_telemetry_point(telemetry_point)
+    
+    def on_save_lap_clicked(self):
+        """Handle the save lap button click."""
+        # Disable the save button to prevent double-saving
+        self.save_lap_button.setEnabled(False)
+        
+        # Get the current telemetry buffer
+        telemetry_buffer = self.telemetry_monitor.get_buffer_copy()
+        
+        # Validate the telemetry data
+        is_valid, message, diagnostics = validate_lap_telemetry(telemetry_buffer)
+        
+        if not is_valid:
+            QMessageBox.warning(
+                self, 
+                "Incomplete Lap Data", 
+                f"This lap has incomplete telemetry data and cannot be saved:\n\n{message}"
+            )
+            self.save_lap_button.setEnabled(True)
+            return
+        
+        # Prepare lap data header
+        current_time = datetime.now().isoformat()
+        
+        # Check if we have session and driver info
+        track_name = "Unknown Track"
+        car_name = "Unknown Car"
+        driver_name = "Unknown Driver"
+        
+        if hasattr(self, 'session_info') and self.session_info:
+            track_name = self.session_info.get('current_track', 
+                         self.session_info.get('TrackName', track_name))
+            car_name = self.session_info.get('current_car',
+                       self.session_info.get('CarName', car_name))
+            driver_name = self.session_info.get('DriverName', driver_name)
+        
+        # Get a representative telemetry point for additional data
+        sample_point = telemetry_buffer[-1] if telemetry_buffer else {}
+        
+        # Create session record (if needed)
+        # In a full implementation, you would check if the current session already exists
+        # and reference it, but for simplicity we'll create a new one here
+        session_data = {
+            'created_at': current_time,
+            'track_name': track_name,
+            'car_name': car_name,
+            'driver_name': driver_name,
+            # Add other session fields as needed
+        }
+        
+        # Create lap record
+        lap_data = {
+            'created_at': current_time,
+            'lap_number': sample_point.get('lap_number', 0),
+            'lap_time': sample_point.get('lap_time', 0),
+            'track_name': track_name,
+            'car_name': car_name,
+            'driver_name': driver_name,
+            'session_id': None,  # Will be populated by the save worker after session is created
+            # Add other lap fields as needed
+        }
+        
+        # Create and show progress dialog
+        self.save_progress_dialog = QMessageBox()
+        self.save_progress_dialog.setWindowTitle("Saving Lap Data")
+        self.save_progress_dialog.setText("Preparing to save lap data...")
+        self.save_progress_dialog.setStandardButtons(QMessageBox.Cancel)
+        self.save_progress_dialog.setIcon(QMessageBox.Information)
+        
+        # Create and start the save worker
+        self.save_thread = QThread()
+        self.save_worker = TelemetrySaveWorker(lap_data, telemetry_buffer)
+        self.save_worker.moveToThread(self.save_thread)
+        
+        # Connect signals
+        self.save_thread.started.connect(self.save_worker.run)
+        self.save_worker.finished.connect(self.on_save_lap_finished)
+        self.save_worker.progress.connect(self.on_save_progress)
+        
+        # Handle cleanup
+        self.save_worker.finished.connect(self.save_thread.quit)
+        self.save_worker.finished.connect(self.save_worker.deleteLater)
+        self.save_thread.finished.connect(self.save_thread.deleteLater)
+        
+        # Connect cancel button
+        cancel_button = self.save_progress_dialog.button(QMessageBox.Cancel)
+        cancel_button.clicked.connect(self.on_save_cancelled)
+        
+        # Start the thread and show dialog
+        self.save_thread.start()
+    
+    def on_save_progress(self, percentage, message):
+        """Update the save progress dialog."""
+        if self.save_progress_dialog:
+            self.save_progress_dialog.setText(f"{message} ({percentage}%)")
+    
+    def on_save_cancelled(self):
+        """Handle cancellation of the save operation."""
+        if hasattr(self, 'save_worker') and self.save_worker:
+            self.save_worker.cancel()
+    
+    def on_save_lap_finished(self, success, message, diagnostics):
+        """Handle completion of the lap save operation."""
+        # Close the progress dialog
+        if self.save_progress_dialog:
+            self.save_progress_dialog.accept()
+            self.save_progress_dialog = None
+        
+        # Re-enable the save button
+        self.save_lap_button.setEnabled(True)
+        
+        # Show appropriate message
+        if success:
+            lap_id = diagnostics.get("lap_id", "Unknown")
+            points_saved = diagnostics.get("points_saved", 0)
+            
+            QMessageBox.information(
+                self, 
+                "Lap Saved", 
+                f"Lap data saved successfully.\n\nLap ID: {lap_id}\nTelemetry Points: {points_saved}"
+            )
+            
+            # Optionally clear buffer after successful save
+            self.telemetry_monitor.clear_buffer()
+            self.coverage_indicator.setValue(0)
+            self.coverage_status.setText("Telemetry buffer cleared")
+        else:
+            QMessageBox.critical(
+                self, 
+                "Save Failed", 
+                f"Failed to save lap data:\n\n{message}"
+            )
+
+    def toggle_diagnostic_mode(self):
+        """Toggle detailed diagnostic logging for lap detection."""
+        try:
+            # Find the lap saver instance
+            if hasattr(self, 'iracing_api') and self.iracing_api:
+                # Access the IRacingLapSaver instance if it exists
+                lap_saver = None
+                if hasattr(self.iracing_api, 'lap_saver'):
+                    lap_saver = self.iracing_api.lap_saver
+                elif hasattr(self.iracing_api, 'get_lap_saver'):
+                    lap_saver = self.iracing_api.get_lap_saver()
+                
+                if lap_saver:
+                    # Toggle the diagnostic mode
+                    current_mode = getattr(lap_saver, '_diagnostic_mode', False)
+                    lap_saver.enable_diagnostics(not current_mode)
+                    
+                    # Update button text
+                    if not current_mode:
+                        # Turning ON
+                        self.diagnostic_mode_button.setText("🔍 Diagnostics: ON")
+                        self.diagnostic_mode_button.setStyleSheet("""
+                            background-color: #2C6694;
+                            color: white;
+                            padding: 5px 10px;
+                            border-radius: 3px;
+                        """)
+                        # Create a temporary status label
+                        status_msg = "Diagnostic mode enabled - logs saved to Documents/TrackPro/Diagnostics"
+                        self.diagnostic_mode_button.setToolTip(status_msg)
+                        logger.info(status_msg)
+                    else:
+                        # Turning OFF
+                        self.diagnostic_mode_button.setText("🔍 Diagnostics: OFF")
+                        self.diagnostic_mode_button.setStyleSheet("""
+                            background-color: #333;
+                            color: #AAA;
+                            padding: 5px 10px;
+                            border-radius: 3px;
+                        """)
+                        self.statusBar().showMessage("Diagnostic mode disabled", 3000)
+                else:
+                    self.statusBar().showMessage("Cannot toggle diagnostics: Lap saver not found", 3000)
+            else:
+                self.statusBar().showMessage("Cannot toggle diagnostics: iRacing API not available", 3000)
+        except Exception as e:
+            logger.error(f"Error toggling diagnostic mode: {e}")
+            self.statusBar().showMessage(f"Error: {str(e)}", 3000)
+
+    # Keep the test_authentication method as previously added
+    def test_authentication(self):
+        """Test authentication and telemetry fetching directly from the main thread.
+        This method is for diagnostic purposes to verify the authentication status."""
+        from Supabase import auth
+        is_logged_in = auth.is_logged_in()
+        logger.info(f"Authentication test - is_logged_in: {is_logged_in}")
+        
+        try:
+            from trackpro.database.supabase_client import supabase as direct_client
+            has_client_session = direct_client.is_authenticated() if direct_client else False
+            logger.info(f"Authentication test - Direct client session: {has_client_session}")
+            
+            if has_client_session:
+                user = direct_client.get_user()
+                logger.info(f"Authentication test - Session has user: {user is not None}")
+                
+                # Try to refresh the session
+                self.refresh_supabase_auth()
+        except Exception as e:
+            logger.error(f"Authentication test error: {e}")
+            
+        # Test the raw telemetry function directly
+        if is_logged_in:
+            try:
+                from Supabase.database import get_telemetry_points
+                # Try fetching for the first lap in our list, if any
+                if hasattr(self, 'left_lap_selector') and self.left_lap_selector.count() > 0:
+                    lap_id = self.left_lap_selector.itemData(0)
+                    if lap_id:
+                        logger.info(f"Testing direct telemetry fetch for lap {lap_id}")
+                        points, msg = get_telemetry_points(lap_id)
+                        if points:
+                            logger.info(f"Successfully fetched {len(points)} telemetry points directly")
+                        else:
+                            logger.error(f"Failed to fetch telemetry points: {msg}")
+            except Exception as e:
+                logger.error(f"Error testing telemetry fetch: {e}")
+                
+        # Show the result in the UI
+        if not is_logged_in:
+            QMessageBox.warning(self, "Authentication Test", 
+                                "Not logged in. Please log in to access telemetry data.")
+        elif not has_client_session:
+            QMessageBox.warning(self, "Authentication Test", 
+                                "Logged in but client session not established. Try restarting the app.")
+        else:
+            QMessageBox.information(self, "Authentication Test", 
+                                  "Logged in and client session is active.")
+
+    def refresh_supabase_auth(self):
+        """Attempt to refresh Supabase authentication across all modules."""
+        # Try to refresh main client
+        try:
+            from trackpro.database.supabase_client import supabase as app_client
+            if app_client:
+                logger.info("Refreshing main Supabase client session...")
+                # Check for the correct refresh method
+                if hasattr(app_client, 'refresh_session'):
+                    app_client.refresh_session()
+                # Try alternative methods that might exist
+                elif hasattr(app_client, 'is_authenticated') and app_client.is_authenticated():
+                    # If authenticated but no refresh method, it's probably good enough
+                    logger.info("Main client already authenticated, no refresh method found")
+                logger.info(f"Main client auth status: {app_client.is_authenticated() if hasattr(app_client, 'is_authenticated') else 'unknown'}")
+        except Exception as e:
+            logger.error(f"Error refreshing main client: {e}")
+            
+        # Try to refresh module level client
+        try:
+            import Supabase.client
+            import Supabase.auth
+            if hasattr(Supabase.client, 'supabase') and Supabase.client.supabase:
+                logger.info("Refreshing module Supabase client session...")
+                token = Supabase.auth.get_session_token()
+                if token:
+                    try:
+                        if hasattr(Supabase.client.supabase, 'auth') and hasattr(Supabase.client.supabase.auth, 'set_session'):
+                            Supabase.client.supabase.auth.set_session(token)
+                            logger.info("Set session in module client")
+                    except Exception as token_error:
+                        logger.error(f"Error setting token: {token_error}")
+        except Exception as e:
+            logger.error(f"Error refreshing module client: {e}")
+            
+        return True
+
+    def _on_compare_clicked(self):
+        """Handler for when the compare button is clicked."""
+        if not self.compare_button.isEnabled():
+            return  # Prevent double clicks
+
+        # Get selected lap IDs from combo boxes
+        left_lap_id = self.left_lap_selector.currentData()
+        right_lap_id = self.right_lap_selector.currentData()
+
+        # Validate selections
+        if not left_lap_id or not right_lap_id:
+            logger.error("Cannot compare - one or both lap selections are empty")
+            QMessageBox.warning(self, "Selection Error", "Please select laps in both selectors to compare.")
+            return
+
+        if left_lap_id == right_lap_id:
+            logger.error("Cannot compare - same lap selected twice")
+            QMessageBox.warning(self, "Selection Error", "Please select different laps to compare.")
+            return
+
+        # Change UI state
+        self.compare_button.setEnabled(False)
+        self.compare_button.setText("Comparing...")
+        
+        # Try to refresh authentication before starting worker
+        try:
+            self.refresh_supabase_auth()
+        except Exception as e:
+            logger.warning(f"Auth refresh failed, continuing anyway: {e}")
+
+        # Create a worker thread to fetch telemetry data
+        logger.info(f"Starting telemetry fetch for Lap A ({left_lap_id}) and Lap B ({right_lap_id})")
+        self.telemetry_fetch_thread = QThread()
+        self.telemetry_fetch_worker = TelemetryFetchWorker(left_lap_id, right_lap_id)
+        self.telemetry_fetch_worker.moveToThread(self.telemetry_fetch_thread)
+        
+        # Connect signals and slots
+        self.telemetry_fetch_thread.started.connect(self.telemetry_fetch_worker.run)
+        self.telemetry_fetch_worker.finished.connect(self._on_telemetry_fetch_finished)
+        self.telemetry_fetch_worker.error.connect(self._on_telemetry_fetch_error)
+        self.telemetry_fetch_worker.finished.connect(self._cleanup_telemetry_fetch_references)
+        self.telemetry_fetch_worker.error.connect(self._cleanup_telemetry_fetch_references)
+        self.telemetry_fetch_thread.finished.connect(self.telemetry_fetch_thread.deleteLater)
+
+        # Start the worker thread
+        self.telemetry_fetch_thread.start()
+
+    def _update_comparison_metrics(self, left_data, right_data):
+        """Calculate and update metrics from the comparison data.
+        
+        Args:
+            left_data: Dictionary with data for lap A
+            right_data: Dictionary with data for lap B
+        """
+        try:
+            # Track length for percentage calculations
+            track_length = getattr(self, 'track_length', 0) 
+            if not track_length and left_data and 'track_length' in left_data:
+                track_length = left_data['track_length']
+            elif not track_length and right_data and 'track_length' in right_data:
+                track_length = right_data['track_length']
+                
+            # Get lap times from UI if available
+            left_lap_time = None
+            right_lap_time = None
+            
+            left_lap_text = self.left_lap_combo.currentText()
+            right_lap_text = self.right_lap_combo.currentText()
+            
+            # Extract lap times from text (format: "Lap XX - 0:12.345")
+            try:
+                left_time_str = left_lap_text.split('-')[-1].strip()
+                if left_time_str != '(No Time)':
+                    parts = left_time_str.split(':')
+                    if len(parts) == 2:
+                        minutes = int(parts[0])
+                        seconds_parts = parts[1].split('.')
+                        seconds = int(seconds_parts[0])
+                        milliseconds = int(seconds_parts[1])
+                        left_lap_time = minutes * 60 + seconds + milliseconds / 1000
+                        
+                right_time_str = right_lap_text.split('-')[-1].strip()
+                if right_time_str != '(No Time)':
+                    parts = right_time_str.split(':')
+                    if len(parts) == 2:
+                        minutes = int(parts[0])
+                        seconds_parts = parts[1].split('.')
+                        seconds = int(seconds_parts[0])
+                        milliseconds = int(seconds_parts[1])
+                        right_lap_time = minutes * 60 + seconds + milliseconds / 1000
+            except Exception as e:
+                logger.warning(f"Error parsing lap times: {e}")
+                
+            # Calculate throttle usage statistics
+            left_throttle_avg = 0
+            right_throttle_avg = 0
+            left_throttle_samples = 0
+            right_throttle_samples = 0
+            
+            if left_data and 'points' in left_data:
+                for point in left_data['points']:
+                    if 'Throttle' in point:
+                        left_throttle_avg += point['Throttle']
+                        left_throttle_samples += 1
+                
+                if left_throttle_samples > 0:
+                    left_throttle_avg /= left_throttle_samples
+                    
+            if right_data and 'points' in right_data:
+                for point in right_data['points']:
+                    if 'Throttle' in point:
+                        right_throttle_avg += point['Throttle']
+                        right_throttle_samples += 1
+                
+                if right_throttle_samples > 0:
+                    right_throttle_avg /= right_throttle_samples
+                    
+            # Calculate brake usage statistics
+            left_brake_avg = 0
+            right_brake_avg = 0
+            left_brake_samples = 0
+            right_brake_samples = 0
+            
+            if left_data and 'points' in left_data:
+                for point in left_data['points']:
+                    if 'Brake' in point:
+                        left_brake_avg += point['Brake']
+                        left_brake_samples += 1
+                
+                if left_brake_samples > 0:
+                    left_brake_avg /= left_brake_samples
+                    
+            if right_data and 'points' in right_data:
+                for point in right_data['points']:
+                    if 'Brake' in point:
+                        right_brake_avg += point['Brake']
+                        right_brake_samples += 1
+                
+                if right_brake_samples > 0:
+                    right_brake_avg /= right_brake_samples
+                    
+            # Calculate time difference if we have lap times
+            time_diff = 0
+            if left_lap_time is not None and right_lap_time is not None:
+                time_diff = right_lap_time - left_lap_time
+                
+            # Update UI with comparison metrics
+            # This could be expanded to show more detailed stats in a stats panel
+            logger.info(f"Lap A throttle avg: {left_throttle_avg:.1%}, Lap B throttle avg: {right_throttle_avg:.1%}")
+            logger.info(f"Lap A brake avg: {left_brake_avg:.1%}, Lap B brake avg: {right_brake_avg:.1%}")
+            
+            if left_lap_time is not None and right_lap_time is not None:
+                sign = "+" if time_diff > 0 else "-"
+                logger.info(f"Lap time difference: {sign}{abs(time_diff):.3f} seconds")
+                
+        except Exception as e:
+            logger.error(f"Error calculating comparison metrics: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def get_track_length(self):
+        """Get the current track length in meters."""
+        # Try to get track length from session info
+        if hasattr(self, 'session_info') and self.session_info:
+            track_length = self.session_info.get('track_length', 0)
+            if track_length > 0:
+                return track_length
+                
+        # Fall back to checking context of currently loaded data
+        if hasattr(self, 'throttle_graph') and hasattr(self.throttle_graph, 'track_length'):
+            graph_track_length = self.throttle_graph.track_length
+            if graph_track_length > 0:
+                return graph_track_length
+                
+        # Default value if we can't find track length anywhere
+        return 1000  # 1000 meters default
+
+    def _setup_lap_comparison(self):
+        """Initialize lap comparison controls."""
+        # Setup lap selection dropdowns
+        self.left_lap_combo = QComboBox()
+        self.left_lap_combo.setMinimumWidth(200)
+        self.left_lap_combo.currentIndexChanged.connect(self._on_left_lap_changed)
+        self.left_lap_label = QLabel("Lap A:")
+        
+        self.right_lap_combo = QComboBox()
+        self.right_lap_combo.setMinimumWidth(200)
+        self.right_lap_combo.currentIndexChanged.connect(self._on_right_lap_changed)
+        self.right_lap_label = QLabel("Lap B:")
+        
+        # Set up compare button (hidden - now automatic when selecting Lap B)
+        self.compare_button = QPushButton("Compare Laps")
+        self.compare_button.clicked.connect(self.on_compare_clicked)
+        self.compare_button.setVisible(False)  # Hide the button
+        
+        # Setup layout
+        self.comparison_layout = QHBoxLayout()
+        self.comparison_layout.addWidget(self.left_lap_label)
+        self.comparison_layout.addWidget(self.left_lap_combo)
+        self.comparison_layout.addWidget(self.right_lap_label)
+        self.comparison_layout.addWidget(self.right_lap_combo)
+        self.comparison_layout.addWidget(self.compare_button)  # Keep in layout but hidden
+        self.comparison_layout.addStretch()
+        
+        self.lap_controls_layout.addLayout(self.comparison_layout)
+
+    def _on_left_lap_changed(self, index):
+        """Handle when user selects a different lap for the left (A) comparison."""
+        # Only trigger update if the lap is valid and not ALL_LAPS
+        left_lap_id = self.left_lap_combo.currentData()
+        
+        if left_lap_id and left_lap_id != "ALL_LAPS":
+            # Call the method that loads data for a single lap
+            self.load_throttle_data(left_lap_id)
+        else:
+            logger.info("Invalid lap selection for Lap A, not loading data")
+
+    def _on_right_lap_changed(self, index):
+        """Handle when user selects a different lap for the right (B) comparison."""
+        # Only trigger comparison if both laps are selected (not ALL_LAPS)
+        left_lap_id = self.left_lap_combo.currentData()
+        right_lap_id = self.right_lap_combo.currentData()
+        
+        if (left_lap_id and right_lap_id and 
+            left_lap_id != "ALL_LAPS" and right_lap_id != "ALL_LAPS"):
+            # Automatically trigger comparison
+            self.on_compare_clicked()
+
+    def show_lap_debug_dialog(self):
+        """Show a dialog with lap recording status and options to save partial laps."""
+        try:
+            # Find the lap saver instance
+            lap_saver = None
+            if hasattr(self, 'iracing_api') and self.iracing_api:
+                if hasattr(self.iracing_api, 'lap_saver'):
+                    lap_saver = self.iracing_api.lap_saver
+                elif hasattr(self.iracing_api, 'get_lap_saver'):
+                    lap_saver = self.iracing_api.get_lap_saver()
+            
+            if not lap_saver:
+                QMessageBox.warning(self, "Lap Debug", "Lap saver not available")
+                return
+                
+            # Get lap recording status
+            status = lap_saver.get_lap_recording_status()
+            
+            # Create dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Lap Recording Debug")
+            dialog.setMinimumWidth(500)
+            dialog.setStyleSheet("""
+                QDialog { background-color: #2D2D30; color: white; }
+                QLabel { color: white; }
+                QTableWidget { background-color: #1E1E1E; color: white; alternate-background-color: #262626; }
+                QTableWidget::item:selected { background-color: #3F3F46; }
+                QPushButton { background-color: #0E639C; color: white; padding: 6px 12px; border-radius: 3px; }
+                QPushButton:hover { background-color: #1177BB; }
+                QPushButton:pressed { background-color: #0D5A8E; }
+                QPushButton:disabled { background-color: #333333; color: #666666; }
+            """)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Summary section
+            summary_group = QGroupBox("Summary")
+            summary_layout = QVBoxLayout(summary_group)
+            
+            total_laps = status.get('total_laps_detected', 0)
+            saved_laps = status.get('total_laps_saved', 0)
+            skipped_laps = status.get('total_laps_skipped', 0)
+            
+            summary_text = f"Total Laps Detected: {total_laps}\n"
+            summary_text += f"Laps Saved: {saved_laps}\n"
+            summary_text += f"Laps Skipped: {skipped_laps}\n"
+            summary_text += f"Coverage Threshold: {status.get('track_coverage_threshold', 0.7) * 100:.0f}%"
+            
+            summary_label = QLabel(summary_text)
+            summary_layout.addWidget(summary_label)
+            layout.addWidget(summary_group)
+            
+            # Partial laps section
+            if status.get('partial_laps'):
+                partial_group = QGroupBox("Partial/Invalid Laps")
+                partial_layout = QVBoxLayout(partial_group)
+                
+                # Create table
+                table = QTableWidget()
+                table.setColumnCount(4)
+                table.setHorizontalHeaderLabels(["Lap #", "Points", "Coverage", "Reason"])
+                table.horizontalHeader().setStretchLastSection(True)
+                table.setRowCount(len(status['partial_laps']))
+                table.setAlternatingRowColors(True)
+                
+                # Populate table
+                row = 0
+                for lap_num, lap_info in status['partial_laps'].items():
+                    table.setItem(row, 0, QTableWidgetItem(str(lap_num)))
+                    table.setItem(row, 1, QTableWidgetItem(str(lap_info.get('point_count', 0))))
+                    table.setItem(row, 2, QTableWidgetItem(f"{lap_info.get('coverage', 0) * 100:.1f}%"))
+                    table.setItem(row, 3, QTableWidgetItem(lap_info.get('reason', 'Unknown')))
+                    row += 1
+                
+                partial_layout.addWidget(table)
+                
+                # Add "Save Partial Laps" button
+                save_partial_button = QPushButton("Force Save Partial Laps")
+                save_partial_button.clicked.connect(lambda: self.save_partial_laps(lap_saver))
+                partial_layout.addWidget(save_partial_button)
+                
+                layout.addWidget(partial_group)
+            else:
+                partial_label = QLabel("No partial laps detected")
+                layout.addWidget(partial_label)
+            
+            # Add close button
+            close_button = QPushButton("Close")
+            close_button.clicked.connect(dialog.accept)
+            layout.addWidget(close_button)
+            
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Error showing lap debug dialog: {e}")
+            QMessageBox.critical(self, "Error", f"Error showing lap debug: {str(e)}")
+    
+    def save_partial_laps(self, lap_saver):
+        """Force save all partial laps."""
+        try:
+            # Confirm action
+            result = QMessageBox.question(
+                self,
+                "Confirm Save",
+                "Are you sure you want to force-save all partial laps?\n\nThis will save laps that were previously skipped due to quality issues.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if result == QMessageBox.Yes:
+                # Call save_partial_laps with force=True
+                lap_saver.save_partial_laps(force=True)
+                
+                # Show confirmation
+                QMessageBox.information(
+                    self, 
+                    "Laps Saved", 
+                    "Partial laps have been force-saved."
+                )
+        except Exception as e:
+            logger.error(f"Error saving partial laps: {e}")
+            QMessageBox.critical(self, "Error", f"Error saving partial laps: {str(e)}")
+
+# --- Worker for Telemetry Loading in Background ---
+class TelemetryLoadWorker(QObject):
+    """Worker to load telemetry data for a lap in the background."""
+    # finished signal now includes lap_id as the first parameter
+    finished = pyqtSignal(str, dict, float, dict)  # (lap_id, telemetry_data, track_length, track_context)
+    error = pyqtSignal(str)                 # (error_message)
+
+    def __init__(self, lap_id):
+        super().__init__()
+        self.lap_id = lap_id
+        self.is_cancelled = False
+
+    def _fetch_track_context(self, client, track_id, track_length):
+        """Helper to fetch corners and markers for track context."""
+        context = {'start_finish': 0}
+        if not client or not track_id or not track_length > 0:
+            return context
+        try:
+            # Corners
+            corner_result = client.table("track_corners").select("track_position,corner_number").eq("track_id", track_id).order("corner_number").execute()
+            if self.is_cancelled: return context # Added this check
+
+            if corner_result.data:
+                corners = []
+                for c in corner_result.data:
+                    pos, num = c.get("track_position"), c.get("corner_number")
+                    if isinstance(pos, (int, float)) and 0 <= pos <= 1 and num is not None:
+                        corners.append((pos * track_length, num))
+                if corners: context['corners'] = corners
+            
+            if self.is_cancelled: return context # Added this check
+
+            # Markers (This is the corrected block that should remain)
+            marker_result = client.table("track_markers").select("track_position,name").eq("track_id", track_id).execute()
+            if self.is_cancelled: return context
+
+            if marker_result.data:
+                markers = []
+                for m in marker_result.data:
+                    pos, marker_name = m.get("track_position"), m.get("name") 
+                    if isinstance(pos, (int, float)) and 0 <= pos <= 1:
+                        markers.append((pos * track_length, marker_name or "")) 
+                if markers: context['markers'] = markers    
+                
+            logger.info(f"Fetched track context for {track_id}: {len(context.get('corners',[]))} corners, {len(context.get('markers',[]))} markers")
+        except Exception as ctx_error:
+            if not self.is_cancelled: # Check before logging
+                 logger.warning(f"Error fetching track context for {track_id}: {ctx_error}")
+        return context
+
+    def run(self):
+        """Load telemetry data for the specified lap ID."""
+        logger.info(f"TelemetryLoadWorker started for lap ID: {self.lap_id}")
+        
+        if not self.lap_id:
+            logger.warning("Cannot load telemetry data: No lap ID provided")
+            self.error.emit("No lap ID provided")
+            return
+            
+        try:
+            # 1. Get Supabase client
+            client = get_supabase_client()
+            if not client:
+                logger.error("Cannot load lap/track details: No Supabase client available")
+                # We'll still try to load telemetry points below
+            
+            lap_data_for_context = None
+            track_length = 0
+            track_context = {}
+
+            if client:  # Only try to fetch context if client is available
+                # 2. Get lap details for context (like session_id)
+                lap_result = client.table("laps").select("session_id").eq("id", self.lap_id).single().execute()
+                    
+                if not lap_result.data:
+                    logger.warning(f"Lap context for {self.lap_id} not found")
+                else:
+                    lap_data_for_context = lap_result.data
+                
+                # 3. Get track information and session context
+                if lap_data_for_context:
+                    try:
+                        session_id = lap_data_for_context.get("session_id")
+                        if session_id:
+                            session_result = client.table("sessions").select("track_id").eq("id", session_id).single().execute()
+                            if session_result.data:
+                                track_id = session_result.data.get("track_id")
+                                if track_id:
+                                    # Fetch track details
+                                    track_detail_res = client.table("tracks").select("length_meters").eq("id", track_id).single().execute()
+                                    if track_detail_res.data and track_detail_res.data.get("length_meters"):
+                                        track_length = float(track_detail_res.data.get("length_meters"))
+                                        
+                                        # Get track context using our internal method
+                                        track_context = self._fetch_track_context(client, track_id, track_length)
+                                    else:
+                                        logger.warning(f"Could not get track_length for track_id {track_id}")
+                    except Exception as track_err:
+                        logger.warning(f"Error extracting track data: {track_err}")
+            else:
+                logger.warning("No Supabase client for lap/track context; graphs might lack some details.")
+
+            # 4. Get telemetry points using the pagination-aware function
+            required_columns = ["timestamp", "throttle", "brake", "track_position", "steering", "speed"]
+            points_data, message = get_telemetry_points(self.lap_id, columns=required_columns)
+                            
+            if points_data is None:
+                logger.warning(f"No telemetry data found for lap {self.lap_id} via get_telemetry_points: {message}")
+                self.error.emit(f"No telemetry data found: {message}")
+                return
+
+            # 5. Process telemetry data
+            valid_points = []
+            for point in points_data:
+                # Ensure LapDist is calculated from track_position if needed
+                if 'LapDist' not in point and 'track_position' in point and track_length > 0:
+                    point['LapDist'] = float(point['track_position']) * track_length
+                elif 'LapDist' not in point:
+                    logger.debug(f"Point missing LapDist and cannot calculate: {point.get('timestamp')}")
+                    continue
+                
+                # Ensure numeric types for graphable values
+                point['throttle'] = float(point.get('throttle', 0))
+                point['brake'] = float(point.get('brake', 0))
+                point['steering'] = float(point.get('steering', 0))
+                point['speed'] = float(point.get('speed', 0))
+                point['timestamp'] = float(point.get('timestamp', 0))
+                point['LapDist'] = float(point['LapDist'])
+
+                valid_points.append(point)
+
+            # 6. Return results
+            if valid_points:
+                valid_points.sort(key=lambda p: p["LapDist"])  # Sort by distance
+                data_to_plot = {"points": valid_points}
+                # Emit lap_id first
+                self.finished.emit(self.lap_id, data_to_plot, track_length, track_context)
+                logger.info(f"TelemetryLoadWorker successfully processed {len(valid_points)} points for lap {self.lap_id}")
+            else:
+                logger.warning(f"No valid telemetry points after processing for lap {self.lap_id}")
+                self.error.emit("No valid telemetry points after processing")
+                
+        except Exception as e:
+            logger.exception(f"Error in TelemetryLoadWorker for lap {self.lap_id}: {e}")
+            self.error.emit(f"Error loading telemetry: {str(e)}")
+
+    def cancel(self):
+        """Cancel the telemetry loading operation."""
+        self.is_cancelled = True
+        logger.info("TelemetryLoadWorker cancellation requested.")
+# --- End Telemetry Load Worker ---

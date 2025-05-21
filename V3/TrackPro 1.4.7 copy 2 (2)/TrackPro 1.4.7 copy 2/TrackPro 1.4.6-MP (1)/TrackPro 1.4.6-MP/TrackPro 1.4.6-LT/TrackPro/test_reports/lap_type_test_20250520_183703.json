@@ -1,0 +1,88 @@
+{
+  "test_name": "Lap Type Classification Test",
+  "timestamp": "2025-05-20T18:37:03.892798",
+  "total_frames": 806,
+  "total_laps_detected": 7,
+  "laps": [
+    {
+      "lap_number_sdk": 0,
+      "lap_state": "OUT",
+      "expected_lap_type": "OUT",
+      "test_passed": true,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": true,
+      "ended_on_pit_road": false,
+      "is_valid_for_leaderboard": false
+    },
+    {
+      "lap_number_sdk": 1,
+      "lap_state": "TIMED",
+      "expected_lap_type": null,
+      "test_passed": true,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": false,
+      "ended_on_pit_road": false,
+      "is_valid_for_leaderboard": true
+    },
+    {
+      "lap_number_sdk": 2,
+      "lap_state": "IN",
+      "expected_lap_type": "TIMED",
+      "test_passed": false,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": false,
+      "ended_on_pit_road": true,
+      "is_valid_for_leaderboard": false
+    },
+    {
+      "lap_number_sdk": 34,
+      "lap_state": "TIMED",
+      "expected_lap_type": "TIMED",
+      "test_passed": true,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": false,
+      "ended_on_pit_road": false,
+      "is_valid_for_leaderboard": true
+    },
+    {
+      "lap_number_sdk": 35,
+      "lap_state": "OUT",
+      "expected_lap_type": "OUT",
+      "test_passed": true,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": true,
+      "ended_on_pit_road": false,
+      "is_valid_for_leaderboard": false
+    },
+    {
+      "lap_number_sdk": 36,
+      "lap_state": "TIMED",
+      "expected_lap_type": "TIMED",
+      "test_passed": true,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": false,
+      "ended_on_pit_road": false,
+      "is_valid_for_leaderboard": true
+    },
+    {
+      "lap_number_sdk": 37,
+      "lap_state": "OUT",
+      "expected_lap_type": "OUT",
+      "test_passed": true,
+      "duration_seconds": 100.0,
+      "frame_count": 100,
+      "started_on_pit_road": true,
+      "ended_on_pit_road": false,
+      "is_valid_for_leaderboard": false
+    }
+  ],
+  "tests_passed": 6,
+  "tests_failed": 1,
+  "all_tests_passed": false
+}

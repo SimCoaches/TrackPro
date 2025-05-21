@@ -1,0 +1,10 @@
+{
+  "test_name": "Lap Type Classification Test",
+  "timestamp": "2025-05-20T18:32:37.038917",
+  "total_frames": 806,
+  "total_laps_detected": 0,
+  "laps": [],
+  "tests_passed": 0,
+  "tests_failed": 0,
+  "all_tests_passed": true
+}

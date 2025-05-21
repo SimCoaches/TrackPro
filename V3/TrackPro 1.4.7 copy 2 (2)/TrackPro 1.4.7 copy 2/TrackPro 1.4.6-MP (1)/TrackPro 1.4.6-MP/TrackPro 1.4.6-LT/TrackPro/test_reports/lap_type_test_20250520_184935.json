@@ -1,0 +1,112 @@
+{
+  "timestamp": "2025-05-20 18:49:35",
+  "lap_results": [
+    {
+      "lap_number": 0,
+      "lap_type": "OUT",
+      "expected_type": "OUT",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": true,
+      "ended_pit": false,
+      "valid_leaderboard": false,
+      "passed": true
+    },
+    {
+      "lap_number": 1,
+      "lap_type": "TIMED",
+      "expected_type": "TIMED",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": false,
+      "ended_pit": false,
+      "valid_leaderboard": true,
+      "passed": true
+    },
+    {
+      "lap_number": 2,
+      "lap_type": "TIMED",
+      "expected_type": "TIMED",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": false,
+      "ended_pit": false,
+      "valid_leaderboard": true,
+      "passed": true
+    },
+    {
+      "lap_number": 34,
+      "lap_type": "TIMED",
+      "expected_type": "TIMED",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": false,
+      "ended_pit": false,
+      "valid_leaderboard": true,
+      "passed": true
+    },
+    {
+      "lap_number": 35,
+      "lap_type": "OUT",
+      "expected_type": "OUT",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": true,
+      "ended_pit": false,
+      "valid_leaderboard": false,
+      "passed": true
+    },
+    {
+      "lap_number": 36,
+      "lap_type": "TIMED",
+      "expected_type": "TIMED",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": false,
+      "ended_pit": false,
+      "valid_leaderboard": true,
+      "passed": true
+    },
+    {
+      "lap_number": 37,
+      "lap_type": "OUT",
+      "expected_type": "OUT",
+      "frames_count": 100,
+      "duration": 100.0,
+      "start_pos": 0.0,
+      "end_pos": 1.0,
+      "started_pit": true,
+      "ended_pit": false,
+      "valid_leaderboard": false,
+      "passed": true
+    },
+    {
+      "lap_number": 40,
+      "lap_type": "IN",
+      "expected_type": null,
+      "frames_count": 106,
+      "duration": 106.0,
+      "start_pos": 0.0,
+      "end_pos": 0.5,
+      "started_pit": false,
+      "ended_pit": true,
+      "valid_leaderboard": false,
+      "passed": true
+    }
+  ],
+  "tests_passed": 8,
+  "tests_failed": 0,
+  "all_tests_passed": true
+}
