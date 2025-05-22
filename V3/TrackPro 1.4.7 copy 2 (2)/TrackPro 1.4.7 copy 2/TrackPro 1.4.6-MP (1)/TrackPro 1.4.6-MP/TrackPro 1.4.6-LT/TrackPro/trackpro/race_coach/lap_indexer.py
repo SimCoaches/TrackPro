@@ -62,6 +62,16 @@ class LapIndexer:
         # Variables to prevent double wrap-around detection
         self._last_wrap_around_time: float = 0.0
         self._wrap_around_cooldown: float = 2.0  # seconds
+        
+        # New variables for delayed lap finalization
+        self._pending_wrap_around_lap: Dict[str, Any] | None = None
+        self._pending_wrap_around_lap_frames: List[Dict[str, Any]] = []
+        self._recently_started_by_wrap_around: bool = False
+        self._wrap_around_start_time: float = 0.0
+        
+        # New lap debug tracking system
+        self._lap_debug_tracker: Dict[int, Dict[str, Any]] = {}
+        self._iracing_to_internal_lap_mapping: Dict[int, int] = {}
 
     def _log_sdk_warning(self, message: str):
         current_time = time.time()
@@ -70,6 +80,65 @@ class LapIndexer:
             logger.warning(message)
             self._last_sdk_data_warning_time = current_time
             self._last_sdk_data_warning_message = message
+
+    def _log_lap_debug_info(self, event_type: str, ir_data: Dict[str, Any], message: str = "") -> None:
+        """Log detailed lap debugging information to track iRacing vs internal lap numbers.
+        
+        Args:
+            event_type: Type of event (e.g., 'WRAPAROUND', 'INCREMENT', 'NEW_LAP', 'FINALIZE')
+            ir_data: Current iRacing telemetry data
+            message: Optional additional debug message
+        """
+        # Extract key data from iRacing frame
+        ir_lap = ir_data.get("Lap", -1)  # Current lap (N+1)
+        ir_lap_completed = ir_data.get("LapCompleted", -1)  # Last completed lap (N)
+        lap_dist_pct = ir_data.get("LapDistPct", -1.0)
+        on_pit_road = ir_data.get("OnPitRoad", False)
+        lap_invalidated = ir_data.get("LapInvalidated", False)
+        session_time = ir_data.get("SessionTimeSecs", 0.0)
+        
+        # Get internal state
+        internal_lap_num = self._active_lap_number_internal
+        lap_state = self._active_lap_state.name if self._active_lap_state else "NONE"
+        
+        # Create debug entry
+        debug_entry = {
+            "timestamp": time.time(),
+            "session_time": session_time,
+            "event_type": event_type,
+            "iracing_lap": ir_lap,
+            "iracing_lap_completed": ir_lap_completed,
+            "internal_lap_num": internal_lap_num,
+            "lap_state": lap_state,
+            "lap_dist_pct": lap_dist_pct,
+            "on_pit_road": on_pit_road,
+            "lap_invalidated": lap_invalidated,
+            "message": message
+        }
+        
+        # Track the mapping between iRacing laps and internal laps
+        if internal_lap_num is not None:
+            self._iracing_to_internal_lap_mapping[ir_lap_completed] = internal_lap_num
+        
+        # Store in debug tracker
+        if internal_lap_num not in self._lap_debug_tracker:
+            self._lap_debug_tracker[internal_lap_num or -1] = []
+        
+        self._lap_debug_tracker[internal_lap_num or -1].append(debug_entry)
+        
+        # Log the debug information
+        mapping_info = f"iRacing#{ir_lap_completed}→Internal#{internal_lap_num}" if internal_lap_num is not None else "No mapping"
+        log_message = (
+            f"[LAP DEBUG] {event_type} - {mapping_info} - "
+            f"iRacing state: Lap={ir_lap}, LapCompleted={ir_lap_completed}, "
+            f"LapDistPct={lap_dist_pct:.3f}, OnPit={on_pit_road}, Invalid={lap_invalidated} - "
+            f"Internal state: Current={internal_lap_num}, State={lap_state}"
+        )
+        
+        if message:
+            log_message += f" - {message}"
+            
+        logger.info(log_message)
 
     def on_frame(self, ir_data: Dict[str, Any]) -> None:
         """Process one telemetry frame from iRacing."""
@@ -124,13 +193,23 @@ class LapIndexer:
         # --- Initialization (First Frame) ---
         if self._last_lap_completed_sdk is None:
             logger.info("[LapIndexer] First frame received. Initializing lap tracking.")
+            # Get current lap distance for initial classification
+            current_lap_dist_pct_initial = float(frame_copy.get("LapDistPct", 0.0))
+            
+            # Determine if this is a mid-session join by checking LapCompleted
+            # If it's not 0, we've joined an ongoing session and need to set lap state accordingly
+            is_mid_session_join = current_lap_completed_sdk > 0
+            
             self._start_new_lap(
                 lap_number_internal=current_lap_completed_sdk, # Starts at 0 for the out-lap
                 start_tick=now_tick,
                 on_pit_start=on_pit_road_now,
                 # LapInvalidated refers to ir["Lap"], which is current_lap_completed_sdk + 1 here.
                 # So, this flag is for the lap we are *just starting*.
-                invalid_sdk_flag_for_this_lap=lap_invalidated_flag_now
+                invalid_sdk_flag_for_this_lap=lap_invalidated_flag_now,
+                # Pass initial lap distance for correct classification on first frame
+                initial_lap_dist_pct=current_lap_dist_pct_initial,
+                is_mid_session_join=is_mid_session_join
             )
             self._active_lap_frames.append(frame_copy)
             self._last_lap_completed_sdk = current_lap_completed_sdk
@@ -139,35 +218,51 @@ class LapIndexer:
             # Initialize previous values for wrap-around and reset detection
             self._previous_lap_dist_pct = frame_copy.get("LapDistPct", 0.0)
             self._previous_speed = frame_copy.get("Speed", 0.0)
+            
+            # Log initial lap state for debugging
+            self._log_lap_debug_info("INITIALIZE", frame_copy, "First frame initialization")
             return
 
-        # --- Check for Reset/Teleport and Track Position Wrap-Around ---
-        # First check if handle_reset should be called
-        current_lap_dist = frame_copy.get("LapDistPct", 0.0)
-        current_speed = frame_copy.get("Speed", 0.0)
-        
-        # Now check for wrap-around or reset
-        reset_handled = self.handle_reset(frame_copy, current_lap_dist, current_speed, on_pit_road_now)
-        wraparound_handled = self.close_if_needed(current_lap_dist, on_pit_road_now, now_tick)
-        
-        # If either reset or wrap-around was handled, return now as the frame has already been processed
-        if reset_handled or wraparound_handled:
-            # The frame has already been added to the new lap in handle_reset or close_if_needed
-            # Update state for next iteration
-            self._last_lap_completed_sdk = current_lap_completed_sdk
-            self._previous_frame_ir_data = frame_copy
-            self._previous_lap_dist_pct = current_lap_dist
-            self._previous_speed = current_speed
-            return
+        # Get current lap distance to check for wrap-around
+        current_lap_dist = float(frame_copy.get("LapDistPct", 0.0))
+        current_speed = float(frame_copy.get("Speed", 0.0))
 
         # --- Main Lap Transition Logic ---
-        # ir["LapCompleted"] has incremented, meaning the lap whose internal number was
-        # self._last_lap_completed_sdk has now officially finished.
-        if current_lap_completed_sdk > self._last_lap_completed_sdk:
+        # Check if ir["LapCompleted"] has incremented, meaning iRacing has officially scored a lap
+        lap_completed_incremented = current_lap_completed_sdk > self._last_lap_completed_sdk
+        
+        # If we have an active lap pending after wrap-around detection and LapCompleted incremented,
+        # now we have the official lap time and can finalize it properly
+        if lap_completed_incremented and self._recently_started_by_wrap_around:
+            logger.info(f"[LapIndexer] LapCompleted incremented after wrap-around: {self._last_lap_completed_sdk} -> {current_lap_completed_sdk}")
+            
+            # Sync our internal lap number with iRacing's LapCompleted
+            self._active_lap_number_internal = current_lap_completed_sdk
+            
+            # Now we have the official lap time from iRacing for the lap we already detected via wrap-around
+            # Update the most recently added lap with the correct time
+            if self.laps and len(self.laps) > 0:
+                last_lap = self.laps[-1]
+                prev_time = last_lap.get("duration_seconds", 0)
+                if prev_time > 0 and lap_last_lap_time_sdk > 0:
+                    logger.info(f"[LapIndexer] Updating wrap-around lap time from {prev_time:.3f}s to SDK value {lap_last_lap_time_sdk:.3f}s")
+                    last_lap["duration_seconds"] = lap_last_lap_time_sdk
+                    
+                    # Ensure lap number matches iRacing by using the just-completed lap number
+                    last_lap["lap_number_sdk"] = current_lap_completed_sdk - 1
+            
+            # Clear the wrap-around flag since we've now processed the official time
+            self._recently_started_by_wrap_around = False
+            
+            # No need to do regular lap transition handling below since we already transitioned
+            # via wrap-around detection
+        elif lap_completed_incremented:
+            # Normal case: ir["LapCompleted"] incremented, meaning the lap whose internal number was
+            # self._last_lap_completed_sdk has now officially finished.
             logger.info(f"[LapIndexer] LapCompleted incremented: {self._last_lap_completed_sdk} -> {current_lap_completed_sdk}")
             
             # Determine if the lap that just finished ended on pit road
-            # This uses the OnPitRoad status from the *previous* frame, which was the last frame of that lap.
+            # This uses the OnPitRoad status from the *previous* frame, which was the last frame of that lap
             ended_on_pit = False
             if self._previous_frame_ir_data:
                 # Handle gracefully if OnPitRoad was missing in previous frame too
@@ -189,6 +284,13 @@ class LapIndexer:
                 on_pit_start=on_pit_road_now,
                 invalid_sdk_flag_for_this_lap=lap_invalidated_flag_now
             )
+        else:
+            # No SDK lap transition, check for wrap-around or reset
+            # Only do this if we're not already tracking a wrap-around transition
+            if not self._recently_started_by_wrap_around:
+                reset_handled = self.handle_reset(frame_copy, current_lap_dist, current_speed, on_pit_road_now)
+                if not reset_handled:
+                    self.close_if_needed(current_lap_dist, on_pit_road_now, now_tick)
 
         # --- Collect Telemetry & Update Invalidity for Active Lap ---
         self._active_lap_frames.append(frame_copy)
@@ -215,7 +317,9 @@ class LapIndexer:
         lap_number_internal: int, # This is ir["LapCompleted"] value at the moment this lap physically starts
         start_tick: float,
         on_pit_start: bool,
-        invalid_sdk_flag_for_this_lap: bool # ir["LapInvalidated"] status for this new lap
+        invalid_sdk_flag_for_this_lap: bool, # ir["LapInvalidated"] status for this new lap
+        initial_lap_dist_pct: float = None, # Optional initial lap distance for classification
+        is_mid_session_join: bool = False # Whether we're joining mid-session
     ) -> None:
         self._active_lap_frames = []
         self._active_lap_number_internal = lap_number_internal
@@ -223,10 +327,23 @@ class LapIndexer:
         self._active_lap_invalid_sdk = invalid_sdk_flag_for_this_lap # Initial invalid state for this lap
         self._active_lap_started_on_pit = on_pit_start
 
+        # Determine lap state based on starting conditions and initial position
         if on_pit_start:
+            # If we're starting on pit road, it's an OUT lap
             self._active_lap_state = LapState.OUT
+            logger.info(f"[LapIndexer] Lap {lap_number_internal} classified as OUT due to starting on pit road")
+        elif is_mid_session_join:
+            # If we're joining mid-session, consider it INCOMPLETE unless it's on pit road
+            self._active_lap_state = LapState.INCOMPLETE
+            logger.info(f"[LapIndexer] Lap {lap_number_internal} classified as INCOMPLETE due to mid-session join")
+        elif initial_lap_dist_pct is not None and initial_lap_dist_pct > 0.5:
+            # If we're starting in the second half of the track, consider it a partial lap
+            self._active_lap_state = LapState.INCOMPLETE
+            logger.info(f"[LapIndexer] Lap {lap_number_internal} classified as INCOMPLETE due to starting at {initial_lap_dist_pct:.3f}")
         else:
+            # Otherwise it's a normal TIMED lap
             self._active_lap_state = LapState.TIMED
+            logger.info(f"[LapIndexer] Lap {lap_number_internal} classified as TIMED (normal racing lap)")
         
         logger.info(f"[LapIndexer] Starting new lap data collection. LapInternalNum: {self._active_lap_number_internal}, "
                     f"Type: {self._active_lap_state.name}, StartTick: {start_tick:.3f}, OnPitStart: {on_pit_start}, "
@@ -245,27 +362,36 @@ class LapIndexer:
 
         lap_to_finalize_sdk_num = self._active_lap_number_internal # This is the LapCompleted value of the lap being finalized
         
+        # Log finalization for debugging
+        if self._previous_frame_ir_data:
+            finalize_msg = f"Finalizing lap {lap_to_finalize_sdk_num}, SDK state: irLap={self._previous_frame_ir_data.get('Lap', -1)}, irCompleted={self._previous_frame_ir_data.get('LapCompleted', -1)}"
+            self._log_lap_debug_info("FINALIZE", self._previous_frame_ir_data, finalize_msg)
+        
         calculated_duration = end_tick - self._active_lap_start_tick
         final_lap_duration = calculated_duration # Default to calculated
 
-        # For normally completed laps (not session end), prefer SDK time if valid and positive.
-        # Lap 0 (out-lap) often has LapLastLapTime == -1 from SDK.
-        if not session_finalize and lap_last_lap_time_from_sdk > 0 and lap_to_finalize_sdk_num >= 0 : # SDK time is valid
+        # Only use SDK time if it's valid (positive) and we're not in a session end
+        # Special case: If this is an OUT lap or INCOMPLETE lap, prefer our calculated time
+        # since iRacing may not have a valid time for these lap types
+        is_timed_lap = self._active_lap_state == LapState.TIMED
+        
+        # For normally completed laps (not session end), prefer SDK time if valid and positive,
+        # but only for TIMED laps. For OUT/IN/INCOMPLETE laps, use our calculated time.
+        if not session_finalize and lap_last_lap_time_from_sdk > 0 and is_timed_lap:
             final_lap_duration = lap_last_lap_time_from_sdk
             logger.info(f"[LapIndexer] Using SDK lap time {final_lap_duration:.3f}s for lap {lap_to_finalize_sdk_num}.")
         else:
             logger.info(f"[LapIndexer] Using calculated lap time {final_lap_duration:.3f}s for lap {lap_to_finalize_sdk_num}. "
-                        f"(SDK time: {lap_last_lap_time_from_sdk:.3f}s, SessionFinalize: {session_finalize})")
+                        f"(SDK time: {lap_last_lap_time_from_sdk:.3f}s, SessionFinalize: {session_finalize}, LapType: {self._active_lap_state.name})")
 
         # Determine lap state
         current_lap_state = self._active_lap_state
         if not self._active_lap_started_on_pit and ended_on_pit_road:
             current_lap_state = LapState.IN
             logger.info(f"[LapIndexer] Lap {lap_to_finalize_sdk_num} reclassified as IN (StartedTrack:True, EndedPit:{ended_on_pit_road}).")
-        elif session_finalize and current_lap_state != LapState.IN : # If session ends and not a clear IN lap
+        elif session_finalize and current_lap_state != LapState.IN: # If session ends and not a clear IN lap
              current_lap_state = LapState.INCOMPLETE
              logger.info(f"[LapIndexer] Lap {lap_to_finalize_sdk_num} marked INCOMPLETE due to session finalize.")
-
 
         # Validity: is_valid_from_sdk is true if self._active_lap_invalid_sdk remained false throughout the lap.
         is_lap_valid_according_to_sdk = not self._active_lap_invalid_sdk
@@ -287,6 +413,8 @@ class LapIndexer:
                 # Context flags for IRacingLapSaver
                 "is_complete_by_sdk_increment": not session_finalize,
                 "is_incomplete_session_end": session_finalize,
+                "calculated_duration": calculated_duration, # Store calculated time for reference
+                "frame_count": len(self._active_lap_frames) # Store frame count for debugging
             }
             self.laps.append(lap_dict)
             logger.info(f"[LapIndexer] Successfully finalized lap {lap_to_finalize_sdk_num} "
@@ -347,6 +475,8 @@ class LapIndexer:
         self._last_lap_completed_sdk = None
         self._previous_frame_ir_data = None
         self._last_wrap_around_time = 0.0
+        self._recently_started_by_wrap_around = False
+        self._wrap_around_start_time = 0.0
         logger.info("[LapIndexer] Internal state reset, but lap data preserved.")
 
     def get_laps(self) -> List[Dict[str, Any]]:
@@ -382,6 +512,8 @@ class LapIndexer:
         self._last_lap_completed_sdk = None
         self._previous_frame_ir_data = None
         self._last_wrap_around_time = 0.0
+        self._recently_started_by_wrap_around = False
+        self._wrap_around_start_time = 0.0
 
     def close_if_needed(self, current_lap_dist: float, on_pit_road: bool, now_tick: float) -> bool:
         """Check if wrap-around has occurred even if OnPitRoad is True.
@@ -422,25 +554,17 @@ class LapIndexer:
             # Update the last wrap-around time
             self._last_wrap_around_time = now_tick
             
-            # Determine if the lap ended on pit road
-            ended_on_pit = on_pit_road
-            
-            # We won't have a valid LapLastLapTime from SDK for this wrap-around
-            # since iRacing's LapCompleted counter didn't increment
-            lap_last_lap_time_from_sdk = -1.0
-            
-            # Save the current active frames before finalizing the lap
-            saved_frames = self._active_lap_frames.copy()
-            
-            # Finalize the current lap
+            # First, finalize the lap that's ending - this is critical to ensure we properly
+            # capture the lap time and state before moving to the next lap
             self._finalise_active_lap(
                 end_tick=now_tick,
-                lap_last_lap_time_from_sdk=lap_last_lap_time_from_sdk,
-                ended_on_pit_road=ended_on_pit,
+                lap_last_lap_time_from_sdk=-1.0, # Temporary placeholder, will be updated when LapCompleted increments
+                ended_on_pit_road=on_pit_road,
                 session_finalize=False
             )
             
-            # Start a new lap
+            # Prepare the next lap - increment the internal lap number but we'll sync with iRacing's
+            # LapCompleted when it increments in a subsequent frame
             next_lap_num = (self._active_lap_number_internal or 0) + 1
             lap_invalidated = False
             if self._previous_frame_ir_data:
@@ -449,19 +573,49 @@ class LapIndexer:
             self._start_new_lap(
                 lap_number_internal=next_lap_num,
                 start_tick=now_tick,
-                on_pit_start=on_pit_road,
+                on_pit_start=on_pit_road,  # Correctly pass the current pit road status
                 invalid_sdk_flag_for_this_lap=lap_invalidated
             )
             
-            # Add the current frame to the new lap, which is important
-            # to make sure we don't miss the first point after crossing S/F
-            if self._previous_frame_ir_data:
-                self._active_lap_frames.append(self._previous_frame_ir_data.copy())
+            # Mark this as a lap started by wrap-around detection for proper handling in the next frame
+            self._recently_started_by_wrap_around = True
+            self._wrap_around_start_time = now_tick
+            
+            # Add the current frame to the new lap to ensure we have the first point after S/F
+            frame_copy = dict(self._previous_frame_ir_data) if self._previous_frame_ir_data else {}
+            frame_copy.update({"LapDistPct": current_lap_dist})  # Make sure the current distance is recorded
+            self._active_lap_frames.append(frame_copy)
             
             return True
             
         return False
+
+    def _finalise_active_lap_delayed(self, lap_last_lap_time_from_sdk: float) -> None:
+        """Finalize a lap that was marked for delayed finalization."""
+        if not self._pending_wrap_around_lap or not self._pending_wrap_around_lap_frames:
+            logger.warning("Cannot finalize delayed lap - no pending lap data available")
+            return
+            
+        lap_dict = self._pending_wrap_around_lap.copy()
         
+        # Update with the correct lap time from iRacing if available
+        if lap_last_lap_time_from_sdk > 0:
+            logger.info(f"Updating delayed lap time from {lap_dict.get('duration_seconds', 0):.3f}s "
+                       f"to SDK value {lap_last_lap_time_from_sdk:.3f}s")
+            lap_dict["duration_seconds"] = lap_last_lap_time_from_sdk
+        
+        # Add to finalized laps
+        self.laps.append(lap_dict)
+        
+        logger.info(f"Successfully finalized delayed lap {lap_dict.get('lap_number_sdk', -1)} "
+                   f"({lap_dict.get('lap_state', 'UNKNOWN')}). "
+                   f"Time: {lap_dict.get('duration_seconds', 0):.3f}s, "
+                   f"Frames: {len(self._pending_wrap_around_lap_frames)}")
+                   
+        # Clear pending data
+        self._pending_wrap_around_lap = None
+        self._pending_wrap_around_lap_frames = []
+
     def handle_reset(self, frame: Dict[str, Any], current_lap_dist: float, current_speed: float, on_pit_road: bool) -> bool:
         """Detect teleport: prev_speed > 2 m/s && speed < 0.5 AND ΔLapDistPct > 0.20 while OnPitRoad == True
         
@@ -495,29 +649,37 @@ class LapIndexer:
             logger.info(f"[LapIndexer] Detected reset/teleport: Speed {self._previous_speed:.1f} → {current_speed:.1f} m/s, "
                        f"Position {self._previous_lap_dist_pct:.3f} → {current_lap_dist:.3f} (OnPitRoad: {on_pit_road})")
             
-            # Save the current active frames before finalizing the lap
-            saved_frames = self._active_lap_frames.copy()
+            # When we detect a reset on pit road, this is potentially the start of an OUT lap
+            # Mark the current lap as INCOMPLETE due to the reset
+            self._active_lap_state = LapState.INCOMPLETE
             
-            # Finalize the current lap
-            self._finalise_active_lap(
-                end_tick=now_tick,
-                lap_last_lap_time_from_sdk=-1.0,  # No valid lap time for a reset
-                ended_on_pit_road=True,  # We know we're on pit road
-                session_finalize=False
-            )
+            # If we've got a significant number of frames already, finalize the current lap as INCOMPLETE
+            if len(self._active_lap_frames) > 10:  # Threshold to consider it a meaningful lap segment
+                self._finalise_active_lap(
+                    end_tick=now_tick,
+                    lap_last_lap_time_from_sdk=-1.0,  # No valid time for incomplete lap
+                    ended_on_pit_road=True,
+                    session_finalize=False
+                )
+                
+                # Start a new lap as an OUT lap since we're on pit road
+                next_lap_num = (self._active_lap_number_internal or 0) + 1
+                lap_invalidated = frame.get("LapInvalidated", False)
+                
+                self._start_new_lap(
+                    lap_number_internal=next_lap_num,
+                    start_tick=now_tick,
+                    on_pit_start=True,  # Always true since we're on pit road
+                    invalid_sdk_flag_for_this_lap=lap_invalidated
+                )
+            else:
+                # Otherwise just mark the current lap as an OUT lap since we're on pit road
+                self._active_lap_state = LapState.OUT
+                self._active_lap_started_on_pit = True
+                logger.info(f"[LapIndexer] Marked lap {self._active_lap_number_internal} as OUT due to pit reset/teleport")
             
-            # Start a new OUT lap at the teleport position
-            next_lap_num = (self._active_lap_number_internal or 0) + 1
-            self._start_new_lap(
-                lap_number_internal=next_lap_num,
-                start_tick=now_tick,
-                on_pit_start=True,  # We're on pit road
-                invalid_sdk_flag_for_this_lap=False  # Reset the flag for the new lap
-            )
-            
-            # Add the current frame to the new lap
+            # Add reset frame to the lap
             self._active_lap_frames.append(frame.copy())
-            
             return True
             
         return False

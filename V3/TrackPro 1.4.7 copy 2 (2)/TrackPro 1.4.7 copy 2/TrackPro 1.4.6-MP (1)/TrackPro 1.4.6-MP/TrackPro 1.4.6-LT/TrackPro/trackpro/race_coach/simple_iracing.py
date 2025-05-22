@@ -446,14 +446,37 @@ class SimpleIRacingAPI(QObject):
                 # --- Notify Callbacks --- #
                 if telemetry:
                     if lap_info_to_pass_to_ui:
-                        telemetry['is_new_lap'] = lap_info_to_pass_to_ui[0]
-                        telemetry['completed_lap_number'] = lap_info_to_pass_to_ui[1]
-                        telemetry['completed_lap_time'] = lap_info_to_pass_to_ui[2]
-                    display_telemetry = telemetry.copy()
-                    display_telemetry['speed'] = speed * 3.6 # Convert for UI
-                    for callback in self._telemetry_callbacks:
-                         try: callback(display_telemetry)
-                         except Exception as e: logger.error(f"Error in telemetry callback: {e}")
+                        # Properly handle different formats of lap_info_to_pass_to_ui
+                        if isinstance(lap_info_to_pass_to_ui, (list, tuple)) and len(lap_info_to_pass_to_ui) > 0:
+                            # Handle the expected list/tuple format
+                            telemetry['is_new_lap'] = lap_info_to_pass_to_ui[0]
+                            if len(lap_info_to_pass_to_ui) > 1:
+                                telemetry['completed_lap_number'] = lap_info_to_pass_to_ui[1]
+                            if len(lap_info_to_pass_to_ui) > 2:
+                                telemetry['completed_lap_time'] = lap_info_to_pass_to_ui[2]
+                        elif isinstance(lap_info_to_pass_to_ui, dict):
+                            # Handle when it's a dictionary (directly from telemetry)
+                            # Just pass through the values we already have
+                            telemetry['is_new_lap'] = lap_info_to_pass_to_ui.get('is_new_lap', False)
+                            telemetry['completed_lap_number'] = lap_info_to_pass_to_ui.get('LapCompleted', telemetry.get('LapCompleted', 0))
+                            telemetry['completed_lap_time'] = lap_info_to_pass_to_ui.get('LapLastLapTime', telemetry.get('LapLastLapTime', 0))
+                            # Only log once per ~10 seconds to reduce spam
+                            if self._telemetry_log_counter % 600 == 0:
+                                logger.debug(f"Handled dictionary format for lap_info: {telemetry['is_new_lap']}, {telemetry['completed_lap_number']}, {telemetry['completed_lap_time']}")
+                        else:
+                            # Set default values if lap_info_to_pass_to_ui is not in the expected format
+                            telemetry['is_new_lap'] = False
+                            telemetry['completed_lap_number'] = telemetry.get('LapCompleted', 0)
+                            telemetry['completed_lap_time'] = telemetry.get('LapLastLapTime', 0)
+                            # Only log once per ~10 seconds to reduce spam
+                            if self._telemetry_log_counter % 600 == 0:
+                                logger.warning(f"lap_info_to_pass_to_ui in unexpected format: {type(lap_info_to_pass_to_ui)}")
+                        
+                        display_telemetry = telemetry.copy()
+                        display_telemetry['speed'] = speed * 3.6 # Convert for UI
+                        for callback in self._telemetry_callbacks:
+                             try: callback(display_telemetry)
+                             except Exception as e: logger.error(f"Error in telemetry callback: {e}")
             elif self._telemetry_log_counter % 60 == 0:
                 logger.warning(f"Missing essential telemetry: LapDistPct={telemetry.get('LapDistPct')}, SessionTimeSecs={telemetry.get('SessionTimeSecs')}")
                         

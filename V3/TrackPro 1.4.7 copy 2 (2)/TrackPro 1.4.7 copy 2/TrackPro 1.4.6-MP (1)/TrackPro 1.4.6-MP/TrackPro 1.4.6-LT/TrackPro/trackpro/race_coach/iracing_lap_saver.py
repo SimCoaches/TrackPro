@@ -11,6 +11,7 @@ import threading
 import queue
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, Any
 
 # Import the Supabase singleton client instead of creating a new one
 from ..database.supabase_client import supabase
@@ -38,78 +39,129 @@ class SaveLapWorker(threading.Thread):
         self._processed_lap_numbers = set()  # Track processed laps in this thread
 
     def run(self):
-        """Main worker thread loop."""
-        logger.info("[SaveLapWorker] Starting lap saving worker thread")
+        logger.info("[SaveLapWorker] Entered run() method.")
+        if not self.running:
+            logger.error("[SaveLapWorker] Exiting run() because self.running is initially False.")
+            return
+            
+        logger.info("[SaveLapWorker] Starting lap saving worker thread (self.running is True at this point)")
         
+        logger.info(f"[SaveLapWorker] IMMEDIATELY BEFORE while loop. self.running = {self.running}")
         while self.running:
+            logger.debug("[SaveLapWorker] Entered while self.running loop.")
+            lap_data = None
             try:
-                # Try to get a lap from the queue, timeout after 1 second to allow checking if we should stop
+                logger.debug("[SaveLapWorker] Top of try block in while loop. Attempting to get lap from queue...")
+                lap_data = self.lap_queue.get(timeout=1.0)
+                
+                # Enhanced debug logging about the item retrieved
+                if lap_data is None:
+                    logger.warning("[SaveLapWorker] Retrieved None item from queue, which is unexpected")
+                elif isinstance(lap_data, dict):
+                    logger.info(f"[SaveLapWorker] Successfully got dictionary item from queue. Keys: {lap_data.keys()}")
+                elif isinstance(lap_data, tuple):
+                    logger.info(f"[SaveLapWorker] Retrieved tuple item from queue, length: {len(lap_data)}")
+                else:
+                    logger.warning(f"[SaveLapWorker] Retrieved unexpected item type from queue: {type(lap_data)}")
+                
+                logger.info(f"[SaveLapWorker] Successfully got item from queue. Type: {type(lap_data)}, Item (first 100 chars): {str(lap_data)[:100]}")
+                
+                if not self.running: 
+                    logger.info("[SaveLapWorker] Worker stopping after getting item from queue (self.running became False).")
+                    if lap_data: 
+                         self.lap_queue.task_done()
+                    break
+
+                # Try/except for dictionary access - log more details if it fails
+                lap_number_sdk = None
                 try:
-                    lap_data = self.lap_queue.get(timeout=1.0)
-                except queue.Empty:
-                    # No lap in queue, continue loop and check if we should stop
+                    if isinstance(lap_data, dict):
+                        lap_number_sdk = lap_data.get("lap_number_sdk")
+                        if lap_number_sdk is None:
+                            logger.error(f"[SaveLapWorker] Key 'lap_number_sdk' not found in lap_data. Available keys: {lap_data.keys()}")
+                    elif isinstance(lap_data, tuple) and len(lap_data) > 0:
+                        lap_number_sdk = lap_data[0]
+                    else:
+                        logger.error(f"[SaveLapWorker] Could not extract lap_number_sdk from data of type {type(lap_data)}")
+                except Exception as ke:
+                    logger.error(f"[SaveLapWorker] Error extracting lap_number_sdk: {ke}", exc_info=True)
+                
+                if lap_number_sdk is None:
+                    logger.error(f"[SaveLapWorker] Could not determine lap_number_sdk from data: {str(lap_data)[:200]}")
+                    self.lap_queue.task_done()
                     continue
-                
-                # Process the lap data
+
+                logger.info(f"[SaveLapWorker] Raw lap_data from queue (first 200 chars): {str(lap_data)[:200]}")
                 sdk_lap_number = lap_data["lap_number_sdk"]
+                logger.info(f"[SaveLapWorker] Extracted sdk_lap_number: {sdk_lap_number}")
                 
-                # Skip if this lap was already processed (belt and suspenders check)
                 if sdk_lap_number in self._processed_lap_numbers:
-                    logger.warning(f"[SaveLapWorker] Lap {sdk_lap_number} already processed, skipping")
+                    logger.warning(f"[SaveLapWorker] Lap {sdk_lap_number} already processed by worker, skipping")
                     self.lap_queue.task_done()
                     continue
                 
-                # Process the lap
+                logger.info(f"[SaveLapWorker] Entering save lock for lap {sdk_lap_number}")
                 with self.lap_save_lock:
                     logger.info(f"[SaveLapWorker] Processing lap {sdk_lap_number} (queue size: {self.lap_queue.qsize()})")
                     
-                    # Call the parent's _save_lap_data method
                     lap_duration = lap_data["duration_seconds"]
                     lap_frames = lap_data["telemetry_frames"]
                     lap_state = lap_data.get("lap_state", "TIMED")
-                    is_valid = lap_data.get("is_valid_from_sdk", True)
-                    is_valid_for_leaderboard = lap_data.get("is_valid_for_leaderboard", False)
-                    
-                    # Add lap state and metadata to each frame first
+                    is_valid_from_sdk_flag = lap_data.get("is_valid_from_sdk", True) # Renamed to avoid conflict
+                    is_valid_for_leaderboard_flag = lap_data.get("is_valid_for_leaderboard", False) # Renamed
+                    is_complete_by_sdk = lap_data.get("is_complete_by_sdk_increment", True)
+
                     lap_frames_with_extra_data = []
-                    for frame in lap_frames:
+                    for frame in lap_frames: # Removed frame_idx as it wasn't used
                         frame_copy = dict(frame)
                         frame_copy["lap_state"] = lap_state
-                        frame_copy["is_valid_for_leaderboard"] = is_valid_for_leaderboard
-                        frame_copy["is_complete_by_sdk_increment"] = lap_data.get("is_complete_by_sdk_increment", True)
+                        frame_copy["is_valid_for_leaderboard"] = is_valid_for_leaderboard_flag 
+                        frame_copy["is_complete_by_sdk_increment"] = is_complete_by_sdk
                         lap_frames_with_extra_data.append(frame_copy)
                     
-                    # Set up context for saving - we're in a separate thread so it's okay to modify these
-                    self.parent._current_lap_data = lap_frames_with_extra_data
-                    self.parent._current_lap_number = sdk_lap_number
+                    self.parent._current_lap_data = lap_frames_with_extra_data 
+                    self.parent._current_lap_number = sdk_lap_number 
                     
-                    # Call the parent's save method
+                    logger.info(f"[SaveLapWorker] Calling parent._save_lap_data for lap {sdk_lap_number}")
                     saved_lap_id = self.parent._save_lap_data(sdk_lap_number, lap_duration, lap_frames_with_extra_data)
                     
                     if saved_lap_id:
                         logger.info(f"[SaveLapWorker] Successfully saved lap {sdk_lap_number} (ID: {saved_lap_id}) in background thread")
-                        # Keep track of this lap number locally and in the parent
                         self._processed_lap_numbers.add(sdk_lap_number)
-                        with self.parent._processing_lock:
+                        with self.parent._processing_lock: 
                             self.parent._processed_lap_indexer_lap_numbers.add(sdk_lap_number)
                     else:
-                        logger.error(f"[SaveLapWorker] Failed to save lap {sdk_lap_number}")
+                        logger.error(f"[SaveLapWorker] Parent _save_lap_data returned failure for lap {sdk_lap_number}")
                 
-                # Mark task as done
+                logger.info(f"[SaveLapWorker] Finished processing lap {sdk_lap_number}, marking task done.")
                 self.lap_queue.task_done()
                 
+            except queue.Empty:
+                # logger.debug("[SaveLapWorker] Queue empty, continuing...") # Can re-enable if needed
+                continue
+            except KeyError as ke:
+                logger.error(f"[SaveLapWorker] KeyError processing lap data: {ke}. Data was (first 200 chars): {str(lap_data)[:200]}", exc_info=True)
+                if lap_data: 
+                    try:
+                        self.lap_queue.task_done()
+                    except Exception as tde:
+                        logger.error(f"[SaveLapWorker] Error calling task_done after KeyError: {tde}")
             except Exception as e:
-                logger.error(f"[SaveLapWorker] Error in lap saving worker: {e}", exc_info=True)
-                # Try to mark the task as done if possible to avoid blocking the queue
-                try:
-                    self.lap_queue.task_done()
-                except:
-                    pass
+                logger.error(f"[SaveLapWorker] Generic error in lap saving worker. Data (first 200 chars): {str(lap_data)[:200]}", exc_info=True)
+                import traceback
+                logger.error(f"[SaveLapWorker] Exception details: {traceback.format_exc()}")
+                if lap_data: 
+                    try:
+                        self.lap_queue.task_done()
+                    except Exception as tde:
+                        logger.error(f"[SaveLapWorker] Error calling task_done after generic error: {tde}")
+        
+        logger.info("[SaveLapWorker] Worker thread loop finished.")
     
     def stop(self):
-        """Stop the worker thread."""
-        logger.info("[SaveLapWorker] Stopping lap saving worker thread")
+        logger.info(f"[SaveLapWorker] stop() called. Current self.running: {self.running}")
         self.running = False
+        logger.info(f"[SaveLapWorker] self.running set to False. Worker thread loop should terminate.")
         
     def enqueue_lap(self, lap_data):
         """Add a lap to the processing queue.
@@ -154,7 +206,7 @@ class IRacingLapSaver:
     """
     Manages saving iRacing lap times and telemetry data to Supabase.
     """
-    def __init__(self):
+    def __init__(self, supabase_client=None, user_id=None, diagnostic_mode=False):
         """Initialize the saver."""
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -170,12 +222,19 @@ class IRacingLapSaver:
         self._save_worker = SaveLapWorker(self)
         self._save_worker.start()
         
+        # Add reference to the worker's lap queue
+        self._lap_queue = self._save_worker.lap_queue
+        
+        # Configuration for saving behavior
+        self._use_direct_save = False  # Set to True to bypass the worker thread and save laps directly
+        self._save_rejects_to_disk = True  # Save failed laps to disk for debugging
+        
         # Supabase connection
-        self._supabase = None
+        self._supabase_client = supabase_client
         self._connection_disabled = False
         
         # User identification
-        self._user_id = None
+        self._user_id = user_id
         
         # Session tracking
         self._current_session_id = None
@@ -200,7 +259,7 @@ class IRacingLapSaver:
         self._partial_laps = {}
         
         # Enhanced detection with buffer
-        self._position_buffer_size = 20  # Increased from original value for more robust detection
+        self._position_buffer_size = 10
         self._recent_positions = []
         self._recent_timestamps = []
         
@@ -218,7 +277,7 @@ class IRacingLapSaver:
         self._short_lap_times = []  # Store short lap times that might be pit entries/exits
         
         # Diagnostics
-        self._diagnostic_mode = False
+        self._diagnostic_mode = diagnostic_mode
         self._position_log_file = None
         self._telemetry_debug_counter = 0
         
@@ -230,9 +289,21 @@ class IRacingLapSaver:
         self._last_invalid_lap_number_warning_message: str = ""
         self._warning_interval: float = 5.0  # seconds
 
+        # Initialize connection state
+        self._is_connected = False
+        self._authenticated = False
+        
+        # Initialize lap tracking
+        self._current_track_config = None
+        
+        # Enhanced lap debugging for sync issues
+        self._lap_debug_mapping = {}  # Maps iRacing LapCompleted to our internal lap numbers
+        self._lap_sync_issues = []    # Tracks detected synchronization issues
+        self._debug_mode = True       # Enable detailed debugging by default
+
     def set_supabase_client(self, client):
         """Set the Supabase client instance."""
-        self._supabase = client
+        self._supabase_client = client
         if client:
             logger.info(f"Supabase client set for IRacingLapSaver: {client is not None}")
             self._connection_disabled = False
@@ -256,13 +327,13 @@ class IRacingLapSaver:
             self._connection_disabled = True
 
         # Fallback: if no client provided, try to get from global singleton
-        if not self._supabase:
+        if not self._supabase_client:
             try:
                 # Import here to avoid circular imports
                 from ..database.supabase_client import supabase as global_client
                 if global_client:
                     logger.info("Using global Supabase client instance as fallback")
-                    self._supabase = global_client
+                    self._supabase_client = global_client
                     self._connection_disabled = False
                     return
             except Exception as e:
@@ -458,44 +529,114 @@ class IRacingLapSaver:
                 is_valid_from_indexer = indexed_lap.get("is_valid_from_sdk", True)  # Use is_valid_from_sdk flag
                 lap_state_from_indexer = indexed_lap.get("lap_state", "TIMED")  # Get lap state (OUT, TIMED, IN, INCOMPLETE)
                 is_valid_for_leaderboard = indexed_lap.get("is_valid_for_leaderboard", False)  # Get leaderboard validity flag
-                is_complete_by_sdk = indexed_lap.get("is_complete_by_sdk_increment", True)  # Whether lap completed normally
-
-                logger.info(f"[LapIndexer] New lap {sdk_lap_number} to process. Time: {lap_duration:.3f}s, Type: {lap_state_from_indexer}, Valid: {is_valid_from_indexer}, Valid for Leaderboard: {is_valid_for_leaderboard}")
+                is_complete_by_sdk = indexed_lap.get("is_complete_by_sdk_increment", True)
                 
-                # Only queue the lap for saving if it's valid according to LapIndexer
-                if is_valid_from_indexer:
-                    # Queue the lap data for the background worker
-                    # Make a copy of the indexed_lap with only what we need
-                    lap_data_for_queue = {
-                        "lap_number_sdk": sdk_lap_number,
-                        "duration_seconds": lap_duration,
-                        "telemetry_frames": lap_telemetry_frames.copy(),  # Deep copy the frames
-                        "is_valid_from_sdk": is_valid_from_indexer,
-                        "lap_state": lap_state_from_indexer,
-                        "is_valid_for_leaderboard": is_valid_for_leaderboard,
-                        "is_complete_by_sdk_increment": is_complete_by_sdk
+                # Extract iRacing lap information from the first frame of this lap
+                # This is crucial for mapping our internal lap numbers to iRacing's numbers
+                iracing_lap_info = {}
+                if lap_telemetry_frames and len(lap_telemetry_frames) > 0:
+                    first_frame = lap_telemetry_frames[0]
+                    iracing_lap_info = {
+                        "ir_lap": first_frame.get("Lap", -1),
+                        "ir_completed": first_frame.get("LapCompleted", -1),
+                        "lap_dist": first_frame.get("LapDistPct", -1.0),
+                        "session_time": first_frame.get("SessionTimeSecs", 0.0)
                     }
-                    
-                    # Queue the lap for processing
-                    self._save_worker.enqueue_lap(lap_data_for_queue)
-                    
-                    # Add it to laps_to_return_to_ui - this is used for callbacks to UI
-                    laps_to_return_to_ui.append((True, sdk_lap_number, lap_duration, lap_state_from_indexer))
-                    self._total_laps_detected += 1
+                
+                # Debug logging for lap synchronization
+                self._debug_lap_sync(
+                    f"Processing new lap from LapIndexer: SDK#{sdk_lap_number}, Type={lap_state_from_indexer}, Valid={is_valid_from_indexer}",
+                    iracing_lap_info if iracing_lap_info else {"Lap": -1, "LapCompleted": sdk_lap_number},
+                    sdk_lap_number
+                )
+                
+                # IMPORTANT FIX FOR LAP NUMBER SYNCHRONIZATION:
+                # The correct lap number to use is the lap_number_sdk from the LapIndexer
+                # This ensures we're using iRacing's lap numbering system
+                correct_lap_number = sdk_lap_number
+                
+                # Log the lap number correction if applicable
+                if correct_lap_number != self._current_lap_number:
+                    logger.info(f"[LAP SYNC] Correcting lap number from internal {self._current_lap_number} to iRacing {correct_lap_number}")
+                
+                # Now process this lap with the correct lap number
+                logger.info(f"[LapIndexer] New lap {correct_lap_number} to process. Time: {lap_duration:.3f}s, Type: {lap_state_from_indexer}, Valid: {is_valid_from_indexer}, Valid for Leaderboard: {is_valid_for_leaderboard}")
+                
+                # Create a properly formatted lap data dictionary
+                lap_data_dict = {
+                    "lap_number_sdk": correct_lap_number,
+                    "duration_seconds": lap_duration,
+                    "telemetry_frames": lap_telemetry_frames,
+                    "lap_state": lap_state_from_indexer,
+                    "is_valid_from_sdk": is_valid_from_indexer,
+                    "is_valid_for_leaderboard": is_valid_for_leaderboard,
+                    "is_complete_by_sdk_increment": is_complete_by_sdk
+                }
+                
+                # Check if direct saving is enabled
+                if self._use_direct_save:
+                    # Save lap directly without using the worker thread
+                    logger.info(f"[DIRECT] Using direct save for lap {correct_lap_number} (worker thread bypass)")
+                    self.save_lap_directly(lap_data_dict)
                 else:
-                    logger.info(f"[LapIndexer] Lap {sdk_lap_number} was marked invalid by LapIndexer (type: {lap_state_from_indexer}). Skipping save.")
-                    self._total_laps_skipped += 1
-            
+                    # Monitor queue size - if it's getting too large, something might be wrong with the worker
+                    queue_size = self._lap_queue.qsize() if self._lap_queue else 0
+                    if queue_size >= 5:  # If we have 5+ laps queued, the worker might be stuck
+                        logger.warning(f"[QUEUE HEALTH] Queue size has reached {queue_size} items. Worker thread may be stuck. Saving directly as fallback.")
+                        self.save_lap_directly(lap_data_dict)
+                        
+                        # Check if we should force-enable direct saving
+                        if queue_size >= 10:  # If queue has 10+ items, permanently switch to direct saving
+                            logger.error(f"[QUEUE HEALTH] Queue size is {queue_size}, which is unacceptably high. Enabling direct saving mode permanently.")
+                            self.enable_direct_save(True)
+                    else:
+                        # Queue lap for background saving using correct lap number 
+                        # (only if worker thread doesn't seem to be having problems)
+                        with self._lap_queue.mutex:
+                            # Check if the lap is already in the queue
+                            existing_lap_nums = []
+                            for item in list(self._lap_queue.queue):
+                                if isinstance(item, dict):
+                                    existing_lap_nums.append(item.get("lap_number_sdk", -1))
+                                elif isinstance(item, tuple) and len(item) > 0:
+                                    existing_lap_nums.append(item[0])
+                            
+                            if correct_lap_number not in existing_lap_nums:
+                                logger.info(f"[SaveLapWorker] Enqueueing lap {correct_lap_number} for background processing")
+                                # IMPORTANT: Make sure we always put a dictionary in the queue
+                                self._lap_queue.put(lap_data_dict)
+                                # Debug verify what was placed in the queue
+                                logger.info(f"[QUEUE DEBUG] Added item to queue. Type: {type(lap_data_dict)}, Keys: {lap_data_dict.keys()}")
+                            else:
+                                logger.warning(f"[SaveLapWorker] Lap {correct_lap_number} already in queue, skipping duplicate")
+                
+                # Get the last section of telemetry for this lap to return to UI immediately
+                # The full telemetry will be processed and saved in the background
+                if len(lap_telemetry_frames) > 0:
+                    last_section = lap_telemetry_frames[-10:] if len(lap_telemetry_frames) > 10 else lap_telemetry_frames
+                    laps_to_return_to_ui.append({
+                        "lap_number": correct_lap_number,
+                        "lap_time": lap_duration,
+                        "telemetry": last_section,
+                        "is_new_lap": True,
+                        "lap_state": lap_state_from_indexer
+                    })
+
+            # Return the most recent lap completion if there is one
             if laps_to_return_to_ui:
-                # For simplicity, returning the first new lap info. UI might need to handle multiple.
-                # The tuple now includes lap type as the fourth element
-                return laps_to_return_to_ui[0]
-            # --- END NEW LAP PROCESSING ---
+                # Get most recent lap based on session time
+                most_recent = max(laps_to_return_to_ui, key=lambda x: x["telemetry"][-1].get("SessionTimeSecs", 0) if x["telemetry"] else 0)
+                lap_number = most_recent["lap_number"]
+                lap_time = most_recent["lap_time"]
+                
+                # Basic telemetry frame with just the completion notification
+                telemetry_with_completion = {**telemetry_data, "is_new_lap": True, "completed_lap_number": lap_number, "completed_lap_time": lap_time}
+                return telemetry_with_completion
 
         except Exception as e:
             logger.error(f"Error processing telemetry: {e}", exc_info=True)
 
-        return None # No new lap completed
+        return telemetry_data
         
     def _calculate_track_coverage(self, lap_data):
         """Calculate the percentage of track covered by the data points."""
@@ -786,57 +927,35 @@ class IRacingLapSaver:
 
     def _save_lap_data(self, lap_number, lap_time, lap_frames_from_indexer):
         """Save lap data to Supabase with retry capability."""
-        # Debug connection state
         logger.info(f"Attempting to save lap {lap_number} (time: {lap_time:.3f}s)")
-        logger.info(f"Connection state: Supabase client exists: {self._supabase is not None}, Session ID: {self._current_session_id}")
         
-        # First check: is connection disabled flag set?
-        if self._connection_disabled:
-            logger.error("Cannot save lap: connection is explicitly disabled")
+        # Verify that we have a Supabase client and session
+        if not self._supabase_client:
+            logger.error("[CRITICAL] Supabase client not available, cannot save lap data. Make sure client is set properly at initialization.")
             return None
-        
-        # Check if we have a Supabase client
-        logger.debug(f"[SAVE_DEBUG] Checking self._supabase. Value: {self._supabase}, Type: {type(self._supabase)}")
-        if not self._supabase:
-            logger.error("Cannot save lap: No Supabase client available")
             
-            # Try to get the global client as a fallback
-            try:
-                from ..database.supabase_client import supabase as global_client
-                logger.debug(f"[SAVE_DEBUG] Fallback: Got global_client. Value: {global_client}, Type: {type(global_client)}")
-                if global_client:
-                    logger.info("Attempting to use global Supabase client for lap save")
-                    self._supabase = global_client
-                    logger.debug(f"[SAVE_DEBUG] Fallback: Set self._supabase. Value: {self._supabase}, Type: {type(self._supabase)}")
-                    if not self._supabase:
-                        logger.error("Global client retrieval failed")
-                        return None
-                else:
-                    logger.error("Global Supabase client not available")
-                    return None
-            except Exception as e:
-                logger.error(f"Error getting global Supabase client: {e}")
-                self._connection_disabled = True
-
-        # Check if we have a session ID
         if not self._current_session_id:
-            logger.error(f"Cannot save lap: No session ID available")
+            logger.error("[CRITICAL] No active session ID, cannot save lap data. Ensure a session is created before saving laps.")
+            
+            # Log additional debug information about session state
+            logger.error(f"[DEBUG] Session state: _current_session_id={self._current_session_id}, _current_car_id={self._current_car_id}, _current_track_id={self._current_track_id}")
+            
+            # Special case for handling missing session ID
+            if not self._current_session_id and not self._connection_disabled:
+                logger.warning("[RECOVERY] No session ID but connection is available. This could indicate the session wasn't properly created.")
+                
             return None
-
-        # Check if we have a user ID
-        if not self._user_id:
-            logger.error("Cannot save lap data: User ID not set")
+            
+        # Log connection state for debugging
+        logger.info(f"Connection state: Supabase client exists: {self._supabase_client is not None}, Session ID: {self._current_session_id}")
+        
+        # Check that the client has the 'table' method before using it
+        if not hasattr(self._supabase_client, 'table'):
+            logger.error("[CRITICAL] Supabase client does not have 'table' method, cannot save lap data. Check client initialization.")
             return None
-
-        # Debug client capabilities
-        logger.debug(f"[SAVE_DEBUG] Checking capabilities of self._supabase. Value: {self._supabase}, Type: {type(self._supabase)}")
-        if hasattr(self._supabase, 'table'):
-            logger.info("Supabase client has 'table' method")
-        else:
-            logger.error("Supabase client missing 'table' method - cannot save")
-            return None
-
-        # Validate lap data before saving
+        logger.info("Supabase client has 'table' method")
+        
+        # Validate lap telemetry data before saving
         is_valid, validation_message = self._validate_lap_data(lap_frames_from_indexer, lap_number)
         logger.info(f"Lap {lap_number} validation: {validation_message}")
 
@@ -853,6 +972,15 @@ class IRacingLapSaver:
             
             # The final is_valid_for_leaderboard depends on BOTH LapIndexer's view AND _validate_lap_data's result
             is_valid_for_leaderboard = is_valid and is_valid_for_leaderboard_from_indexer
+            
+            # Add debugging for lap number consistency
+            ir_lap = first_frame.get("Lap", -1)
+            ir_completed = first_frame.get("LapCompleted", -1)
+            logger.info(f"[LAP SYNC] Saving lap {lap_number} with iRacing Lap={ir_lap}, LapCompleted={ir_completed}")
+            
+            # Additional debugging for lap number mismatch
+            if ir_completed != lap_number and ir_completed > 0:
+                logger.warning(f"[LAP SYNC] Potential lap number mismatch: saving lap {lap_number} but iRacing LapCompleted={ir_completed}")
         else:
             # Fallback if no frames (should not happen for a processed lap from LapIndexer)
             logger.warning(f"Lap {lap_number} has no telemetry frames for determining lap_type/leaderboard_validity in _save_lap_data. Defaulting type to TIMED, leaderboard to False.")
@@ -894,7 +1022,7 @@ class IRacingLapSaver:
             logger.info(f"Saving Lap {lap_number} ({lap_time:.3f}s, Type: {lap_type}) for session {self._current_session_id} with UUID {lap_uuid}")
             
             # Try to insert the lap data
-            response = self._supabase.table("laps").insert(lap_data).execute()
+            response = self._supabase_client.table("laps").insert(lap_data).execute()
                 
             if response.data and len(response.data) > 0:
                 saved_lap_uuid = response.data[0].get('id', lap_uuid)
@@ -926,7 +1054,7 @@ class IRacingLapSaver:
                 return None
 
     def _save_telemetry_points(self, lap_uuid, telemetry_points_from_indexer):
-        if not self._supabase or not lap_uuid or not telemetry_points_from_indexer:
+        if not self._supabase_client or not lap_uuid or not telemetry_points_from_indexer:
             logger.warning("Cannot save telemetry: Missing Supabase client, lap ID, or telemetry data.")
             return False
     
@@ -977,7 +1105,7 @@ class IRacingLapSaver:
             max_retries = 3
             for retry in range(max_retries):
                 try:
-                    response = self._supabase.table("telemetry_points").insert(telemetry_data_to_insert).execute()
+                    response = self._supabase_client.table("telemetry_points").insert(telemetry_data_to_insert).execute()
                     if response.data:
                         saved_count += len(response.data)
                         break  # Success
@@ -998,7 +1126,7 @@ class IRacingLapSaver:
         # If some batches failed, update the lap record to mark it as potentially incomplete
         if failed_count > 0:
             try:
-                self._supabase.table("laps").update({
+                self._supabase_client.table("laps").update({
                     "metadata": json.dumps({
                         "telemetry_incomplete": True,
                         "failed_batches": failed_batch_indices,
@@ -1022,7 +1150,7 @@ class IRacingLapSaver:
         Returns:
             List of lap time data
         """
-        if not self._supabase:
+        if not self._supabase_client:
             logger.error("Cannot get lap times: Supabase connection not available")
             return []
         
@@ -1032,7 +1160,7 @@ class IRacingLapSaver:
             return []
         
         try:
-            result = self._supabase.table("laps").select("*").eq("session_id", session_id).order("lap_number").execute()
+            result = self._supabase_client.table("laps").select("*").eq("session_id", session_id).order("lap_number").execute()
             
             if result.data:
                 return result.data
@@ -1052,12 +1180,12 @@ class IRacingLapSaver:
         Returns:
             List of telemetry data points
         """
-        if not self._supabase:
+        if not self._supabase_client:
             logger.error("Cannot get telemetry data: Supabase connection not available")
             return []
         
         try:
-            result = self._supabase.table("telemetry_points").select("*").eq("lap_id", lap_id).order("track_position").execute()
+            result = self._supabase_client.table("telemetry_points").select("*").eq("lap_id", lap_id).order("track_position").execute()
             
             if result.data:
                 return result.data
@@ -1078,7 +1206,7 @@ class IRacingLapSaver:
         }
         
         # Check Supabase client exists
-        if not self._supabase:
+        if not self._supabase_client:
             result["connection_status"] = "failed"
             result["errors"].append("Supabase client not initialized")
             return result
@@ -1092,7 +1220,7 @@ class IRacingLapSaver:
             tables_to_check = ["tracks", "cars", "sessions", "laps", "telemetry_points"]
             for table in tables_to_check:
                 try:
-                    response = self._supabase.table(table).select("id").limit(1).execute()
+                    response = self._supabase_client.table(table).select("id").limit(1).execute()
                     result["tables_accessible"][table] = {
                         "accessible": True,
                         "count": len(response.data) if hasattr(response, 'data') else 0
@@ -1212,3 +1340,143 @@ class IRacingLapSaver:
             self._save_worker.stop()
             
         logger.info("[SHUTDOWN] IRacingLapSaver shutdown complete")
+
+    def _debug_lap_sync(self, message: str, ir_data: Dict[str, Any], internal_lap: int = None):
+        """Log detailed lap synchronization debug information.
+        
+        Args:
+            message: Debug message
+            ir_data: Current iRacing data frame
+            internal_lap: Our internal lap number (if available)
+        """
+        if not self._debug_mode:
+            return
+            
+        ir_lap = ir_data.get("Lap", -1)
+        ir_completed = ir_data.get("LapCompleted", -1)
+        
+        if internal_lap is None:
+            internal_lap = self._current_lap_number
+            
+        # Store mapping information
+        self._lap_debug_mapping[ir_completed] = internal_lap
+        
+        # Check for potential sync issues
+        if ir_completed > 0 and ir_completed - 1 != internal_lap:
+            issue = {
+                "timestamp": time.time(),
+                "ir_completed": ir_completed,
+                "internal_lap": internal_lap,
+                "message": f"Sync issue: iRacing LapCompleted={ir_completed}, our internal lap={internal_lap}"
+            }
+            self._lap_sync_issues.append(issue)
+            logger.warning(f"[LAP SYNC] {issue['message']}")
+            
+        session_time = ir_data.get("SessionTimeSecs", 0)
+        lap_dist = ir_data.get("LapDistPct", -1.0)
+        
+        # Format a detailed debug message
+        debug_msg = (
+            f"[LAP SYNC] {message} - "
+            f"iRacing: Lap={ir_lap}, Completed={ir_completed}, Dist={lap_dist:.3f} - "
+            f"Internal: CurrentLap={internal_lap} - "
+            f"Time: {session_time:.2f}s"
+        )
+        
+        logger.info(debug_msg)
+
+    def enable_direct_save(self, enabled=True):
+        """Enable or disable direct lap saving, bypassing the worker thread.
+        
+        Args:
+            enabled: Whether to enable direct saving
+        """
+        old_value = self._use_direct_save
+        self._use_direct_save = enabled
+        logger.info(f"Direct lap saving {'enabled' if enabled else 'disabled'} (was: {'enabled' if old_value else 'disabled'})")
+        
+    def save_lap_directly(self, lap_data_dict):
+        """Save a lap directly without using the worker thread.
+        
+        This is a fallback mechanism for when the worker thread is not functioning properly.
+        
+        Args:
+            lap_data_dict: Dictionary with lap data in the same format used by the worker
+            
+        Returns:
+            Lap UUID if saved successfully, None otherwise
+        """
+        try:
+            logger.info(f"[DIRECT SAVE] Attempting to directly save lap {lap_data_dict.get('lap_number_sdk', 'unknown')}")
+            
+            sdk_lap_number = lap_data_dict.get("lap_number_sdk")
+            if not sdk_lap_number:
+                logger.error("[DIRECT SAVE] No lap_number_sdk in lap_data_dict")
+                return None
+                
+            # Skip if we've already processed this lap
+            if sdk_lap_number in self._processed_lap_indexer_lap_numbers:
+                logger.warning(f"[DIRECT SAVE] Lap {sdk_lap_number} already processed, skipping")
+                return None
+                
+            lap_duration = lap_data_dict.get("duration_seconds", 0)
+            lap_frames = lap_data_dict.get("telemetry_frames", [])
+            
+            # Call the internal save method directly
+            saved_lap_id = self._save_lap_data(sdk_lap_number, lap_duration, lap_frames)
+            
+            if saved_lap_id:
+                logger.info(f"[DIRECT SAVE] Successfully saved lap {sdk_lap_number} directly")
+                with self._processing_lock:
+                    self._processed_lap_indexer_lap_numbers.add(sdk_lap_number)
+                return saved_lap_id
+            else:
+                logger.error(f"[DIRECT SAVE] Failed to save lap {sdk_lap_number} directly")
+                
+                # If configured to save to disk, do that as a fallback
+                if self._save_rejects_to_disk:
+                    self._save_lap_to_disk(sdk_lap_number, lap_duration, lap_frames)
+                    
+                return None
+                
+        except Exception as e:
+            logger.error(f"[DIRECT SAVE] Error saving lap directly: {e}", exc_info=True)
+            return None
+            
+    def _save_lap_to_disk(self, lap_number, lap_duration, lap_frames):
+        """Save a lap to disk as JSON (fallback when database saving fails)."""
+        try:
+            if not lap_frames:
+                logger.warning(f"[DISK SAVE] No frames to save for lap {lap_number}")
+                return False
+                
+            # Create directory if it doesn't exist
+            fallback_dir = Path(os.path.expanduser("~/Documents/TrackPro/FallbackLaps"))
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create unique filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = fallback_dir / f"lap_{lap_number}_{timestamp}.json"
+            
+            # Save to file
+            lap_data = {
+                "lap_number": lap_number,
+                "lap_time": lap_duration,
+                "timestamp": time.time(),
+                "session_id": self._current_session_id,
+                "track_id": self._current_track_id,
+                "car_id": self._current_car_id,
+                "user_id": self._user_id,
+                "point_count": len(lap_frames),
+                "points": lap_frames
+            }
+            
+            with open(filename, 'w') as f:
+                json.dump(lap_data, f)
+                
+            logger.info(f"[DISK SAVE] Saved lap {lap_number} to disk: {filename}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[DISK SAVE] Error saving lap {lap_number} to disk: {e}")
+            return False

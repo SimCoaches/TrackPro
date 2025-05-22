@@ -278,3 +278,57 @@ Project Link: [https://github.com/SimCoaches/TrackPro](https://github.com/SimCoa
 ## More Information
 For more information and updates, visit:
 https://github.com/Trackpro-dev/TrackPro
+
+## Lap Synchronization Debug Guide
+
+### Overview of the Issue
+We identified and fixed a critical issue with lap synchronization and saving. The core problem was:
+
+1. **Lap Detection:** The system properly detects laps and correctly distinguishes between iRacing's lap numbers and internal lap numbers.
+2. **Queue Processing:** The `SaveLapWorker` thread was not properly processing items from the queue, causing laps to be detected but never saved to Supabase.
+
+### Key Fixes Implemented
+
+1. **Enhanced Debug Logging**
+   - Added comprehensive logging in the `SaveLapWorker` thread to identify issues with queue processing
+   - Improved lap synchronization visualization showing iRacing lap numbers vs. internal lap numbers
+   - Added queue health monitoring to detect when laps aren't being processed
+
+2. **Direct Save Functionality**
+   - Added a direct save option that bypasses the worker thread
+   - Implemented automatic fallback to direct saving if the queue gets too large
+   - Added disk-based backup saving for laps that fail to save to Supabase
+
+3. **Format Validation**
+   - Added robust type checking to ensure lap data is properly formatted before saving
+   - Enhanced error handling to prevent queue lock-ups
+
+### How to Monitor Lap Saving Issues
+
+When running the application, monitor the logs for:
+
+1. `[LAP SYNC]` messages - These show synchronization between iRacing lap numbers and our internal tracking
+2. `[SaveLapWorker]` messages - These show the status of background lap saving
+3. `[QUEUE DEBUG]` and `[QUEUE HEALTH]` messages - These show the status of the queue
+
+If you see the queue size growing but no laps being processed, the app will automatically switch to direct saving mode.
+
+### Manual Override Options
+
+To manually control the lap saving behavior:
+
+1. **Enable Direct Save Mode**: This bypasses the worker thread and saves laps directly
+   ```python
+   lap_saver.enable_direct_save(True)  # Enable direct saving
+   ```
+
+2. **Force Save to Disk**: If there are issues with Supabase connectivity
+   ```python
+   lap_saver._save_lap_to_disk(lap_number, lap_duration, lap_frames)
+   ```
+
+### Testing the Fix
+
+1. Run the application and drive several laps in iRacing
+2. Check the logs for lap detection and saving messages
+3. Look for saved laps in Supabase or in the fallback directory (~/Documents/TrackPro/FallbackLaps)
