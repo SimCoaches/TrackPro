@@ -903,6 +903,149 @@ class MainWindow(QMainWindow):
         logger.info("Scheduling authentication state update after initialization")
         QTimer.singleShot(500, self.update_auth_state)
     
+    def closeEvent(self, event):
+        """Handle window close event to ensure proper application shutdown."""
+        logger.info("MainWindow closeEvent triggered - initiating shutdown sequence")
+        
+        try:
+            # Try to find the TrackProApp instance using the stored reference
+            app_instance = getattr(self, 'app_instance', None)
+            
+            # If not found, try alternative methods
+            if not app_instance:
+                logger.warning("No app_instance found, trying alternative methods...")
+                # Look for the TrackProApp instance through QApplication
+                qapp = QApplication.instance()
+                if qapp:
+                    # Check if the QApplication has a reference to our TrackProApp
+                    for widget in qapp.topLevelWidgets():
+                        if hasattr(widget, 'parent') and widget.parent() is None:
+                            # This might be our main window, check for app reference
+                            if hasattr(widget, 'app') and hasattr(widget.app, 'cleanup'):
+                                app_instance = widget.app
+                                break
+                    
+                    # Alternative: check if the app was stored somewhere accessible
+                    if not app_instance:
+                        # Try to find it through the application's attributes
+                        for attr_name in dir(qapp):
+                            if not attr_name.startswith('_'):
+                                try:
+                                    attr = getattr(qapp, attr_name)
+                                    if hasattr(attr, 'cleanup') and hasattr(attr, 'hardware'):
+                                        app_instance = attr
+                                        break
+                                except:
+                                    continue
+            
+            # If we found the app instance, call its cleanup
+            if app_instance:
+                logger.info("Found TrackProApp instance, calling cleanup...")
+                app_instance.cleanup()
+            else:
+                logger.warning("Could not find TrackProApp instance for cleanup")
+                
+                # Manual cleanup of critical resources
+                self._manual_cleanup()
+            
+            # Ensure any Race Coach background threads are terminated
+            self._cleanup_race_coach_threads()
+            
+            # Accept the close event
+            event.accept()
+            
+            # Force quit the application
+            logger.info("Calling QApplication.quit() to ensure complete shutdown")
+            QApplication.quit()
+            
+        except Exception as e:
+            logger.error(f"Error during window close: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            # Force accept the event even if cleanup failed
+            event.accept()
+            QApplication.quit()
+    
+    def _manual_cleanup(self):
+        """Manual cleanup of critical resources when app instance is not found."""
+        logger.info("Performing manual cleanup of critical resources")
+        
+        try:
+            # Try to save any pending calibration data
+            if hasattr(self, '_pedal_data'):
+                logger.info("Attempting to save calibration data")
+                # This is a simplified save - the full save would be in hardware
+                # but we're doing this as a backup
+        except Exception as e:
+            logger.error(f"Error during manual calibration save: {e}")
+        
+        try:
+            # Clean up any timers that might be running
+            for child in self.findChildren(QTimer):
+                if child.isActive():
+                    child.stop()
+                    logger.info(f"Stopped timer: {child}")
+        except Exception as e:
+            logger.error(f"Error stopping timers: {e}")
+    
+    def _cleanup_race_coach_threads(self):
+        """Clean up Race Coach background threads and resources."""
+        try:
+            logger.info("Cleaning up Race Coach threads and resources...")
+            
+            # First, stop the iRacing session monitor thread
+            try:
+                logger.info("Stopping iRacing session monitor thread...")
+                from trackpro.race_coach.iracing_session_monitor import stop_monitoring
+                stop_monitoring()
+                logger.info("Successfully stopped iRacing session monitor thread")
+            except Exception as e:
+                logger.error(f"Error stopping iRacing session monitor thread: {e}")
+            
+            # Find Race Coach widget in stacked widget
+            if hasattr(self, 'stacked_widget'):
+                for i in range(self.stacked_widget.count()):
+                    widget = self.stacked_widget.widget(i)
+                    if widget and hasattr(widget, '__class__') and 'RaceCoach' in widget.__class__.__name__:
+                        logger.info("Found Race Coach widget, initiating cleanup...")
+                        
+                        # Call the widget's cleanup method if it exists
+                        if hasattr(widget, 'cleanup_resources'):
+                            widget.cleanup_resources()
+                        
+                        # Disconnect iRacing API if present
+                        if hasattr(widget, 'iracing_api') and widget.iracing_api:
+                            try:
+                                widget.iracing_api.disconnect()
+                                logger.info("Disconnected Race Coach iRacing API")
+                            except Exception as e:
+                                logger.error(f"Error disconnecting iRacing API: {e}")
+                        
+                        # Clean up lap saver if present
+                        if hasattr(widget, 'iracing_lap_saver') and widget.iracing_lap_saver:
+                            try:
+                                if hasattr(widget.iracing_lap_saver, 'shutdown'):
+                                    widget.iracing_lap_saver.shutdown()
+                                    logger.info("Shut down Race Coach lap saver")
+                            except Exception as e:
+                                logger.error(f"Error shutting down lap saver: {e}")
+                        
+                        # Force close any background worker threads
+                        if hasattr(widget, 'findChildren'):
+                            from PyQt5.QtCore import QThread
+                            for thread in widget.findChildren(QThread):
+                                if thread.isRunning():
+                                    logger.info(f"Terminating background thread: {thread}")
+                                    thread.quit()
+                                    if not thread.wait(2000):  # Wait up to 2 seconds
+                                        thread.terminate()
+                                        logger.warning(f"Had to forcefully terminate thread: {thread}")
+        except Exception as e:
+            logger.error(f"Error cleaning up Race Coach threads: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
     def _init_pedal_data(self):
         """Initialize data structures for all pedals."""
         self._pedal_data = {}
@@ -2994,17 +3137,17 @@ class MainWindow(QMainWindow):
                     
                     # Get available curves from hardware
                     curves = self.hardware.list_available_curves(pedal)
-                    logger.info(f"Found {len(curves)} curves for {pedal}: {curves}")
+                    logger.debug(f"Found {len(curves)} curves for {pedal}: {curves}")
                     
                     # Update the saved curves dropdown if it exists
                     if 'saved_curves_selector' in data and data['saved_curves_selector']:
                         selector = data['saved_curves_selector']
                         
-                        # Add Log for Widget Access ID
-                        logger.info(f"[{pedal}] Accessing saved_curves_selector with ID: {id(selector)}")
+                        # Log widget access at debug level
+                        logger.debug(f"[{pedal}] Accessing saved_curves_selector with ID: {id(selector)}")
                         
                         # Verify the widget is alive and visible
-                        logger.info(f"[{pedal}] Selector isVisible: {selector.isVisible()}, isEnabled: {selector.isEnabled()}")
+                        logger.debug(f"[{pedal}] Selector isVisible: {selector.isVisible()}, isEnabled: {selector.isEnabled()}")
                         
                         current_text = selector.currentText()
                         selector.clear()
@@ -3017,7 +3160,7 @@ class MainWindow(QMainWindow):
                         for curve in sorted(curves):
                             selector.addItem(curve)
                         
-                        logger.info(f"[{pedal}] saved_curves_selector item count after adding: {selector.count()}")
+                        logger.debug(f"[{pedal}] saved_curves_selector item count after adding: {selector.count()}")
                         
                         # Restore selection if possible
                         if current_text and current_text in curves:
@@ -3037,9 +3180,9 @@ class MainWindow(QMainWindow):
                         # Get the main curve type selector
                         curve_selector = data['curve_type_selector']
                         
-                        # Log access
-                        logger.info(f"[{pedal}] Accessing curve_type_selector with ID: {id(curve_selector)}")
-                        logger.info(f"[{pedal}] curve_type_selector isVisible: {curve_selector.isVisible()}, isEnabled: {curve_selector.isEnabled()}")
+                        # Log access at debug level
+                        logger.debug(f"[{pedal}] Accessing curve_type_selector with ID: {id(curve_selector)}")
+                        logger.debug(f"[{pedal}] curve_type_selector isVisible: {curve_selector.isVisible()}, isEnabled: {curve_selector.isEnabled()}")
                         
                         # Save current selection
                         current_type = curve_selector.currentText()
@@ -3060,8 +3203,8 @@ class MainWindow(QMainWindow):
                             if curve not in built_in_types:
                                 curve_selector.addItem(curve)
                         
-                        # Log item count
-                        logger.info(f"[{pedal}] curve_type_selector item count after adding: {curve_selector.count()}")
+                        # Log item count at debug level
+                        logger.debug(f"[{pedal}] curve_type_selector item count after adding: {curve_selector.count()}")
                         
                         # Restore selection if possible
                         if current_type and (current_type in built_in_types or current_type in curves):
@@ -3080,7 +3223,10 @@ class MainWindow(QMainWindow):
             
             # Clear the flag after populating
             self._is_populating_curves = False
-            logger.info("Curve lists refreshed successfully")
+            
+            # Add single summary log instead of 60+ detailed logs
+            total_curves = sum(len(self.hardware.list_available_curves(pedal)) for pedal in ['throttle', 'brake', 'clutch'])
+            logger.info(f"Curve lists refreshed: {total_curves} total curves loaded")
         except Exception as e:
             logger.error(f"Error refreshing curve lists: {e}")
             self._is_populating_curves = False

@@ -25,9 +25,10 @@ try:
     from .data_manager import DataManager
     from .model import RacingModel
     from .analysis import LapAnalysis
-    from .superlap import SuperLap
+    # from .superlap import SuperLap  # DISABLED: Module doesn't exist
     from .telemetry_saver import TelemetrySaver  # Import the new telemetry saver
     from .iracing_lap_saver import IRacingLapSaver  # Import the Supabase lap saver
+    from .lazy_loader import lazy_loader  # Import Phase 3 lazy loading system
     
     # Apply patch to ensure compatibility functions are defined
     try:
@@ -97,33 +98,25 @@ try:
                 logger.error(f"Error initializing DataManager: {data_error}")
                 data_manager = None
 
-            # Create model components if needed
-            try:
+            # Create model components with lazy loading (Phase 3 optimization)
+            def create_racing_model():
                 from .model import RacingModel
-                model = RacingModel()
-                logger.info("RacingModel initialized successfully")
-            except Exception as model_error:
-                logger.error(f"Error initializing RacingModel: {model_error}")
-                model = None
+                return RacingModel()
             
-            # Create analysis
-            try:
+            def create_lap_analysis():
                 from .analysis import LapAnalysis
-                lap_analysis = LapAnalysis()
-                logger.info("LapAnalysis initialized successfully")
-            except Exception as analysis_error:
-                logger.error(f"Error initializing LapAnalysis: {analysis_error}")
-                lap_analysis = None
+                return LapAnalysis()
             
-            # Create SuperLap
-            try:
-                from .superlap import SuperLap
-                super_lap = SuperLap()
-                logger.info("SuperLap initialized successfully")
-            except Exception as superlap_error:
-                logger.error(f"Error initializing SuperLap: {superlap_error}")
-                super_lap = None
-                
+            # Register components for lazy loading
+            model_component = lazy_loader.register_component("RacingModel", create_racing_model)
+            analysis_component = lazy_loader.register_component("LapAnalysis", create_lap_analysis)
+            
+            # Set placeholders (actual loading happens when accessed)
+            model = None  # Will be lazy-loaded when needed
+            lap_analysis = None  # Will be lazy-loaded when needed
+            
+            logger.info("RacingModel and LapAnalysis registered for lazy loading")
+            
             # Create TelemetrySaver for local saving
             try:
                 from .telemetry_saver import TelemetrySaver
@@ -323,6 +316,12 @@ try:
             if iracing_api is None:
                 logger.critical("Failed to create any IRacingAPI implementation")
                 return None
+            
+            # Check if Qt application is available before creating widget
+            if QApplication.instance() is None:
+                logger.error("Cannot create Race Coach widget: No QApplication instance found")
+                logger.error("Race Coach widget requires a Qt application to be running")
+                return None
                 
             logger.info(f"Creating RaceCoachWidget with API: {type(iracing_api).__name__}")
             
@@ -351,4 +350,4 @@ except ImportError as e:
         return None
     
 __all__ = ['RaceCoachWidget', 'IRacingAPI', 'SimpleIRacingAPI', 'DataManager', 'RacingModel', 
-           'LapAnalysis', 'SuperLap', 'TelemetrySaver', 'IRacingLapSaver', 'create_race_coach_widget'] 
+           'LapAnalysis', 'TelemetrySaver', 'IRacingLapSaver', 'create_race_coach_widget'] 

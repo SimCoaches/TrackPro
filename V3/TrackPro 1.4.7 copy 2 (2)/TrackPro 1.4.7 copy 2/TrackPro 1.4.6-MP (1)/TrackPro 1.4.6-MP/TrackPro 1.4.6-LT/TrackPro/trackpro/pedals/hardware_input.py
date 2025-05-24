@@ -9,6 +9,8 @@ import ctypes
 import time
 from ..database import calibration_manager, supabase
 from trackpro.database.user_manager import user_manager
+from ..race_coach.debouncer import trackpro_debouncer
+from .curve_cache import curve_cache
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,9 @@ class HardwareInput:
         
         # Sync with cloud if user is authenticated
         self._sync_with_cloud()
+        
+        # Setup debounced calibration operations (Phase 3 optimization)
+        trackpro_debouncer.setup_calibration_operations(self._execute_calibration_save)
 
     def _sync_with_cloud(self):
         """Sync calibration data with cloud if user is authenticated."""
@@ -300,95 +305,19 @@ class HardwareInput:
         return self._get_curves_directory() / pedal
 
     def list_available_curves(self, pedal: str) -> list:
-        """List all available curves for a specific pedal."""
+        """List all available curves for a specific pedal (Phase 3 optimized with caching)."""
         try:
-            # First get all local curves
+            # Use cached curve loading for dramatically improved performance
             curves_dir = self.get_pedal_curves_directory(pedal)
-            logger.info(f"Looking for curves in directory: {curves_dir}")
+            local_curves, cache_hit = curve_cache.get_cached_curves(pedal, curves_dir)
             
-            # Ensure the directory exists
-            if not curves_dir.exists():
-                logger.warning(f"Curves directory does not exist: {curves_dir}")
-                curves_dir.mkdir(exist_ok=True)
-                logger.info(f"Created curves directory: {curves_dir}")
-                local_curves = []
+            # Performance logging
+            if cache_hit:
+                logger.debug(f"Cache hit: Loaded {len(local_curves)} curves for {pedal} from cache")
             else:
-                # Get all JSON files in the directory
-                curve_files = list(curves_dir.glob("*.json"))
-                logger.info(f"Found {len(curve_files)} curve files: {[f.name for f in curve_files]}")
-                
-                # Validate each curve file to ensure it's readable
-                local_curves = []
-                for file in curve_files:
-                    try:
-                        # Skip temporary files
-                        if ".tmp." in file.name:
-                            logger.debug(f"Skipping temporary file: {file.name}")
-                            continue
-                            
-                        with open(file) as f:
-                            try:
-                                # Try to parse the JSON
-                                content = f.read()
-                                
-                                # Check for corrupted files with multiple JSON objects
-                                if content.count('"name"') > 1:
-                                    logger.warning(f"Detected corrupted curve file with multiple JSON objects: {file}")
-                                    # Try to fix the file
-                                    try:
-                                        # Find the first complete JSON object
-                                        first_brace = content.find('{')
-                                        if first_brace >= 0:
-                                            # Find the matching closing brace
-                                            brace_count = 0
-                                            for i, char in enumerate(content[first_brace:]):
-                                                if char == '{':
-                                                    brace_count += 1
-                                                elif char == '}':
-                                                    brace_count -= 1
-                                                    if brace_count == 0:
-                                                        # We found the end of the first complete JSON object
-                                                        valid_json = content[first_brace:first_brace+i+1]
-                                                        curve_data = json.loads(valid_json)
-                                                        
-                                                        # Save the fixed file
-                                                        with open(file, 'w') as fix_file:
-                                                            json.dump(curve_data, fix_file, indent=2)
-                                                        
-                                                        logger.info(f"Fixed corrupted curve file: {file}")
-                                                        
-                                                        # Add to valid curves
-                                                        local_curves.append(file.stem)
-                                                        logger.info(f"Added fixed curve: {file.stem}")
-                                                        break
-                                    except Exception as fix_error:
-                                        logger.error(f"Failed to fix corrupted curve file: {fix_error}")
-                                    continue
-                                    
-                                # Parse the JSON
-                                curve_data = json.loads(content)
-                                
-                                # More lenient validation - only check if it's a dictionary with at least points
-                                # or the filename can be used as the curve name
-                                if not isinstance(curve_data, dict):
-                                    logger.warning(f"Skipping invalid curve file (not a JSON object): {file}")
-                                    continue
-                                    
-                                # If file has points but no required fields, it's still usable
-                                if 'points' in curve_data:
-                                    local_curves.append(file.stem)
-                                    logger.debug(f"Validated curve file: {file.name}")
-                                else:
-                                    logger.warning(f"Skipping curve file without points: {file}")
-                                    
-                            except json.JSONDecodeError:
-                                logger.warning(f"Skipping invalid JSON in curve file: {file}")
-                                continue
-                    except Exception as e:
-                        logger.warning(f"Error reading curve file {file}: {e}")
-                        continue
+                logger.debug(f"Cache miss: Scanned {len(local_curves)} curves for {pedal}")
             
-            # Now get cloud curves if user is authenticated
+            # Now get cloud curves if user is authenticated (this is quick, so we don't cache it)
             cloud_curves = []
             if supabase.is_authenticated():
                 try:
@@ -413,7 +342,13 @@ class HardwareInput:
             
             # Combine local and cloud curves
             all_curves = sorted(local_curves + cloud_curves)
-            logger.info(f"Found {len(all_curves)} valid curves for {pedal}: {all_curves}")
+            
+            # Only log summary instead of verbose details
+            if all_curves:
+                logger.info(f"Loaded {len(all_curves)} curves for {pedal} (cache {'hit' if cache_hit else 'miss'})")
+            else:
+                logger.debug(f"No curves found for {pedal}")
+                
             return all_curves
         except Exception as e:
             logger.error(f"Error listing available curves: {e}", exc_info=True)
@@ -698,8 +633,19 @@ class HardwareInput:
         return False
     
     def save_calibration(self, calibration: dict):
-        """Save calibration data to file and cloud."""
+        """Save calibration data to file and cloud with smart debouncing (Phase 3 optimized)."""
         try:
+            # Use smart debouncer instead of manual timer management
+            trackpro_debouncer.trigger("save_calibration", calibration)
+            logger.debug("Calibration save scheduled via smart debouncer")
+        except Exception as e:
+            logger.error(f"Failed to schedule calibration save: {e}")
+            raise
+    
+    def _execute_calibration_save(self, calibration: dict):
+        """Execute the actual calibration save operation after debounce period (Phase 3 optimized)."""
+        try:
+            
             # Save to local file first
             self._save_calibration_to_file(calibration)
             logger.info("Calibration saved locally")
@@ -711,7 +657,7 @@ class HardwareInput:
                 except:
                     pass
             
-            # Store the calibration data for delayed upload
+            # Use debouncer for delayed cloud save instead of manual timer
             self._pending_cloud_calibration = calibration.copy()
             
             # Create a new timer for cloud upload with 1 minute delay
@@ -719,10 +665,9 @@ class HardwareInput:
             self._cloud_save_timer = threading.Timer(60.0, self._delayed_cloud_save)
             self._cloud_save_timer.daemon = True
             self._cloud_save_timer.start()
-            logger.info("Cloud save scheduled in 60 seconds")
+            logger.debug("Cloud save scheduled in 60 seconds")
         except Exception as e:
             logger.error(f"Failed to save calibration: {e}")
-            raise
     
     def _delayed_cloud_save(self):
         """Save calibration to cloud after delay period."""

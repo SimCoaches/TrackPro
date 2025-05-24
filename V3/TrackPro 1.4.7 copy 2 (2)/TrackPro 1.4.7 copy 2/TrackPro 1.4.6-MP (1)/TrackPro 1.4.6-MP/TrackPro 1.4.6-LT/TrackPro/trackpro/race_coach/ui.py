@@ -4187,24 +4187,29 @@ class RaceCoachWidget(QWidget):
                     on_telemetry_update=self.on_telemetry_data,
                 )
 
-                # Force a direct connection attempt to iRacing
+                # Check iRacing status using smart connection manager (Phase 3 optimized)
                 try:
                     from .iracing_session_monitor import is_iracing_available, run_irsdk_parse
+                    from .connection_manager import iracing_connection_manager
 
-                    # Log that we're attempting direct connection
-                    logger.info("Attempting direct connection to iRacing...")
+                    # Get connection stats for logging
+                    stats = iracing_connection_manager.get_connection_stats()
+                    logger.info(f"iRacing connection status check (attempts: {stats['attempts_last_minute']}/3 per minute)")
 
-                    # Try to connect and get status
+                    # Smart connection attempt (respects backoff and caching)
                     is_connected = is_iracing_available()
-                    logger.info(f"Direct iRacing connection test result: {is_connected}")
+                    
+                    # Only log result if an actual attempt was made
+                    if stats['attempts_last_minute'] > 0:
+                        logger.info(f"iRacing connection result: {is_connected}")
 
                     # If connected, try to parse data
                     if is_connected:
                         parse_result = run_irsdk_parse()
-                        logger.info(f"iRacing data parse result: {parse_result}")
+                        logger.debug(f"iRacing data parse result: {parse_result}")
 
                 except Exception as e:
-                    logger.error(f"Error during direct iRacing connection attempt: {e}")
+                    logger.error(f"Error during iRacing connection check: {e}")
                     import traceback
 
                     logger.error(traceback.format_exc())

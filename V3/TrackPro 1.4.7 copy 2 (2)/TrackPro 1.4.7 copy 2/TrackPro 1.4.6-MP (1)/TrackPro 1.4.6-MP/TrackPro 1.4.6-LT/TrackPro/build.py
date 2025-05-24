@@ -706,8 +706,7 @@ SectionEnd
             "trackpro.race_coach.model",
             "trackpro.race_coach.data_manager",
             "trackpro.race_coach.iracing_api",
-            "trackpro.race_coach.analysis",
-            "trackpro.race_coach.superlap"
+        # Add Race Coach modules and submodules
         ]
         
         # Add numpy and its submodules - expanded list to ensure all parts are included

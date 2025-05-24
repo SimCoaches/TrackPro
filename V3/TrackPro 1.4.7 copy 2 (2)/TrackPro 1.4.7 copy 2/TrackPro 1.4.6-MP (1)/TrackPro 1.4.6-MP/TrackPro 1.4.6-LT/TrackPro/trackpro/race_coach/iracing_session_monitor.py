@@ -10,6 +10,7 @@ from typing import Optional
 import traceback
 import json
 import datetime
+from .connection_manager import iracing_connection_manager
 
 # --- Configuration ---
 # Use dynamic path based on current Python environment
@@ -34,29 +35,66 @@ current_session_uuid = None
 # Event to signal the monitoring thread to stop (optional but good practice)
 should_stop = False
 
-def is_iracing_available():
-    """Check if iRacing is available and can be connected to"""
+# Global reference to monitor thread for cleanup
+_monitor_thread = None
+
+def stop_monitoring():
+    """Stop the iRacing monitoring loop."""
+    global should_stop, _monitor_thread
+    print("Monitor: Stopping iRacing monitoring thread...")
+    should_stop = True
+    
+    # Wait for the thread to finish with a timeout
+    if _monitor_thread and _monitor_thread.is_alive():
+        try:
+            print("Monitor: Waiting for monitor thread to finish...")
+            _monitor_thread.join(timeout=5.0)
+            if _monitor_thread.is_alive():
+                print("Monitor: Warning - monitor thread did not finish in time")
+            else:
+                print("Monitor: Monitor thread stopped successfully")
+        except Exception as e:
+            print(f"Monitor: Error waiting for monitor thread to finish: {e}")
+    
+    # Reset the thread reference
+    _monitor_thread = None
+    print("Monitor: Monitoring stopped")
+
+def _raw_iracing_connection():
+    """Raw connection attempt - for use by the smart connection manager."""
     try:
         # First check if iRacing is already connected
         if ir.is_initialized and ir.is_connected:
             return True
             
         # Otherwise try to connect
-        print("Attempting to connect to iRacing...")
         startup_result = ir.startup()
-        print(f"iRacing startup result: {startup_result}")
         
         # Check both initialized and connected flags
         connection_result = ir.is_initialized and ir.is_connected
-        print(f"iRacing connection status - initialized: {ir.is_initialized}, connected: {ir.is_connected}")
         
         if not connection_result:
             ir.shutdown()
             
         return connection_result
     except Exception as e:
-        print(f"Error checking iRacing availability: {str(e)}")
-        print(traceback.format_exc())
+        print(f"Error in raw iRacing connection: {str(e)}")
+        return False
+
+def is_iracing_available():
+    """Check if iRacing is available and can be connected to - Phase 3 Optimized"""
+    # BUGFIX: Don't use SmartConnectionManager for connectivity checks during monitoring
+    # Only use it for actual connection attempts. For monitoring, do a simple direct check.
+    try:
+        # Direct check without going through the smart connection manager
+        # This avoids false disconnections due to rate limiting/backoff
+        if ir.is_initialized and ir.is_connected:
+            return True
+        else:
+            # Only use smart connection manager for actual connection attempts
+            return iracing_connection_manager.attempt_connection()
+    except Exception as e:
+        print(f"Error checking iRacing availability: {e}")
         return False
 
 def get_session_info_update_count():
@@ -802,6 +840,11 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
 
 def start_monitoring(supabase_client: Client, user_id: str, lap_saver, simple_api):
     """Starts the iRacing monitoring loop in a background daemon thread."""
+    global _monitor_thread, should_stop
+    
+    # Reset stop flag
+    should_stop = False
+    
     # Add simple_api parameter
     if not isinstance(supabase_client, Client):
          print("Error starting monitor: Invalid Supabase client provided.", file=sys.stderr)
@@ -817,14 +860,18 @@ def start_monitoring(supabase_client: Client, user_id: str, lap_saver, simple_ap
         return None
 
     print("Starting iRacing background monitor thread...")
-    monitor_thread = threading.Thread(
+    _monitor_thread = threading.Thread(
         target=_monitor_loop,
         args=(supabase_client, user_id, lap_saver, simple_api), # Pass lap_saver and simple_api
         daemon=True # Ensures thread exits when the main app exits
     )
-    monitor_thread.start()
+    _monitor_thread.start()
     print("iRacing monitor thread started.")
-    return monitor_thread # Optionally return the thread object
+    return _monitor_thread # Return the thread object
+
+# --- Initialize Smart Connection Manager (Phase 3 Optimization) ---
+# Register the raw connection function with the smart manager
+iracing_connection_manager.register_connection_function(_raw_iracing_connection)
 
 # --- No longer running automatically, needs to be called from TrackPro ---
 # if __name__ == "__main__":

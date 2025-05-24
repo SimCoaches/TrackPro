@@ -38,6 +38,14 @@ class SaveLapWorker(threading.Thread):
         self.lap_save_lock = threading.Lock()  # Lock for thread safety
         self._processed_lap_numbers = set()  # Track processed laps in this thread
 
+        # Health monitoring
+        self._last_activity_time = time.time()
+        self._total_processed = 0
+        self._total_failed = 0
+        self._is_healthy = True
+        self._consecutive_failures = 0
+        self._max_consecutive_failures = 3
+
     def run(self):
         logger.info("[SaveLapWorker] Entered run() method.")
         if not self.running:
@@ -53,6 +61,9 @@ class SaveLapWorker(threading.Thread):
             try:
                 logger.debug("[SaveLapWorker] Top of try block in while loop. Attempting to get lap from queue...")
                 lap_data = self.lap_queue.get(timeout=1.0)
+                
+                # Update activity time
+                self._last_activity_time = time.time()
                 
                 # Enhanced debug logging about the item retrieved
                 if lap_data is None:
@@ -89,6 +100,8 @@ class SaveLapWorker(threading.Thread):
                 if lap_number_sdk is None:
                     logger.error(f"[SaveLapWorker] Could not determine lap_number_sdk from data: {str(lap_data)[:200]}")
                     self.lap_queue.task_done()
+                    self._total_failed += 1
+                    self._consecutive_failures += 1
                     continue
 
                 logger.info(f"[SaveLapWorker] Raw lap_data from queue (first 200 chars): {str(lap_data)[:200]}")
@@ -128,31 +141,56 @@ class SaveLapWorker(threading.Thread):
                     if saved_lap_id:
                         logger.info(f"[SaveLapWorker] Successfully saved lap {sdk_lap_number} (ID: {saved_lap_id}) in background thread")
                         self._processed_lap_numbers.add(sdk_lap_number)
-                        with self.parent._processing_lock: 
-                            self.parent._processed_lap_indexer_lap_numbers.add(sdk_lap_number)
+                        # CRITICAL FIX: Only mark as processed in main thread AFTER successful save
+                        self.parent._mark_lap_as_processed(sdk_lap_number, success=True)
+                        self._total_processed += 1
+                        self._consecutive_failures = 0  # Reset failure counter on success
+                        self._is_healthy = True
                     else:
                         logger.error(f"[SaveLapWorker] Parent _save_lap_data returned failure for lap {sdk_lap_number}")
+                        # CRITICAL FIX: Notify parent of failure so it can retry or handle appropriately
+                        self.parent._mark_lap_as_processed(sdk_lap_number, success=False)
+                        self._total_failed += 1
+                        self._consecutive_failures += 1
+                        
+                        # Check if worker should be considered unhealthy
+                        if self._consecutive_failures >= self._max_consecutive_failures:
+                            self._is_healthy = False
+                            logger.error(f"[SaveLapWorker] Worker marked as unhealthy due to {self._consecutive_failures} consecutive failures")
                 
                 logger.info(f"[SaveLapWorker] Finished processing lap {sdk_lap_number}, marking task done.")
                 self.lap_queue.task_done()
                 
             except queue.Empty:
-                # logger.debug("[SaveLapWorker] Queue empty, continuing...") # Can re-enable if needed
+                # Update activity time even on empty queue
+                self._last_activity_time = time.time()
                 continue
             except KeyError as ke:
                 logger.error(f"[SaveLapWorker] KeyError processing lap data: {ke}. Data was (first 200 chars): {str(lap_data)[:200]}", exc_info=True)
+                self._total_failed += 1
+                self._consecutive_failures += 1
                 if lap_data: 
                     try:
                         self.lap_queue.task_done()
+                        # Try to notify parent of failure
+                        lap_num = lap_data.get("lap_number_sdk", -1) if isinstance(lap_data, dict) else -1
+                        if lap_num != -1:
+                            self.parent._mark_lap_as_processed(lap_num, success=False)
                     except Exception as tde:
                         logger.error(f"[SaveLapWorker] Error calling task_done after KeyError: {tde}")
             except Exception as e:
                 logger.error(f"[SaveLapWorker] Generic error in lap saving worker. Data (first 200 chars): {str(lap_data)[:200]}", exc_info=True)
                 import traceback
                 logger.error(f"[SaveLapWorker] Exception details: {traceback.format_exc()}")
+                self._total_failed += 1
+                self._consecutive_failures += 1
                 if lap_data: 
                     try:
                         self.lap_queue.task_done()
+                        # Try to notify parent of failure
+                        lap_num = lap_data.get("lap_number_sdk", -1) if isinstance(lap_data, dict) else -1
+                        if lap_num != -1:
+                            self.parent._mark_lap_as_processed(lap_num, success=False)
                     except Exception as tde:
                         logger.error(f"[SaveLapWorker] Error calling task_done after generic error: {tde}")
         
@@ -201,6 +239,34 @@ class SaveLapWorker(threading.Thread):
             return True
         except:
             return False
+    
+    def get_health_status(self):
+        """Get worker thread health status.
+        
+        Returns:
+            Dictionary with health information
+        """
+        current_time = time.time()
+        time_since_activity = current_time - self._last_activity_time
+        
+        return {
+            "is_healthy": self._is_healthy,
+            "is_alive": self.is_alive(),
+            "is_running": self.running,
+            "total_processed": self._total_processed,
+            "total_failed": self._total_failed,
+            "consecutive_failures": self._consecutive_failures,
+            "time_since_activity": time_since_activity,
+            "queue_size": self.get_queue_size(),
+            "last_activity_time": self._last_activity_time
+        }
+    
+    def reset_health(self):
+        """Reset health status (called after worker restart)."""
+        self._consecutive_failures = 0
+        self._is_healthy = True
+        self._last_activity_time = time.time()
+        logger.info("[SaveLapWorker] Health status reset")
 
 class IRacingLapSaver:
     """
@@ -218,6 +284,16 @@ class IRacingLapSaver:
         self._processed_lap_indexer_lap_numbers = set()
         self._processing_lock = threading.Lock()  # Lock for thread safety
         
+        # CRITICAL FIX: Track lap processing state properly
+        self._failed_lap_numbers = set()  # Track laps that failed to save
+        self._pending_lap_numbers = set()  # Track laps currently being processed
+        self._expected_next_lap_number = 0  # For sequence validation
+        self._lap_sequence_gaps = []  # Track any gaps in lap sequence
+        
+        # CIRCUIT BREAKER: Prevent infinite retry loops
+        self._lap_retry_count = {}  # Track retry attempts per lap
+        self._max_lap_retries = 3  # Maximum retries before giving up
+        
         # Set up the background worker for lap saving
         self._save_worker = SaveLapWorker(self)
         self._save_worker.start()
@@ -226,8 +302,17 @@ class IRacingLapSaver:
         self._lap_queue = self._save_worker.lap_queue
         
         # Configuration for saving behavior
-        self._use_direct_save = False  # Set to True to bypass the worker thread and save laps directly
+        self._use_direct_save = True  # BUGFIX: Set to True to bypass the worker thread and save laps directly (worker thread has issues)
         self._save_rejects_to_disk = True  # Save failed laps to disk for debugging
+        
+        # Log the fix
+        logger.info(f"🔧 BUGFIX: IRacingLapSaver initialized with direct save mode enabled to bypass worker thread issues")
+        
+        # Worker health monitoring
+        self._last_health_check_time = time.time()
+        self._health_check_interval = 30.0  # Check worker health every 30 seconds
+        self._worker_restart_count = 0
+        self._max_worker_restarts = 3
         
         # Supabase connection
         self._supabase_client = supabase_client
@@ -300,6 +385,12 @@ class IRacingLapSaver:
         self._lap_debug_mapping = {}  # Maps iRacing LapCompleted to our internal lap numbers
         self._lap_sync_issues = []    # Tracks detected synchronization issues
         self._debug_mode = True       # Enable detailed debugging by default
+        
+        # CRITICAL THREADING FIX: Asynchronous save system to prevent blocking telemetry collection
+        self._async_save_thread = None
+        self._async_save_queue = queue.Queue()
+        self._async_save_running = False
+        self._start_async_save_thread()
 
     def set_supabase_client(self, client):
         """Set the Supabase client instance."""
@@ -448,6 +539,7 @@ class IRacingLapSaver:
             iracing_completed_lap = telemetry_data.get('LapCompleted', 0)
             
             # --- Feed data to the LapIndexer ---
+            # The LapIndexer now has improved reset detection and telemetry association
             self.lap_indexer.on_frame(telemetry_data)
             
             # Safety check on lap numbers
@@ -468,9 +560,11 @@ class IRacingLapSaver:
                 
             # DEBUG: Log key telemetry values every ~5 seconds
             if self._telemetry_debug_counter % 300 == 0:
-                logger.info(f"Lap Detection Debug: LapDistPct={lap_dist_pct:.3f}, Last={self._last_track_position:.3f}, " +
+                # Get current lap from LapIndexer (authoritative source)
+                lap_indexer_current = getattr(self.lap_indexer, '_active_lap_number_internal', 'N/A')
+                logger.info(f"🔧 LAP SYNC DEBUG: LapDistPct={lap_dist_pct:.3f}, Last={self._last_track_position:.3f}, " +
                            f"iRacing Current={iracing_current_lap}, iRacing Completed={iracing_completed_lap}, " + 
-                           f"Internal Current={self._current_lap_number}, SessionTime={session_time:.3f}")
+                           f"LapIndexer Current={lap_indexer_current}, Internal (deprecated)={self._current_lap_number}, SessionTime={session_time:.3f}")
 
             if lap_dist_pct < 0:
                 if self._telemetry_debug_counter % 300 == 0:
@@ -491,11 +585,12 @@ class IRacingLapSaver:
             if self._is_first_telemetry:
                 self._last_track_position = lap_dist_pct
                 self._lap_start_time = session_time
-                # IMPORTANT: Start with iRacing's current lap number rather than our own
-                self._current_lap_number = iracing_current_lap
+                # CRITICAL FIX: Sync internal counter with iRacing's completed lap number
+                # This ensures we start with the correct lap numbering from iRacing
+                self._current_lap_number = iracing_completed_lap
                 self._is_first_telemetry = False
                 self._current_lap_data = []
-                logger.info(f"Lap Saver: First telemetry received for Lap {self._current_lap_number}. Session: {self._current_session_id}")
+                logger.info(f"🔧 LAP SYNC FIX: First telemetry - iRacing Current={iracing_current_lap}, Completed={iracing_completed_lap}, Setting internal to {self._current_lap_number}. Session: {self._current_session_id}")
 
             # Add to position history buffer for enhanced detection
             self._recent_positions.append(lap_dist_pct)
@@ -512,17 +607,21 @@ class IRacingLapSaver:
             indexed_laps = self.lap_indexer.get_laps()
             laps_to_return_to_ui = []
 
+            # CRITICAL FIX: Check worker health before processing laps
+            self._check_worker_health()
+
             # Process any laps we haven't seen yet (using thread-safe check)
             for indexed_lap in indexed_laps:
                 sdk_lap_number = indexed_lap["lap_number_sdk"]
                 
-                # Skip laps we've already processed - use thread-safe check
+                # CRITICAL FIX: Skip laps we've already processed OR are currently pending OR have failed
                 with self._processing_lock:
-                    if sdk_lap_number in self._processed_lap_indexer_lap_numbers:
+                    if (sdk_lap_number in self._processed_lap_indexer_lap_numbers or 
+                        sdk_lap_number in self._pending_lap_numbers):
                         continue
                     
-                    # Mark it as "being processed" to prevent duplicate processing
-                    self._processed_lap_indexer_lap_numbers.add(sdk_lap_number)
+                    # Mark as pending (will be marked as processed by callback after actual save)
+                    self._pending_lap_numbers.add(sdk_lap_number)
                     
                 lap_duration = indexed_lap["duration_seconds"]
                 lap_telemetry_frames = indexed_lap["telemetry_frames"]
@@ -555,16 +654,27 @@ class IRacingLapSaver:
                 # This ensures we're using iRacing's lap numbering system
                 correct_lap_number = sdk_lap_number
                 
-                # Log the lap number correction if applicable
+                # CRITICAL FIX: Keep internal counter synchronized with iRacing
                 if correct_lap_number != self._current_lap_number:
-                    logger.info(f"[LAP SYNC] Correcting lap number from internal {self._current_lap_number} to iRacing {correct_lap_number}")
+                    logger.info(f"🔧 [LAP SYNC FIX] Correcting internal lap counter from {self._current_lap_number} to iRacing {correct_lap_number}")
+                    self._current_lap_number = correct_lap_number  # Keep internal counter in sync
                 
                 # Now process this lap with the correct lap number
                 logger.info(f"[LapIndexer] New lap {correct_lap_number} to process. Time: {lap_duration:.3f}s, Type: {lap_state_from_indexer}, Valid: {is_valid_from_indexer}, Valid for Leaderboard: {is_valid_for_leaderboard}")
                 
+                # CRITICAL BUG FIX: Skip only truly invalid lap numbers (negative laps)
+                # Note: lap 0 is valid in iRacing (it's the outlap)
+                if correct_lap_number < 0:
+                    logger.warning(f"[LAP VALIDATION] Skipping invalid lap number {correct_lap_number} - negative lap numbers are invalid")
+                    # Mark as processed to prevent infinite retry
+                    self._mark_lap_as_processed(sdk_lap_number, success=False)
+                    continue
+                
                 # Create a properly formatted lap data dictionary
+                # CRITICAL: Always use the LapIndexer's SDK lap number (from iRacing) as the authoritative lap number
                 lap_data_dict = {
-                    "lap_number_sdk": correct_lap_number,
+                    "lap_number_sdk": correct_lap_number,  # This is iRacing's LapCompleted value - authoritative
+                    "lap_number": correct_lap_number,      # Also set regular lap_number for consistency
                     "duration_seconds": lap_duration,
                     "telemetry_frames": lap_telemetry_frames,
                     "lap_state": lap_state_from_indexer,
@@ -573,17 +683,35 @@ class IRacingLapSaver:
                     "is_complete_by_sdk_increment": is_complete_by_sdk
                 }
                 
+                # CRITICAL FIX: Update all telemetry frames with the correct final lap classification
+                # This ensures that validation gets the correct lap type from the LapIndexer's final decision
+                updated_telemetry_frames = []
+                for frame in lap_telemetry_frames:
+                    frame_copy = dict(frame)
+                    # Override any stale lap_state data with the LapIndexer's final classification
+                    frame_copy["lap_state"] = lap_state_from_indexer
+                    frame_copy["is_valid_for_leaderboard"] = is_valid_for_leaderboard
+                    frame_copy["is_complete_by_sdk_increment"] = is_complete_by_sdk
+                    updated_telemetry_frames.append(frame_copy)
+                
+                # Update the lap data dict with corrected frames
+                lap_data_dict["telemetry_frames"] = updated_telemetry_frames
+                
                 # Check if direct saving is enabled
                 if self._use_direct_save:
-                    # Save lap directly without using the worker thread
-                    logger.info(f"[DIRECT] Using direct save for lap {correct_lap_number} (worker thread bypass)")
-                    self.save_lap_directly(lap_data_dict)
+                    # CRITICAL THREADING FIX: Use truly asynchronous saving to avoid blocking telemetry collection
+                    logger.info(f"[ASYNC] Using non-blocking asynchronous save for lap {correct_lap_number}")
+                    self.save_lap_async(lap_data_dict)
+                    # Mark as pending immediately, will be marked as processed by async callback
+                    # Don't mark as processed here since it's asynchronous
                 else:
                     # Monitor queue size - if it's getting too large, something might be wrong with the worker
                     queue_size = self._lap_queue.qsize() if self._lap_queue else 0
                     if queue_size >= 5:  # If we have 5+ laps queued, the worker might be stuck
                         logger.warning(f"[QUEUE HEALTH] Queue size has reached {queue_size} items. Worker thread may be stuck. Saving directly as fallback.")
-                        self.save_lap_directly(lap_data_dict)
+                        success = self.save_lap_directly(lap_data_dict)
+                        # CRITICAL FIX: Mark as processed based on actual result
+                        self._mark_lap_as_processed(correct_lap_number, success=(success is not None))
                         
                         # Check if we should force-enable direct saving
                         if queue_size >= 10:  # If queue has 10+ items, permanently switch to direct saving
@@ -609,6 +737,9 @@ class IRacingLapSaver:
                                 logger.info(f"[QUEUE DEBUG] Added item to queue. Type: {type(lap_data_dict)}, Keys: {lap_data_dict.keys()}")
                             else:
                                 logger.warning(f"[SaveLapWorker] Lap {correct_lap_number} already in queue, skipping duplicate")
+                                # CRITICAL FIX: If already in queue, remove from pending since we're not processing it again
+                                with self._processing_lock:
+                                    self._pending_lap_numbers.discard(correct_lap_number)
                 
                 # Get the last section of telemetry for this lap to return to UI immediately
                 # The full telemetry will be processed and saved in the background
@@ -959,27 +1090,33 @@ class IRacingLapSaver:
         is_valid, validation_message = self._validate_lap_data(lap_frames_from_indexer, lap_number)
         logger.info(f"Lap {lap_number} validation: {validation_message}")
 
-        # Determine lap type and leaderboard validity STRICTLY from LapIndexer's output in the frames
-        lap_type = "TIMED"  # Default, but should be overwritten by frame data
-        is_valid_for_leaderboard = False # Default, should be overwritten
+        # CRITICAL FIX: Get lap type directly from the method parameters instead of from frames
+        # The lap frames should now have the correct lap_state thanks to our fix above
+        lap_type = "TIMED"  # Default fallback
+        is_valid_for_leaderboard = False # Default fallback
         
         if lap_frames_from_indexer and len(lap_frames_from_indexer) > 0:
-            # Use the first frame as representative for these flags, as LapIndexer adds them to all frames of a lap
+            # Use the first frame which should now have the correct final lap classification
             first_frame = lap_frames_from_indexer[0]
             lap_type = first_frame.get("lap_state", "TIMED")
-            # is_valid_for_leaderboard is now directly taken from what LapIndexer determined and passed in frames
+            # Get the leaderboard validity from the frame (updated by our fix above)
             is_valid_for_leaderboard_from_indexer = first_frame.get("is_valid_for_leaderboard", False)
             
             # The final is_valid_for_leaderboard depends on BOTH LapIndexer's view AND _validate_lap_data's result
             is_valid_for_leaderboard = is_valid and is_valid_for_leaderboard_from_indexer
             
-            # Add debugging for lap number consistency
+            logger.info(f"[LAP TYPE FIX] Lap {lap_number} type from corrected frames: {lap_type}, leaderboard: {is_valid_for_leaderboard_from_indexer}")
+        else:
+            logger.warning(f"[LAP TYPE FIX] Lap {lap_number} has no frames - using fallback classification")
+        
+        # Add debugging for lap number consistency
+        if lap_frames_from_indexer and len(lap_frames_from_indexer) > 0:
             ir_lap = first_frame.get("Lap", -1)
             ir_completed = first_frame.get("LapCompleted", -1)
             logger.info(f"[LAP SYNC] Saving lap {lap_number} with iRacing Lap={ir_lap}, LapCompleted={ir_completed}")
             
             # Additional debugging for lap number mismatch
-            if ir_completed != lap_number and ir_completed > 0:
+            if ir_completed > 0 and ir_completed - 1 != lap_number:
                 logger.warning(f"[LAP SYNC] Potential lap number mismatch: saving lap {lap_number} but iRacing LapCompleted={ir_completed}")
         else:
             # Fallback if no frames (should not happen for a processed lap from LapIndexer)
@@ -1255,13 +1392,14 @@ class IRacingLapSaver:
         for indexed_lap in all_indexed_laps:
             sdk_lap_number = indexed_lap["lap_number_sdk"]
             
-            # Skip laps we've already processed - use thread-safe check
+            # CRITICAL FIX: Skip laps we've already processed OR are currently pending
             with self._processing_lock:
-                if sdk_lap_number in self._processed_lap_indexer_lap_numbers:
+                if (sdk_lap_number in self._processed_lap_indexer_lap_numbers or 
+                    sdk_lap_number in self._pending_lap_numbers):
                     continue
                 
-                # Mark it as "being processed" to prevent duplicate processing
-                self._processed_lap_indexer_lap_numbers.add(sdk_lap_number)
+                # Mark as pending for session end processing
+                self._pending_lap_numbers.add(sdk_lap_number)
                 
             lap_duration = indexed_lap["duration_seconds"]
             lap_telemetry_frames = indexed_lap["telemetry_frames"]
@@ -1287,23 +1425,42 @@ class IRacingLapSaver:
                     "is_incomplete_session_end": is_incomplete
                 }
                 
-                # Queue the lap for processing
-                self._save_worker.enqueue_lap(lap_data_for_queue)
-                newly_processed_laps += 1
+                # CRITICAL FIX: Use direct save for session end to ensure completion
+                logger.info(f"[SESSION END] Using direct save for lap {sdk_lap_number} to ensure completion")
+                success = self.save_lap_directly(lap_data_for_queue)
+                self._mark_lap_as_processed(sdk_lap_number, success=(success is not None))
+                
+                if success:
+                    newly_processed_laps += 1
             else:
                 logger.info(f"[SESSION END] Lap {sdk_lap_number} (Type: {lap_state_from_indexer}) from LapIndexer was invalid. Skipping save.")
+                # Mark as processed (failed) to remove from pending
+                self._mark_lap_as_processed(sdk_lap_number, success=False)
 
         if newly_processed_laps > 0:
-            logger.info(f"[SESSION END] Queued {newly_processed_laps} additional lap(s) from LapIndexer data at session close.")
-            
-            # Wait for the worker to finish processing the queue (with timeout)
-            logger.info(f"[SESSION END] Waiting for worker to process {self._save_worker.get_queue_size()} queued laps...")
-            if self._save_worker.wait_until_empty(timeout=30.0):
-                logger.info("[SESSION END] All laps successfully processed by worker")
-            else:
-                logger.warning("[SESSION END] Timeout waiting for worker to finish - some laps may still be processing")
+            logger.info(f"[SESSION END] Processed {newly_processed_laps} additional lap(s) from LapIndexer data at session close.")
         else:
             logger.info(f"[SESSION END] No new laps from LapIndexer needed saving at session close.")
+
+        # Wait for any remaining worker tasks to complete (but don't wait too long)
+        if self._save_worker and self._save_worker.is_alive():
+            logger.info(f"[SESSION END] Waiting for worker to process {self._save_worker.get_queue_size()} remaining queued laps...")
+            if self._save_worker.wait_until_empty(timeout=10.0):
+                logger.info("[SESSION END] All queued laps successfully processed by worker")
+            else:
+                logger.warning("[SESSION END] Timeout waiting for worker to finish - some laps may still be processing")
+
+        # Log session end statistics
+        with self._processing_lock:
+            total_processed = len(self._processed_lap_indexer_lap_numbers)
+            total_failed = len(self._failed_lap_numbers)
+            total_pending = len(self._pending_lap_numbers)
+            logger.info(f"[SESSION END] Final session statistics: Processed: {total_processed}, Failed: {total_failed}, Still Pending: {total_pending}")
+            
+            if self._lap_sequence_gaps:
+                logger.warning(f"[SESSION END] Detected {len(self._lap_sequence_gaps)} lap sequence gaps during session")
+                for gap in self._lap_sequence_gaps:
+                    logger.warning(f"[SESSION END] Gap: laps {gap['gap_start']} to {gap['gap_end']} (missing {gap['missing_count']} laps)")
 
         # Reset session state for IRacingLapSaver
         logger.info(f"[SESSION END] Resetting for potential new session. Processed laps history retained.")
@@ -1312,8 +1469,15 @@ class IRacingLapSaver:
         self._lap_start_time = 0
         self._last_track_position = 0
         self._current_lap_data = []
-        # We do NOT clear _processed_lap_indexer_lap_numbers since it's possible
-        # we'll reconnect to the same iRacing session after a brief disconnect
+        
+        # CRITICAL FIX: Reset lap tracking state for new session
+        with self._processing_lock:
+            self._pending_lap_numbers.clear()
+            self._failed_lap_numbers.clear()
+            self._expected_next_lap_number = 0
+            self._lap_sequence_gaps.clear()
+            self._lap_retry_count.clear()  # Reset retry counters
+            # Keep _processed_lap_indexer_lap_numbers for potential reconnect to same session
 
         session_folder = getattr(self, '_current_session_folder', None)
         logger.info(f"[SESSION END] Telemetry recording session ended. Session folder: {session_folder}")
@@ -1407,17 +1571,22 @@ class IRacingLapSaver:
             Lap UUID if saved successfully, None otherwise
         """
         try:
+            # CRITICAL BUG FIX: Validate lap_data_dict structure
+            if not isinstance(lap_data_dict, dict):
+                logger.error(f"[DIRECT SAVE] Invalid lap_data_dict type: {type(lap_data_dict)}")
+                return None
+                
             logger.info(f"[DIRECT SAVE] Attempting to directly save lap {lap_data_dict.get('lap_number_sdk', 'unknown')}")
             
             sdk_lap_number = lap_data_dict.get("lap_number_sdk")
-            if not sdk_lap_number:
-                logger.error("[DIRECT SAVE] No lap_number_sdk in lap_data_dict")
+            if not sdk_lap_number or sdk_lap_number <= 0:
+                logger.error(f"[DIRECT SAVE] Invalid lap_number_sdk: {sdk_lap_number}. Available keys: {list(lap_data_dict.keys())}")
                 return None
                 
-            # Skip if we've already processed this lap
-            if sdk_lap_number in self._processed_lap_indexer_lap_numbers:
-                logger.warning(f"[DIRECT SAVE] Lap {sdk_lap_number} already processed, skipping")
-                return None
+            # CRITICAL FIX: Don't skip if already processed - let the callback system handle that
+            # if sdk_lap_number in self._processed_lap_indexer_lap_numbers:
+            #     logger.warning(f"[DIRECT SAVE] Lap {sdk_lap_number} already processed, skipping")
+            #     return None
                 
             lap_duration = lap_data_dict.get("duration_seconds", 0)
             lap_frames = lap_data_dict.get("telemetry_frames", [])
@@ -1427,8 +1596,7 @@ class IRacingLapSaver:
             
             if saved_lap_id:
                 logger.info(f"[DIRECT SAVE] Successfully saved lap {sdk_lap_number} directly")
-                with self._processing_lock:
-                    self._processed_lap_indexer_lap_numbers.add(sdk_lap_number)
+                # CRITICAL FIX: Don't mark as processed here - let the caller handle it via callback
                 return saved_lap_id
             else:
                 logger.error(f"[DIRECT SAVE] Failed to save lap {sdk_lap_number} directly")
@@ -1480,3 +1648,378 @@ class IRacingLapSaver:
         except Exception as e:
             logger.error(f"[DISK SAVE] Error saving lap {lap_number} to disk: {e}")
             return False
+
+    def _mark_lap_as_processed(self, lap_number, success=True):
+        """CRITICAL FIX: Callback method to mark laps as processed after actual completion.
+        
+        This fixes the race condition where laps were marked as processed before they were actually saved.
+        
+        Args:
+            lap_number: The lap number that was processed
+            success: Whether the processing was successful
+        """
+        with self._processing_lock:
+            # Remove from pending
+            self._pending_lap_numbers.discard(lap_number)
+            
+            if success:
+                self._processed_lap_indexer_lap_numbers.add(lap_number)
+                # Remove from failed set if it was there
+                self._failed_lap_numbers.discard(lap_number)
+                # Reset retry count on success
+                self._lap_retry_count.pop(lap_number, None)
+                logger.info(f"[LAP PROCESSING] Lap {lap_number} successfully processed and marked as complete")
+                
+                # Update expected sequence
+                self._validate_lap_sequence(lap_number)
+            else:
+                # CIRCUIT BREAKER: Track retry attempts
+                retry_count = self._lap_retry_count.get(lap_number, 0) + 1
+                self._lap_retry_count[lap_number] = retry_count
+                
+                if retry_count >= self._max_lap_retries:
+                    logger.error(f"[CIRCUIT BREAKER] Lap {lap_number} failed {retry_count} times - giving up to prevent infinite loop")
+                    self._failed_lap_numbers.add(lap_number)
+                    self._processed_lap_indexer_lap_numbers.add(lap_number)  # Mark as processed to stop retries
+                    self._lap_retry_count.pop(lap_number, None)  # Clean up
+                else:
+                    logger.warning(f"[LAP PROCESSING] Lap {lap_number} failed (attempt {retry_count}/{self._max_lap_retries})")
+                    
+                    # Only consider retrying if under the limit
+                    if self._use_direct_save and retry_count < self._max_lap_retries:
+                        logger.info(f"[LAP PROCESSING] Will retry failed lap {lap_number} (attempt {retry_count + 1})")
+    
+    def _validate_lap_sequence(self, lap_number):
+        """Validate lap sequence and detect gaps.
+        
+        Args:
+            lap_number: The lap number to validate in sequence
+        """
+        if self._expected_next_lap_number == 0:
+            # First lap, initialize expected sequence
+            self._expected_next_lap_number = lap_number + 1
+            logger.info(f"[LAP SEQUENCE] Initializing sequence at lap {lap_number}")
+        elif lap_number == self._expected_next_lap_number - 1:
+            # Expected sequence, no action needed
+            pass
+        elif lap_number == self._expected_next_lap_number:
+            # Next in sequence
+            self._expected_next_lap_number = lap_number + 1
+        elif lap_number > self._expected_next_lap_number:
+            # Gap detected
+            gap_start = self._expected_next_lap_number
+            gap_end = lap_number - 1
+            gap_info = {
+                "gap_start": gap_start,
+                "gap_end": gap_end,
+                "missing_count": gap_end - gap_start + 1,
+                "detected_at": time.time()
+            }
+            self._lap_sequence_gaps.append(gap_info)
+            logger.warning(f"[LAP SEQUENCE] Gap detected: missing laps {gap_start} to {gap_end} (received lap {lap_number})")
+            self._expected_next_lap_number = lap_number + 1
+        else:
+            # Received older lap - could be out of order processing
+            logger.info(f"[LAP SEQUENCE] Received older lap {lap_number} (expected {self._expected_next_lap_number})")
+    
+    def _check_worker_health(self):
+        """Check worker thread health and restart if necessary.
+        
+        Returns:
+            bool: True if worker is healthy, False if restarted or failed
+        """
+        current_time = time.time()
+        
+        # Only check health periodically
+        if current_time - self._last_health_check_time < self._health_check_interval:
+            return True
+            
+        self._last_health_check_time = current_time
+        
+        # Get health status from worker
+        if not self._save_worker or not self._save_worker.is_alive():
+            logger.error("[WORKER HEALTH] Worker thread is not alive")
+            return self._restart_worker("Thread not alive")
+            
+        health_status = self._save_worker.get_health_status()
+        logger.debug(f"[WORKER HEALTH] Status: {health_status}")
+        
+        # Check if worker is unhealthy
+        if not health_status["is_healthy"]:
+            logger.error(f"[WORKER HEALTH] Worker marked as unhealthy: {health_status}")
+            return self._restart_worker("Worker marked as unhealthy")
+            
+        # Check if worker has been inactive too long
+        if health_status["time_since_activity"] > 300:  # 5 minutes
+            logger.warning(f"[WORKER HEALTH] Worker inactive for {health_status['time_since_activity']:.1f} seconds")
+            
+        # Check if queue is backing up excessively
+        if health_status["queue_size"] > 20:
+            logger.error(f"[WORKER HEALTH] Queue backing up excessively: {health_status['queue_size']} items")
+            return self._restart_worker("Queue backing up")
+            
+        return True
+    
+    def _restart_worker(self, reason):
+        """Restart the worker thread.
+        
+        Args:
+            reason: Reason for restart
+            
+        Returns:
+            bool: True if restart successful, False if max restarts exceeded
+        """
+        self._worker_restart_count += 1
+        
+        if self._worker_restart_count > self._max_worker_restarts:
+            logger.error(f"[WORKER RESTART] Max restart attempts ({self._max_worker_restarts}) exceeded. Enabling direct save mode.")
+            self.enable_direct_save(True)
+            return False
+            
+        logger.info(f"[WORKER RESTART] Restarting worker thread (attempt {self._worker_restart_count}/{self._max_worker_restarts}). Reason: {reason}")
+        
+        # Stop old worker
+        if self._save_worker:
+            self._save_worker.stop()
+            # Don't wait too long for it to stop
+            if self._save_worker.is_alive():
+                self._save_worker.join(timeout=5.0)
+                
+        # Create new worker
+        self._save_worker = SaveLapWorker(self)
+        self._save_worker.reset_health()
+        self._save_worker.start()
+        
+        # Update reference
+        self._lap_queue = self._save_worker.lap_queue
+        
+        logger.info("[WORKER RESTART] New worker thread started")
+        return True
+
+    def retry_failed_laps(self):
+        """Attempt to retry laps that failed to save.
+        
+        Returns:
+            Dictionary with retry results
+        """
+        with self._processing_lock:
+            failed_laps = self._failed_lap_numbers.copy()
+            
+        if not failed_laps:
+            return {"success": True, "message": "No failed laps to retry", "retried": 0, "succeeded": 0}
+            
+        logger.info(f"[RETRY] Attempting to retry {len(failed_laps)} failed laps")
+        
+        retried = 0
+        succeeded = 0
+        
+        # Get current laps from indexer to find the failed ones
+        all_indexed_laps = self.lap_indexer.get_laps()
+        lap_data_by_number = {lap["lap_number_sdk"]: lap for lap in all_indexed_laps}
+        
+        for failed_lap_number in failed_laps:
+            if failed_lap_number not in lap_data_by_number:
+                logger.warning(f"[RETRY] Failed lap {failed_lap_number} not found in indexer data")
+                continue
+                
+            lap_data = lap_data_by_number[failed_lap_number]
+            lap_data_dict = {
+                "lap_number_sdk": failed_lap_number,
+                "duration_seconds": lap_data["duration_seconds"],
+                "telemetry_frames": lap_data["telemetry_frames"],
+                "lap_state": lap_data.get("lap_state", "TIMED"),
+                "is_valid_from_sdk": lap_data.get("is_valid_from_sdk", True),
+                "is_valid_for_leaderboard": lap_data.get("is_valid_for_leaderboard", False),
+                "is_complete_by_sdk_increment": lap_data.get("is_complete_by_sdk_increment", True)
+            }
+            
+            logger.info(f"[RETRY] Retrying failed lap {failed_lap_number}")
+            success = self.save_lap_directly(lap_data_dict)
+            retried += 1
+            
+            if success:
+                succeeded += 1
+                self._mark_lap_as_processed(failed_lap_number, success=True)
+                logger.info(f"[RETRY] Successfully retried lap {failed_lap_number}")
+            else:
+                logger.error(f"[RETRY] Retry failed for lap {failed_lap_number}")
+                
+        return {
+            "success": succeeded > 0,
+            "message": f"Retried {retried} laps, {succeeded} succeeded",
+            "retried": retried,
+            "succeeded": succeeded
+        }
+
+    def get_processing_status(self):
+        """Get comprehensive processing status for diagnostics.
+        
+        Returns:
+            Dictionary with processing statistics
+        """
+        with self._processing_lock:
+            processed_count = len(self._processed_lap_indexer_lap_numbers)
+            failed_count = len(self._failed_lap_numbers)
+            pending_count = len(self._pending_lap_numbers)
+            gap_count = len(self._lap_sequence_gaps)
+            
+            # Get worker health if available
+            worker_health = None
+            if self._save_worker and self._save_worker.is_alive():
+                try:
+                    worker_health = self._save_worker.get_health_status()
+                except:
+                    worker_health = {"error": "Could not get worker health"}
+            
+            return {
+                "processed_laps": processed_count,
+                "failed_laps": failed_count,
+                "pending_laps": pending_count,
+                "sequence_gaps": gap_count,
+                "expected_next_lap": self._expected_next_lap_number,
+                "worker_restarts": self._worker_restart_count,
+                "direct_save_mode": self._use_direct_save,
+                "worker_health": worker_health,
+                "failed_lap_numbers": list(self._failed_lap_numbers),
+                "pending_lap_numbers": list(self._pending_lap_numbers),
+                "sequence_gap_details": self._lap_sequence_gaps.copy()
+            }
+
+    def shutdown(self):
+        """Clean shutdown of the IRacingLapSaver.
+        
+        Call this when the application is closing to ensure all laps are saved.
+        """
+        logger.info("[SHUTDOWN] IRacingLapSaver shutting down")
+        
+        # Finalize any outstanding laps
+        self.end_session()
+        
+        # Get final processing status
+        status = self.get_processing_status()
+        logger.info(f"[SHUTDOWN] Final processing status: {status}")
+        
+        # Stop the worker thread
+        if hasattr(self, '_save_worker') and self._save_worker:
+            # Wait for up to 10 seconds for the queue to finish
+            logger.info(f"[SHUTDOWN] Waiting for worker to finish processing {self._save_worker.get_queue_size()} remaining laps...")
+            self._save_worker.wait_until_empty(timeout=10.0)
+            
+            # Now stop the worker
+            self._save_worker.stop()
+            
+            # Wait for worker thread to actually stop
+            if self._save_worker.is_alive():
+                logger.info("[SHUTDOWN] Waiting for worker thread to stop...")
+                self._save_worker.join(timeout=5.0)
+                if self._save_worker.is_alive():
+                    logger.warning("[SHUTDOWN] Worker thread did not stop gracefully")
+                else:
+                    logger.info("[SHUTDOWN] Worker thread stopped successfully")
+            
+        # Attempt to retry any failed laps one more time
+        retry_result = self.retry_failed_laps()
+        if retry_result["retried"] > 0:
+            logger.info(f"[SHUTDOWN] Final retry attempt: {retry_result['message']}")
+            
+        # Stop the async save thread
+        if hasattr(self, '_async_save_running') and self._async_save_running:
+            logger.info("🧵 [ASYNC SAVE] Stopping async save thread...")
+            self._async_save_running = False
+            
+            # Signal shutdown
+            try:
+                self._async_save_queue.put(None, timeout=1.0)
+            except:
+                pass
+            
+            # Wait for thread to finish
+            if hasattr(self, '_async_save_thread') and self._async_save_thread and self._async_save_thread.is_alive():
+                self._async_save_thread.join(timeout=5.0)
+                if self._async_save_thread.is_alive():
+                    logger.warning("🧵 [ASYNC SAVE] Thread did not stop within timeout")
+                else:
+                    logger.info("🧵 [ASYNC SAVE] Thread stopped successfully")
+            
+        logger.info("[SHUTDOWN] IRacingLapSaver shutdown complete")
+
+    def _start_async_save_thread(self):
+        """Start the asynchronous save thread."""
+        if hasattr(self, '_async_save_thread') and self._async_save_thread and self._async_save_thread.is_alive():
+            return  # Thread already running
+        
+        self._async_save_running = True
+        self._async_save_thread = threading.Thread(target=self._async_save_worker, daemon=True)
+        self._async_save_thread.start()
+        logger.info("🧵 [ASYNC SAVE] Asynchronous save thread started")
+    
+    def _async_save_worker(self):
+        """Worker method that runs in the async save thread to handle saving without blocking telemetry."""
+        logger.info("🧵 [ASYNC SAVE] Worker thread started")
+        
+        while self._async_save_running:
+            try:
+                # Wait for lap data with timeout
+                lap_data_dict = self._async_save_queue.get(timeout=1.0)
+                
+                if lap_data_dict is None:  # Shutdown signal
+                    break
+                
+                sdk_lap_number = lap_data_dict.get("lap_number_sdk")
+                logger.info(f"🧵 [ASYNC SAVE] Processing lap {sdk_lap_number} asynchronously")
+                
+                start_time = time.time()
+                
+                # Call the actual save method (this can take several seconds)
+                saved_lap_id = self.save_lap_directly(lap_data_dict)
+                
+                end_time = time.time()
+                save_duration = end_time - start_time
+                
+                # Mark as processed based on result
+                success = (saved_lap_id is not None)
+                self._mark_lap_as_processed(sdk_lap_number, success=success)
+                
+                if success:
+                    logger.info(f"🧵 [ASYNC SAVE] Successfully saved lap {sdk_lap_number} in {save_duration:.2f}s (async)")
+                else:
+                    logger.error(f"🧵 [ASYNC SAVE] Failed to save lap {sdk_lap_number} after {save_duration:.2f}s (async)")
+                
+                self._async_save_queue.task_done()
+                
+            except queue.Empty:
+                continue  # Timeout - keep running
+            except Exception as e:
+                logger.error(f"🧵 [ASYNC SAVE] Error in async save worker: {e}", exc_info=True)
+                # Continue running even if there's an error
+        
+        logger.info("🧵 [ASYNC SAVE] Worker thread exiting")
+    
+    def save_lap_async(self, lap_data_dict):
+        """Queue a lap for asynchronous saving without blocking the telemetry thread.
+        
+        Args:
+            lap_data_dict: Dictionary containing lap data to save
+        """
+        if not hasattr(self, '_async_save_running') or not self._async_save_running:
+            logger.warning("🧵 [ASYNC SAVE] Async save system not running, falling back to direct save")
+            return self.save_lap_directly(lap_data_dict)
+        
+        sdk_lap_number = lap_data_dict.get("lap_number_sdk")
+        
+        try:
+            # Queue the lap for async processing - this is non-blocking
+            self._async_save_queue.put(lap_data_dict, block=False)
+            logger.info(f"🧵 [ASYNC SAVE] Queued lap {sdk_lap_number} for asynchronous processing (queue size: {self._async_save_queue.qsize()})")
+            
+            # Check queue health
+            queue_size = self._async_save_queue.qsize()
+            if queue_size > 10:
+                logger.warning(f"🧵 [ASYNC SAVE] Queue size is high ({queue_size}), async save may be falling behind")
+            
+        except queue.Full:
+            logger.error(f"🧵 [ASYNC SAVE] Queue is full, falling back to direct save for lap {sdk_lap_number}")
+            return self.save_lap_directly(lap_data_dict)
+        except Exception as e:
+            logger.error(f"🧵 [ASYNC SAVE] Error queuing lap {sdk_lap_number}: {e}")
+            return self.save_lap_directly(lap_data_dict)

@@ -423,21 +423,8 @@ class SimpleIRacingAPI(QObject):
                     lap_info_to_pass_to_ui = self.telemetry_saver.process_telemetry(telemetry)
                 if self.lap_saver:
                     try:
-                         # Call handle_reset before processing telemetry through the lap indexer
-                         # This ensures reset detection is handled first as specified in the fix plan
-                         if hasattr(self.lap_saver, 'lap_indexer'):
-                             # Extract the needed values for reset detection
-                             current_lap_dist = telemetry.get('LapDistPct', 0.0)
-                             current_speed = telemetry.get('Speed', 0.0)
-                             on_pit_road = telemetry.get('OnPitRoad', False)
-                             now_tick = telemetry.get('SessionTimeSecs', 0.0)
-                             
-                             # Call handle_reset before on_frame
-                             self.lap_saver.lap_indexer.handle_reset(telemetry, current_lap_dist, current_speed, on_pit_road)
-                             
-                             # Call close_if_needed to check for lap wrap-around
-                             self.lap_saver.lap_indexer.close_if_needed(current_lap_dist, on_pit_road, now_tick)
-                         
+                         # Process telemetry through the improved LapIndexer (which now has conservative reset detection)
+                         # The LapIndexer.on_frame() method handles all reset detection and lap boundary detection internally
                          lap_result_supabase = self.lap_saver.process_telemetry(telemetry)
                          if lap_result_supabase: lap_info_to_pass_to_ui = lap_result_supabase
                     except Exception as e:
@@ -632,50 +619,27 @@ class SimpleIRacingAPI(QObject):
             logger.warning("Telemetry saver not initialized, cannot set data manager")
 
     def set_lap_saver(self, lap_saver):
-        """Set the lap saver to use for storing lap data in Supabase.
-        
-        Args:
-            lap_saver: The IRacingLapSaver instance
-        """
+        """Set the lap saver for telemetry processing."""
         self.lap_saver = lap_saver
-        
-        # First check if user_id is in session info
-        user_id = None
-        if self._session_info and 'user_id' in self._session_info:
-            user_id = self._session_info['user_id']
-            
-        # If not found in session info, try to get from user_manager
-        if not user_id:
-            try:
-                from ..auth.user_manager import get_current_user
-                user = get_current_user()
-                if user and hasattr(user, 'id'):
-                    user_id = user.id
-                    # Store it in session info for future use
-                    if not self._session_info:
-                        self._session_info = {}
-                    self._session_info['user_id'] = user_id
-            except Exception as e:
-                logger.error(f"Error getting current user: {e}")
-        
-        # Set the user ID if we have it
-        if user_id:
-            lap_saver.set_user_id(user_id)
-            logger.info(f"Set user ID for lap saver: {user_id}")
-        else:
-            logger.warning("No user ID available to set for lap saver")
-            
-        # Start a session if we're already connected
-        if self.state.ir_connected:
-            track_name = self.get_current_track()
-            car_name = self.get_current_car()
-            session_type = self.get_session_type()
-            session_id = lap_saver.start_session(track_name, car_name, session_type)
-            logger.info(f"Started Supabase session with ID: {session_id}")
-        
         logger.info("Lap saver set for telemetry processing")
         
-        return True 
+        # If the lap saver has an update method for user data, call it
+        if hasattr(lap_saver, 'set_user_id'):
+            # Extract user ID from session info if available
+            user_id = self._session_info.get('user_id')
+            if user_id:
+                lap_saver.set_user_id(user_id)
+                logger.info(f"Set user ID for lap saver: {user_id}")
+        
+        return True
+    
+    def set_telemetry_saver(self, telemetry_saver):
+        """Set the telemetry saver for processing telemetry data."""
+        if telemetry_saver:
+            self.telemetry_saver = telemetry_saver
+            logger.info("External telemetry saver connected to SimpleIRacingAPI")
+            return True
+        return False
 
     def debug_ir_vars(self):
         """Debug function to print all available iRacing variables."""

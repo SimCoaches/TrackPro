@@ -63,6 +63,10 @@ class LapIndexer:
         self._last_wrap_around_time: float = 0.0
         self._wrap_around_cooldown: float = 2.0  # seconds
         
+        # Early boundary detection to capture lap starts better
+        self._approaching_boundary: bool = False
+        self._boundary_approach_threshold: float = 0.95  # Start watching when we reach 95% of lap
+        
         # New variables for delayed lap finalization
         self._pending_wrap_around_lap: Dict[str, Any] | None = None
         self._pending_wrap_around_lap_frames: List[Dict[str, Any]] = []
@@ -290,7 +294,11 @@ class LapIndexer:
             if not self._recently_started_by_wrap_around:
                 reset_handled = self.handle_reset(frame_copy, current_lap_dist, current_speed, on_pit_road_now)
                 if not reset_handled:
-                    self.close_if_needed(current_lap_dist, on_pit_road_now, now_tick)
+                    self.close_if_needed(current_lap_dist, on_pit_road_now, now_tick, frame_copy)
+                    
+        # --- LAP NUMBER VALIDATION SYSTEM ---
+        # Final check to ensure our internal lap number stays synchronized with iRacing
+        self._validate_lap_synchronization(frame_copy)
 
         # --- Collect Telemetry & Update Invalidity for Active Lap ---
         self._active_lap_frames.append(frame_copy)
@@ -311,6 +319,49 @@ class LapIndexer:
         self._previous_frame_ir_data = frame_copy
         self._previous_lap_dist_pct = current_lap_dist
         self._previous_speed = current_speed
+        
+    def _validate_lap_synchronization(self, frame_copy: Dict[str, Any]) -> None:
+        """Validate that our internal lap numbering stays synchronized with iRacing.
+        
+        This method catches edge cases where lap numbers can drift apart and corrects them.
+        """
+        if self._active_lap_number_internal is None:
+            return
+            
+        iracing_lap = frame_copy.get("Lap", 0)
+        iracing_completed = frame_copy.get("LapCompleted", 0)
+        
+        # Calculate what iRacing thinks the current lap should be
+        expected_current_lap = iracing_completed + 1
+        
+        # Our internal lap should generally match iRacing's LapCompleted
+        # but we need to handle cases where they diverge
+        
+        # Case 1: Our internal lap is significantly behind iRacing's completed count
+        if self._active_lap_number_internal < iracing_completed - 1:
+            logger.warning(f"[LAP SYNC] Internal lap {self._active_lap_number_internal} is behind iRacing completed {iracing_completed}")
+            logger.info(f"[LAP SYNC] Syncing internal lap to {iracing_completed} to match iRacing")
+            self._active_lap_number_internal = iracing_completed
+            
+        # Case 2: Our internal lap is ahead of what iRacing thinks should be completed
+        elif self._active_lap_number_internal > iracing_completed + 1:
+            logger.warning(f"[LAP SYNC] Internal lap {self._active_lap_number_internal} is ahead of iRacing completed {iracing_completed}")
+            logger.info(f"[LAP SYNC] Adjusting internal lap to {iracing_completed} to match iRacing")
+            self._active_lap_number_internal = iracing_completed
+            
+        # Case 3: Check consistency with iRacing's current driving lap
+        # The driving lap (ir["Lap"]) should be our internal lap + 1 in most cases
+        if (iracing_lap > 0 and 
+            self._active_lap_number_internal is not None and 
+            abs(iracing_lap - (self._active_lap_number_internal + 1)) > 1):
+            
+            logger.info(f"[LAP SYNC] Potential driving lap inconsistency: "
+                       f"iRacing driving lap {iracing_lap}, internal lap {self._active_lap_number_internal}")
+            
+            # If the inconsistency is large, sync with iRacing's completed count
+            if abs(iracing_lap - (self._active_lap_number_internal + 1)) > 2:
+                logger.warning(f"[LAP SYNC] Large driving lap inconsistency detected, syncing with iRacing completed count")
+                self._active_lap_number_internal = iracing_completed
 
     def _start_new_lap(
         self,
@@ -321,11 +372,21 @@ class LapIndexer:
         initial_lap_dist_pct: float = None, # Optional initial lap distance for classification
         is_mid_session_join: bool = False # Whether we're joining mid-session
     ) -> None:
+        # CRITICAL BUG FIX: Prevent truly invalid lap numbers (negative values)
+        # Note: lap_number_internal of 0 is valid in iRacing (it's the outlap)
+        if lap_number_internal < 0:
+            logger.warning(f"[LapIndexer] Refusing to start invalid lap number {lap_number_internal}")
+            return
+            
         self._active_lap_frames = []
         self._active_lap_number_internal = lap_number_internal
         self._active_lap_start_tick = start_tick
         self._active_lap_invalid_sdk = invalid_sdk_flag_for_this_lap # Initial invalid state for this lap
         self._active_lap_started_on_pit = on_pit_start
+
+        # Enhanced lap state classification with detailed logging
+        logger.info(f"[LapIndexer] Classifying lap {lap_number_internal}: on_pit_start={on_pit_start}, "
+                   f"is_mid_session_join={is_mid_session_join}, initial_lap_dist_pct={initial_lap_dist_pct}")
 
         # Determine lap state based on starting conditions and initial position
         if on_pit_start:
@@ -344,6 +405,15 @@ class LapIndexer:
             # Otherwise it's a normal TIMED lap
             self._active_lap_state = LapState.TIMED
             logger.info(f"[LapIndexer] Lap {lap_number_internal} classified as TIMED (normal racing lap)")
+        
+        # Additional validation: If lap 0, it should always be OUT regardless of other factors
+        if lap_number_internal == 0 and self._active_lap_state != LapState.OUT:
+            logger.info(f"[LapIndexer] Lap 0 reclassified from {self._active_lap_state.name} to OUT (lap 0 is always outlap)")
+            self._active_lap_state = LapState.OUT
+            
+        # Additional validation: If we're clearly not on pit road but classified as OUT, log a warning
+        if not on_pit_start and self._active_lap_state == LapState.OUT and lap_number_internal > 0:
+            logger.warning(f"[LapIndexer] Lap {lap_number_internal} classified as OUT but not starting on pit road - this may be incorrect")
         
         logger.info(f"[LapIndexer] Starting new lap data collection. LapInternalNum: {self._active_lap_number_internal}, "
                     f"Type: {self._active_lap_state.name}, StartTick: {start_tick:.3f}, OnPitStart: {on_pit_start}, "
@@ -477,6 +547,7 @@ class LapIndexer:
         self._last_wrap_around_time = 0.0
         self._recently_started_by_wrap_around = False
         self._wrap_around_start_time = 0.0
+        self._approaching_boundary = False
         logger.info("[LapIndexer] Internal state reset, but lap data preserved.")
 
     def get_laps(self) -> List[Dict[str, Any]]:
@@ -514,14 +585,16 @@ class LapIndexer:
         self._last_wrap_around_time = 0.0
         self._recently_started_by_wrap_around = False
         self._wrap_around_start_time = 0.0
+        self._approaching_boundary = False
 
-    def close_if_needed(self, current_lap_dist: float, on_pit_road: bool, now_tick: float) -> bool:
+    def close_if_needed(self, current_lap_dist: float, on_pit_road: bool, now_tick: float, current_frame: Dict[str, Any] = None) -> bool:
         """Check if wrap-around has occurred even if OnPitRoad is True.
         
         Args:
             current_lap_dist: Current LapDistPct value (0.0-1.0)
             on_pit_road: Current OnPitRoad status
             now_tick: Current session time in seconds
+            current_frame: Current telemetry frame data for proper association
             
         Returns:
             True if lap was closed, False otherwise
@@ -530,13 +603,27 @@ class LapIndexer:
         if self._active_lap_number_internal is None or not self._active_lap_frames:
             return False
             
-        # Check for wrap-around - if we were near the end of the lap and now near the start
-        # Use 0.02 hysteresis to avoid jitter at the start/finish line
-        wrap_detected = (self._previous_lap_dist_pct > 0.98 and current_lap_dist < 0.02)
+        # EARLY BOUNDARY DETECTION: Track when we're approaching the start/finish line
+        if not self._approaching_boundary and current_lap_dist > self._boundary_approach_threshold:
+            self._approaching_boundary = True
+            logger.info(f"[LapIndexer] 🏁 Approaching S/F line at {current_lap_dist:.3f} - Enhanced monitoring active")
+        elif self._approaching_boundary and current_lap_dist < 0.50:
+            # We've wrapped around and are now in the first half of the new lap
+            self._approaching_boundary = False
+            
+        # CRITICAL FIX: Tighter wrap-around detection to capture the very start of laps
+        # Detect wrap-around much earlier to avoid missing the beginning of laps
         
-        # Also detect if we experienced a huge drop in position (≥0.95) which indicates S/F crossing
-        # This catches cases where position jumps from say 0.99 to 0.04 (dropping by 0.95)
-        big_drop_detected = (self._previous_lap_dist_pct - current_lap_dist >= 0.95)
+        # Primary detection: Near end of lap to very start of lap (most common case)
+        wrap_detected = (self._previous_lap_dist_pct > 0.97 and current_lap_dist < 0.01)
+        
+        # Secondary detection: Large position drop (catches any remaining cases)
+        # This catches cases where position jumps from say 0.99 to 0.01 (dropping by 0.98)
+        big_drop_detected = (self._previous_lap_dist_pct - current_lap_dist >= 0.90)
+        
+        # Tertiary detection: Very tight detection for small jumps that cross zero
+        # This catches cases where we go from 0.995 to 0.001 (very small window)
+        precise_wrap_detected = (self._previous_lap_dist_pct > 0.995 and current_lap_dist < 0.005)
         
         # Check for cooldown period to prevent multiple detections of the same boundary
         time_since_last_wrap = now_tick - self._last_wrap_around_time
@@ -547,9 +634,20 @@ class LapIndexer:
                            f"(Time since last wrap: {time_since_last_wrap:.3f}s)")
             return False
         
-        if wrap_detected or big_drop_detected:
-            logger.info(f"[LapIndexer] Detected lap wrap-around: {self._previous_lap_dist_pct:.3f} → {current_lap_dist:.3f} "
-                       f"(OnPitRoad: {on_pit_road})")
+        # Enhanced logging when approaching boundary for debugging
+        if self._approaching_boundary and (self._previous_lap_dist_pct > 0.98 or current_lap_dist < 0.02):
+            logger.info(f"[LapIndexer] 🎯 CRITICAL ZONE: {self._previous_lap_dist_pct:.6f} → {current_lap_dist:.6f} "
+                       f"(Δ={self._previous_lap_dist_pct - current_lap_dist:.6f})")
+        
+        if wrap_detected or big_drop_detected or precise_wrap_detected:
+            # Log which detection method triggered
+            detection_method = []
+            if wrap_detected: detection_method.append("PRIMARY(0.97→0.01)")
+            if big_drop_detected: detection_method.append("SECONDARY(≥0.90_drop)")
+            if precise_wrap_detected: detection_method.append("TERTIARY(0.995→0.005)")
+            
+            logger.info(f"[LapIndexer] ⚡ EARLY LAP DETECTION: {self._previous_lap_dist_pct:.6f} → {current_lap_dist:.6f} "
+                       f"Methods: {', '.join(detection_method)} (OnPitRoad: {on_pit_road})")
             
             # Update the last wrap-around time
             self._last_wrap_around_time = now_tick
@@ -581,10 +679,33 @@ class LapIndexer:
             self._recently_started_by_wrap_around = True
             self._wrap_around_start_time = now_tick
             
-            # Add the current frame to the new lap to ensure we have the first point after S/F
-            frame_copy = dict(self._previous_frame_ir_data) if self._previous_frame_ir_data else {}
-            frame_copy.update({"LapDistPct": current_lap_dist})  # Make sure the current distance is recorded
-            self._active_lap_frames.append(frame_copy)
+            # CRITICAL FIX: Ensure we capture the start of the lap properly with CURRENT frame data
+            # This fixes the telemetry data offset issue
+            
+            # First, add a synthetic "zero crossing" frame if we jumped over it
+            if self._previous_lap_dist_pct > 0.99 and current_lap_dist > 0.01:
+                # We jumped over the zero crossing, interpolate a frame at position 0.000
+                boundary_frame = dict(self._previous_frame_ir_data) if self._previous_frame_ir_data else {}
+                boundary_frame.update({
+                    "LapDistPct": 0.000,  # Synthetic start-of-lap frame
+                    "lap_boundary_interpolated": True  # Mark as interpolated for debugging
+                })
+                self._active_lap_frames.append(boundary_frame)
+                logger.info(f"[LapIndexer] 🎯 Added interpolated start-of-lap frame at 0.000")
+            
+            # CRITICAL FIX: Use the CURRENT frame data for the new lap, not previous frame data
+            if current_frame is not None:
+                # Use the actual current frame data
+                new_lap_frame = dict(current_frame)
+                new_lap_frame.update({"LapDistPct": current_lap_dist})  # Ensure correct lap distance
+                self._active_lap_frames.append(new_lap_frame)
+                logger.info(f"[LapIndexer] ✅ Added CURRENT frame data to new lap {next_lap_num} at {current_lap_dist:.6f}")
+            else:
+                # Fallback to previous frame data if current frame not available (should not happen)
+                fallback_frame = dict(self._previous_frame_ir_data) if self._previous_frame_ir_data else {}
+                fallback_frame.update({"LapDistPct": current_lap_dist})
+                self._active_lap_frames.append(fallback_frame)
+                logger.warning(f"[LapIndexer] ⚠️ Used fallback frame data for new lap {next_lap_num} - this may cause telemetry offset")
             
             return True
             
@@ -617,7 +738,10 @@ class LapIndexer:
         self._pending_wrap_around_lap_frames = []
 
     def handle_reset(self, frame: Dict[str, Any], current_lap_dist: float, current_speed: float, on_pit_road: bool) -> bool:
-        """Detect teleport: prev_speed > 2 m/s && speed < 0.5 AND ΔLapDistPct > 0.20 while OnPitRoad == True
+        """Enhanced reset detection that catches ESC->Reset to Pits scenarios more reliably.
+        
+        This method should detect actual resets to pits (like ESC->Reset to Pits),
+        especially when they happen after completing a lap.
         
         Args:
             frame: Current telemetry frame
@@ -626,63 +750,130 @@ class LapIndexer:
             on_pit_road: Current OnPitRoad status
             
         Returns:
-            True if reset was detected and handled, False otherwise
+            True if an actual reset was detected and handled, False otherwise
         """
-        # Only check if we're on pit road - resets elsewhere are handled differently
-        if not on_pit_road:
-            return False
-            
         # Only need to check if we have previous data
         if self._previous_lap_dist_pct < 0 or not self._active_lap_frames:
             return False
             
-        # Check for sudden drop in speed (car was moving but now almost stopped)
-        speed_drop = (self._previous_speed > 2.0 and current_speed < 0.5)
+        now_tick = float(frame.get("SessionTimeSecs", 0.0))
         
-        # Check for significant position jump (teleport)
-        position_jump = abs(current_lap_dist - self._previous_lap_dist_pct) > 0.20
+        # Get previous pit road status for transition detection
+        prev_on_pit_road = False
+        if self._previous_frame_ir_data:
+            prev_on_pit_road = self._previous_frame_ir_data.get("OnPitRoad", False)
         
-        # Combined check for reset/teleport while on pit road
-        if speed_drop and position_jump and on_pit_road:
-            now_tick = float(frame.get("SessionTimeSecs", 0.0))
+        # --- ENHANCED RESET DETECTION SCENARIOS ---
+        
+        # Scenario 1: Classic teleport to pits (speed drop + position jump + now on pit road)
+        # This is the traditional "ESC -> Reset to Pits" scenario
+        speed_drop = (self._previous_speed > 10.0 and current_speed < 5.0)  # Significant speed drop
+        position_jump = abs(current_lap_dist - self._previous_lap_dist_pct) > 0.20  # Position jump
+        now_on_pit_road = on_pit_road and not prev_on_pit_road  # Just entered pit road
+        
+        teleport_to_pits = speed_drop and position_jump and now_on_pit_road
+        
+        # Scenario 2: Sudden pit road entry with large position jump (relaxed criteria)
+        # This catches "ESC -> Reset to Pits" even when speed criteria aren't met
+        sudden_pit_entry = (not prev_on_pit_road and on_pit_road and 
+                           abs(current_lap_dist - self._previous_lap_dist_pct) > 0.15 and  # Lowered threshold
+                           not self._is_likely_sf_crossing(current_lap_dist))
+        
+        # Scenario 3: Major speed reset while on pit road (like car getting stuck and resetting)
+        speed_reset_in_pits = (prev_on_pit_road and on_pit_road and 
+                              self._previous_speed > 1.0 and current_speed < 0.1)
+        
+        # Scenario 4: NEW - Position-based reset detection (catches ESC->Reset after lap completion)
+        # This detects when someone suddenly appears in pit area regardless of speed
+        # Common when using ESC->Reset to Pits after completing a lap
+        position_based_reset = (not prev_on_pit_road and on_pit_road and 
+                               abs(current_lap_dist - self._previous_lap_dist_pct) > 0.10 and  # Any significant jump
+                               current_lap_dist < 0.50)  # Now in first half of track (pit area)
+        
+        # Scenario 5: NEW - Track position discontinuity with pit entry
+        # This catches cases where position suddenly changes AND we're now on pit road
+        # This is very common with reset actions
+        position_discontinuity = (not prev_on_pit_road and on_pit_road and
+                                 abs(current_lap_dist - self._previous_lap_dist_pct) > 0.05)  # Even smaller jumps
+        
+        # Scenario 6: NEW - Speed-independent pit teleport
+        # For cases where speed doesn't drop dramatically but position changes significantly with pit entry
+        pit_teleport = (not prev_on_pit_road and on_pit_road and
+                       abs(current_lap_dist - self._previous_lap_dist_pct) > 0.08 and
+                       current_speed < 20.0)  # Reasonable speed (not necessarily dropped)
+        
+        # --- DETERMINE IF RESET OCCURRED ---
+        reset_detected = (teleport_to_pits or sudden_pit_entry or speed_reset_in_pits or 
+                         position_based_reset or position_discontinuity or pit_teleport)
+        
+        if reset_detected:
+            # Log which scenario triggered the reset detection
+            triggers = []
+            if teleport_to_pits: triggers.append("TeleportToPits")
+            if sudden_pit_entry: triggers.append("SuddenPitEntry") 
+            if speed_reset_in_pits: triggers.append("SpeedResetInPits")
+            if position_based_reset: triggers.append("PositionBasedReset")
+            if position_discontinuity: triggers.append("PositionDiscontinuity")
+            if pit_teleport: triggers.append("PitTeleport")
             
-            logger.info(f"[LapIndexer] Detected reset/teleport: Speed {self._previous_speed:.1f} → {current_speed:.1f} m/s, "
-                       f"Position {self._previous_lap_dist_pct:.3f} → {current_lap_dist:.3f} (OnPitRoad: {on_pit_road})")
+            logger.info(f"[LapIndexer] 🔄 RESET DETECTED - Triggers: {', '.join(triggers)}")
+            logger.info(f"[LapIndexer] Reset details: Speed {self._previous_speed:.1f}→{current_speed:.1f} m/s, "
+                       f"Position {self._previous_lap_dist_pct:.3f}→{current_lap_dist:.3f}, "
+                       f"OnPit {prev_on_pit_road}→{on_pit_road}")
             
-            # When we detect a reset on pit road, this is potentially the start of an OUT lap
-            # Mark the current lap as INCOMPLETE due to the reset
-            self._active_lap_state = LapState.INCOMPLETE
+            # --- HANDLE THE ACTUAL RESET ---
             
-            # If we've got a significant number of frames already, finalize the current lap as INCOMPLETE
-            if len(self._active_lap_frames) > 10:  # Threshold to consider it a meaningful lap segment
+            if self._active_lap_number_internal is not None and len(self._active_lap_frames) > 0:
+                # Use the PREVIOUS frame's timestamp as the end time
+                end_time = self._previous_frame_ir_data.get("SessionTimeSecs", now_tick) if self._previous_frame_ir_data else now_tick
+                
+                logger.info(f"[LapIndexer] Finalizing lap {self._active_lap_number_internal} due to RESET "
+                           f"({len(self._active_lap_frames)} frames, ending at {end_time:.3f})")
+                
                 self._finalise_active_lap(
-                    end_tick=now_tick,
-                    lap_last_lap_time_from_sdk=-1.0,  # No valid time for incomplete lap
-                    ended_on_pit_road=True,
+                    end_tick=end_time,
+                    lap_last_lap_time_from_sdk=-1.0,  # No valid lap time for interrupted lap
+                    ended_on_pit_road=True,  # Reset implies ending in pit area
                     session_finalize=False
                 )
                 
-                # Start a new lap as an OUT lap since we're on pit road
-                next_lap_num = (self._active_lap_number_internal or 0) + 1
+                # Start new lap after reset - this should be an OUT lap since we reset to pits
+                next_lap_number = self._active_lap_number_internal + 1
                 lap_invalidated = frame.get("LapInvalidated", False)
                 
+                logger.info(f"[LapIndexer] Starting new OUT lap {next_lap_number} after RESET (on_pit_start=True)")
+                
                 self._start_new_lap(
-                    lap_number_internal=next_lap_num,
+                    lap_number_internal=next_lap_number,
                     start_tick=now_tick,
-                    on_pit_start=True,  # Always true since we're on pit road
+                    on_pit_start=True,  # TRUE reset means starting on pit road = OUT lap
                     invalid_sdk_flag_for_this_lap=lap_invalidated
                 )
-            else:
-                # Otherwise just mark the current lap as an OUT lap since we're on pit road
-                self._active_lap_state = LapState.OUT
-                self._active_lap_started_on_pit = True
-                logger.info(f"[LapIndexer] Marked lap {self._active_lap_number_internal} as OUT due to pit reset/teleport")
-            
-            # Add reset frame to the lap
-            self._active_lap_frames.append(frame.copy())
+                
             return True
             
         return False
+
+    def _is_likely_sf_crossing(self, current_lap_dist: float) -> bool:
+        """Helper method to determine if a position change is likely a start/finish line crossing.
+        
+        Args:
+            current_lap_dist: Current lap distance percentage
+            
+        Returns:
+            True if this looks like an S/F line crossing, False otherwise
+        """
+        # S/F line crossings typically involve going from high position (>0.95) to low position (<0.05)
+        # or the reverse for backward movement
+        prev_dist = self._previous_lap_dist_pct
+        
+        # Forward S/F crossing: high to low
+        forward_crossing = (prev_dist > 0.95 and current_lap_dist < 0.05)
+        
+        # Backward S/F crossing: low to high (rare but possible)
+        backward_crossing = (prev_dist < 0.05 and current_lap_dist > 0.95)
+        
+        return forward_crossing or backward_crossing
 
     # -----------------------------------------------------------------------
     # How to wire (Updated):

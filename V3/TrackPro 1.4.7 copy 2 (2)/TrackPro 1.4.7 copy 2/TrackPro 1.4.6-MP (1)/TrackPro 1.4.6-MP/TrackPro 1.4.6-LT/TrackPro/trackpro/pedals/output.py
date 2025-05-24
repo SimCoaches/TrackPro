@@ -3,7 +3,6 @@ from ctypes import wintypes
 import logging
 import time
 import os
-import winreg
 
 logger = logging.getLogger(__name__)
 
@@ -65,23 +64,8 @@ class VirtualJoystick:
             self.vjoy_acquired = True
             return
             
-        # Try to set the device name
-        try:
-            # Set the device name to make it easier to identify in games
-            import win32api
-            import win32con
-            
-            # Open the registry key
-            key_path = r"SYSTEM\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_1234&PID_BEAD"
-            try:
-                key = win32api.RegOpenKeyEx(win32con.HKEY_LOCAL_MACHINE, key_path, 0, win32con.KEY_SET_VALUE)
-                win32api.RegSetValueEx(key, "OEMName", 0, win32con.REG_SZ, "TrackPro Virtual Pedals")
-                win32api.RegCloseKey(key)
-                logger.info("Set vJoy device name to 'TrackPro Virtual Pedals'")
-            except Exception as e:
-                logger.error(f"Failed to set vJoy device name: {e}")
-        except ImportError:
-            logger.warning("win32api not available, skipping device name setting")
+        # Note: vJoy device name setting removed due to registry permission issues
+        # The device will use the default vJoy name in Windows
         
         # Load the vJoy DLL
         self.vjoy_dll = None

@@ -265,6 +265,7 @@ class TrackProApp:
         self.updater = None
         self.reconnecting = False
         self.startup_complete = False
+        self.cleanup_completed = False  # Prevent duplicate cleanup calls
         self.oauth_callback_server = None
         
         # Add reference store to prevent C++ objects from being garbage collected
@@ -287,6 +288,9 @@ class TrackProApp:
             # Update progress 10%
             self.update_progress(10, "Initializing interface...")
             self.window = MainWindow(oauth_handler=self.oauth_handler)
+            
+            # Store a reference to this app instance in the window for cleanup
+            self.window.app_instance = self
             
             # Connect auth state changed signal
             if hasattr(self.window, 'auth_state_changed'):
@@ -889,7 +893,13 @@ class TrackProApp:
     
     def cleanup(self, force_unhide=True):
         """Clean up resources before application closes."""
+        # Prevent duplicate cleanup calls
+        if hasattr(self, 'cleanup_completed') and self.cleanup_completed:
+            logger.debug("Cleanup already completed, skipping duplicate call")
+            return
+            
         logger.info("Cleaning up resources...")
+        self.cleanup_completed = True
         
         # Clean up Race Coach resources if it exists
         if hasattr(self, 'window') and hasattr(self.window, 'stacked_widget'):
