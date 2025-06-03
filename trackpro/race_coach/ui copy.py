@@ -274,10 +274,29 @@ class TelemetryFetchWorker(QObject):
         if not telemetry_points or len(telemetry_points) < 2:
             return None  # Not enough data
 
+        # **FIX: Map database field names to what graphs expect**
+        mapped_points = []
+        for point in telemetry_points:
+            mapped_point = point.copy()  # Copy the original point
+        
+            # Map track_position to LapDist (what graphs expect)
+            if 'track_position' in mapped_point:
+                mapped_point['LapDist'] = mapped_point['track_position']
+        
+            # Ensure we have all the required fields
+            mapped_point.setdefault('LapDist', 0)
+            mapped_point.setdefault('throttle', 0)
+            mapped_point.setdefault('brake', 0)
+            mapped_point.setdefault('steering', 0)
+            mapped_point.setdefault('speed', 0)
+            mapped_point.setdefault('timestamp', 0)
+        
+            mapped_points.append(mapped_point)
+    
         # Sort points by timestamp just in case
-        telemetry_points.sort(key=lambda p: p.get("timestamp", 0))
+        mapped_points.sort(key=lambda p: p.get("timestamp", 0))
 
-        total_time = telemetry_points[-1].get("timestamp", 0) - telemetry_points[0].get("timestamp", 0)
+        total_time = mapped_points[-1].get("timestamp", 0) - mapped_points[0].get("timestamp", 0)
         if total_time <= 0:
             return None  # Invalid time range
 
@@ -295,20 +314,20 @@ class TelemetryFetchWorker(QObject):
         timestamps = []
 
         # Store the previous timestamp for duration calculations
-        prev_timestamp = telemetry_points[0].get("timestamp", 0)
+        prev_timestamp = mapped_points[0].get("timestamp", 0)
 
         # Track current segment
         in_full_throttle = False
         in_heavy_braking = False
         in_cornering = False
 
-        for point in telemetry_points:
+        for point in mapped_points:
             timestamp = point.get("timestamp", 0)
             throttle = point.get("throttle", 0)
             brake = point.get("brake", 0)
             steering = abs(point.get("steering", 0))
             speed = point.get("speed", 0)
-            track_position = point.get("track_position", 0)
+            track_position = point.get("LapDist", point.get("track_position", 0))  # Use mapped field
 
             # Duration of this segment
             duration = timestamp - prev_timestamp
@@ -366,8 +385,8 @@ class TelemetryFetchWorker(QObject):
             "cornering_pct": cornering_pct,
         }
 
-        # Return the stats and the raw telemetry points directly
-        return {"stats": stats, "points": telemetry_points}
+        # **IMPORTANT: Return the mapped points, not the original ones**
+        return {"stats": stats, "points": mapped_points}
 
     def run(self):
         """Fetch telemetry data for both laps and calculate stats."""
@@ -4310,44 +4329,42 @@ class SuperLapWidget(QWidget):
         # Start the thread
         session_load_thread.start()
     
-    def on_sessions_loaded(self, sessions):
-        """Handle loaded sessions from the worker thread."""
+    def _on_sessions_loaded(self, sessions, message):
+        """Handle loaded sessions from worker thread."""
         try:
-            self.session_combo.clear()
-            
-            if not sessions:
-                self.session_combo.addItem("No sessions with ML data available", None)
-                self.session_context_label.setText("No SuperLap data available for your car/track combinations yet. Our ML model is continuously analyzing new data.")
-                return
-            
-            # Add valid sessions to combo box
-            for session in sessions:
-                car_name = session.get('cars', {}).get('name', 'Unknown Car') if session.get('cars') else 'Unknown Car'
-                track_name = session.get('tracks', {}).get('name', 'Unknown Track') if session.get('tracks') else 'Unknown Track'
-                created_at = session.get('created_at', '')
+            if hasattr(self, 'session_combo'):
+                # Temporarily block signals to prevent on_session_changed during programmatic population
+                self.session_combo.blockSignals(True) # <--- ADD/ENSURE THIS LINE
                 
-                try:
-                    from datetime import datetime
-                    timestamp = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                    display_text = f"{timestamp.strftime('%Y-%m-%d %H:%M')} - {track_name} ({car_name})"
-                except (ValueError, TypeError):
-                    display_text = f"{created_at} - {track_name} ({car_name})"
+                self.session_combo.clear() # Clear after blocking
                 
-                self.session_combo.addItem(display_text, session)
+                if sessions:
+                    for session in sessions:
+                        display_text = self._format_session_display(session)
+                        self.sessiimage.pngbddItem(display_text, session)
+                    
+                    # Select first session by default
+                    if self.session_combo.count() > 0:
+                        self.session_combo.setCurrentIndex(0)
+                        # DO NOT call self.on_session_changed() here.
+                        # The InitialLoadWorker's _on_laps_loaded method will handle loading laps for this first session.
+                else:
+                    self.session_combo.addItem("No sessions found", None)
+                
+                self.session_combo.blockSignals(False) # <--- ADD/ENSURE THIS LINE (Unblock signals)
+                    
+            logger.info(f"Loaded {len(sessions) if sessions else 0} sessions")
             
-            if self.session_combo.count() > 0:
-                self.session_combo.setCurrentIndex(0)
-                self.on_session_changed()
-                
         except Exception as e:
-            print(f"Error handling loaded sessions: {e}")
+            logger.error(f"Error handling loaded sessions: {e}")
+
     
     def on_sessions_error(self, error_message):
         """Handle session loading errors."""
         self.session_combo.clear()
         self.session_combo.addItem(f"Error: {error_message}", None)
         self.session_context_label.setText("Error loading session data. Please try again.")
-    
+
     def load_sessions(self):
         """Load user sessions that match car/track combinations with available SuperLaps."""
         try:
@@ -4693,268 +4710,6 @@ class SuperLapWidget(QWidget):
         except Exception as e:
             print(f"Error fetching ML laps from Supabase: {e}")
             return []
-    
-    def on_user_lap_changed(self):
-        """Handle user lap selection change."""
-        current_data = self.user_lap_combo.currentData()
-        if current_data:
-            self.current_user_lap = next((lap for lap in self.user_laps if lap['id'] == current_data), None)
-            self.update_compare_button_state()
-    
-    def on_ml_lap_changed(self):
-        """Handle ML lap selection change."""
-        current_data = self.ml_lap_combo.currentData()
-        if current_data:
-            self.current_ml_lap = next((lap for lap in self.ml_laps if lap['id'] == current_data), None)
-            self.update_compare_button_state()
-    
-    def update_compare_button_state(self):
-        """Enable/disable compare button based on selections."""
-        can_compare = (self.current_user_lap is not None and 
-                      self.current_ml_lap is not None)
-        self.compare_button.setEnabled(can_compare)
-    
-    def analyze_performance(self):
-        """Perform comprehensive performance analysis."""
-        if not self.current_user_lap or not self.current_ml_lap:
-            return
-        
-        # Update overview tab
-        self.update_overview_analysis()
-        
-        # Update sector analysis
-        self.update_sector_analysis()
-        
-        # Update technique analysis
-        self.update_technique_analysis()
-        
-        # Switch to overview tab to show results
-        self.analysis_tabs.setCurrentIndex(0)
-    
-    def update_overview_analysis(self):
-        """Update the performance overview tab with analysis results."""
-        user_time = self.current_user_lap.get('lap_time', 0)
-        ml_time = self.current_ml_lap.get('lap_time', 0)
-        
-        self.user_time_label.setText(f"Your Time: {self._format_time(user_time)}")
-        self.ml_time_label.setText(f"SuperLap Time: {self._format_time(ml_time)}")
-        
-        if user_time > 0 and ml_time > 0:
-            diff = user_time - ml_time
-            if diff > 0:
-                self.time_diff_label.setText(f"Potential Improvement: -{self._format_time(diff)}")
-                self.time_diff_label.setStyleSheet("color: #00ff88; font-size: 18px; font-weight: bold;")
-            else:
-                self.time_diff_label.setText(f"You're faster by: {self._format_time(abs(diff))}")
-                self.time_diff_label.setStyleSheet("color: #ffaa00; font-size: 18px; font-weight: bold;")
-        
-        # Update ML info
-        confidence = self.current_ml_lap.get('confidence_score', 0)
-        self.confidence_label.setText(f"AI Confidence: {confidence*100:.0f}%")
-        
-        method = self.current_ml_lap.get('optimization_method', 'Unknown')
-        self.method_label.setText(f"Analysis Method: {method}")
-        
-        model = self.current_ml_lap.get('model_used', 'Unknown')
-        self.model_label.setText(f"AI Model: {model}")
-        
-        # Update key insights
-        insights = self.generate_key_insights()
-        self.insights_list.setText(insights)
-        
-        # Update performance bars
-        self.update_performance_bars()
-    
-    def generate_key_insights(self):
-        """Generate key insights based on the analysis."""
-        insights = []
-        
-        # Get brake points analysis
-        brake_points = self.current_ml_lap.get('brake_points', [])
-        if brake_points:
-            total_brake_improvement = sum(1 for bp in brake_points if 'later' in bp.get('improvement', '').lower())
-            if total_brake_improvement > 0:
-                insights.append(f"🛑 Brake later at {total_brake_improvement} corners for significant time gains")
-        
-        # Get throttle analysis
-        throttle_points = self.current_ml_lap.get('throttle_points', [])
-        if throttle_points:
-            early_throttle = sum(1 for tp in throttle_points if 'earlier' in tp.get('improvement', '').lower())
-            if early_throttle > 0:
-                insights.append(f"⚡ Apply throttle earlier at {early_throttle} corners")
-        
-        # Get racing line analysis
-        racing_line = self.current_ml_lap.get('racing_line', [])
-        if racing_line:
-            insights.append(f"🏎️ Optimize racing line at {len(racing_line)} key sections")
-        
-        # Calculate potential time gain
-        improvement_ms = self.current_ml_lap.get('predicted_improvement_ms', 0)
-        if improvement_ms > 0:
-            insights.append(f"🎯 Total potential improvement: {improvement_ms/1000:.3f} seconds")
-        
-        return "\n".join(f"• {insight}" for insight in insights) if insights else "Analysis complete - review detailed tabs for specific improvements"
-    
-    def update_performance_bars(self):
-        """Update the performance comparison bars."""
-        # Sample performance scores - in production these would be calculated from telemetry analysis
-        scores = {
-            'brake_efficiency': 72,
-            'cornering_speed': 68,
-            'throttle_application': 75,
-            'racing_line': 65,
-            'consistency': 80
-        }
-        
-        for aspect_key, (progress_bar, score_label) in self.performance_bars.items():
-            score = scores.get(aspect_key, 0)
-            progress_bar.setValue(score)
-            score_label.setText(f"{score}/100")
-    
-    def update_sector_analysis(self):
-        """Update the sector analysis tab."""
-        # Sample sector data - in production this would come from telemetry analysis
-        sectors = [
-            {"name": "Sector 1", "user_time": 28.456, "ml_time": 27.892, "improvement": "Brake later at T1, earlier throttle at T2"},
-            {"name": "Sector 2", "user_time": 31.234, "ml_time": 30.678, "improvement": "Wider line through chicane, smoother inputs"},
-            {"name": "Sector 3", "user_time": 25.678, "ml_time": 25.234, "improvement": "Later apex at final corner, use more track"}
-        ]
-        
-        self.sector_table.setRowCount(len(sectors))
-        
-        for row, sector in enumerate(sectors):
-            self.sector_table.setItem(row, 0, QTableWidgetItem(sector["name"]))
-            self.sector_table.setItem(row, 1, QTableWidgetItem(self._format_time(sector["user_time"])))
-            self.sector_table.setItem(row, 2, QTableWidgetItem(self._format_time(sector["ml_time"])))
-            
-            diff = sector["user_time"] - sector["ml_time"]
-            diff_item = QTableWidgetItem(f"-{self._format_time(diff)}" if diff > 0 else f"+{self._format_time(abs(diff))}")
-            if diff > 0:
-                diff_item.setForeground(QColor("#ff6666"))
-            else:
-                diff_item.setForeground(QColor("#00ff88"))
-            self.sector_table.setItem(row, 3, diff_item)
-            
-            self.sector_table.setItem(row, 4, QTableWidgetItem(sector["improvement"]))
-        
-        # Update sector tips
-        tips = "Focus on Sector 1 for the biggest gains:\n"
-        tips += "• Brake 15m later at Turn 1 (currently braking at 120m, try 105m)\n"
-        tips += "• Apply throttle 0.3s earlier at Turn 2 exit\n"
-        tips += "• Use wider entry line for better corner speed"
-        
-        self.sector_tips.setText(tips)
-    
-    def update_technique_analysis(self):
-        """Update the driving technique analysis tab."""
-        # Brake analysis
-        brake_points = self.current_ml_lap.get('brake_points', [])
-        if brake_points:
-            brake_text = "Key braking improvements:\n\n"
-            for bp in brake_points:
-                corner = bp.get('corner', 'Unknown')
-                improvement = bp.get('improvement', 'No data')
-                brake_text += f"• Corner {corner}: {improvement}\n"
-            brake_text += "\n💡 Focus on braking later while maintaining control. Practice threshold braking to maximize stopping power."
-        else:
-            brake_text = "No specific braking improvements identified. Your braking technique is already well optimized!"
-        
-        self.brake_analysis.setText(brake_text)
-        
-        # Throttle analysis
-        throttle_points = self.current_ml_lap.get('throttle_points', [])
-        if throttle_points:
-            throttle_text = "Throttle application improvements:\n\n"
-            for tp in throttle_points:
-                corner = tp.get('corner', 'Unknown')
-                improvement = tp.get('improvement', 'No data')
-                throttle_text += f"• Corner {corner}: {improvement}\n"
-            throttle_text += "\n💡 Earlier throttle application can significantly improve lap times. Practice smooth, progressive throttle inputs."
-        else:
-            throttle_text = "Your throttle application is already well optimized!"
-        
-        self.throttle_analysis.setText(throttle_text)
-        
-        # Racing line analysis
-        racing_line = self.current_ml_lap.get('racing_line', [])
-        if racing_line:
-            line_text = "Racing line optimizations:\n\n"
-            for rl in racing_line:
-                section = rl.get('section', 'Unknown')
-                improvement = rl.get('improvement', 'No data')
-                line_text += f"• {section}: {improvement}\n"
-            line_text += "\n💡 Small racing line adjustments can yield big gains. Focus on maximizing corner exit speed for better straight-line performance."
-        else:
-            line_text = "Your racing line is already well optimized!"
-        
-        self.line_analysis.setText(line_text)
-    
-    def _format_time(self, time_in_seconds):
-        """Format time in seconds to MM:SS.mmm format."""
-        if time_in_seconds is None or time_in_seconds <= 0:
-            return "--:--.---"
-        minutes = int(time_in_seconds // 60)
-        seconds = time_in_seconds % 60
-        return f"{minutes:02d}:{seconds:06.3f}"
-    
-    def _remove_thread_from_tracking(self, thread_name):
-        """Remove a thread from the active threads list when it finishes."""
-        self.active_threads = [t for t in self.active_threads if t[0] != thread_name]
-    
-    def _is_thread_running(self, thread_type):
-        """Check if any thread of the specified type is currently running."""
-        for thread_name, thread, worker in self.active_threads:
-            if thread_name.startswith(thread_type) and thread and thread.isRunning():
-                return True
-        return False
-    
-    def cleanup_threads(self):
-        """Clean up all active threads before widget destruction."""
-        self._is_being_destroyed = True  # Prevent new threads from starting
-        logger.info(f"SuperLapWidget: Cleaning up {len(self.active_threads)} active threads")
-        
-        for thread_name, thread, worker in self.active_threads[:]:  # Copy list to avoid modification during iteration
-            try:
-                # Cancel the worker if possible
-                if worker and hasattr(worker, 'cancel'):
-                    worker.cancel()
-                
-                # Stop the thread gracefully
-                if thread and thread.isRunning():
-                    thread.quit()
-                    if not thread.wait(2000):  # Wait up to 2 seconds
-                        logger.warning(f"SuperLapWidget: Thread {thread_name} did not stop gracefully, terminating")
-                        thread.terminate()
-                        thread.wait(1000)  # Wait another second for termination
-                    else:
-                        logger.info(f"SuperLapWidget: Thread {thread_name} stopped gracefully")
-                        
-            except Exception as e:
-                logger.error(f"SuperLapWidget: Error cleaning up thread {thread_name}: {e}")
-        
-        # Clear the list
-        self.active_threads.clear()
-        logger.info("SuperLapWidget: Thread cleanup completed")
-    
-    def _reset_iracing_connection(self):
-        """Reset iRacing connection by calling parent's method."""
-        logger.info("🔌 SuperLap widget requesting iRacing connection reset...")
-        if hasattr(self.parent(), 'reset_iracing_connection'):
-            self.parent().reset_iracing_connection()
-        else:
-            logger.warning("⚠️ Parent widget doesn't have reset_iracing_connection method")
-    
-    def closeEvent(self, event):
-        """Handle widget close event."""
-        self.cleanup_threads()
-        super().closeEvent(event)
-    
-    def __del__(self):
-        """Destructor to ensure cleanup."""
-        try:
-            self.cleanup_threads()
-        except Exception as e:
-            logger.error(f"SuperLapWidget: Error in destructor: {e}")
 
 
 class RaceCoachWidget(QWidget):
@@ -5096,8 +4851,6 @@ class RaceCoachWidget(QWidget):
             logger.error(f"Error setting up callbacks for iRacing API: {e}")
             import traceback
             logger.error(traceback.format_exc())
-
-    # Removed conflicting _perform_lazy_initialization method - using old working system
 
     def _do_lazy_initialization_work(self):
         """Do the actual heavy initialization work in the background."""
@@ -6734,6 +6487,7 @@ class RaceCoachWidget(QWidget):
     def refresh_session_and_lap_lists(self):
         """Refresh both session and lap lists from the database."""
         try:
+            print(f"[MANUAL_DEBUG_V3] In refresh_session_and_lap_lists: hasattr(self, '_start_initial_data_loading') = {hasattr(self, '_start_initial_data_loading')}")
             logger.info("Refreshing session and lap lists...")
             
             # Show loading indicator
@@ -6824,7 +6578,6 @@ class RaceCoachWidget(QWidget):
         except Exception as e:
             logger.error(f"Error comparing laps: {e}")
             QMessageBox.critical(self, "Error", f"Error comparing laps:\n{str(e)}")
-
     def _start_initial_data_loading(self):
         """Start loading initial session and lap data in background."""
         try:
@@ -6949,44 +6702,219 @@ class RaceCoachWidget(QWidget):
         """Load laps for a specific session."""
         try:
             if not session_id:
+                logger.warning("No session ID provided for lap loading")
+                if hasattr(self, 'left_lap_combo') and hasattr(self, 'right_lap_combo'):
+                    self.left_lap_combo.clear()
+                    self.right_lap_combo.clear()
+                    self.left_lap_combo.addItem("No session selected", None)
+                    self.right_lap_combo.addItem("No session selected", None)
                 return
                 
-            # This would typically start another background worker
-            # For now, just clear the loading state
-            QTimer.singleShot(1000, lambda: self._simulate_lap_loading(session_id))
+            logger.info(f"Loading laps for session: {session_id}")
+            
+            # Use the existing get_laps function to query for laps for this specific session
+            try:
+                laps, msg_laps = get_laps(limit=50, user_only=True, session_id=session_id)
+                
+                if hasattr(self, 'left_lap_combo') and hasattr(self, 'right_lap_combo'):
+                    self.left_lap_combo.clear()
+                    self.right_lap_combo.clear()
+                    
+                    if laps:
+                        for lap in laps:
+                            display_text = self._format_lap_display(
+                                lap.get('lap_number', 0),
+                                lap.get('lap_time', 0),
+                                lap.get('is_valid', True)
+                            )
+                            self.left_lap_combo.addItem(display_text, lap.get('id'))
+                            self.right_lap_combo.addItem(display_text, lap.get('id'))
+                        
+                        # Auto-select first two laps for comparison if available
+                        if len(laps) >= 2:
+                            self.left_lap_combo.setCurrentIndex(0)
+                            self.right_lap_combo.setCurrentIndex(1)
+                            self.on_lap_selection_changed()
+                        elif len(laps) == 1:
+                            self.left_lap_combo.setCurrentIndex(0)
+                            self.right_lap_combo.setCurrentIndex(0)
+                            self.on_lap_selection_changed()
+                        
+                        logger.info(f"Successfully loaded {len(laps)} laps for session {session_id}")
+                    else:
+                        self.left_lap_combo.addItem("No laps found for this session", None)
+                        self.right_lap_combo.addItem("No laps found for this session", None)
+                        logger.info(f"No laps found for session {session_id}")
+                        
+            except Exception as query_error:
+                logger.error(f"Error querying laps for session {session_id}: {query_error}")
+                if hasattr(self, 'left_lap_combo') and hasattr(self, 'right_lap_combo'):
+                    self.left_lap_combo.clear()
+                    self.right_lap_combo.clear()
+                    self.left_lap_combo.addItem("Error loading laps", None)
+                    self.right_lap_combo.addItem("Error loading laps", None)
             
         except Exception as e:
             logger.error(f"Error loading laps for session {session_id}: {e}")
-
-    def _simulate_lap_loading(self, session_id):
-        """Simulate lap loading (placeholder for actual implementation)."""
-        try:
-            # This is a placeholder - in the real implementation,
-            # this would query the database for laps in this session
             if hasattr(self, 'left_lap_combo') and hasattr(self, 'right_lap_combo'):
                 self.left_lap_combo.clear()
                 self.right_lap_combo.clear()
-                self.left_lap_combo.addItem("No laps available", None)
-                self.right_lap_combo.addItem("No laps available", None)
-                
-        except Exception as e:
-            logger.error(f"Error simulating lap loading: {e}")
+                self.left_lap_combo.addItem("Error loading laps", None)
+                self.right_lap_combo.addItem("Error loading laps", None)
+
+    def _simulate_lap_loading(self, session_id):
+        """REMOVED: This placeholder method was causing the 'No laps available' issue.
+        
+        This method has been removed because it was a placeholder that always showed
+        "No laps available" regardless of whether laps actually existed for the session.
+        The proper lap loading is now handled directly in _load_laps_for_session.
+        """
+        logger.info(f"_simulate_lap_loading called but this method has been disabled - proper lap loading now handled by _load_laps_for_session for session {session_id}")
+        # This method is now a no-op to prevent the "No laps available" issue
+        pass
 
     def _compare_laps(self, left_lap_id, right_lap_id):
         """Compare two laps and update telemetry visualization."""
         try:
             logger.info(f"Comparing laps: {left_lap_id} vs {right_lap_id}")
             
-            # This would typically load telemetry data and update graphs
-            # For now, just log the comparison
+            if left_lap_id is None or right_lap_id is None:
+                logger.warning("Cannot compare laps - one or both lap IDs are None")
+                return
+            
+            # Show loading status
             if hasattr(self, 'graph_status_label'):
-                self.graph_status_label.setText("Comparison in progress...")
+                self.graph_status_label.setText("Loading telemetry data...")
                 self.graph_status_label.setVisible(True)
-                
-                # Hide status after a delay
-                QTimer.singleShot(3000, lambda: self.graph_status_label.setVisible(False))
+            
+            # Cancel any existing telemetry fetch operation
+            if self.telemetry_fetch_thread is not None and self.telemetry_fetch_thread.isRunning():
+                if hasattr(self.telemetry_fetch_worker, 'cancel'):
+                    self.telemetry_fetch_worker.cancel()
+                self.telemetry_fetch_thread.quit()
+                self.telemetry_fetch_thread.wait(1000)  # Wait up to 1 second
+            
+            # Create and start worker thread to load telemetry data
+            self.telemetry_fetch_thread = QThread()
+            self.telemetry_fetch_worker = TelemetryFetchWorker(left_lap_id, right_lap_id)
+            self.telemetry_fetch_worker.moveToThread(self.telemetry_fetch_thread)
+            
+            # Connect signals
+            self.telemetry_fetch_thread.started.connect(self.telemetry_fetch_worker.run)
+            self.telemetry_fetch_worker.finished.connect(self._on_telemetry_loaded)
+            self.telemetry_fetch_worker.error.connect(self._on_telemetry_error)
+            self.telemetry_fetch_worker.finished.connect(self.telemetry_fetch_thread.quit)
+            self.telemetry_fetch_worker.finished.connect(self.telemetry_fetch_worker.deleteLater)
+            self.telemetry_fetch_thread.finished.connect(self.telemetry_fetch_thread.deleteLater)
+            
+            # Start the thread
+            self.telemetry_fetch_thread.start()
+            logger.info(f"Started telemetry fetch for laps {left_lap_id} and {right_lap_id}")
             
         except Exception as e:
             logger.error(f"Error comparing laps: {e}")
+            if hasattr(self, 'graph_status_label'):
+                self.graph_status_label.setText(f"Error loading data: {str(e)}")
+                self.graph_status_label.setVisible(True)
+                QTimer.singleShot(3000, lambda: self.graph_status_label.setVisible(False))
 
+    def get_track_length(self):
+        """Get the current track length in meters."""
+        # Try to get track length from session info
+        if hasattr(self, "session_info") and self.session_info:
+            track_length = self.session_info.get("track_length", 0)
+            if track_length > 0:
+                return track_length
 
+        # Fall back to checking context of currently loaded data
+        if hasattr(self, "throttle_graph") and hasattr(self.throttle_graph, "track_length"):
+            graph_track_length = self.throttle_graph.track_length
+            if graph_track_length > 0:
+                return graph_track_length
+
+        # Default value if we can't find track length anywhere
+        return 1000  # 1000 meters default
+
+    def _on_telemetry_loaded(self, left_data, right_data):
+        """Handle loaded telemetry data and update graphs."""
+        try:
+            logger.info("Telemetry data loaded successfully, updating graphs...")
+        
+            # Hide loading status
+            if hasattr(self, 'graph_status_label'):
+                self.graph_status_label.setVisible(False)
+        
+            # Check if we have valid data
+            if not left_data or not right_data:
+                logger.warning("No telemetry data received")
+                if hasattr(self, 'graph_status_label'):
+                    self.graph_status_label.setText("No telemetry data available")
+                    self.graph_status_label.setVisible(True)
+                    QTimer.singleShot(3000, lambda: self.graph_status_label.setVisible(False))
+                return
+        
+            # Extract telemetry points from the data
+            left_points = left_data.get('points', []) if isinstance(left_data, dict) else left_data
+            right_points = right_data.get('points', []) if isinstance(right_data, dict) else right_data
+        
+            logger.info(f"Processing {len(left_points)} left points and {len(right_points)} right points")
+        
+            # Get track length from session data or lap data
+            track_length = self.get_track_length()
+            if not track_length:
+                logger.warning("No track length available, using default")
+                track_length = 1000  # Default fallback
+        
+            # Update all graph widgets with comparison data using the correct method
+            try:
+                if hasattr(self, 'throttle_graph') and self.throttle_graph:
+                    self.throttle_graph.update_graph_comparison(left_data, right_data, track_length)
+                    logger.info("Updated throttle graph")
+            
+                if hasattr(self, 'brake_graph') and self.brake_graph:
+                    self.brake_graph.update_graph_comparison(left_data, right_data, track_length)
+                    logger.info("Updated brake graph")
+            
+                if hasattr(self, 'steering_graph') and self.steering_graph:
+                    self.steering_graph.update_graph_comparison(left_data, right_data, track_length)
+                    logger.info("Updated steering graph")
+            
+                if hasattr(self, 'speed_graph') and self.speed_graph:
+                    self.speed_graph.update_graph_comparison(left_data, right_data, track_length)
+                    logger.info("Updated speed graph")
+            
+                logger.info("All graphs updated successfully!")
+            
+            except Exception as graph_error:
+                logger.error(f"Error updating graphs: {graph_error}")
+                import traceback
+                logger.error(traceback.format_exc())
+                if hasattr(self, 'graph_status_label'):
+                    self.graph_status_label.setText(f"Error updating graphs: {graph_error}")
+                    self.graph_status_label.setVisible(True)
+                
+        except Exception as e:
+            logger.error(f"Error handling loaded telemetry: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            if hasattr(self, 'graph_status_label'):
+                self.graph_status_label.setText(f"Error processing data: {str(e)}")
+                self.graph_status_label.setVisible(True)
+                QTimer.singleShot(5000, lambda: self.graph_status_label.setVisible(False))
+
+    def _on_telemetry_error(self, left_error, right_error):
+        """Handle telemetry loading errors."""
+        logger.error(f"Telemetry loading error - Left: {left_error}, Right: {right_error}")
+        
+        if hasattr(self, 'graph_status_label'):
+            error_msg = "Failed to load telemetry data"
+            if left_error and right_error:
+                error_msg = f"Error loading both laps: {left_error}"
+            elif left_error:
+                error_msg = f"Error loading Lap A: {left_error}"
+            elif right_error:
+                error_msg = f"Error loading Lap B: {right_error}"
+            
+            self.graph_status_label.setText(error_msg)
+            self.graph_status_label.setVisible(True)
+            QTimer.singleShot(5000, lambda: self.graph_status_label.setVisible(False))

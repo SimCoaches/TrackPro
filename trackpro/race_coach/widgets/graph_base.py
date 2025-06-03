@@ -40,19 +40,97 @@ class GraphBase(QWidget):
         
         points = lap_data.get('points', [])
         
+        # DEBUG: Log the first few points to see what data we're getting
+        if len(points) > 0:
+            logger.info(f"DEBUG: Processing {len(points)} telemetry points for channels: {channel_names}")
+            logger.info(f"DEBUG: First point keys: {list(points[0].keys())}")
+            logger.info(f"DEBUG: First point sample: {points[0]}")
+            if len(points) > 5:
+                logger.info(f"DEBUG: Middle point sample: {points[len(points)//2]}")
+        
         # Extract raw data arrays
         raw_distances = []
         raw_data = {channel: [] for channel in channel_names}
         
-        for point in points:
-            # Get distance value
-            if 'LapDist' in point:
-                dist = point['LapDist']
-            elif 'track_position' in point and track_length > 0:
-                # Convert normalized position to actual distance
-                dist = point['track_position'] * track_length
+        # First pass: determine if we should use track_position or LapDist and calculate track length if needed
+        has_lap_dist = any('LapDist' in point for point in points)
+        has_track_position = any('track_position' in point for point in points)
+        
+        # Check if distance data is normalized (0-1) or actual distance
+        sample_distances = []
+        
+        # Get a better sample spread - sample from beginning, middle, and end
+        total_points = len(points)
+        sample_indices = []
+        if total_points >= 10:
+            # Sample from different parts of the lap for better detection
+            sample_indices = [
+                0, 1, 2,  # Start
+                total_points // 4, total_points // 4 + 1,  # Quarter
+                total_points // 2, total_points // 2 + 1,  # Middle  
+                3 * total_points // 4, 3 * total_points // 4 + 1,  # Three quarters
+                total_points - 1  # End
+            ]
+        else:
+            sample_indices = list(range(min(total_points, 10)))
+        
+        for i in sample_indices:
+            if i < total_points:
+                point = points[i]
+                if has_lap_dist and 'LapDist' in point:
+                    sample_distances.append(point['LapDist'])
+                elif has_track_position and 'track_position' in point:
+                    sample_distances.append(point['track_position'])
+        
+        # Determine if data is normalized or actual distance
+        is_normalized = False
+        if sample_distances:
+            max_sample_dist = max(sample_distances)
+            min_sample_dist = min(sample_distances)
+            
+            # More robust detection: if ALL values are between 0-1, it's normalized
+            # Even if the range is small, if all values are 0-1, it's normalized
+            all_values_0_to_1 = all(0.0 <= d <= 1.0 for d in sample_distances)
+            has_reasonable_spread = (max_sample_dist - min_sample_dist) > 0.05  # Lower threshold
+            
+            if all_values_0_to_1:
+                is_normalized = True
+                logger.info(f"DEBUG: Detected NORMALIZED distance data (all values 0-1). Range: {min_sample_dist:.3f} to {max_sample_dist:.3f}")
             else:
-                continue  # Skip if missing distance
+                is_normalized = False
+                logger.info(f"DEBUG: Detected ACTUAL distance data (values outside 0-1). Range: {min_sample_dist:.1f}m to {max_sample_dist:.1f}m")
+        
+        # Set appropriate track length
+        if not track_length or track_length <= 0:
+            if is_normalized:
+                # For normalized data, use a reasonable track length based on track type
+                # Most road courses are 2-6km, ovals are 1-4km
+                track_length = 3000  # Default 3km
+                logger.info(f"DEBUG: Using default track length for normalized data: {track_length}m")
+            else:
+                # For actual distance data, estimate from the data range
+                track_length = max(sample_distances) if sample_distances else 1000
+                logger.info(f"DEBUG: Estimated track length from actual distance data: {track_length}m")
+        
+        for point in points:
+            # Get distance value with improved logic
+            dist = None
+            
+            if has_lap_dist and 'LapDist' in point:
+                raw_dist = point['LapDist']
+            elif has_track_position and 'track_position' in point:
+                raw_dist = point['track_position']
+            else:
+                continue  # Skip points without distance data
+                
+            # Convert to actual distance if normalized
+            if is_normalized:
+                dist = raw_dist * track_length  # Convert 0-1 to actual meters
+            else:
+                dist = raw_dist  # Already in meters
+            
+            if dist is None or dist < 0:
+                continue  # Skip invalid distances
                 
             raw_distances.append(dist)
             
@@ -64,14 +142,46 @@ class GraphBase(QWidget):
         if not raw_distances:
             logger.warning("No valid distance values found in telemetry data")
             return None
+        
+        # DEBUG: Log the distance range and data ranges for each channel
+        min_dist = min(raw_distances)
+        max_dist = max(raw_distances)
+        logger.info(f"DEBUG: Final distance range: {min_dist:.1f}m to {max_dist:.1f}m (track_length: {track_length}m)")
+        
+        for channel in channel_names:
+            if raw_data[channel]:
+                values = [v for v in raw_data[channel] if v is not None and not np.isnan(v)]
+                if values:
+                    min_val = min(values)
+                    max_val = max(values)
+                    avg_val = sum(values) / len(values)
+                    logger.info(f"DEBUG: {channel} range: {min_val:.3f} to {max_val:.3f} (avg: {avg_val:.3f}) from {len(values)} valid points")
+                else:
+                    logger.warning(f"DEBUG: {channel} has no valid values")
+            else:
+                logger.warning(f"DEBUG: {channel} has no data points")
             
         # Create uniform distance grid with specified resolution
-        max_dist = max(raw_distances)
-        if track_length > 0 and max_dist < track_length:
-            max_dist = track_length
+        # For proper interpolation, use the actual data range
+        grid_start = min_dist
+        grid_end = max_dist
+        
+        # Ensure we have a reasonable number of points for interpolation
+        distance_span = grid_end - grid_start
+        if distance_span > 0:
+            # Use resolution that gives us 500-1000 points for good detail
+            effective_resolution = max(1.0, distance_span / 800)  # Aim for ~800 points
+            num_points = max(100, int(distance_span / effective_resolution) + 1)  # At least 100 points
+        else:
+            # Fallback for edge case
+            grid_start = 0
+            grid_end = track_length
+            num_points = 1000
+            effective_resolution = track_length / 1000
             
-        # Create x_m array with 1m resolution (or as specified)
-        x_m = np.linspace(0, max_dist, int(max_dist/resolution) + 1)
+        x_m = np.linspace(grid_start, grid_end, num_points)
+        
+        logger.info(f"DEBUG: Created distance grid: {len(x_m)} points from {grid_start:.1f}m to {grid_end:.1f}m (resolution: {effective_resolution:.2f}m)")
         
         # Preprocess and resample each channel
         resampled_data = {'x_m': x_m}
@@ -101,23 +211,42 @@ class GraphBase(QWidget):
             x_valid = x_valid[sort_idx]
             y_valid = y_valid[sort_idx]
             
-            # Handle duplicate x values by averaging y values
-            if len(x_valid) > 1 and np.any(np.diff(x_valid) == 0):
-                unique_x, unique_indices = np.unique(x_valid, return_index=True)
-                # Get average y values for each unique x
-                unique_y = np.zeros_like(unique_x)
-                for i, idx in enumerate(unique_indices):
-                    next_idx = unique_indices[i+1] if i < len(unique_indices)-1 else len(x_valid)
-                    unique_y[i] = np.mean(y_valid[idx:next_idx])
-                x_valid = unique_x
-                y_valid = unique_y
+            # Remove duplicate x values by averaging y values
+            if len(x_valid) > 1:
+                unique_x, unique_indices, unique_counts = np.unique(x_valid, return_index=True, return_counts=True)
+                if len(unique_x) < len(x_valid):  # We have duplicates
+                    unique_y = np.zeros_like(unique_x)
+                    for i, (idx, count) in enumerate(zip(unique_indices, unique_counts)):
+                        if count == 1:
+                            unique_y[i] = y_valid[idx]
+                        else:
+                            # Average the duplicate values
+                            end_idx = idx + count
+                            unique_y[i] = np.mean(y_valid[idx:end_idx])
+                    x_valid = unique_x
+                    y_valid = unique_y
+                    logger.debug(f"Removed {len(x_raw) - len(x_valid)} duplicate distance values for {channel}")
             
             # Perform linear interpolation to the uniform grid
             try:
-                # Use numpy's interp function for linear interpolation
-                resampled_values = np.interp(x_m, x_valid, y_valid, left=y_valid[0], right=y_valid[-1])
-                resampled_data[channel] = resampled_values
-                logger.debug(f"Resampled {channel} data: {len(x_valid)} points to {len(x_m)} points")
+                # Ensure we have at least 2 points for interpolation
+                if len(x_valid) < 2:
+                    logger.warning(f"Not enough valid points for {channel} interpolation: {len(x_valid)}")
+                    resampled_data[channel] = np.full_like(x_m, y_valid[0] if len(y_valid) > 0 else np.nan)
+                else:
+                    # Use numpy's interp function for linear interpolation
+                    # Only interpolate within the data range, extrapolate with boundary values
+                    resampled_values = np.interp(x_m, x_valid, y_valid, left=y_valid[0], right=y_valid[-1])
+                    resampled_data[channel] = resampled_values
+                
+                # DEBUG: Log resampled data ranges
+                final_values = resampled_data[channel]
+                min_resampled = np.nanmin(final_values)
+                max_resampled = np.nanmax(final_values)
+                avg_resampled = np.nanmean(final_values)
+                logger.info(f"DEBUG: {channel} resampled range: {min_resampled:.3f} to {max_resampled:.3f} (avg: {avg_resampled:.3f})")
+                
+                logger.debug(f"Resampled {channel} data: {len(x_valid)} raw points to {len(x_m)} interpolated points")
             except Exception as e:
                 logger.error(f"Error resampling {channel} data: {e}")
                 resampled_data[channel] = np.full_like(x_m, np.nan)

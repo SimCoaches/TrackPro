@@ -198,53 +198,75 @@ def get_laps(limit: int = 50, user_only: bool = True, session_id: str = None):
         return None, "Not logged in. Please log in to view laps"
 
     try:
-        # Use the main client for the query
-        query = main_supabase.client.table("laps").select("*").limit(limit).order("lap_number")
-
-        # Filter by session ID if provided
         if session_id:
-            query = query.eq('session_id', session_id)
-
-        # Filter by user ID if requested
-        if user_only:
-            # Get user directly from the main client
-            user = main_supabase.get_user()
-            user_id = None
-            if user:
-                 if hasattr(user, 'id'):
-                     user_id = user.id
-                 elif hasattr(user, 'user') and hasattr(user.user, 'id'):
-                     user_id = user.user.id
+            # For specific sessions, get laps and filter out obvious outlaps
+            logger.info(f"Fetching laps for session {session_id}")
             
-            if user_id:
-                # Need to join with sessions table to filter by user_id
-                # This assumes laps table has a session_id foreign key
-                # Modify query to filter based on user ID in the joined sessions table
-                # NOTE: Supabase Python client might not support join filtering directly in this way easily.
-                # A view or function might be better, or filtering post-fetch.
-                # For now, we'll stick to filtering by session_id, assuming sessions are already user-filtered.
-                # If session_id is NOT provided, we CAN filter laps by user_id via the session join.
-                if not session_id:
-                     # Adjust query to filter based on user ID in the sessions table
-                     # This requires knowing the structure and how to perform the join/filter efficiently.
-                     # Let's assume a direct filter on laps table if user_id exists there (unlikely but simpler)
-                     # Or fetch sessions first and then laps for those sessions? More complex.
-                     # **Revisiting**: The easiest way is to fetch sessions first if session_id is None.
-                     # For now, the primary use case provides session_id, so direct user filtering here is complex.
-                     # Let's rely on the session_id being user-specific for now.
-                     # If session_id is None and user_only is True, we should probably return an error or fetch user's sessions first.
-                     logger.warning("get_laps: user_only=True without session_id is not fully supported yet for direct user filtering.")
-                     # Fallback: If no session_id, return empty for now if user_only is True without session filter.
-                     # return [], "Need session_id for user-specific laps"
-                     pass # Let the session_id filter handle user specificity for now
+            # First try to get ALL laps for debugging (no filtering)
+            result_all = main_supabase.client.table("laps").select("*").eq("session_id", session_id).order("lap_number").limit(limit).execute()
+            logger.info(f"Found {len(result_all.data) if result_all.data else 0} total laps in database for session {session_id}")
+            
+            if result_all.data:
+                for i, lap in enumerate(result_all.data[:3]):  # Log first 3 for debugging
+                    logger.info(f"DB Lap {i}: id={lap.get('id')}, lap_number={lap.get('lap_number')}, lap_time={lap.get('lap_time')}, is_valid={lap.get('is_valid')}")
+            
+            # Now get laps with less strict filtering - allow any lap_time and both valid/invalid laps for debugging
+            result = main_supabase.client.table("laps").select("*").eq("session_id", session_id).order("lap_number").limit(limit).execute()
+            
+            if result.data:
+                # For debugging, let's be less strict and include all laps for now
+                filtered_laps = []
+                for lap in result.data:
+                    lap_time = lap.get('lap_time', 0)
+                    is_valid = lap.get('is_valid', False)
+                    # Much more lenient filtering for debugging - include any lap with a reasonable time
+                    if lap_time > 0 and lap_time < 600:  # Include laps under 10 minutes (very lenient)
+                        filtered_laps.append(lap)
+                        logger.debug(f"Included lap {lap.get('lap_number')} with time {lap_time}s, is_valid={is_valid}")
+                    else:
+                        logger.debug(f"Filtered out lap {lap.get('id')} with lap time {lap_time}s")
+                
+                logger.info(f"Found {len(filtered_laps)} laps for session {session_id} after lenient filtering (filtered {len(result.data) - len(filtered_laps)} extreme outliers)")
+                return filtered_laps, f"Found {len(filtered_laps)} laps"
             else:
-                logger.warning("get_laps: user_only=True but could not get user ID from main client")
-                return [], "Could not determine user ID"
+                logger.warning(f"No laps found in database for session {session_id}")
+                return [], "No laps found for this session"
+        else:
+            # For general lap queries, get recent valid laps
+            logger.info("Fetching recent racing laps")
+            
+            # Get recent valid laps with reasonable lap times
+            query = main_supabase.client.table("laps").select("*").eq("is_valid", True)
+            
+            # Add time filter for recent laps
+            from datetime import datetime, timedelta
+            thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).isoformat()
+            query = query.gte("created_at", thirty_days_ago)
+            
+            # Execute the query
+            result = query.order("created_at", desc=True).limit(limit * 2).execute()  # Get more to allow for filtering
+            
+            if result.data:
+                # Filter out obvious outlaps
+                filtered_laps = []
+                for lap in result.data:
+                    lap_time = lap.get('lap_time', 0)
+                    # Only include laps with reasonable lap times (5 seconds to 2 minutes)
+                    if 5 < lap_time < 120:
+                        filtered_laps.append(lap)
+                    
+                    # Stop when we have enough good laps
+                    if len(filtered_laps) >= limit:
+                        break
+                
+                logger.info(f"Found {len(filtered_laps)} recent racing laps after filtering")
+                return filtered_laps, f"Found {len(filtered_laps)} racing laps"
+            else:
+                return [], "No recent laps found"
 
-        result = query.execute()
-        return result.data, "Laps retrieved successfully"
     except Exception as e:
-        return None, f"Failed to retrieve laps: {e}"
+        logger.error(f"Error fetching laps: {e}")
+        return None, f"Database error: {str(e)}"
 
 
 def get_lap(lap_id: str):
@@ -375,12 +397,13 @@ def _execute_telemetry_query(client, lap_id: str, columns: Optional[list[str]] =
         return None, f"Failed to retrieve telemetry points due to an exception: {str(e)}"
 
 # --- Add missing get_sessions function ---
-def get_sessions(limit: int = 50, user_only: bool = False):
+def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool = False):
     """Fetch sessions from the `sessions` table.
 
     Args:
         limit: Maximum number of sessions to return (default 50).
         user_only: If True, only return sessions for the currently logged-in user.
+        only_with_laps: If True, only return sessions that have at least one lap.
 
     Returns:
         Tuple of (list[dict] | None, str): Data and status message.
@@ -397,10 +420,60 @@ def get_sessions(limit: int = 50, user_only: bool = False):
         return None, "Not logged in. Please log in to view sessions"
 
     try:
+        # DEBUGGING: First, let's see what laps exist in the database at all
+        all_laps_result = main_supabase.client.table("laps").select("session_id, lap_number, lap_time, is_valid, created_at").limit(100).execute()
+        if all_laps_result.data:
+            logger.info(f"DATABASE DEBUG: Found {len(all_laps_result.data)} total laps in database")
+            # Group by session_id to see which sessions have laps
+            session_lap_counts = {}
+            for lap in all_laps_result.data:
+                session_id = lap.get('session_id')
+                if session_id not in session_lap_counts:
+                    session_lap_counts[session_id] = 0
+                session_lap_counts[session_id] += 1
+            
+            logger.info(f"DATABASE DEBUG: Sessions with laps: {session_lap_counts}")
+            for session_id, count in session_lap_counts.items():
+                logger.info(f"DATABASE DEBUG: Session {session_id} has {count} laps")
+        else:
+            logger.warning("DATABASE DEBUG: No laps found in entire database!")
+
         # Use the main client for the query
-        query = main_supabase.client.table("sessions").select("*, tracks(name), cars(name)").limit(limit).order("created_at", desc=True)
+        if only_with_laps:
+            # Query sessions that have at least one lap using EXISTS
+            query = main_supabase.client.table("sessions").select("*, tracks(name), cars(name)")
+            
+            # Add subquery to only include sessions with laps
+            # Note: This uses a more complex approach since Supabase doesn't have direct EXISTS support
+            # We'll fetch sessions and then filter by checking if they have laps
+            all_sessions_result = query.limit(limit * 3).order("created_at", desc=True).execute()  # Get more to allow for filtering
+            
+            if all_sessions_result.data:
+                # Get session IDs that have laps
+                sessions_with_laps = set()
+                if all_laps_result.data:
+                    sessions_with_laps = {lap.get('session_id') for lap in all_laps_result.data if lap.get('session_id')}
+                
+                # Filter sessions to only include those with laps
+                filtered_sessions = []
+                for session in all_sessions_result.data:
+                    session_id = session.get('id')
+                    if session_id in sessions_with_laps:
+                        filtered_sessions.append(session)
+                        if len(filtered_sessions) >= limit:  # Stop when we have enough
+                            break
+                
+                logger.info(f"DATABASE DEBUG: Filtered to {len(filtered_sessions)} sessions with laps (from {len(all_sessions_result.data)} total sessions)")
+                result_data = filtered_sessions
+            else:
+                result_data = []
+        else:
+            # Regular query for all sessions
+            query = main_supabase.client.table("sessions").select("*, tracks(name), cars(name)").limit(limit).order("created_at", desc=True)
+            result = query.execute()
+            result_data = result.data or []
         
-        if user_only:
+        if user_only and result_data:
             # Get user directly from the main client
             user = main_supabase.get_user()
             user_id = None
@@ -411,17 +484,24 @@ def get_sessions(limit: int = 50, user_only: bool = False):
                      user_id = user.user.id
             
             if user_id:
-                query = query.eq("user_id", user_id)
+                # Filter by user_id
+                result_data = [session for session in result_data if session.get('user_id') == user_id]
+                logger.info(f"DATABASE DEBUG: Filtering sessions by user_id: {user_id}")
             else:
                 logger.warning("get_sessions: user_only=True but could not get user ID from main client")
                 return [], "Could not determine user ID"
+        else:
+            logger.info("DATABASE DEBUG: Not filtering by user - getting all sessions")
                 
-        result = query.execute()
+        logger.info(f"DATABASE DEBUG: Found {len(result_data)} sessions")
 
         # Process results to flatten track/car names
         processed_data = []
-        if result.data:
-            for session in result.data:
+        if result_data:
+            for session in result_data:
+                session_id = session.get('id')
+                logger.info(f"DATABASE DEBUG: Session {session_id} - {session.get('created_at')} - {session.get('cars', {}).get('name', 'Unknown')} at {session.get('tracks', {}).get('name', 'Unknown')}")
+                
                 session['track_name'] = session.get('tracks', {}).get('name', 'Unknown Track') if session.get('tracks') else 'Unknown Track'
                 session['car_name'] = session.get('cars', {}).get('name', 'Unknown Car') if session.get('cars') else 'Unknown Car'
                 # Remove nested structures if they exist
@@ -431,6 +511,7 @@ def get_sessions(limit: int = 50, user_only: bool = False):
 
         return processed_data, "Sessions retrieved successfully"
     except Exception as e:
+        logger.error(f"Error in get_sessions: {e}")
         return None, f"Failed to retrieve sessions: {e}"
 # --- End get_sessions function ---
 

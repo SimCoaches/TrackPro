@@ -127,26 +127,33 @@ class LapIndexer:
                 if lap_data is None:
                     break
                     
-                # Save the lap immediately
+                # Process the lap
+                lap_num = lap_data.get("lap_number_sdk", "unknown")
+                lap_state = lap_data.get("lap_state", "UNKNOWN")
+                lap_time = lap_data.get("duration_seconds", 0)
+                
+                logger.info(f"[SaveWorker] 💾 SAVING lap {lap_num} ({lap_state}, {lap_time:.3f}s)")
+                
+                # Call the save callback and check if it succeeded
                 if self._save_callback:
                     try:
-                        lap_num = lap_data.get("lap_number_sdk", "unknown")
-                        lap_state = lap_data.get("lap_state", "unknown")
-                        lap_time = lap_data.get("duration_seconds", 0)
+                        # The callback should return True/False to indicate success
+                        result = self._save_callback(lap_data)
+                        # Handle different return types (some callbacks may not return anything)
+                        save_success = result if result is not None else True
                         
-                        logger.info(f"[SaveWorker] 💾 SAVING lap {lap_num} ({lap_state}, {lap_time:.3f}s)")
-                        self._save_callback(lap_data)
-                        
-                        # Track saved laps for backward compatibility
-                        self._saved_laps.append(lap_data)
-                        
-                        logger.info(f"[SaveWorker] ✅ Successfully saved lap {lap_num}")
-                        
+                        if save_success:
+                            # Track saved laps for backward compatibility
+                            self._saved_laps.append(lap_data)
+                            logger.info(f"[SaveWorker] ✅ Successfully saved lap {lap_num}")
+                        else:
+                            logger.error(f"[SaveWorker] ❌ Failed to save lap {lap_num}")
                     except Exception as e:
-                        logger.error(f"[SaveWorker] ❌ Failed to save lap {lap_num}: {e}")
+                        logger.error(f"[SaveWorker] ❌ Save callback threw exception for lap {lap_num}: {e}")
                 else:
-                    logger.warning(f"[SaveWorker] ⚠️ No save callback registered - lap {lap_data.get('lap_number_sdk', 'unknown')} not saved")
+                    logger.warning(f"[SaveWorker] ⚠️ No save callback registered - lap {lap_num} not saved")
                     
+                # Mark task as done
                 self._immediate_save_queue.task_done()
                 
             except queue.Empty:
@@ -156,7 +163,8 @@ class LapIndexer:
                 continue
                 
             except Exception as e:
-                logger.error(f"[SaveWorker] Unexpected error in save worker: {e}")
+                lap_num = lap_data.get("lap_number_sdk", "unknown") if 'lap_data' in locals() else "unknown"
+                logger.error(f"[SaveWorker] ❌ Failed to save lap {lap_num}: {e}")
         
         logger.info("[LapIndexer] 🛑 Save worker thread finished")
     

@@ -1,0 +1,84 @@
+2025-06-03 02:25:15,820 - __main__ - INFO - Timestamp: 2025-06-03 02:25:15.820384
+2025-06-03 02:25:15,820 - __main__ - INFO - ============================================================
+2025-06-03 02:25:15,820 - __main__ - INFO - === TESTING IMPORTS ===
+2025-06-03 02:25:16,561 - Supabase.client - ERROR - Supabase credentials not found in .env file. Please ensure SUPABASE_URL and SUPABASE_KEY are set.
+2025-06-03 02:25:16,977 - trackpro.database.supabase_client - INFO - Found saved authentication session
+2025-06-03 02:25:16,978 - trackpro.database.supabase_client - INFO - Checking if Supabase is enabled...
+2025-06-03 02:25:16,978 - trackpro.config - INFO - Supabase enabled: True
+2025-06-03 02:25:16,978 - trackpro.database.supabase_client - INFO - Supabase is enabled in configuration
+2025-06-03 02:25:16,979 - trackpro.config - INFO - Found Supabase URL
+2025-06-03 02:25:16,979 - trackpro.config - INFO - Found Supabase key
+2025-06-03 02:25:16,979 - trackpro.database.supabase_client - INFO - Using Supabase URL: https://xbfotxwpntqplvvsffrr.supabase.co
+2025-06-03 02:25:16,979 - trackpro.database.supabase_client - INFO - Got Supabase key: eyJhbGciOiJIUzI1NiIs...
+2025-06-03 02:25:16,979 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Attempting DNS resolution for: xbfotxwpntqplvvsffrr.supabase.co
+2025-06-03 02:25:16,980 - trackpro.database.supabase_client - DEBUG - Resolving hostname: xbfotxwpntqplvvsffrr.supabase.co
+2025-06-03 02:25:17,018 - trackpro.database.supabase_client - DEBUG - Resolved xbfotxwpntqplvvsffrr.supabase.co to ['104.18.38.10', '172.64.149.246']
+2025-06-03 02:25:17,019 - trackpro.database.supabase_client - INFO - Resolved xbfotxwpntqplvvsffrr.supabase.co to 104.18.38.10
+2025-06-03 02:25:17,020 - trackpro.database.supabase_client - INFO - Initializing Supabase client...
+2025-06-03 02:25:17,020 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Attempting create_client...
+2025-06-03 02:25:17,583 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] create_client call successful.
+2025-06-03 02:25:17,583 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Client object created: True
+2025-06-03 02:25:17,583 - trackpro.database.supabase_client - INFO - Attempting to restore saved session...
+2025-06-03 02:25:17,855 - trackpro.database.supabase_client - INFO - Session restored successfully using access and refresh tokens
+2025-06-03 02:25:17,855 - trackpro.database.supabase_client - INFO - Testing connection to Supabase...
+2025-06-03 02:25:17,855 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Attempting _client.auth.get_session()...
+2025-06-03 02:25:17,856 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] _client.auth.get_session() successful.
+2025-06-03 02:25:17,856 - trackpro.database.supabase_client - INFO - Supabase client initialized and connected successfully
+2025-06-03 02:25:18,652 - matplotlib - DEBUG - matplotlib data path: C:\Users\lawre\AppData\Local\Programs\Python\Python313\Lib\site-packages\matplotlib\mpl-data
+2025-06-03 02:25:18,668 - matplotlib - DEBUG - CONFIGDIR=C:\Users\lawre\.matplotlib
+2025-06-03 02:25:18,670 - matplotlib - DEBUG - interactive is False
+2025-06-03 02:25:18,671 - matplotlib - DEBUG - platform is win32
+2025-06-03 02:25:18,772 - matplotlib - DEBUG - CACHEDIR=C:\Users\lawre\.matplotlib
+2025-06-03 02:25:18,778 - matplotlib.font_manager - DEBUG - Using fontManager instance from C:\Users\lawre\.matplotlib\fontlist-v390.json
+2025-06-03 02:25:19,205 - trackpro.race_coach - INFO - Compatibility methods already exist in RaceCoachWidget - no patching needed
+2025-06-03 02:25:19,207 - trackpro.race_coach.debouncer - INFO - SmartDebouncer initialized - Phase 3 optimization active
+2025-06-03 02:25:19,207 - trackpro.race_coach.debouncer - INFO - TrackProDebouncer initialized with optimized delays
+2025-06-03 02:25:19,210 - trackpro.pedals.curve_cache - INFO - No existing curve cache found, starting fresh
+2025-06-03 02:25:19,210 - trackpro.pedals.curve_cache - INFO - CurveCache initialized with TTL 3600s
+2025-06-03 02:25:21,050 - trackpro.gamification.stripe_integration - WARNING - Stripe secret key not found in environment variables. Payment processing will be disabled.
+2025-06-03 02:25:21,059 - trackpro.database.supabase_client - INFO - Initializing Supabase manager for the first time
+2025-06-03 02:25:21,060 - trackpro.database.supabase_client - INFO - Found saved authentication session
+2025-06-03 02:25:21,060 - trackpro.database.supabase_client - INFO - Checking if Supabase is enabled...
+2025-06-03 02:25:21,060 - trackpro.config - INFO - Supabase enabled: True
+2025-06-03 02:25:21,060 - trackpro.database.supabase_client - INFO - Supabase is enabled in configuration
+2025-06-03 02:25:21,061 - trackpro.config - INFO - Found Supabase URL
+2025-06-03 02:25:21,061 - trackpro.config - INFO - Found Supabase key
+2025-06-03 02:25:21,061 - trackpro.database.supabase_client - INFO - Using Supabase URL: https://xbfotxwpntqplvvsffrr.supabase.co
+2025-06-03 02:25:21,061 - trackpro.database.supabase_client - INFO - Got Supabase key: eyJhbGciOiJIUzI1NiIs...
+2025-06-03 02:25:21,062 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Attempting DNS resolution for: xbfotxwpntqplvvsffrr.supabase.co
+2025-06-03 02:25:21,062 - trackpro.database.supabase_client - DEBUG - Using cached DNS for xbfotxwpntqplvvsffrr.supabase.co
+2025-06-03 02:25:21,062 - trackpro.database.supabase_client - INFO - Resolved xbfotxwpntqplvvsffrr.supabase.co to 104.18.38.10
+2025-06-03 02:25:21,062 - trackpro.database.supabase_client - INFO - Initializing Supabase client...
+2025-06-03 02:25:21,062 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Attempting create_client...
+2025-06-03 02:25:21,395 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] create_client call successful.
+2025-06-03 02:25:21,395 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Client object created: True
+2025-06-03 02:25:21,395 - trackpro.database.supabase_client - INFO - Attempting to restore saved session...
+2025-06-03 02:25:21,549 - trackpro.database.supabase_client - INFO - Session restored successfully using access and refresh tokens
+2025-06-03 02:25:21,550 - trackpro.database.supabase_client - INFO - Testing connection to Supabase...
+2025-06-03 02:25:21,550 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] Attempting _client.auth.get_session()...
+2025-06-03 02:25:21,550 - trackpro.database.supabase_client - INFO - [INIT_DEBUG] _client.auth.get_session() successful.
+2025-06-03 02:25:21,550 - trackpro.database.supabase_client - INFO - Supabase client initialized and connected successfully
+2025-06-03 02:25:21,592 - __main__ - INFO - === TESTING SUPABASE CONNECTION ===
+2025-06-03 02:25:21,686 - __main__ - INFO - Authentication status: True
+2025-06-03 02:25:21,787 - __main__ - INFO - === TESTING SESSION DATA RETRIEVAL ===
+2025-06-03 02:25:22,473 - __main__ - INFO - Session 1: ID=494ce0ef-465e-43d9-b8c1-801fc4af4742, Track=The Bullring, Car=Dallara F312 F3
+2025-06-03 02:25:22,473 - __main__ - INFO - Session 2: ID=91ced133-0654-4579-b5cd-e4dd9f2a3d5e, Track=The Bullring, Car=Dallara F312 F3
+2025-06-03 02:25:22,473 - __main__ - INFO - Session 3: ID=7a26f69b-4910-49b2-ab59-e85f9e57a0e5, Track=The Bullring, Car=Dallara F312 F3
+2025-06-03 02:25:22,473 - __main__ - INFO - === TESTING GRAPH WIDGETS ===
+2025-06-03 02:25:23,452 - trackpro.race_coach.widgets.throttle_graph - INFO - Updating throttle graph with comparison data for A:3 and B:3 points
+2025-06-03 02:25:23,452 - trackpro.race_coach.widgets.graph_base - INFO - [throttle] Telemetry validation completed: 3/3 points valid in 0.03ms
+2025-06-03 02:25:23,452 - trackpro.race_coach.widgets.graph_base - INFO - [throttle] Telemetry validation completed: 3/3 points valid in 0.01ms
+2025-06-03 02:25:23,464 - trackpro.race_coach.widgets.graph_base - DEBUG - Resampled Throttle data: 3 points to 1001 points
+2025-06-03 02:25:23,465 - trackpro.race_coach.widgets.throttle_graph - INFO - Set Lap A throttle data with 1001 points
+2025-06-03 02:25:23,465 - trackpro.race_coach.widgets.graph_base - DEBUG - Resampled Throttle data: 3 points to 1001 points
+2025-06-03 02:25:23,466 - trackpro.race_coach.widgets.throttle_graph - INFO - Set Lap B throttle data with 1001 points
+2025-06-03 02:25:23,490 - __main__ - INFO - === TESTING FULL INTEGRATION ===
+2025-06-03 02:25:23,490 - __main__ - INFO - === TESTING SESSION DATA RETRIEVAL ===
+2025-06-03 02:25:23,807 - __main__ - INFO - Session 1: ID=494ce0ef-465e-43d9-b8c1-801fc4af4742, Track=The Bullring, Car=Dallara F312 F3
+2025-06-03 02:25:23,807 - __main__ - INFO - Session 2: ID=91ced133-0654-4579-b5cd-e4dd9f2a3d5e, Track=The Bullring, Car=Dallara F312 F3
+2025-06-03 02:25:23,807 - __main__ - INFO - Session 3: ID=7a26f69b-4910-49b2-ab59-e85f9e57a0e5, Track=The Bullring, Car=Dallara F312 F3
+2025-06-03 02:25:23,807 - __main__ - INFO - === TESTING LAP DATA RETRIEVAL FOR SESSION 494ce0ef-465e-43d9-b8c1-801fc4af4742 ===
+2025-06-03 02:25:24,128 - __main__ - INFO - ============================================================
+2025-06-03 02:25:24,132 - __main__ - INFO - ============================================================
+2025-06-03 02:25:24,150 - __main__ - INFO - ============================================================
+2025-06-03 02:25:24,150 - __main__ - INFO - OVERALL: 4/5 tests passed
