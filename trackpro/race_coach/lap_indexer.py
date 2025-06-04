@@ -652,6 +652,12 @@ class LapIndexer:
         
         logger.info(f"[LapIndexer] 🎯 PROCESSING STORED LAP: Lap {lap_number} with {len(telemetry_frames)} frames")
         
+        # Validate timing data before calculation
+        if start_tick is None or end_tick is None:
+            logger.error(f"[LapIndexer] ❌ Invalid timing data for lap {lap_number}: start_tick={start_tick}, end_tick={end_tick}")
+            logger.error(f"[LapIndexer] ❌ Skipping lap processing due to invalid timing data")
+            return
+        
         # Calculate our timing for comparison
         calculated_duration = end_tick - start_tick
         
@@ -754,6 +760,9 @@ class LapIndexer:
             logger.warning("[LapIndexer] Attempted to finalize lap but active lap state is incomplete or has no frames.")
             return
 
+        # Initialize calculated_duration as fallback
+        calculated_duration = 0.0
+        
         # Save the lap with the CORRECT lap number from iRacing
         # When LapCompleted increments, the lap that just finished should be saved with that completed lap number
         if not session_finalize and current_lap_completed_sdk is not None:
@@ -772,8 +781,13 @@ class LapIndexer:
         # RELIABLE TIMING STRATEGY: Use calculated duration as primary (proven most accurate)
         # With validation and smart fallbacks for edge cases
         if not session_finalize and lap_last_lap_time_from_sdk != 0:
-            # Calculate our timing (proven to match iRacing display perfectly)
-            calculated_duration = end_tick - self._active_lap_start_tick
+            # Validate timing data before calculation
+            if self._active_lap_start_tick is None:
+                logger.error(f"[LapIndexer] ❌ Invalid start_tick for lap {lap_to_finalize_sdk_num}: {self._active_lap_start_tick}")
+                calculated_duration = 0.0
+            else:
+                # Calculate our timing (proven to match iRacing display perfectly)
+                calculated_duration = end_tick - self._active_lap_start_tick
             
             # Get iRacing's timing variables for comparison
             iracing_last_time = lap_last_lap_time_from_sdk
@@ -811,13 +825,21 @@ class LapIndexer:
         
         elif not session_finalize and lap_last_lap_time_from_sdk == 0:
             # Zero time from iRacing - use calculated time
-            calculated_duration = end_tick - self._active_lap_start_tick
+            if self._active_lap_start_tick is None:
+                logger.error(f"[LapIndexer] ❌ Invalid start_tick for lap {lap_to_finalize_sdk_num}: {self._active_lap_start_tick}")
+                calculated_duration = 0.0
+            else:
+                calculated_duration = end_tick - self._active_lap_start_tick
             final_lap_duration = calculated_duration
             logger.info(f"[RELIABLE TIMING] 🎯 Zero iRacing time - Using calculated time {final_lap_duration:.3f}s")
         
         else:
             # Session finalization or when iRacing time is not available
-            calculated_duration = end_tick - self._active_lap_start_tick
+            if self._active_lap_start_tick is None:
+                logger.error(f"[LapIndexer] ❌ Invalid start_tick for lap {lap_to_finalize_sdk_num}: {self._active_lap_start_tick}")
+                calculated_duration = 0.0
+            else:
+                calculated_duration = end_tick - self._active_lap_start_tick
             final_lap_duration = calculated_duration
             if session_finalize:
                 logger.info(f"[RELIABLE TIMING] 🎯 Session finalization - Using calculated time {final_lap_duration:.3f}s")

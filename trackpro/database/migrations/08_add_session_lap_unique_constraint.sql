@@ -31,7 +31,7 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'schema_metadata') THEN
         UPDATE schema_metadata 
-        SET version = '1.4.8', 
+        SET version = '1.5.0', 
             description = 'Added unique constraint on (session_id, lap_number) in laps table',
             updated_at = NOW();
     END IF;

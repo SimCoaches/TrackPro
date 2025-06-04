@@ -403,7 +403,13 @@ def update_supabase_data(supabase, user_id, track_name, car_name, track_id, car_
         except Exception as e:
             print(f"Warning: Could not save session to local file: {e}")
         
-        return session_id
+        # Return session data including database IDs needed for lap saving
+        return {
+            'session_id': session_id,
+            'track_db_id': track_db_id,
+            'car_db_id': car_db_id,
+            'session_type': session_type
+        }
 
     except Exception as e:
         print(f"Error updating Supabase data: {str(e)}")
@@ -793,7 +799,7 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                             if supabase_client and logged_in_user_id:
                                 try:
                                     # Create the session record
-                                    session_uuid = update_supabase_data(
+                                    session_data = update_supabase_data(
                                         supabase_client, 
                                         logged_in_user_id, 
                                         track_name, 
@@ -808,8 +814,12 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                                         track_location
                                     )
                                     
-                                    if session_uuid:
+                                    if session_data and isinstance(session_data, dict):
+                                        session_uuid = session_data['session_id']
+                                        track_db_id = session_data['track_db_id']
+                                        car_db_id = session_data['car_db_id']
                                         print(f"Monitor: Creating new session. UUID: {session_uuid}")
+                                        print(f"Monitor: Database IDs - Track: {track_db_id}, Car: {car_db_id}")
                                         # Update the currently tracked session
                                         current_session_uuid = session_uuid
                                         
@@ -847,11 +857,25 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                                 # Notify the lap saver of the session with safety check
                                 if lap_saver_instance:
                                     try:
-                                        # Reset all lap saver variables for session (new or resumed)
-                                        lap_saver_instance._current_session_id = session_uuid
-                                        lap_saver_instance._current_track_id = last_processed_iracing_track_id
-                                        lap_saver_instance._current_car_id = last_processed_iracing_car_id
-                                        lap_saver_instance._current_session_type = session_type
+                                        # CRITICAL FIX: Use proper database IDs and new session context method
+                                        if hasattr(lap_saver_instance, 'set_session_context'):
+                                            # Use the new method with proper database IDs
+                                            lap_saver_instance.set_session_context(
+                                                session_id=session_uuid,
+                                                track_id=track_db_id,  # ✅ Correct database ID
+                                                car_id=car_db_id,      # ✅ Correct database ID
+                                                session_type=session_type
+                                            )
+                                            print(f"Monitor: ✅ Set session context with database IDs")
+                                        else:
+                                            # Fallback to old method for compatibility
+                                            lap_saver_instance._current_session_id = session_uuid
+                                            lap_saver_instance._current_track_id = track_db_id
+                                            lap_saver_instance._current_car_id = car_db_id
+                                            lap_saver_instance._current_session_type = session_type
+                                            print(f"Monitor: ⚠️  Used fallback session setting (no set_session_context method)")
+                                        
+                                        # Reset lap tracking state for new/resumed session
                                         lap_saver_instance._current_lap_number = 0
                                         lap_saver_instance._is_first_telemetry = True
                                         lap_saver_instance._current_lap_data = []
@@ -860,14 +884,7 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                                         
                                         session_action = "created"
                                         print(f"Monitor: Session ID {session_action} in lap saver: {session_uuid}")
-                                        
-                                        # Process any immediate laps that were queued while waiting for session
-                                        if hasattr(lap_saver_instance, '_process_queued_immediate_laps'):
-                                            try:
-                                                lap_saver_instance._process_queued_immediate_laps()
-                                                print("Monitor: Processed queued immediate laps for session")
-                                            except Exception as queue_error:
-                                                print(f"Monitor: Error processing queued immediate laps: {queue_error}")
+                                        print(f"Monitor: ✅ Lap saver configured with correct database IDs")
                                         
                                         # Also ensure the session is explicitly initialized in the IRacingLapSaver
                                         if hasattr(lap_saver_instance, 'start_session'):

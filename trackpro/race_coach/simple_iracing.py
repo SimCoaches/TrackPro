@@ -462,6 +462,10 @@ class SimpleIRacingAPI(QObject):
             # --- Pass to TelemetrySaver, LapSaver, and SectorTiming --- #
             # Ensure essential data exists before passing
             if telemetry.get('LapDistPct') is not None and telemetry.get('SessionTimeSecs') is not None:
+                
+                # NOTE: Removed frame-based future sector data application
+                # Sector data is now stored by lap number and retrieved by the lap saver
+                
                 lap_info_to_pass_to_ui = None
                 
                 # Process sector timing
@@ -477,13 +481,16 @@ class SimpleIRacingAPI(QObject):
                                 self._sector_init_log_time = current_time
                         else:
                             # Process telemetry for simple sector timing
-                            logger.debug(f"🔧 [SIMPLE SECTOR] About to call sector_timing.process_telemetry() - enabled: {self.sector_timing.is_enabled}")
-                            logger.debug(f"🔧 [SIMPLE SECTOR] Telemetry data keys: {list(telemetry.keys())}")
-                            logger.debug(f"🔧 [SIMPLE SECTOR] LapDistPct: {telemetry.get('LapDistPct')}, Lap: {telemetry.get('Lap')}")
+                            # Reduce debug spam - only log occasionally
+                            if self._telemetry_count % 300 == 0:  # Every ~5 seconds
+                                logger.debug(f"🔧 [SIMPLE SECTOR] About to call sector_timing.process_telemetry() - enabled: {self.sector_timing.is_enabled}")
+                                logger.debug(f"🔧 [SIMPLE SECTOR] Telemetry data keys: {list(telemetry.keys())}")
+                                logger.debug(f"🔧 [SIMPLE SECTOR] LapDistPct: {telemetry.get('LapDistPct')}, Lap: {telemetry.get('Lap')}")
                             
                             sector_result = self.sector_timing.process_telemetry(telemetry)
                             
-                            logger.debug(f"🔧 [SIMPLE SECTOR] sector_timing.process_telemetry() returned: {sector_result}")
+                            if self._telemetry_count % 300 == 0:  # Every ~5 seconds
+                                logger.debug(f"🔧 [SIMPLE SECTOR] sector_timing.process_telemetry() returned: {sector_result}")
                             
                             if sector_result:
                                 # Add current sector progress to telemetry
@@ -495,23 +502,66 @@ class SimpleIRacingAPI(QObject):
                                 telemetry['sector_timing_initialized'] = True
                                 telemetry['total_sectors'] = sector_result.get('total_sectors', 0)
                                 
+                                # CRITICAL FIX: Add current lap sector timing data that lap saver expects
+                                telemetry['current_lap_sector_times'] = sector_result.get('current_lap_splits', [])
+                                telemetry['sector_timing_method'] = sector_result.get('timing_method', '10_equal_sectors')
+                                
                                 # Check if a lap was completed
                                 completed_lap = sector_result.get('completed_lap')
                                 if completed_lap:
                                     logger.info(f"🏁 SIMPLE sector timing completed lap {completed_lap['lap_number']}: {completed_lap['total_time']:.3f}s")
-                                    # Add completed lap data to telemetry for UI
-                                    telemetry['sector_times'] = completed_lap['sector_times']
-                                    telemetry['sector_total_time'] = completed_lap['total_time']
-                                    telemetry['sector_lap_completed'] = True
+                                    
+                                    # CRITICAL FIX: Create complete sector data package for this and recent frames
+                                    sector_data_package = {
+                                        'sector_times': completed_lap['sector_times'],
+                                        'sector_total_time': completed_lap['total_time'],
+                                        'sector_lap_completed': True,
+                                        'sector_completion_frame_id': self._telemetry_count
+                                    }
+                                    
+                                    # Add individual sector fields that lap saver expects
+                                    for i, sector_time in enumerate(completed_lap['sector_times']):
+                                        sector_data_package[f'sector{i+1}_time'] = sector_time
+                                    
+                                    # Also copy any other sector-related fields from the result
+                                    for key, value in sector_result.items():
+                                        if key.startswith('sector') and key.endswith('_time'):
+                                            sector_data_package[key] = value
+                                    
+                                    # Add to current telemetry frame
+                                    telemetry.update(sector_data_package)
+                                    
+                                    # CRITICAL: Store completed sector data with lap-specific identification
+                                    if not hasattr(self, '_lap_sector_data'):
+                                        self._lap_sector_data = {}
+                                    
+                                    lap_number = completed_lap['lap_number']
+                                    
+                                    # Store sector data with lap number as key (not frame-based)
+                                    self._lap_sector_data[lap_number] = {
+                                        'sector_times': completed_lap['sector_times'],
+                                        'sector_total_time': completed_lap['total_time'],
+                                        'timestamp': time.time(),
+                                        'frame_id': self._telemetry_count
+                                    }
+                                    
+                                    # Clean up old lap data (keep only last 5 laps)
+                                    if len(self._lap_sector_data) > 5:
+                                        old_laps = sorted(self._lap_sector_data.keys())[:-5]
+                                        for old_lap in old_laps:
+                                            del self._lap_sector_data[old_lap]
+                                    
+                                    logger.info(f"🔧 [LAP SECTOR STORAGE] Stored complete sector data for lap {lap_number}: {completed_lap['sector_times']}")
                                     logger.info(f"🔧 [SIMPLE SECTOR] Added completed sector data to frame: {completed_lap['sector_times']}")
+                                    logger.debug(f"✅ [SECTOR FIX] Added individual sector fields: sector1_time through sector{len(completed_lap['sector_times'])}_time")
                                 else:
                                     # Mark that no lap was completed this frame
                                     telemetry['sector_lap_completed'] = False
                                 
                                 # Log sector progress occasionally
-                                if not hasattr(self, '_last_sector_log_time') or (current_time - self._last_sector_log_time > 5):
+                                if not hasattr(self, '_last_sector_log_time') or (current_time - self._last_sector_log_time > 10):
                                     logger.info(f"🏁 SIMPLE Current sector: {sector_result.get('current_sector', 'N/A')}/{sector_result.get('total_sectors', 'N/A')}, Time: {sector_result.get('current_sector_time', 0):.2f}s")
-                                    logger.info(f"🔧 [SIMPLE SECTOR] Adding to frame: current_lap_splits={sector_result.get('current_lap_splits', [])}, completed_sectors={sector_result.get('completed_sectors', 0)}")
+                                    logger.debug(f"🔧 [SIMPLE SECTOR] Adding to frame: current_lap_splits={sector_result.get('current_lap_splits', [])}, completed_sectors={sector_result.get('completed_sectors', 0)}")
                                     self._last_sector_log_time = current_time
                             else:
                                 # Don't add sector data if not initialized
@@ -734,6 +784,11 @@ class SimpleIRacingAPI(QObject):
         if hasattr(lap_saver, 'set_sector_timing_system') and hasattr(self, 'sector_timing'):
             lap_saver.set_sector_timing_system(self.sector_timing)
             logger.info("✅ [SECTOR DEBUG] Connected sector timing system to lap saver")
+            
+        # CRITICAL FIX: Connect the iRacing API to the lap saver for direct sector data access
+        if hasattr(lap_saver, 'set_iracing_api'):
+            lap_saver.set_iracing_api(self)
+            logger.info("✅ [SECTOR DEBUG] Connected iRacing API to lap saver for lap-specific sector data")
         
         # If the lap saver has an update method for user data, call it
         if hasattr(lap_saver, 'set_user_id'):
@@ -927,6 +982,26 @@ class SimpleIRacingAPI(QObject):
         else:
             logger.warning("❌ Simple sector timing not available")
             return False
+
+    def get_lap_sector_data(self, lap_number):
+        """Get stored sector data for a specific lap number.
+        
+        Args:
+            lap_number: The lap number to get sector data for
+            
+        Returns:
+            Dictionary with sector data or None if not found
+        """
+        if hasattr(self, '_lap_sector_data') and lap_number in self._lap_sector_data:
+            sector_data = self._lap_sector_data[lap_number]
+            logger.info(f"🔧 [LAP SECTOR RETRIEVAL] Found sector data for lap {lap_number}: {sector_data['sector_times']}")
+            return sector_data
+        else:
+            logger.warning(f"❌ [LAP SECTOR RETRIEVAL] No sector data found for lap {lap_number}")
+            if hasattr(self, '_lap_sector_data'):
+                available_laps = list(self._lap_sector_data.keys())
+                logger.warning(f"❌ [LAP SECTOR RETRIEVAL] Available laps: {available_laps}")
+            return None
 
     def start_deferred_monitoring(self):
         """Start the deferred iRacing session monitoring if parameters are available."""

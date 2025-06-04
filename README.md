@@ -1,4 +1,4 @@
-# TrackPro v1.4.8
+# TrackPro v1.5.0
 
 ![TrackPro Logo](docs/images/logo.png)
 
@@ -259,7 +259,7 @@ Lawrence Thomas - [lawrence@simcoaches.com](mailto:lawrence@simcoaches.com)
 Project Link: [https://github.com/SimCoaches/TrackPro](https://github.com/SimCoaches/TrackPro)
 
 ## Installation Instructions
-1. Run `TrackPro_Setup_v1.4.8.exe` as Administrator
+1. Run `TrackPro_Setup_v1.5.0.exe` as Administrator
 2. Follow the installation wizard
 3. When prompted, allow the installation of vJoy and HidHide drivers
 4. Restart your computer when asked (required for proper driver installation)

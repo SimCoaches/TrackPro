@@ -11,6 +11,7 @@ import stat
 from trackpro import __version__
 from pathlib import Path
 import importlib
+from sign_code import CodeSigner
 
 class InstallerBuilder:
     VJOY_URL = "https://github.com/jshafer817/vJoy/releases/download/v2.1.9.1/vJoySetup.exe"
@@ -21,6 +22,8 @@ class InstallerBuilder:
         self.dist_dir = "dist"
         self.version = __version__
         self.cwd = Path.cwd()
+        self.code_signer = CodeSigner()
+        self.enable_signing = True  # Set to False to disable signing
         
     def download_file(self, url, dest_folder):
         """Download a file and return its path."""
@@ -51,6 +54,56 @@ class InstallerBuilder:
             print(f"! Error: {filename} not found at {filepath} after download attempt")
             
         return filepath
+
+    def sign_files(self, files_to_sign):
+        """Sign the specified files with the code signing certificate."""
+        if not self.enable_signing:
+            print("Code signing is disabled")
+            return True
+        
+        if not self.code_signer.signtool_path:
+            print("⚠️  Warning: signtool.exe not found. Skipping code signing.")
+            print("To enable code signing:")
+            print("1. Install Windows SDK from: https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/")
+            print("2. Or install via Visual Studio Installer -> Windows SDK")
+            return False
+        
+        print("\n=== Code Signing Phase ===")
+        signing_successful = True
+        
+        for file_path in files_to_sign:
+            if not os.path.exists(file_path):
+                print(f"⚠️  Warning: File not found for signing: {file_path}")
+                continue
+            
+            file_size = os.path.getsize(file_path)
+            print(f"\nSigning: {file_path} ({file_size:,} bytes)")
+            
+            # Try to sign the file
+            success = self.code_signer.sign_file(
+                file_path, 
+                description=f"TrackPro v{self.version}",
+                timestamp_url="http://timestamp.sectigo.com"
+            )
+            
+            if success:
+                print(f"✓ Successfully signed: {file_path}")
+                # Verify the signature
+                if self.code_signer.verify_signature(file_path):
+                    print(f"✓ Signature verified: {file_path}")
+                else:
+                    print(f"⚠️  Warning: Signature verification failed: {file_path}")
+            else:
+                print(f"✗ Failed to sign: {file_path}")
+                signing_successful = False
+        
+        if signing_successful:
+            print("\n✓ All files signed successfully!")
+        else:
+            print("\n⚠️  Some files failed to sign. Check the output above for details.")
+            print("The build will continue, but unsigned files may trigger security warnings.")
+        
+        return signing_successful
 
     def create_installer_script(self):
         """Create the NSIS installer script using relative paths with backslashes."""
@@ -126,7 +179,61 @@ Function .onInit
     ${{If}} $R0 != ""
         ; Skip driver installation if we're resuming
         StrCpy $0 "RESUME"
+    ${{Else}}
+        ; Clean up previous TrackPro installations
+        Call CleanupPreviousVersions
     ${{EndIf}}
+FunctionEnd
+
+Function CleanupPreviousVersions
+    DetailPrint "Checking for previous TrackPro installations..."
+    DetailPrint "NOTE: User data (calibrations, settings) will be preserved during cleanup"
+    
+    ; First, terminate any running TrackPro processes
+    DetailPrint "Terminating any running TrackPro processes..."
+    ExecWait 'taskkill /F /IM "TrackPro*.exe" /T' $0
+    
+    ; Remove all TrackPro executables from Program Files
+    DetailPrint "Removing previous TrackPro executables..."
+    Delete "$PROGRAMFILES64\TrackPro\TrackPro*.exe"
+    Delete "$PROGRAMFILES64\TrackPro\TrackPro_v*.exe"
+    Delete "$PROGRAMFILES32\TrackPro\TrackPro*.exe"
+    Delete "$PROGRAMFILES32\TrackPro\TrackPro_v*.exe"
+    
+    ; Remove all TrackPro shortcuts from Start Menu
+    DetailPrint "Removing previous TrackPro shortcuts..."
+    Delete "$SMPROGRAMS\TrackPro\TrackPro*.lnk"
+    Delete "$SMPROGRAMS\TrackPro\TrackPro v*.lnk"
+    
+    ; Remove all TrackPro desktop shortcuts
+    Delete "$DESKTOP\TrackPro*.lnk"
+    Delete "$DESKTOP\TrackPro v*.lnk"
+    
+    ; Clean up registry entries for all previous versions
+    DetailPrint "Cleaning up previous version registry entries..."
+    
+    ; Enumerate and remove old TrackPro uninstall entries
+    StrCpy $1 0
+    loop:
+        EnumRegKey $2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall" $1
+        StrCmp $2 "" done
+        
+        ; Check if this is a TrackPro entry
+        ReadRegStr $3 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2" "DisplayName"
+        StrCpy $4 $3 8  ; Get first 8 characters
+        StrCmp $4 "TrackPro" 0 next_key
+        
+        ; This is a TrackPro entry, remove it
+        DetailPrint "Removing registry entry: $3"
+        DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2"
+        Goto loop  ; Start over since we modified the registry
+        
+        next_key:
+        IntOp $1 $1 + 1
+        Goto loop
+    
+    done:
+    DetailPrint "Previous version cleanup completed"
 FunctionEnd
 
 Section "Prerequisites"
@@ -304,29 +411,69 @@ Section "MainApplication"
 SectionEnd
 
 Section "Uninstall"
-    ; Remove application files
+    ; Terminate any running TrackPro processes first
+    DetailPrint "Terminating any running TrackPro processes..."
+    ExecWait 'taskkill /F /IM "TrackPro*.exe" /T' $0
+    
+    ; Remove ALL TrackPro application files (not just current version)
+    DetailPrint "Removing all TrackPro application files..."
     Delete "$INSTDIR\uninstall.exe"
-    Delete "$INSTDIR\TrackPro_v{version}.exe"
+    Delete "$INSTDIR\TrackPro*.exe"
+    Delete "$INSTDIR\TrackPro_v*.exe"
     
-    ; Remove any data files and folders that the application creates
-    RMDir /r "$LOCALAPPDATA\TrackPro"
+    ; NOTE: We deliberately DO NOT remove user data directories like:
+    ; - $LOCALAPPDATA\TrackPro (contains user calibrations, settings, etc.)
+    ; - $APPDATA\TrackPro (contains user configuration files)
+    ; This preserves user's calibrations and settings across updates
     
-    ; Remove shortcuts and directories
-    Delete "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk"
-    Delete "$DESKTOP\TrackPro v{version}.lnk"
+    ; Remove ALL TrackPro shortcuts and directories
+    DetailPrint "Removing all TrackPro shortcuts..."
+    Delete "$SMPROGRAMS\TrackPro\TrackPro*.lnk"
+    Delete "$SMPROGRAMS\TrackPro\TrackPro v*.lnk"
+    Delete "$DESKTOP\TrackPro*.lnk"
+    Delete "$DESKTOP\TrackPro v*.lnk"
     RMDir "$SMPROGRAMS\TrackPro"
     
-    ; Remove installation directory if empty
-    RMDir "$INSTDIR"
+    ; Remove installation directory and all contents
+    RMDir /r "$INSTDIR"
     
-    ; Remove registry entries
+    ; Clean up ALL TrackPro registry entries (not just current version)
+    DetailPrint "Cleaning up all TrackPro registry entries..."
+    
+    ; Remove current version registry entries
     DeleteRegKey ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}"
     DeleteRegKey HKLM "${{PRODUCT_DIR_REGKEY}}"
     
-    ; Display a confirmation message
-    MessageBox MB_ICONINFORMATION|MB_OK "TrackPro v{version} has been successfully uninstalled from your computer."
+    ; Enumerate and remove any remaining TrackPro uninstall entries
+    StrCpy $1 0
+    uninstall_loop:
+        EnumRegKey $2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall" $1
+        StrCmp $2 "" uninstall_done
+        
+        ; Check if this is a TrackPro entry
+        ReadRegStr $3 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2" "DisplayName"
+        StrCpy $4 $3 8  ; Get first 8 characters
+        StrCmp $4 "TrackPro" 0 uninstall_next_key
+        
+        ; This is a TrackPro entry, remove it
+        DetailPrint "Removing registry entry: $3"
+        DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2"
+        Goto uninstall_loop  ; Start over since we modified the registry
+        
+        uninstall_next_key:
+        IntOp $1 $1 + 1
+        Goto uninstall_loop
     
-    DetailPrint "Uninstallation complete"
+    uninstall_done:
+    
+    ; Clean up App Paths registry entries
+    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\TrackPro.exe"
+    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\TrackPro_v{version}.exe"
+    
+    ; Display a confirmation message
+    MessageBox MB_ICONINFORMATION|MB_OK "All TrackPro versions have been successfully uninstalled from your computer."
+    
+    DetailPrint "Complete uninstallation finished"
 SectionEnd
 """
         # Format the script with the version
@@ -450,7 +597,7 @@ SectionEnd
             error_msg += "\nPlease ensure all required files are present before building the installer."
             raise Exception(error_msg)
         
-        # Build installer
+                    # Build installer
         print("\nBuilding installer...")
         try:
             # Find NSIS executable
@@ -576,6 +723,13 @@ SectionEnd
         
         if installer_size < 1000000:  # Less than 1MB might indicate a problem
             print("! Warning: Installer file size is smaller than expected. Please verify its contents.")
+        
+        # Sign the installer
+        self.sign_files([installer_path])
+        
+        print(f"\n✓ Build process completed!")
+        print(f"✓ Signed installer available at: {os.path.abspath(installer_path)}")
+        print(f"✓ Installer is ready for distribution")
 
     def clean_build(self):
         """Clean previous builds."""
@@ -953,6 +1107,9 @@ SectionEnd
         if os.path.exists(exe_path):
             file_size = os.path.getsize(exe_path)
             print(f"\n✓ TrackPro_v{self.version}.exe successfully built at: {exe_path} ({file_size} bytes)")
+            
+            # Sign the executable
+            self.sign_files([exe_path])
             
             # Try to run it as a test
             try:

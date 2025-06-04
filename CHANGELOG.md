@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0 - 2025-01-15
+- **MAJOR FIX**: Resolved critical issue where previous versions weren't deleted during updates
+- Added automatic cleanup of old TrackPro versions during installation
+- Enhanced installer to remove previous executables, shortcuts, and registry entries before installing new version
+- User data (calibrations, settings, race data) is now properly preserved during updates
+- Improved update process with better user feedback and progress indication
+- Added version cleanup test script for verification
+- Updated to version 1.5.0
+
 ## 1.4.8 - 2025-05-17
 - Updated version to 1.4.8
 - Fixed lap classification and recording to be BULLETPROOF

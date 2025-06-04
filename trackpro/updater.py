@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Get the GitHub repository from environment variable or use a default
 GITHUB_REPO = "SimCoaches/TrackPro"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CURRENT_VERSION = "1.4.8"
+CURRENT_VERSION = "1.5.0"
 
 class UpdateChecker(QThread):
     update_available = pyqtSignal(str, str)  # version, download_url
@@ -341,6 +341,10 @@ class Updater:
             except Exception as e:
                 logger.error(f"Error disabling HidHide cloaking before update: {e}")
             
+            # Give Windows a moment to process the cleanup
+            import time
+            time.sleep(2)
+            
             # Create a batch script to handle antivirus exclusions and run the installer
             batch_content = f'''@echo off
 echo TrackPro Update Process Started
@@ -350,6 +354,15 @@ echo Installer path: {installer_path}
 echo Target directory: {INSTALL_DIR}
 echo New version: {self.latest_version}
 echo Current version: {CURRENT_VERSION}
+echo ===================================
+echo.
+echo IMPORTANT: This installer will automatically remove ALL previous
+echo TrackPro versions before installing the new version. This ensures
+echo a clean installation and prevents disk space issues.
+echo.
+echo YOUR USER DATA WILL BE PRESERVED:
+echo - Calibrations and settings will NOT be deleted
+echo - Only old executable files and shortcuts are removed
 echo ===================================
 
 echo.
@@ -392,6 +405,12 @@ echo.
 echo Step 4: Terminating TrackPro instances...
 taskkill /F /IM "TrackPro*.exe" 2>NUL
 echo TrackPro instances terminated
+echo.
+echo NOTE: The new installer includes automatic cleanup of previous versions.
+echo This means it will remove old TrackPro executables, shortcuts, and registry
+echo entries before installing the new version. USER DATA (calibrations, settings)
+echo will be preserved. This should resolve the issue where previous versions
+echo weren't being properly removed.
 
 echo.
 echo Step 5: Running installer interactively...

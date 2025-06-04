@@ -400,6 +400,10 @@ class IRacingLapSaver:
         self.lap_indexer.set_immediate_save_callback(self._immediate_save_callback)
         self.lap_indexer.start_save_worker()
         
+        # CRITICAL FIX: Buffer for completed sector data to handle timing delays
+        self._sector_data_buffer = {}  # lap_number -> sector_data
+        self._max_buffer_size = 10  # Keep last 10 laps of sector data
+        
         logger.info("🔌 IRacingLapSaver ready with immediate saving enabled")
         logger.info("✅ Immediate save callback registered")
         logger.info("✅ Immediate save worker thread started")
@@ -440,6 +444,9 @@ class IRacingLapSaver:
         
         Args:
             lap_data: Complete lap dictionary from LapIndexer
+            
+        Returns:
+            bool: True if save was successful, False otherwise
         """
         try:
             self._immediate_saves_processed += 1
@@ -459,7 +466,7 @@ class IRacingLapSaver:
             # Validate that we have essential data
             if lap_number < 0:
                 logger.error(f"❌ IMMEDIATE SAVE SKIPPED: Invalid lap number {lap_number}")
-                return
+                return False
                 
             if frame_count == 0:
                 logger.warning(f"⚠️  IMMEDIATE SAVE WARNING: Lap {lap_number} has no telemetry frames")
@@ -471,7 +478,7 @@ class IRacingLapSaver:
                 if not hasattr(self, '_queued_immediate_laps'):
                     self._queued_immediate_laps = []
                 self._queued_immediate_laps.append(lap_data)
-                return
+                return False  # Return False since we couldn't save now
                 
             # Use existing validation and save logic
             if was_reset:
@@ -494,8 +501,11 @@ class IRacingLapSaver:
                 success_rate = (self._immediate_saves_successful / self._immediate_saves_processed) * 100
                 logger.info(f"📊 IMMEDIATE SAVE STATS: {self._immediate_saves_successful}/{self._immediate_saves_processed} successful ({success_rate:.1f}%)")
                 
+            return success  # CRITICAL FIX: Return the actual success status
+                
         except Exception as e:
             logger.error(f"💥 IMMEDIATE SAVE ERROR: {e}", exc_info=True)
+            return False  # Return False on exception
 
     def _process_immediate_lap(self, lap_data):
         """
@@ -528,44 +538,174 @@ class IRacingLapSaver:
             sector_data_found_in_frames = False
             
             # First, check if any frames already have sector data
-            for frame in lap_frames:
+            logger.debug(f"🔍 [SECTOR DEBUG] Checking {len(lap_frames)} frames for sector data for lap {lap_number}")
+            
+            # CRITICAL FIX: Exhaustive search for complete sector data with multiple passes
+            # Pass 1: Look for COMPLETE sector data (10 sectors) with highest priority
+            # But prioritize frames that match the current lap to avoid cross-lap contamination
+            best_sector_data = None
+            best_frame_index = -1
+            
+            for i in reversed(range(len(lap_frames))):
+                frame = lap_frames[i]
                 if isinstance(frame, dict):
-                    # Check for completed sector data
-                    if 'sector_times' in frame and frame['sector_times']:
-                        sector_times = frame['sector_times']
-                        sector_data_found_in_frames = True
-                        logger.info(f"✅ [SECTOR FIX] Found completed sector data in frames for lap {lap_number}: {sector_times}")
-                        break
-                    # Check for current lap sector progress
-                    elif ('current_lap_sector_times' in frame and 
-                          frame.get('sector_timing_initialized', False) and
-                          frame.get('current_lap_sector_times')):
+                    # PRIORITY 1: Complete sector_times array with exactly 10 sectors
+                    if 'sector_times' in frame and frame['sector_times'] and len(frame['sector_times']) == 10:
+                        frame_lap = frame.get('Lap', 0)
+                        source_lap = frame.get('_source_lap', frame_lap)
+                        
+                        # Prefer sector data that matches this lap number
+                        if source_lap == lap_number or frame_lap == lap_number:
+                            sector_times = frame['sector_times']
+                            sector_data_found_in_frames = True
+                            logger.info(f"✅ [SECTOR FIX] Found MATCHING lap {lap_number} sector data (10 sectors) in frame {i}: {sector_times}")
+                            break
+                        elif best_sector_data is None:
+                            # Store as fallback but keep looking for exact match
+                            best_sector_data = frame['sector_times']
+                            best_frame_index = i
+                    
+                    # PRIORITY 2: Complete individual sector fields (all 10 sectors present)
+                    elif all(f'sector{j+1}_time' in frame for j in range(10)):
+                        individual_sectors = [frame.get(f'sector{j+1}_time') for j in range(10)]
+                        if all(s is not None for s in individual_sectors):
+                            sector_times = individual_sectors
+                            sector_data_found_in_frames = True
+                            logger.info(f"✅ [SECTOR FIX] Found COMPLETE individual sector fields (10 sectors) in frame {i} for lap {lap_number}: {sector_times}")
+                            break
+            
+            # If we didn't find an exact match, use the best fallback
+            if not sector_data_found_in_frames and best_sector_data is not None:
+                sector_times = best_sector_data
+                sector_data_found_in_frames = True
+                logger.warning(f"⚠️ [SECTOR FIX] Using fallback sector data (10 sectors) from frame {best_frame_index} for lap {lap_number}: {sector_times}")
+                logger.warning(f"⚠️ [SECTOR WARNING] This may indicate cross-lap contamination - sector data might be from wrong lap")
+            
+            # Pass 2: If no complete data found, look for near-complete data (9+ sectors)
+            if not sector_data_found_in_frames:
+                for i in reversed(range(len(lap_frames))):
+                    frame = lap_frames[i]
+                    if isinstance(frame, dict):
+                        # Near-complete sector_times array (9+ sectors)
+                        if 'sector_times' in frame and frame['sector_times'] and len(frame['sector_times']) >= 9:
+                            sector_times = frame['sector_times']
+                            sector_data_found_in_frames = True
+                            logger.info(f"✅ [SECTOR FIX] Found NEAR-COMPLETE sector data array ({len(sector_times)} sectors) in frame {i} for lap {lap_number}: {sector_times}")
+                            break
+                        
+                        # Near-complete individual sector fields (9+ sectors)
+                        elif any(key.startswith('sector') and key.endswith('_time') for key in frame.keys()):
+                            individual_sectors = [frame.get(f'sector{j+1}_time') for j in range(10)]
+                            non_none_sectors = [s for s in individual_sectors if s is not None]
+                            if len(non_none_sectors) >= 9:
+                                sector_times = non_none_sectors
+                                sector_data_found_in_frames = True
+                                logger.info(f"✅ [SECTOR FIX] Found NEAR-COMPLETE individual sector fields ({len(non_none_sectors)} sectors) in frame {i} for lap {lap_number}: {sector_times}")
+                                break
+            
+            # Pass 3: If still no data found, look for partial data (3+ sectors) as last resort
+            if not sector_data_found_in_frames:
+                for i in reversed(range(len(lap_frames))):
+                    frame = lap_frames[i]
+                    if isinstance(frame, dict):
+                        # Partial sector_times array (3+ sectors)
+                        if 'sector_times' in frame and frame['sector_times'] and len(frame['sector_times']) >= 3:
+                            sector_times = frame['sector_times']
+                            sector_data_found_in_frames = True
+                            logger.info(f"✅ [SECTOR FIX] Found PARTIAL sector data array ({len(sector_times)} sectors) in frame {i} for lap {lap_number}: {sector_times}")
+                            break
+                        
+                        # Partial individual sector fields (3+ sectors)
+                        elif any(key.startswith('sector') and key.endswith('_time') for key in frame.keys()):
+                            individual_sectors = [frame.get(f'sector{j+1}_time') for j in range(10)]
+                            non_none_sectors = [s for s in individual_sectors if s is not None]
+                            if len(non_none_sectors) >= 3:
+                                sector_times = non_none_sectors
+                                sector_data_found_in_frames = True
+                                logger.info(f"✅ [SECTOR FIX] Found PARTIAL individual sector fields ({len(non_none_sectors)} sectors) in frame {i} for lap {lap_number}: {sector_times}")
+                                break
+
+            # FALLBACK: Check for current lap sector progress (only if no completed data found)
+            if not sector_data_found_in_frames:
+                logger.info(f"🔧 [SECTOR DEBUG] No completed sector data found, checking progress data...")
+                
+                # Check frames in reverse order for the most recent progress
+                for i in reversed(range(len(lap_frames))):
+                    frame = lap_frames[i]
+                    if (isinstance(frame, dict) and 
+                        'current_lap_sector_times' in frame and 
+                        frame.get('sector_timing_initialized', False) and
+                        frame.get('current_lap_sector_times')):
+                        
                         current_lap_splits = frame.get('current_lap_sector_times', [])
                         current_sector_time = frame.get('current_sector_time', 0.0)
                         total_sectors = frame.get('total_sectors', 0)
+                        
+                        logger.info(f"🔧 [SECTOR DEBUG] Frame {i} progress: {len(current_lap_splits)}/{total_sectors} sectors, current: {current_sector_time:.3f}s")
                         
                         # Reconstruct sector times from progress data
                         if len(current_lap_splits) == total_sectors:
                             # Complete lap
                             sector_times = current_lap_splits
                             sector_data_found_in_frames = True
-                            logger.info(f"✅ [SECTOR FIX] Reconstructed complete sector data from frames for lap {lap_number}: {sector_times}")
+                            logger.info(f"✅ [SECTOR FIX] Reconstructed complete sector data from progress in frame {i} for lap {lap_number}: {sector_times}")
                             break
-                        elif len(current_lap_splits) > 0 and current_sector_time > 0.1:
-                            # Partial lap with current sector time
+                        elif len(current_lap_splits) >= 8 and current_sector_time > 0.1:
+                            # Near-complete lap with current sector time
                             sector_times = current_lap_splits + [current_sector_time]
                             sector_data_found_in_frames = True
-                            logger.info(f"✅ [SECTOR FIX] Reconstructed partial sector data from frames for lap {lap_number}: {sector_times}")
+                            logger.info(f"✅ [SECTOR FIX] Reconstructed near-complete sector data from progress in frame {i} for lap {lap_number}: {sector_times}")
                             break
-                        elif len(current_lap_splits) > 0:
-                            # Just completed sectors
+                        elif len(current_lap_splits) >= 3:
+                            # Partial lap with multiple sectors
                             sector_times = current_lap_splits
                             sector_data_found_in_frames = True
-                            logger.info(f"✅ [SECTOR FIX] Using completed sectors from frames for lap {lap_number}: {sector_times}")
+                            logger.info(f"✅ [SECTOR FIX] Using partial sector progress from frame {i} for lap {lap_number}: {sector_times}")
                             break
             
-            # Fallback: Try to get sector data from timing system if not found in frames
-            if not sector_data_found_in_frames and hasattr(self, '_sector_timing_system') and self._sector_timing_system:
+            # CRITICAL FIX: Get sector data directly by lap number from the API
+            if not sector_data_found_in_frames:
+                logger.info(f"🔍 [LAP SECTOR] Checking for lap-specific sector data for lap {lap_number}")
+                
+                # Get sector data from the iRacing API using lap number
+                if hasattr(self, '_iracing_api') and self._iracing_api:
+                    lap_sector_data = self._iracing_api.get_lap_sector_data(lap_number)
+                    if lap_sector_data and 'sector_times' in lap_sector_data:
+                        sector_times = lap_sector_data['sector_times']
+                        logger.info(f"✅ [LAP SECTOR] Found exact sector data for lap {lap_number}: {sector_times}")
+                    else:
+                        logger.warning(f"❌ [LAP SECTOR] No exact sector data found for lap {lap_number}")
+                else:
+                    logger.warning(f"❌ [LAP SECTOR] No iRacing API reference available")
+                    
+                # Fallback to buffered data if API doesn't have it
+                if not sector_times:
+                    logger.info(f"🔍 [BACKFILL] Checking buffered sector data for lap {lap_number}")
+                    buffered_data = self._get_buffered_sector_data(lap_number)
+                    if buffered_data:
+                        buffered_sector_times = buffered_data.get('sector_times', [])
+                        if buffered_sector_times:
+                            sector_times = buffered_sector_times
+                            logger.info(f"✅ [BACKFILL] Using buffered sector data for lap {lap_number}: {sector_times}")
+                        else:
+                            logger.warning(f"❌ [BACKFILL] Buffered data found but no sector_times for lap {lap_number}")
+                    else:
+                        logger.info(f"❌ [BACKFILL] No buffered sector data found for lap {lap_number}")
+
+            # Fallback: Try to get sector data from timing system if not found in frames, API, or buffer
+            # Debug: If no sector data found, log what's in the frames  
+            if not sector_times:
+                logger.warning(f"❌ [SECTOR DEBUG] No sector data found in frames or buffer for lap {lap_number}")
+                # Log sample frame keys for debugging
+                if lap_frames:
+                    sample_frame = lap_frames[-1] if isinstance(lap_frames[-1], dict) else {}
+                    sector_keys = [k for k in sample_frame.keys() if 'sector' in k.lower()]
+                    timing_keys = [k for k in sample_frame.keys() if 'timing' in k.lower()]
+                    logger.warning(f"🔍 [SECTOR DEBUG] Sample frame sector keys: {sector_keys}")
+                    logger.warning(f"🔍 [SECTOR DEBUG] Sample frame timing keys: {timing_keys}")
+                    logger.warning(f"🔍 [SECTOR DEBUG] Sample frame has sector_timing_initialized: {sample_frame.get('sector_timing_initialized', False)}")
+            
+            if not sector_times and hasattr(self, '_sector_timing_system') and self._sector_timing_system:
                 try:
                     # Get the most recent completed lap from the sector timing system
                     recent_laps = self._sector_timing_system.get_recent_laps(1)
@@ -1249,6 +1389,7 @@ class IRacingLapSaver:
             logger.error("[CRITICAL] Supabase client not available, cannot save lap data. Make sure client is set properly at initialization.")
             return None
             
+        # CRITICAL FIX: Ensure session exists before saving lap
         if not self._current_session_id:
             logger.error("[CRITICAL] No active session ID, cannot save lap data. Ensure a session is created before saving laps.")
             
@@ -1259,6 +1400,11 @@ class IRacingLapSaver:
             if not self._current_session_id and not self._connection_disabled:
                 logger.warning("[RECOVERY] No session ID but connection is available. This could indicate the session wasn't properly created.")
                 
+            return None
+        
+        # Validate that the session exists in the database
+        if not self._ensure_session_exists():
+            logger.error(f"[CRITICAL] Session {self._current_session_id} does not exist in database and could not be created")
             return None
             
         # Log connection state for debugging
@@ -1273,6 +1419,12 @@ class IRacingLapSaver:
         # Validate lap telemetry data before saving
         is_valid, validation_message = self._validate_lap_data(lap_frames_from_indexer, lap_number)
         logger.info(f"Lap {lap_number} validation: {validation_message}")
+
+        # Check for OUT lap (lap_time = -1) and mark as invalid
+        if lap_time == -1:
+            is_valid = False
+            validation_message += " | OUT lap (lap_time = -1)"
+            logger.info(f"Lap {lap_number} marked as invalid: OUT lap detected (lap_time = -1)")
 
         # CRITICAL FIX: Get lap type directly from the method parameters instead of from frames
         # The lap frames should now have the correct lap_state thanks to our fix above
@@ -1318,6 +1470,14 @@ class IRacingLapSaver:
         # Generate a UUID for the lap to ensure insert-only approach
         lap_uuid = str(uuid.uuid4())
         
+        # Check for sector timing data in the lap frames
+        sector_times = None
+        for frame in lap_frames_from_indexer[::-1]:  # Check frames in reverse order
+            if isinstance(frame, dict) and 'sector_times' in frame and frame['sector_times']:
+                sector_times = frame['sector_times']
+                logger.info(f"✅ [SECTOR INTEGRATION] Found sector data for lap {lap_number}: {sector_times}")
+                break
+        
         lap_data = {
             "id": lap_uuid,  # Use UUID as primary key for insert-only approach
             "session_id": self._current_session_id,
@@ -1338,6 +1498,13 @@ class IRacingLapSaver:
             })
         }
         
+        # Add sector times directly to the lap record if available
+        if sector_times:
+            for sector_num, sector_time in enumerate(sector_times, 1):
+                if sector_num <= 10:  # Only save up to 10 sectors
+                    lap_data[f"sector{sector_num}_time"] = sector_time
+            logger.info(f"✅ [SECTOR INTEGRATION] Added {len(sector_times)} sector times directly to lap record")
+        
         # Make the save attempt
         try:
             logger.info(f"Saving Lap {lap_number} ({lap_time:.3f}s, Type: {lap_type}) for session {self._current_session_id} with UUID {lap_uuid}")
@@ -1353,8 +1520,11 @@ class IRacingLapSaver:
                 if lap_frames_from_indexer:
                     self._save_telemetry_points(saved_lap_uuid, lap_frames_from_indexer)
                 
-                # Save sector times if available in the lap frames
-                self._save_sector_times(saved_lap_uuid, lap_frames_from_indexer)
+                # Save sector times if available in the lap frames (only if not already included in lap record)
+                if not sector_times:
+                    self._save_sector_times(saved_lap_uuid, lap_frames_from_indexer)
+                else:
+                    logger.info(f"✅ [SECTOR INTEGRATION] Sector times already included in lap record, skipping separate sector save")
 
                 self._total_laps_saved += 1
                 return saved_lap_uuid
@@ -1569,27 +1739,47 @@ class IRacingLapSaver:
             
             logger.info(f"💾 [SECTOR DEBUG] Saving sector times for lap {lap_uuid}: {sector_times}")
             
-            # Prepare sector data for insertion
-            sector_data_to_insert = []
+            # Update the laps table with sector times instead of inserting into separate table
+            sector_updates = {}
             for sector_num, sector_time in enumerate(sector_times, 1):
-                sector_data_to_insert.append({
-                    "lap_id": lap_uuid,
-                    "user_id": self._user_id,
-                    "sector_number": sector_num,
-                    "sector_time": sector_time,
-                    "created_at": datetime.now().isoformat()
-                })
+                if sector_num <= 10:  # Only save up to 10 sectors
+                    sector_updates[f"sector{sector_num}_time"] = sector_time
             
-            logger.info(f"💾 [SECTOR DEBUG] Prepared {len(sector_data_to_insert)} sector records for insertion")
+            logger.info(f"💾 [SECTOR DEBUG] Updating lap {lap_uuid} with sector columns: {sector_updates}")
             
-            # Insert sector times
-            response = self._supabase_client.table("sector_times").insert(sector_data_to_insert).execute()
+            # Add a small delay to ensure the lap record exists before updating
+            import time
+            time.sleep(0.1)
             
-            if response.data:
-                logger.info(f"✅ [SECTOR DEBUG] Successfully saved {len(sector_data_to_insert)} sector times for lap {lap_uuid}")
-                return True
-            else:
-                logger.warning(f"❌ [SECTOR DEBUG] Failed to save sector times for lap {lap_uuid}. Response: {response}")
+            try:
+                response = self._supabase_client.table("laps").update(sector_updates).eq("id", lap_uuid).execute()
+                
+                logger.info(f"💾 [SECTOR DEBUG] Update response received - data: {bool(response.data)}, count: {getattr(response, 'count', 'N/A')}")
+                
+                if response.data:
+                    logger.info(f"✅ [SECTOR DEBUG] Successfully updated lap {lap_uuid} with {len(sector_updates)} sector columns")
+                    return True
+                else:
+                    logger.error(f"❌ [SECTOR DEBUG] Failed to update sector times for lap {lap_uuid}")
+                    logger.error(f"❌ [SECTOR DEBUG] Response data: {response.data}")
+                    logger.error(f"❌ [SECTOR DEBUG] Response count: {getattr(response, 'count', 'N/A')}")
+                    
+                    # Try to verify if the lap record exists
+                    try:
+                        check_response = self._supabase_client.table("laps").select("id").eq("id", lap_uuid).execute()
+                        if check_response.data:
+                            logger.error(f"❌ [SECTOR DEBUG] Lap record exists but update failed - possible data type issue")
+                            logger.error(f"❌ [SECTOR DEBUG] Sector updates attempted: {sector_updates}")
+                        else:
+                            logger.error(f"❌ [SECTOR DEBUG] Lap record does not exist - timing issue")
+                    except Exception as check_error:
+                        logger.error(f"❌ [SECTOR DEBUG] Error checking lap record existence: {check_error}")
+                    
+                    return False
+                    
+            except Exception as update_error:
+                logger.error(f"❌ [SECTOR DEBUG] Exception during sector update: {update_error}")
+                logger.error(f"❌ [SECTOR DEBUG] Update data attempted: {sector_updates}")
                 return False
                 
         except Exception as e:
@@ -2363,6 +2553,15 @@ class IRacingLapSaver:
         """
         self._sector_timing_system = sector_timing
         logger.info("✅ [SECTOR DEBUG] Sector timing system connected to lap saver")
+        
+    def set_iracing_api(self, iracing_api):
+        """Set the iRacing API for direct lap-specific sector data access.
+        
+        Args:
+            iracing_api: The SimpleIRacingAPI instance
+        """
+        self._iracing_api = iracing_api
+        logger.info("✅ [SECTOR DEBUG] iRacing API connected to lap saver for lap-specific sector data")
     
     def _get_sector_data_from_timing_system(self, lap_uuid):
         """Fallback method to get sector data directly from the sector timing system.
@@ -2407,4 +2606,205 @@ class IRacingLapSaver:
             
         except Exception as e:
             logger.error(f"❌ [SECTOR DEBUG] Error getting sector data from timing system: {e}")
+            return None
+
+    def _ensure_session_exists(self):
+        """
+        Ensure the current session exists in the database.
+        Create it if it doesn't exist.
+        
+        Returns:
+            bool: True if session exists or was created successfully, False otherwise
+        """
+        if not self._current_session_id:
+            logger.error("[SESSION VALIDATION] No current session ID set")
+            return False
+            
+        if not self._supabase_client:
+            logger.error("[SESSION VALIDATION] No Supabase client available")
+            return False
+            
+        try:
+            # Check if session exists
+            logger.info(f"[SESSION VALIDATION] Checking if session {self._current_session_id} exists in database")
+            
+            response = self._supabase_client.table("sessions").select("id").eq("id", self._current_session_id).execute()
+            
+            if response.data and len(response.data) > 0:
+                logger.info(f"[SESSION VALIDATION] ✅ Session {self._current_session_id} exists in database")
+                return True
+            
+            # Session doesn't exist - try to create it
+            logger.warning(f"[SESSION VALIDATION] ❌ Session {self._current_session_id} does not exist in database")
+            return self._create_missing_session()
+            
+        except Exception as e:
+            logger.error(f"[SESSION VALIDATION] Error checking session existence: {e}")
+            return False
+    
+    def _create_missing_session(self):
+        """
+        Create a missing session record in the database.
+        
+        Returns:
+            bool: True if session was created successfully, False otherwise
+        """
+        try:
+            # We need track_id, car_id, and user_id to create a session
+            if not all([self._current_track_id, self._current_car_id, self._user_id]):
+                logger.error(f"[SESSION CREATION] Missing required data for session creation:")
+                logger.error(f"[SESSION CREATION]   Track ID: {self._current_track_id}")
+                logger.error(f"[SESSION CREATION]   Car ID: {self._current_car_id}")
+                logger.error(f"[SESSION CREATION]   User ID: {self._user_id}")
+                return False
+            
+            logger.info(f"[SESSION CREATION] Creating missing session {self._current_session_id}")
+            
+            # Create session data matching the schema
+            session_data = {
+                'id': self._current_session_id,  # Use the existing session ID from monitor
+                'user_id': self._user_id,
+                'track_id': self._current_track_id,
+                'car_id': self._current_car_id,
+                'session_type': self._current_session_type or 'Practice',
+                'session_date': 'now()',
+                'created_at': 'now()'
+            }
+            
+            logger.info(f"[SESSION CREATION] Session data: {session_data}")
+            
+            # Insert the session
+            response = self._supabase_client.table("sessions").insert(session_data).execute()
+            
+            if response.data and len(response.data) > 0:
+                created_session_id = response.data[0].get('id')
+                logger.info(f"[SESSION CREATION] ✅ Successfully created session {created_session_id}")
+                
+                # Process any queued immediate laps now that we have a session
+                if hasattr(self, '_queued_immediate_laps') and self._queued_immediate_laps:
+                    logger.info(f"[SESSION CREATION] Processing {len(self._queued_immediate_laps)} queued immediate laps")
+                    self._process_queued_immediate_laps()
+                
+                return True
+            else:
+                logger.error(f"[SESSION CREATION] ❌ Failed to create session - no data returned")
+                return False
+                
+        except Exception as e:
+            # Check if it's a duplicate key error (session was created by another process)
+            if "duplicate key value violates unique constraint" in str(e) or "violates unique constraint" in str(e):
+                logger.info(f"[SESSION CREATION] ✅ Session {self._current_session_id} was created by another process")
+                return True
+            else:
+                logger.error(f"[SESSION CREATION] ❌ Error creating session: {e}")
+                return False
+    
+    def set_session_context(self, session_id, track_id, car_id, session_type=None):
+        """
+        Set the session context for lap saving.
+        
+        Args:
+            session_id: The session UUID
+            track_id: The track database ID
+            car_id: The car database ID
+            session_type: The session type (Practice, Qualifying, Race, etc.)
+        """
+        self._current_session_id = session_id
+        self._current_track_id = track_id
+        self._current_car_id = car_id
+        self._current_session_type = session_type
+        
+        logger.info(f"[SESSION CONTEXT] Set session context:")
+        logger.info(f"[SESSION CONTEXT]   Session ID: {session_id}")
+        logger.info(f"[SESSION CONTEXT]   Track ID: {track_id}")
+        logger.info(f"[SESSION CONTEXT]   Car ID: {car_id}")
+        logger.info(f"[SESSION CONTEXT]   Session Type: {session_type}")
+        
+        # Validate the session exists
+        if session_id:
+            session_valid = self._ensure_session_exists()
+            if session_valid:
+                logger.info(f"[SESSION CONTEXT] ✅ Session {session_id} validated successfully")
+            else:
+                logger.error(f"[SESSION CONTEXT] ❌ Session {session_id} validation failed")
+
+    def backfill_sector_data(self, sector_data_package, frames_back=200):
+        """Store completed sector data in buffer for later use when processing delayed laps.
+        
+        This method is called when a lap is completed with sector timing data,
+        storing that data so it can be retrieved when the lap saver processes
+        the lap (which happens with a 3-second delay due to the LapIndexer).
+        
+        Args:
+            sector_data_package: Dictionary containing all sector timing data
+            frames_back: Number of frames back to consider (for logging only)
+        """
+        try:
+            # Extract lap number from sector data
+            sector_completion_frame_id = sector_data_package.get('sector_completion_frame_id')
+            sector_times = sector_data_package.get('sector_times', [])
+            
+            if not sector_times:
+                logger.warning(f"❌ [BACKFILL] No sector times in sector data package")
+                return
+                
+            # Store the sector data with frame ID as key (we'll match by proximity)
+            if sector_completion_frame_id:
+                self._sector_data_buffer[sector_completion_frame_id] = sector_data_package
+                logger.debug(f"🔧 [BACKFILL] Stored sector data for frame {sector_completion_frame_id}: {len(sector_times)} sectors")
+                
+                # Clean up old entries to prevent memory leak
+                if len(self._sector_data_buffer) > self._max_buffer_size:
+                    # Remove oldest entries (smallest frame IDs)
+                    old_keys = sorted(self._sector_data_buffer.keys())[:-self._max_buffer_size]
+                    for old_key in old_keys:
+                        del self._sector_data_buffer[old_key]
+                    logger.debug(f"🧹 [BACKFILL] Cleaned up {len(old_keys)} old sector data entries")
+            else:
+                logger.warning(f"❌ [BACKFILL] No sector_completion_frame_id in sector data package")
+                
+        except Exception as e:
+            logger.error(f"❌ [BACKFILL] Error storing sector data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _get_buffered_sector_data(self, lap_number, frame_range=None):
+        """Retrieve buffered sector data for a lap.
+        
+        Args:
+            lap_number: The lap number to find sector data for
+            frame_range: Optional tuple of (start_frame, end_frame) to search within
+            
+        Returns:
+            dict: Sector data package if found, None otherwise
+        """
+        try:
+            if not self._sector_data_buffer:
+                logger.debug(f"🔍 [BACKFILL] No buffered sector data available for lap {lap_number}")
+                return None
+                
+            logger.debug(f"🔍 [BACKFILL] Searching buffered sector data for lap {lap_number}")
+            logger.debug(f"🔍 [BACKFILL] Available buffer keys: {list(self._sector_data_buffer.keys())}")
+            
+            # If we have a frame range, look for sector data within that range
+            if frame_range:
+                start_frame, end_frame = frame_range
+                for frame_id in sorted(self._sector_data_buffer.keys(), reverse=True):
+                    if start_frame <= frame_id <= end_frame:
+                        sector_data = self._sector_data_buffer[frame_id]
+                        logger.info(f"✅ [BACKFILL] Found matching sector data at frame {frame_id} for lap {lap_number}")
+                        return sector_data
+            
+            # Otherwise, return the most recent sector data (highest frame ID)
+            if self._sector_data_buffer:
+                latest_frame_id = max(self._sector_data_buffer.keys())
+                sector_data = self._sector_data_buffer[latest_frame_id]
+                logger.info(f"✅ [BACKFILL] Using latest buffered sector data from frame {latest_frame_id} for lap {lap_number}")
+                return sector_data
+                
+            logger.debug(f"❌ [BACKFILL] No matching buffered sector data found for lap {lap_number}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ [BACKFILL] Error retrieving buffered sector data for lap {lap_number}: {e}")
             return None

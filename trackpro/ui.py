@@ -8,7 +8,7 @@ import time
 import math
 
 # Version information - hardcoded to avoid cyclic imports
-__version__ = "1.4.8"
+__version__ = "1.5.0"
 
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -804,7 +804,7 @@ class MainWindow(QMainWindow):
         # Main window setup
         self.window_width = 1200
         self.window_height = 900  # Increased from 800 to 900
-        self.setWindowTitle("TrackPro Configuration v1.4.8")
+        self.setWindowTitle("TrackPro Configuration v1.5.0")
         self.setMinimumSize(1000, 875)  # Increased minimum height from 700 to 800
         self.setWindowIcon(QIcon(":/icons/app_icon.ico"))
 
