@@ -14,19 +14,30 @@ class SteeringGraphWidget(GraphBase):
         
         # Create the plot widget
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground('k')  # Black background
+        self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
         self.plot_widget.setTitle("Steering vs Distance")
         self.plot_widget.setLabel('bottom', "Distance (m)")
         
-        # Configure Y-Axis for steering (-100% to 100%)
+        # Configure Y-Axis for steering (-100% to 100%) with better styling
         left_axis = self.plot_widget.getAxis('left')
-        left_axis.setLabel("Steering (%)")
+        left_axis.setLabel("Steering (%)", color='#e6edf3')
+        left_axis.setTextPen('#e6edf3')
+        left_axis.setPen('#30363d')
         left_axis.setTicks([[(-1.0, '-100'), (-0.75, '-75'), (-0.5, '-50'), (-0.25, '-25'), 
                              (0, '0'), 
                              (0.25, '25'), (0.5, '50'), (0.75, '75'), (1.0, '100')]])
         
-        # Show grid lines for both axes
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        # Configure X-axis with better styling
+        bottom_axis = self.plot_widget.getAxis('bottom')
+        bottom_axis.setTextPen('#e6edf3')
+        bottom_axis.setPen('#30363d')
+        
+        # Style the plot title
+        title_item = self.plot_widget.plotItem.titleLabel
+        title_item.setAttr('color', '#a78bfa')
+        
+        # Show grid lines for both axes with modern styling
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
         
         # Set custom grid for x-axis at intervals
         self.add_distance_grid()
@@ -36,21 +47,25 @@ class SteeringGraphWidget(GraphBase):
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.plotItem.vb.disableAutoRange()
         
-        # Create a standard legend in the top-right corner with default style
-        self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt')
+        # Create a modern legend in the top-right corner
+        self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt', 
+                                                 brush=(22, 27, 34, 180), 
+                                                 pen='#30363d')
         
-        # Add horizontal line at 0
-        self.zero_line = pg.InfiniteLine(angle=0, pos=0, pen=pg.mkPen('w', width=1, style=Qt.DashLine))
+        # Add horizontal line at 0 with better styling
+        self.zero_line = pg.InfiniteLine(angle=0, pos=0, pen=pg.mkPen('#6e7681', width=1, style=Qt.DashLine))
         self.plot_widget.addItem(self.zero_line)
         
-        # Create crosshair lines
-        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('w', width=1))
-        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('w', width=1))
+        # Create crosshair lines with modern styling
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
+        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
         self.plot_widget.addItem(self.vLine, ignoreBounds=True)
         self.plot_widget.addItem(self.hLine, ignoreBounds=True)
         
-        # Create text label for coordinates
-        self.label = pg.TextItem(text='', color='w', anchor=(0, 1))
+        # Create text label for coordinates with modern styling
+        self.label = pg.TextItem(text='', color='#e6edf3', anchor=(0, 1),
+                                fill=pg.mkBrush(22, 27, 34, 180),
+                                border=pg.mkPen('#30363d'))
         self.label.setPos(10, 10)
         self.plot_widget.addItem(self.label, ignoreBounds=True)
         
@@ -72,15 +87,18 @@ class SteeringGraphWidget(GraphBase):
         # Connect mouse movement to crosshair update
         self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
         
+        # Initialize grid lines list for custom grid functionality
+        self.grid_lines = []
+        
         # Set up the layout
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.plot_widget)
         self.setLayout(layout)
         
-        # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#00A0FF', width=2), name="Lap A Steering", autoDownsample=False, clipToView=False)
-        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#88D0FF', width=2, style=Qt.SolidLine), name="Lap B Steering", autoDownsample=False, clipToView=False)
+        # Initialize plot items with modern colors matching the new design
+        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Steering", autoDownsample=False, clipToView=False)
+        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Steering", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curve
         self.steering_curve_b.hide()
@@ -97,91 +115,101 @@ class SteeringGraphWidget(GraphBase):
     
     def mouseMoved(self, evt):
         """Handle mouse movement to update crosshairs and tooltip."""
-        # Unpack the tuple if we received one
-        if isinstance(evt, tuple):
-            pos = evt[0]  # Get the QPointF from the tuple
-        else:
-            pos = evt
-            
-        if self.plot_widget.sceneBoundingRect().contains(pos):
-            mousePoint = self.plot_widget.plotItem.vb.mapSceneToView(pos)
-            x, y = mousePoint.x(), mousePoint.y()
-            
-            # Update crosshair positions
-            self.vLine.setPos(x)
-            self.hLine.setPos(y)
-            
-            # Find the actual steering values at the cursor position
-            steering_value_a = None
-            steering_value_b = None
-            distance = x
-            
-            # Find the closest data point for Lap A
-            if self.steering_curve.xData is not None and len(self.steering_curve.xData) > 0:
-                # Find the closest x point to the cursor
-                closest_idx = -1
-                min_distance = float('inf')
-                
-                for i, x_val in enumerate(self.steering_curve.xData):
-                    dist = abs(x_val - x)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_idx = i
-                
-                if closest_idx >= 0 and closest_idx < len(self.steering_curve.yData):
-                    # Get actual steering value from the data
-                    steering_value_a = self.steering_curve.yData[closest_idx] * 100  # Convert to percentage
-            
-            # In comparison mode, also find the closest data point for Lap B
-            if self.comparison_mode and self.steering_curve_b.xData is not None and len(self.steering_curve_b.xData) > 0:
-                # Find the closest x point to the cursor
-                closest_idx = -1
-                min_distance = float('inf')
-                
-                for i, x_val in enumerate(self.steering_curve_b.xData):
-                    dist = abs(x_val - x)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_idx = i
-                
-                if closest_idx >= 0 and closest_idx < len(self.steering_curve_b.yData):
-                    # Get actual steering value from the data
-                    steering_value_b = self.steering_curve_b.yData[closest_idx] * 100  # Convert to percentage
-            
-            # Format tooltip text with steering direction and the actual values
-            if steering_value_a is not None:
-                # Basic tooltip for single lap
-                if not self.comparison_mode or steering_value_b is None:
-                    direction_a = "Right" if steering_value_a > 0 else "Left"
-                    if abs(steering_value_a) < 1.0:  # Close to zero
-                        direction_a = "Center"
-                        
-                    tooltip = f"""
-                        <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
-                            <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                            <span style='color: #00AAFF;'>Steering {direction_a}: {abs(steering_value_a):.0f}%</span>
-                        </div>
-                    """
+        try:
+            # Convert tuple to QPointF if needed (happens with SignalProxy)
+            if isinstance(evt, tuple):
+                from PyQt5.QtCore import QPointF
+                if len(evt) >= 2:
+                    pos = QPointF(evt[0], evt[1])
+                elif len(evt) == 1:
+                    pos = evt[0]
                 else:
-                    # Enhanced tooltip for comparison
-                    direction_a = "Right" if steering_value_a > 0 else "Left"
-                    if abs(steering_value_a) < 1.0:
-                        direction_a = "Center"
-                        
-                    direction_b = "Right" if steering_value_b > 0 else "Left"
-                    if abs(steering_value_b) < 1.0:
-                        direction_b = "Center"
-                    
-                    tooltip = f"""
-                        <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
-                            <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                            <span style='color: #00AAFF;'>Lap A: {direction_a} {abs(steering_value_a):.0f}%</span><br>
-                            <span style='color: #88CCFF;'>Lap B: {direction_b} {abs(steering_value_b):.0f}%</span>
-                        </div>
-                    """
+                    return  # Invalid tuple, skip this event
+            else:
+                pos = evt
                 
-                self.label.setHtml(tooltip)
-                self.label.setPos(x, -0.9)  # Position tooltip at top of graph
+            if self.plot_widget.sceneBoundingRect().contains(pos):
+                mousePoint = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+                x, y = mousePoint.x(), mousePoint.y()
+                
+                # Update crosshair positions
+                self.vLine.setPos(x)
+                self.hLine.setPos(y)
+                
+                # Find the actual steering values at the cursor position
+                steering_value_a = None
+                steering_value_b = None
+                distance = x
+                
+                # Find the closest data point for Lap A
+                if self.steering_curve.xData is not None and len(self.steering_curve.xData) > 0:
+                    # Find the closest x point to the cursor
+                    closest_idx = -1
+                    min_distance = float('inf')
+                    
+                    for i, x_val in enumerate(self.steering_curve.xData):
+                        dist = abs(x_val - x)
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_idx = i
+                    
+                    if closest_idx >= 0 and closest_idx < len(self.steering_curve.yData):
+                        # Get actual steering value from the data
+                        steering_value_a = self.steering_curve.yData[closest_idx] * 100  # Convert to percentage
+                
+                # In comparison mode, also find the closest data point for Lap B
+                if self.comparison_mode and self.steering_curve_b.xData is not None and len(self.steering_curve_b.xData) > 0:
+                    # Find the closest x point to the cursor
+                    closest_idx = -1
+                    min_distance = float('inf')
+                    
+                    for i, x_val in enumerate(self.steering_curve_b.xData):
+                        dist = abs(x_val - x)
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_idx = i
+                    
+                    if closest_idx >= 0 and closest_idx < len(self.steering_curve_b.yData):
+                        # Get actual steering value from the data
+                        steering_value_b = self.steering_curve_b.yData[closest_idx] * 100  # Convert to percentage
+                
+                # Format tooltip text with steering direction and the actual values
+                if steering_value_a is not None:
+                    # Basic tooltip for single lap
+                    if not self.comparison_mode or steering_value_b is None:
+                        direction_a = "Right" if steering_value_a > 0 else "Left"
+                        if abs(steering_value_a) < 1.0:  # Close to zero
+                            direction_a = "Center"
+                            
+                        tooltip = f"""
+                            <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
+                                <span style='color: white;'>Dist: {distance:.1f}m</span><br>
+                                <span style='color: #00AAFF;'>Steering {direction_a}: {abs(steering_value_a):.0f}%</span>
+                            </div>
+                        """
+                    else:
+                        # Enhanced tooltip for comparison
+                        direction_a = "Right" if steering_value_a > 0 else "Left"
+                        if abs(steering_value_a) < 1.0:
+                            direction_a = "Center"
+                            
+                        direction_b = "Right" if steering_value_b > 0 else "Left"
+                        if abs(steering_value_b) < 1.0:
+                            direction_b = "Center"
+                        
+                        tooltip = f"""
+                            <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
+                                <span style='color: white;'>Dist: {distance:.1f}m</span><br>
+                                <span style='color: #00AAFF;'>Lap A: {direction_a} {abs(steering_value_a):.0f}%</span><br>
+                                <span style='color: #88CCFF;'>Lap B: {direction_b} {abs(steering_value_b):.0f}%</span>
+                            </div>
+                        """
+                    
+                    self.label.setHtml(tooltip)
+                    self.label.setPos(x, -0.9)  # Position tooltip at top of graph
+        except Exception as e:
+            # Silently handle any mouse movement errors to prevent console spam
+            pass
     
     def reset_view(self):
         """Reset the view to show the entire lap from start to finish."""
@@ -189,8 +217,8 @@ class SteeringGraphWidget(GraphBase):
             # Temporarily enable auto-ranging
             self.plot_widget.plotItem.vb.enableAutoRange()
 
-            # Set fixed Y range for steering (-100% to 100%)
-            self.plot_widget.setYRange(-1, 1, padding=0.05)
+            # Set FIXED Y range for steering (-100% to 100%) - NO MORE AUTO-RANGING
+            self.plot_widget.setYRange(-1, 1, padding=0.02)
             
             # Set X range to track length if available, otherwise use a default
             if self.track_length and self.track_length > 0:
@@ -349,47 +377,9 @@ class SteeringGraphWidget(GraphBase):
             self.steering_curve.setData(resampled_data['x_m'], resampled_data['Steering'])
             self.steering_curve.show()
             
-            # Compute Y-axis limits with margin for steering
-            y_values = resampled_data['Steering']
-
-            if not np.any(np.isfinite(y_values)):
-                logger.warning("Steering data is all NaN or infinite after resampling. Setting default Y-range.")
-                y_min_calc, y_max_calc = -1.0, 1.0
-            else:
-                y_min_actual = np.nanmin(y_values[np.isfinite(y_values)])
-                y_max_actual = np.nanmax(y_values[np.isfinite(y_values)])
-
-                is_degrees_range_heuristic = False
-                is_normalized_range_heuristic = False
-
-                if abs(y_max_actual) > 10 or abs(y_min_actual) > 10: # Heuristic for degrees
-                    is_degrees_range_heuristic = True
-                elif abs(y_max_actual) <= 1.5 and abs(y_min_actual) <= 1.5: # Heuristic for -1 to 1
-                    is_normalized_range_heuristic = True
-                
-                # If neither heuristic strongly matches, but data range is small, assume normalized
-                if not is_degrees_range_heuristic and not is_normalized_range_heuristic and (y_max_actual - y_min_actual < 2.0):
-                    is_normalized_range_heuristic = True
-
-                if is_degrees_range_heuristic:
-                    y_min_calc = min(y_min_actual, -180.0)
-                    y_max_calc = max(y_max_actual, 180.0)
-                elif is_normalized_range_heuristic:
-                    y_min_calc = min(y_min_actual, -1.0)
-                    y_max_calc = max(y_max_actual, 1.0)
-                else: # Fallback if range is unusual (e.g. data from -5 to 5)
-                    y_min_calc = y_min_actual
-                    y_max_calc = y_max_actual
-            
-            margin = 0.05 * abs(y_max_calc - y_min_calc) if (y_max_calc - y_min_calc) != 0 else 0.1
-            if y_min_calc == y_max_calc: # Ensure a visible range if all points are identical
-                y_min_final = y_min_calc - 0.5
-                y_max_final = y_max_calc + 0.5
-            else:
-                y_min_final = y_min_calc - margin
-                y_max_final = y_max_calc + margin
-
-            self.plot_widget.setYRange(y_min_final, y_max_final, padding=0)
+            # Use FIXED Y-axis range for steering - consistent -100% to +100%
+            # No more complex auto-ranging that causes range to jump around
+            self.plot_widget.setYRange(-1, 1, padding=0.02)
             
             # Set X-axis range to track length
             self.plot_widget.setXRange(0, self.track_length, padding=0)
@@ -429,8 +419,8 @@ class SteeringGraphWidget(GraphBase):
             # Update title for single lap view
             self.plot_widget.setTitle("Steering vs Distance")
             
-            # Update grid based on track length
-            self.update_grid()
+            # Update grid based on track length (skip for now to prevent crashes)
+            # self.update_grid()
             
         except Exception as e:
             logger.error(f"Error updating steering graph: {e}", exc_info=True)
@@ -488,16 +478,16 @@ class SteeringGraphWidget(GraphBase):
         self.steering_curve_b.show()
         if self.legend is None:
              # Create a new legend with proper styling if it doesn't exist
-             self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt')
+             self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt', 
+                                                      brush=(22, 27, 34, 180), 
+                                                      pen='#30363d')
         # ------------------------------------------------
         
         # Store track length
         self.track_length = track_length
         
-        # Initialize variable for Y-axis limits
-        global_y_min, global_y_max = float('inf'), float('-inf')
-        is_degrees_range = False
-        is_normalized_range = False
+        # Use FIXED Y-axis range for steering comparison - consistent -100% to +100%
+        # No more complex auto-ranging that causes range to jump around
         
         # Process and plot data for Lap A if valid
         if is_valid_a:
@@ -505,20 +495,6 @@ class SteeringGraphWidget(GraphBase):
             if resampled_data_a:
                 # Update plot with resampled data
                 self.steering_curve.setData(resampled_data_a['x_m'], resampled_data_a['Steering'])
-                
-                # Update global min/max values
-                y_min_a = np.nanmin(resampled_data_a['Steering'])
-                y_max_a = np.nanmax(resampled_data_a['Steering'])
-                
-                global_y_min = min(global_y_min, y_min_a)
-                global_y_max = max(global_y_max, y_max_a)
-                
-                # Try to determine if using degrees (-180 to 180) or normalized (-1 to 1)
-                if abs(y_max_a) > 10 or abs(y_min_a) > 10:
-                    is_degrees_range = True
-                elif abs(y_max_a) <= 1.5 and abs(y_min_a) <= 1.5:
-                    is_normalized_range = True
-                
                 logger.info(f"Set Lap A steering data with {len(resampled_data_a['x_m'])} points")
             else:
                 logger.warning("Failed to preprocess Lap A data")
@@ -533,20 +509,6 @@ class SteeringGraphWidget(GraphBase):
             if resampled_data_b:
                 # Update plot with resampled data
                 self.steering_curve_b.setData(resampled_data_b['x_m'], resampled_data_b['Steering'])
-                
-                # Update global min/max values
-                y_min_b = np.nanmin(resampled_data_b['Steering'])
-                y_max_b = np.nanmax(resampled_data_b['Steering'])
-                
-                global_y_min = min(global_y_min, y_min_b)
-                global_y_max = max(global_y_max, y_max_b)
-                
-                # Try to determine if using degrees (-180 to 180) or normalized (-1 to 1)
-                if abs(y_max_b) > 10 or abs(y_min_b) > 10:
-                    is_degrees_range = True
-                elif abs(y_max_b) <= 1.5 and abs(y_min_b) <= 1.5:
-                    is_normalized_range = True
-                
                 logger.info(f"Set Lap B steering data with {len(resampled_data_b['x_m'])} points")
             else:
                 logger.warning("Failed to preprocess Lap B data")
@@ -566,24 +528,8 @@ class SteeringGraphWidget(GraphBase):
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()
         
-        # Ensure reasonable range boundaries based on the data
-        if global_y_min == float('inf') or global_y_max == float('-inf'):
-            # No valid data, use default range
-            global_y_min, global_y_max = -1, 1
-            
-        # Adjust ranges based on detected data type
-        if is_degrees_range:
-            # Ensure range includes at least -180 to 180 for degrees
-            global_y_min = min(global_y_min, -180)
-            global_y_max = max(global_y_max, 180)
-        elif is_normalized_range:
-            # Ensure range includes at least -1 to 1 for normalized
-            global_y_min = min(global_y_min, -1)
-            global_y_max = max(global_y_max, 1)
-            
-        # Add Y-axis margin and set limits
-        margin = 0.05 * (global_y_max - global_y_min)
-        self.plot_widget.setYRange(global_y_min - margin, global_y_max + margin, padding=0)
+        # Use FIXED Y-axis range for steering comparison - consistent -100% to +100%
+        self.plot_widget.setYRange(-1, 1, padding=0.02)
         
         # Set X-axis range to track length
         self.plot_widget.setXRange(0, self.track_length, padding=0)
@@ -604,8 +550,8 @@ class SteeringGraphWidget(GraphBase):
         self.plot_widget.setTitle("Steering vs Distance (Comparison)")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
-        # Update grid based on track length
-        self.update_grid()
+        # Update grid based on track length (skip for now to prevent crashes)
+        # self.update_grid()
         
         # Force a redraw of the plot
         self.plot_widget.update()

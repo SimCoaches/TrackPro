@@ -9,7 +9,7 @@ import math
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QFrame, QGridLayout, QSizePolicy, QDialog,
-    QTextEdit, QDialogButtonBox, QMessageBox
+    QTextEdit, QDialogButtonBox, QMessageBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 from PyQt5.QtGui import QFont, QColor, QPainter, QPen, QBrush
@@ -420,151 +420,255 @@ class TelemetryTab(QWidget):
     def setup_ui(self):
         """Set up the telemetry tab UI."""
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)  # Much tighter spacing
+        layout.setContentsMargins(8, 8, 8, 8)  # Reduced margins
 
-        # Lap selection controls
+        # COMPACT TOP CONTROLS - minimal space like RaceStudio3
         controls_frame = QFrame()
-        controls_layout = QGridLayout(controls_frame)
-        controls_layout.setContentsMargins(5, 5, 5, 5)
-        controls_layout.setHorizontalSpacing(15)
+        controls_frame.setStyleSheet("""
+            QFrame {
+                background-color: #2d2d30;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px;
+                margin-bottom: 6px;
+            }
+            QLabel {
+                color: #e0e0e0;
+                font-weight: 500;
+                font-size: 11px;
+                margin: 0px;
+                padding: 0px;
+            }
+            QComboBox {
+                background-color: #3c3c3c;
+                color: #ffffff;
+                border: 1px solid #666;
+                border-radius: 3px;
+                padding: 3px 6px;
+                font-size: 11px;
+                min-height: 12px;
+                max-height: 20px;
+            }
+            QComboBox:hover {
+                border-color: #00d4ff;
+                background-color: #444;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 16px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border: 1px solid #999;
+                width: 0px;
+                height: 0px;
+                border-left: 3px solid transparent;
+                border-right: 3px solid transparent;
+                border-top: 5px solid #999;
+            }
+            QPushButton {
+                background-color: #404040;
+                color: #ffffff;
+                border: 1px solid #666;
+                border-radius: 3px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 500;
+                max-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #505050;
+                border-color: #00d4ff;
+            }
+            QPushButton:pressed {
+                background-color: #353535;
+            }
+        """)
+        controls_layout = QHBoxLayout(controls_frame)
+        controls_layout.setContentsMargins(6, 4, 6, 4)
+        controls_layout.setSpacing(8)
 
-        # Session Selection
+        # Session selection - very compact
         session_label = QLabel("Session:")
-        session_label.setStyleSheet("color:#DDD")
         self.session_combo = QComboBox()
-        self.session_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
-        self.session_combo.setMinimumWidth(400)
+        self.session_combo.setMinimumWidth(300)
+        self.session_combo.setMaximumWidth(400)
         self.session_combo.currentIndexChanged.connect(self.on_session_changed)
 
-        self.refresh_button = QPushButton("🔄 Refresh All")
-        self.refresh_button.setToolTip("Refresh session and lap lists from database")
-        self.refresh_button.setStyleSheet("padding: 5px 10px;")
-        self.refresh_button.clicked.connect(self.refresh_session_and_lap_lists)
-
-        # Add iRacing connection reset button
-        self.reset_connection_button = QPushButton("🔌 Reset iRacing")
-        self.reset_connection_button.setToolTip("Reset iRacing connection if showing as disconnected")
-        self.reset_connection_button.setStyleSheet("padding: 5px 10px; background-color: #444; color: #FFA500;")
-        self.reset_connection_button.clicked.connect(self.reset_iracing_connection)
-
-        controls_layout.addWidget(session_label, 0, 0)
-        controls_layout.addWidget(self.session_combo, 0, 1)
-        controls_layout.addWidget(self.refresh_button, 0, 2)
-        controls_layout.addWidget(self.reset_connection_button, 0, 3)
-
-        # Graph status label
-        self.graph_status_label = QLabel()
-        self.graph_status_label.setAlignment(Qt.AlignLeft)
-        self.graph_status_label.setStyleSheet("color: #FFA500; font-weight: bold; padding-left: 10px;")
-        self.graph_status_label.setVisible(False)
-        controls_layout.addWidget(self.graph_status_label, 0, 5)
-
-        # Lap Selection
-        left_label = QLabel("Lap A:")
-        left_label.setStyleSheet("color:#DDD")
+        # Lap selection - inline and compact
+        lap_a_label = QLabel("Lap A:")
         self.left_lap_combo = QComboBox()
-        self.left_lap_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
-        self.left_lap_combo.setMinimumWidth(200)
+        self.left_lap_combo.setMinimumWidth(120)
+        self.left_lap_combo.setMaximumWidth(150)
         self.left_lap_combo.currentIndexChanged.connect(self.on_lap_selection_changed)
 
-        right_label = QLabel("Lap B:")
-        right_label.setStyleSheet("color:#DDD")
+        vs_label = QLabel("vs")
+        vs_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 11px; margin: 0px 4px;")
+
+        lap_b_label = QLabel("Lap B:")
         self.right_lap_combo = QComboBox()
-        self.right_lap_combo.setStyleSheet("background-color:#333;color:#EEE; padding: 3px;")
-        self.right_lap_combo.setMinimumWidth(200)
+        self.right_lap_combo.setMinimumWidth(120)
+        self.right_lap_combo.setMaximumWidth(150)
         self.right_lap_combo.currentIndexChanged.connect(self.on_lap_selection_changed)
 
-        controls_layout.addWidget(left_label, 1, 0)
-        controls_layout.addWidget(self.left_lap_combo, 1, 1)
-        controls_layout.addWidget(right_label, 1, 2)
-        controls_layout.addWidget(self.right_lap_combo, 1, 3, 1, 2)
+        # Compact buttons
+        self.refresh_button = QPushButton("🔄")
+        self.refresh_button.setToolTip("Refresh session and lap lists from database")
+        self.refresh_button.setMaximumWidth(30)
+        self.refresh_button.clicked.connect(self.refresh_session_and_lap_lists)
+
+        self.reset_connection_button = QPushButton("🔌")
+        self.reset_connection_button.setToolTip("Reset iRacing connection if disconnected")
+        self.reset_connection_button.setMaximumWidth(30)
+        self.reset_connection_button.clicked.connect(self.reset_iracing_connection)
+
+        # Status label
+        self.graph_status_label = QLabel()
+        self.graph_status_label.setAlignment(Qt.AlignLeft)
+        self.graph_status_label.setStyleSheet("""
+            QLabel {
+                color: #ffa500;
+                font-weight: bold;
+                background: transparent;
+                padding-left: 8px;
+                font-size: 11px;
+            }
+        """)
+        self.graph_status_label.setVisible(False)
+
+        # Add all controls to layout in a single row
+        controls_layout.addWidget(session_label)
+        controls_layout.addWidget(self.session_combo)
+        controls_layout.addWidget(QLabel("|"))  # Separator
+        controls_layout.addWidget(lap_a_label)
+        controls_layout.addWidget(self.left_lap_combo)
+        controls_layout.addWidget(vs_label)
+        controls_layout.addWidget(lap_b_label)
+        controls_layout.addWidget(self.right_lap_combo)
+        controls_layout.addWidget(QLabel("|"))  # Separator
+        controls_layout.addWidget(self.refresh_button)
+        controls_layout.addWidget(self.reset_connection_button)
+        controls_layout.addWidget(self.graph_status_label)
+        controls_layout.addStretch()
 
         layout.addWidget(controls_frame)
 
-        # Telemetry comparison widget
-        self.telemetry_widget = TelemetryComparisonWidget(self)
-        layout.addWidget(self.telemetry_widget)
-
-        # Loading indicator
-        self.loading_label = QLabel("🔄 Loading sessions...")
+        # Loading indicator - much more compact
+        self.loading_label = QLabel("🔄 Loading...")
         self.loading_label.setAlignment(Qt.AlignCenter)
-        self.loading_label.setStyleSheet("color: #AAA; font-style: italic; padding: 10px;")
+        self.loading_label.setStyleSheet("""
+            QLabel {
+                color: #aaa;
+                font-style: italic;
+                background-color: #1a1a1a;
+                border: 1px solid #333;
+                border-radius: 3px;
+                padding: 8px;
+                margin: 4px;
+                font-size: 11px;
+            }
+        """)
         self.loading_label.setVisible(False)
         layout.insertWidget(1, self.loading_label)
 
-        # Graph settings
-        plot_settings = """
-            padding-left: 5px;
-            padding-right: 5px;
-            padding-top: 5px;
-            padding-bottom: 5px;
+        # COMPACT GRAPHS CONTAINER - like RaceStudio3 stacked view
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: #0d1117;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+            }
+            QScrollBar:vertical {
+                background-color: #21262d;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #58a6ff;
+                border-radius: 4px;
+                min-height: 15px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #79c0ff;
+            }
+        """)
+        
+        graphs_container = QFrame()
+        graphs_container.setStyleSheet("""
+            QFrame {
+                background-color: #0d1117;
+                border: none;
+                padding: 2px;
+            }
+        """)
+        graphs_layout = QVBoxLayout(graphs_container)
+        graphs_layout.setContentsMargins(2, 2, 2, 2)
+        graphs_layout.setSpacing(3)  # Minimal spacing between graphs
+
+        # COMPACT GRAPH SETTINGS - Larger heights since we removed headers
+        base_graph_style = """
+            QWidget {
+                background-color: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+            }
         """
 
-        # Uniform settings for all graphs
-        uniform_min_height = 180
-        uniform_max_height = 200
-        uniform_spacing = 15
-        uniform_margins = (5, 5, 5, 5)
-        uniform_stretch_factor = 1
+        # LARGER heights now that we removed the header waste - more like RaceStudio3
+        GRAPH_HEIGHT = 150  # Increased from 120 since we removed title headers
+        graph_size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Add throttle graph widget
+        # Create graph containers WITHOUT title headers to maximize drawing area
+        def create_graph_container(graph_widget):
+            container = QFrame()
+            container.setStyleSheet("""
+                QFrame {
+                    background-color: #161b22;
+                    border: 1px solid #30363d;
+                    border-radius: 4px;
+                    margin: 1px;
+                }
+            """)
+            container_layout = QVBoxLayout(container)
+            container_layout.setContentsMargins(2, 2, 2, 2)
+            container_layout.setSpacing(0)  # No spacing for titles
+
+            # NO TITLE LABEL - maximizes graph drawing area
+            graph_widget.setFixedHeight(GRAPH_HEIGHT)
+            graph_widget.setSizePolicy(graph_size_policy)
+            graph_widget.setStyleSheet(base_graph_style)
+            container_layout.addWidget(graph_widget)
+
+            return container
+
+        # All graphs without title headers - maximize drawing area
         self.throttle_graph = ThrottleGraphWidget(self)
-        self.throttle_graph.setMinimumHeight(uniform_min_height)
-        self.throttle_graph.setMaximumHeight(uniform_max_height)
-        self.throttle_graph.setContentsMargins(*uniform_margins)
-        self.throttle_graph.setStyleSheet(
-            f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}"
-        )
-        layout.addWidget(self.throttle_graph, uniform_stretch_factor)
+        throttle_container = create_graph_container(self.throttle_graph)
+        graphs_layout.addWidget(throttle_container)
 
-        layout.addSpacing(uniform_spacing)
-
-        # Add brake graph widget
         self.brake_graph = BrakeGraphWidget(self)
-        self.brake_graph.setMinimumHeight(uniform_min_height)
-        self.brake_graph.setMaximumHeight(uniform_max_height)
-        self.brake_graph.setContentsMargins(*uniform_margins)
-        self.brake_graph.setStyleSheet(
-            f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}"
-        )
-        layout.addWidget(self.brake_graph, uniform_stretch_factor)
+        brake_container = create_graph_container(self.brake_graph)
+        graphs_layout.addWidget(brake_container)
 
-        layout.addSpacing(uniform_spacing)
-
-        # Add steering graph widget
         self.steering_graph = SteeringGraphWidget(self)
-        self.steering_graph.setMinimumHeight(uniform_min_height)
-        self.steering_graph.setMaximumHeight(uniform_max_height)
-        self.steering_graph.setContentsMargins(*uniform_margins)
-        self.steering_graph.setStyleSheet(
-            f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}"
-        )
-        layout.addWidget(self.steering_graph, uniform_stretch_factor)
+        steering_container = create_graph_container(self.steering_graph)
+        graphs_layout.addWidget(steering_container)
 
-        layout.addSpacing(uniform_spacing)
-
-        # Add speed graph widget
         self.speed_graph = SpeedGraphWidget(self)
-        self.speed_graph.setMinimumHeight(uniform_min_height)
-        self.speed_graph.setMaximumHeight(uniform_max_height)
-        self.speed_graph.setContentsMargins(*uniform_margins)
-        self.speed_graph.setStyleSheet(
-            f"border: 1px solid #444; border-radius: 4px; background-color: #222; {plot_settings}"
-        )
-        layout.addWidget(self.speed_graph, uniform_stretch_factor)
+        speed_container = create_graph_container(self.speed_graph)
+        graphs_layout.addWidget(speed_container)
 
-        layout.addSpacing(uniform_spacing)
+        # Minimal bottom padding
+        graphs_layout.addStretch(0)
 
-        # Add stretch at the end
-        layout.addStretch(1)
-
-        # Set size policies
-        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.throttle_graph.setSizePolicy(size_policy)
-        self.brake_graph.setSizePolicy(size_policy)
-        self.steering_graph.setSizePolicy(size_policy)
-        self.speed_graph.setSizePolicy(size_policy)
+        # Set the graphs container as the scroll area widget
+        scroll_area.setWidget(graphs_container)
+        layout.addWidget(scroll_area)
 
     def _start_initial_data_loading(self):
         """Start loading initial session and lap data in the background."""
@@ -783,16 +887,51 @@ class TelemetryTab(QWidget):
             for point in left_data['points']:
                 mapped_point = point.copy()
                 
+                # DEBUG: Log available field names in the first point
+                if mapped_points == []:  # First point
+                    logger.info(f"DEBUG: Available fields in left lap point: {list(point.keys())}")
+                
                 # Critical mapping: Convert database field names to graph widget expectations
                 if 'track_position' in mapped_point:
-                    mapped_point['LapDist'] = mapped_point['track_position']  # Main fix for the graph display issue
+                    # Convert track_position to actual distance in meters
+                    track_pos = mapped_point['track_position']
+                    if 0 <= track_pos <= 1:
+                        # Normalized position, convert to actual distance
+                        mapped_point['LapDist'] = track_pos * track_length
+                    else:
+                        # Already in meters
+                        mapped_point['LapDist'] = track_pos
                 
-                # Ensure all required fields exist with defaults
+                # Ensure all required fields exist with defaults and correct capitalization
                 mapped_point.setdefault('LapDist', 0)
-                mapped_point.setdefault('throttle', 0)
-                mapped_point.setdefault('brake', 0) 
-                mapped_point.setdefault('steering', 0)
-                mapped_point.setdefault('speed', 0)
+                
+                # Map lowercase to titlecase field names that graph widgets expect
+                if 'throttle' in mapped_point:
+                    mapped_point['Throttle'] = mapped_point['throttle']
+                    logger.debug(f"Mapped throttle: {mapped_point['throttle']} -> Throttle: {mapped_point['Throttle']}")
+                if 'brake' in mapped_point:
+                    mapped_point['Brake'] = mapped_point['brake']
+                    logger.debug(f"Mapped brake: {mapped_point['brake']} -> Brake: {mapped_point['Brake']}")
+                if 'steering' in mapped_point:
+                    # Use raw steering values directly - they appear to already be normalized
+                    # Raw values like 0.167 are appropriate for the -1 to 1 graph range
+                    raw_steering = mapped_point['steering']
+                    if raw_steering is not None:
+                        # Clamp to -1 to 1 range but don't scale since values are already appropriate
+                        normalized_steering = max(-1.0, min(1.0, raw_steering))
+                        mapped_point['Steering'] = normalized_steering
+                        logger.debug(f"Mapped steering: {raw_steering} -> Steering: {normalized_steering:.3f}")
+                    else:
+                        mapped_point['Steering'] = 0.0
+                if 'speed' in mapped_point:
+                    mapped_point['Speed'] = mapped_point['speed']
+                    logger.debug(f"Mapped speed: {mapped_point['speed']} -> Speed: {mapped_point['Speed']}")
+                
+                # Set defaults for titlecase fields
+                mapped_point.setdefault('Throttle', 0)
+                mapped_point.setdefault('Brake', 0) 
+                mapped_point.setdefault('Steering', 0)
+                mapped_point.setdefault('Speed', 0)
                 mapped_point.setdefault('timestamp', 0)
                 mapped_point.setdefault('rpm', 0)
                 
@@ -807,16 +946,51 @@ class TelemetryTab(QWidget):
             for point in right_data['points']:
                 mapped_point = point.copy()
                 
+                # DEBUG: Log available field names in the first point
+                if mapped_points == []:  # First point
+                    logger.info(f"DEBUG: Available fields in right lap point: {list(point.keys())}")
+                
                 # Critical mapping: Convert database field names to graph widget expectations
                 if 'track_position' in mapped_point:
-                    mapped_point['LapDist'] = mapped_point['track_position']  # Main fix for the graph display issue
+                    # Convert track_position to actual distance in meters
+                    track_pos = mapped_point['track_position']
+                    if 0 <= track_pos <= 1:
+                        # Normalized position, convert to actual distance
+                        mapped_point['LapDist'] = track_pos * track_length
+                    else:
+                        # Already in meters
+                        mapped_point['LapDist'] = track_pos
                 
-                # Ensure all required fields exist with defaults
+                # Ensure all required fields exist with defaults and correct capitalization
                 mapped_point.setdefault('LapDist', 0)
-                mapped_point.setdefault('throttle', 0)
-                mapped_point.setdefault('brake', 0)
-                mapped_point.setdefault('steering', 0)
-                mapped_point.setdefault('speed', 0)
+                
+                # Map lowercase to titlecase field names that graph widgets expect
+                if 'throttle' in mapped_point:
+                    mapped_point['Throttle'] = mapped_point['throttle']
+                    logger.debug(f"Right lap - Mapped throttle: {mapped_point['throttle']} -> Throttle: {mapped_point['Throttle']}")
+                if 'brake' in mapped_point:
+                    mapped_point['Brake'] = mapped_point['brake']
+                    logger.debug(f"Right lap - Mapped brake: {mapped_point['brake']} -> Brake: {mapped_point['Brake']}")
+                if 'steering' in mapped_point:
+                    # Use raw steering values directly - they appear to already be normalized
+                    # Raw values like 0.167 are appropriate for the -1 to 1 graph range
+                    raw_steering = mapped_point['steering']
+                    if raw_steering is not None:
+                        # Clamp to -1 to 1 range but don't scale since values are already appropriate
+                        normalized_steering = max(-1.0, min(1.0, raw_steering))
+                        mapped_point['Steering'] = normalized_steering
+                        logger.debug(f"Right lap - Mapped steering: {raw_steering} -> Steering: {normalized_steering:.3f}")
+                    else:
+                        mapped_point['Steering'] = 0.0
+                if 'speed' in mapped_point:
+                    mapped_point['Speed'] = mapped_point['speed']
+                    logger.debug(f"Right lap - Mapped speed: {mapped_point['speed']} -> Speed: {mapped_point['Speed']}")
+                
+                # Set defaults for titlecase fields
+                mapped_point.setdefault('Throttle', 0)
+                mapped_point.setdefault('Brake', 0)
+                mapped_point.setdefault('Steering', 0)
+                mapped_point.setdefault('Speed', 0)
                 mapped_point.setdefault('timestamp', 0)
                 mapped_point.setdefault('rpm', 0)
                 
@@ -827,17 +1001,27 @@ class TelemetryTab(QWidget):
         
         # Update graphs based on whether we have comparison data or single lap
         if left_lap_data and right_lap_data:
+            # Log first point data for debugging
+            if left_lap_data['points']:
+                first_point = left_lap_data['points'][0]
+                logger.info(f"DEBUG: First left lap point fields: {list(first_point.keys())}")
+                logger.info(f"DEBUG: First left lap point values - Throttle: {first_point.get('Throttle', 'MISSING')}, Brake: {first_point.get('Brake', 'MISSING')}, Steering: {first_point.get('Steering', 'MISSING')}, Speed: {first_point.get('Speed', 'MISSING')}")
+            
             # Comparison mode - update all graphs with both laps
             if hasattr(self, 'throttle_graph'):
+                logger.info("DEBUG: Updating throttle graph with comparison data")
                 self.throttle_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
             
             if hasattr(self, 'brake_graph'):
+                logger.info("DEBUG: Updating brake graph with comparison data")
                 self.brake_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
             if hasattr(self, 'steering_graph'):
+                logger.info("DEBUG: Updating steering graph with comparison data")
                 self.steering_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
             if hasattr(self, 'speed_graph'):
+                logger.info("DEBUG: Updating speed graph with comparison data")
                 self.speed_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
         elif left_lap_data:

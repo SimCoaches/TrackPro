@@ -14,8 +14,8 @@ class GraphBase(QWidget):
         super().__init__(parent)
         # Child classes should initialize their own plot widgets and data structures
         
-        # Debugging settings
-        self.debug_enabled = True
+        # Debugging settings - DISABLED for clean interface like RaceStudio3
+        self.debug_enabled = False  # Changed from True to False to hide debug info bars
         self.debug_info = {}  # Store debugging info for the current graph
         
     def preprocess_telemetry_data(self, lap_data, track_length, channel_names=None, resolution=1):

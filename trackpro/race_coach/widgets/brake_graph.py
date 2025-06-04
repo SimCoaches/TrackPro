@@ -13,34 +13,48 @@ class BrakeGraphWidget(GraphBase):
         
         # Create the plot widget
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground('k')  # Black background
-        self.plot_widget.setTitle("Brake vs Distance") 
+        self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
+        self.plot_widget.setTitle("Brake vs Distance")
         self.plot_widget.setLabel('bottom', "Distance (m)")
         
-        # Configure Left Y-Axis for Percentage
+        # Configure Y-Axis for brake (0-100%) with better styling
         left_axis = self.plot_widget.getAxis('left')
-        left_axis.setLabel("Brake (%)")
-        left_axis.setTicks([[(0, '0'), (0.25, '25'), (0.5, '50'), (0.75, '75'), (1.0, '100')]])
+        left_axis.setLabel("Brake (%)", color='#e6edf3')
+        left_axis.setTextPen('#e6edf3')
+        left_axis.setPen('#30363d')
         
-        # Show grid lines for both axes
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        # Configure X-axis with better styling
+        bottom_axis = self.plot_widget.getAxis('bottom')
+        bottom_axis.setTextPen('#e6edf3')
+        bottom_axis.setPen('#30363d')
         
-        # Disable mouse interaction for zoom/pan
+        # Style the plot title
+        title_item = self.plot_widget.plotItem.titleLabel
+        title_item.setAttr('color', '#fca5a5')
+        
+        # Show grid lines for both axes with modern styling
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
+        
+        # Disable mouse interaction
         self.plot_widget.plotItem.vb.setMouseEnabled(x=False, y=False)
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.plotItem.vb.disableAutoRange()
         
-        # Create a standard legend in the top-right corner with default style
-        self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt')
+        # Create a modern legend in the top-left corner
+        self.legend = self.plot_widget.addLegend(offset=(20, 10), labelTextSize='10pt',
+                                                 brush=(22, 27, 34, 180), 
+                                                 pen='#30363d')
         
-        # Create crosshair lines
-        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('w', width=1))
-        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('w', width=1))
+        # Create crosshair lines with modern styling
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
+        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
         self.plot_widget.addItem(self.vLine, ignoreBounds=True)
         self.plot_widget.addItem(self.hLine, ignoreBounds=True)
         
-        # Create text label for coordinates
-        self.label = pg.TextItem(text='', color='w', anchor=(0, 1))
+        # Create text label for coordinates with modern styling
+        self.label = pg.TextItem(text='', color='#e6edf3', anchor=(0, 1),
+                                fill=pg.mkBrush(22, 27, 34, 180),
+                                border=pg.mkPen('#30363d'))
         self.label.setPos(10, 10)
         self.plot_widget.addItem(self.label, ignoreBounds=True)
         
@@ -78,14 +92,21 @@ class BrakeGraphWidget(GraphBase):
         # Connect mouse movement for crosshair
         self.plot_widget.scene().sigMouseMoved.connect(self.mouseMoved)
         
+        # Connect mouse movement to crosshair update
+        self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
+        
+        # Initialize grid lines list for custom grid functionality
+        self.grid_lines = []
+        
         # Setup layout
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.plot_widget)
         self.setLayout(layout)
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.brake_curve = self.plot_widget.plot(pen=pg.mkPen('#C80000', width=2), name="Lap A Brake", autoDownsample=False, clipToView=False)
-        self.brake_curve_b = self.plot_widget.plot(pen=pg.mkPen('#FF8888', width=2, style=Qt.SolidLine), name="Lap B Brake", autoDownsample=False, clipToView=False)
+        self.brake_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Brake", autoDownsample=False, clipToView=False)
+        self.brake_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Brake", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curves
         self.brake_curve_b.hide()
@@ -102,98 +123,83 @@ class BrakeGraphWidget(GraphBase):
         
     def mouseMoved(self, pos):
         """Handle mouse movement to update crosshairs and tooltip."""
-        if self.plot_widget.sceneBoundingRect().contains(pos):
-            mousePoint = self.plot_widget.plotItem.vb.mapSceneToView(pos)
-            x, y = mousePoint.x(), mousePoint.y()
+        try:
+            # Convert tuple to QPointF if needed (happens with SignalProxy)
+            if isinstance(pos, tuple):
+                from PyQt5.QtCore import QPointF
+                if len(pos) >= 2:
+                    pos = QPointF(pos[0], pos[1])
+                elif len(pos) == 1:
+                    pos = pos[0]
+                else:
+                    return  # Invalid tuple, skip this event
             
-            # Update crosshair positions
-            self.vLine.setPos(x)
-            self.hLine.setPos(y)
-            
-            # Find the actual brake values at the cursor position
-            brake_value_a = None
-            brake_value_b = None
-            distance = x
-            
-            # Find the closest data point from Lap A
-            if self.brake_curve.xData is not None and len(self.brake_curve.xData) > 0:
-                # Find the closest x point to the cursor
-                closest_idx = -1
-                min_distance = float('inf')
+            if self.plot_widget.sceneBoundingRect().contains(pos):
+                mousePoint = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+                x, y = mousePoint.x(), mousePoint.y()
                 
-                for i, x_val in enumerate(self.brake_curve.xData):
-                    dist = abs(x_val - x)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_idx = i
+                # Update crosshair positions
+                self.vLine.setPos(x)
+                self.hLine.setPos(y)
                 
-                if closest_idx >= 0:
-                    # Get actual brake value from the data
-                    if closest_idx < len(self.brake_curve.yData):
-                        brake_value_a = self.brake_curve.yData[closest_idx] * 100  # Convert to percentage
+                # Find the actual brake values at the cursor position
+                brake_value_a = None
+                brake_value_b = None
+                distance = x
+                
+                # Find the closest data point from Lap A
+                if self.brake_curve.xData is not None and len(self.brake_curve.xData) > 0:
+                    # Find the closest x point to the cursor
+                    closest_idx = -1
+                    min_distance = float('inf')
+                    
+                    for i, x_val in enumerate(self.brake_curve.xData):
+                        dist = abs(x_val - x)
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_idx = i
+                    
+                    if closest_idx >= 0:
+                        # Get actual brake value from the data
+                        if closest_idx < len(self.brake_curve.yData):
+                            brake_value_a = self.brake_curve.yData[closest_idx] * 100  # Convert to percentage
 
-            # In comparison mode, also get data from Lap B
-            if self.comparison_mode and self.brake_curve_b.xData is not None and len(self.brake_curve_b.xData) > 0:
-                # Find the closest x point to the cursor
-                closest_idx = -1
-                min_distance = float('inf')
+                # In comparison mode, also get data from Lap B
+                if self.comparison_mode and self.brake_curve_b.xData is not None and len(self.brake_curve_b.xData) > 0:
+                    # Find the closest x point to the cursor
+                    closest_idx = -1
+                    min_distance = float('inf')
+                    
+                    for i, x_val in enumerate(self.brake_curve_b.xData):
+                        dist = abs(x_val - x)
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_idx = i
+                    
+                    if closest_idx >= 0:
+                        # Get actual brake value from the data
+                        if closest_idx < len(self.brake_curve_b.yData):
+                            brake_value_b = self.brake_curve_b.yData[closest_idx] * 100  # Convert to percentage
                 
-                for i, x_val in enumerate(self.brake_curve_b.xData):
-                    dist = abs(x_val - x)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_idx = i
+                # Update tooltip label with data
+                tooltip_text = f"Distance: {distance:.1f}m"
                 
-                if closest_idx >= 0:
-                    # Get actual brake value from the data
-                    if closest_idx < len(self.brake_curve_b.yData):
-                        brake_value_b = self.brake_curve_b.yData[closest_idx] * 100  # Convert to percentage
-            
-            # Format tooltip text with the actual values
-            if brake_value_a is not None:
-                # Basic tooltip for single lap
-                if not self.comparison_mode or brake_value_b is None:
-                    tooltip = f"""
-                        <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
-                            <span style='color: white;'>Dist: {distance:.1f}m</span> &nbsp;
-                            <span style='color: #FF3333;'>Brake: {brake_value_a:.0f}%</span>
-                        </div>
-                    """
-                else:
-                    # Enhanced tooltip for comparison
-                    tooltip = f"""
-                        <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
-                            <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                            <span style='color: #FF3333;'>Lap A Brake: {brake_value_a:.0f}%</span><br>
-                            <span style='color: #FF8888;'>Lap B Brake: {brake_value_b:.0f}%</span>
-                        </div>
-                    """
-                
-                # Check if hovering over a stopped section
-                for marker in self.stopped_section_markers:
-                    if hasattr(marker, 'stopped_data') and abs(x - marker.pos().x()) < 5:
-                        section = marker.stopped_data
-                        if not self.comparison_mode:
-                            tooltip = f"""
-                                <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
-                                    <span style='color: white;'>Dist: {distance:.1f}m</span> &nbsp;
-                                    <span style='color: #FF6666;'><b>Car Stopped</b></span> &nbsp;
-                                    <span style='color: #FF6666;'>Brake: {section['avg_brake']*100:.0f}%</span>
-                                </div>
-                            """
-                        break
-                
-                # Set tooltip position and content
-                self.label.setHtml(tooltip)
-                
-                # Position the tooltip at the top of the graph where there's more space
-                # Check if we're in the upper part of the graph
-                if y > 0.5:
-                    # If cursor is in top half, show tooltip below cursor
-                    self.label.setPos(x, 0.2)
-                else:
-                    # If cursor is in bottom half, show tooltip above cursor
-                    self.label.setPos(x, 0.8)
+                if brake_value_a is not None:
+                    tooltip_text += f"\nLap A Brake: {brake_value_a:.1f}%"
+                    
+                if brake_value_b is not None:
+                    tooltip_text += f"\nLap B Brake: {brake_value_b:.1f}%"
+                    
+                    if brake_value_a is not None:
+                        # Calculate and display delta
+                        delta = brake_value_b - brake_value_a
+                        tooltip_text += f"\nDelta: {delta:+.1f}%"
+                    
+                self.label.setText(tooltip_text)
+                self.label.setPos(x, y)
+        except Exception as e:
+            # Silently handle any mouse movement errors to prevent console spam
+            pass
 
     def reset_view(self):
         """Reset the view to show the entire lap from start to finish."""
@@ -497,8 +503,8 @@ class BrakeGraphWidget(GraphBase):
             # Update title for single lap view
             self.plot_widget.setTitle("Brake vs Distance")
             
-            # Update grid based on track length
-            self.update_grid()
+            # Update grid based on track length (skip for now to prevent crashes)
+            # self.update_grid()
             
         except Exception as e:
             logger.error(f"Error updating brake graph: {e}", exc_info=True)
@@ -556,7 +562,9 @@ class BrakeGraphWidget(GraphBase):
         self.brake_curve_b.show()
         if self.legend is None:
              # Create a new legend with proper styling if it doesn't exist
-             self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt')
+             self.legend = self.plot_widget.addLegend(offset=(20, 10), labelTextSize='10pt',
+                                                      brush=(22, 27, 34, 180), 
+                                                      pen='#30363d')
         # ------------------------------------------------
         
         # Store track length
@@ -643,8 +651,8 @@ class BrakeGraphWidget(GraphBase):
         self.plot_widget.setTitle("Brake vs Distance (Comparison)")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
-        # Update grid based on track length
-        self.update_grid()
+        # Update grid based on track length (skip for now to prevent crashes)
+        # self.update_grid()
         
         # Force a redraw of the plot
         self.plot_widget.update()

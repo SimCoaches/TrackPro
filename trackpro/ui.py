@@ -2946,14 +2946,26 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index):
         """Handle tab change events."""
-        # Update menu action states based on the current tab
+        # Get the current widget to determine its type
+        current_widget = self.stacked_widget.widget(index)
+        widget_class_name = current_widget.__class__.__name__ if current_widget else "Unknown"
+        
+        # Reset all menu action states
+        self.pedal_config_action.setChecked(False)
+        if hasattr(self, 'race_coach_action'):
+            self.race_coach_action.setChecked(False)
+        if hasattr(self, 'race_pass_action'):
+            self.race_pass_action.setChecked(False)
+        if hasattr(self, 'community_action'):
+            self.community_action.setChecked(False)
+        
+        # Update menu action states and calibration button visibility based on the current tab
         if index == 0:  # Pedal Config tab
             self.pedal_config_action.setChecked(True)
-            self.race_coach_action.setChecked(False)
             self.calibration_wizard_btn.setVisible(True)
             self.save_calibration_btn.setVisible(True)
             
-            # Send a hide event to Race Coach widget if it exists
+            # Send a hide event to other widgets if they exist
             for i in range(1, self.stacked_widget.count()):
                 widget = self.stacked_widget.widget(i)
                 if hasattr(widget, 'hideEvent'):
@@ -2965,25 +2977,43 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         logger.error(f"Error sending hide event to widget: {e}")
                         
-        elif index == 1:  # Race Coach tab
-            self.pedal_config_action.setChecked(False)
-            self.race_coach_action.setChecked(True)
+        elif 'RaceCoach' in widget_class_name:  # Race Coach tab
+            if hasattr(self, 'race_coach_action'):
+                self.race_coach_action.setChecked(True)
             self.calibration_wizard_btn.setVisible(False)
             self.save_calibration_btn.setVisible(False)
             
             # Send a show event to the Race Coach widget
-            widget = self.stacked_widget.widget(index)
-            if hasattr(widget, 'showEvent'):
+            if hasattr(current_widget, 'showEvent'):
                 try:
                     # Create a show event
                     show_event = QShowEvent()
                     # Call the widget's showEvent method
-                    widget.showEvent(show_event)
+                    current_widget.showEvent(show_event)
                 except Exception as e:
                     logger.error(f"Error sending show event to widget: {e}")
                 
             # Initialize gamification overview if not already done
             self.initialize_gamification_overview()
+            
+        elif 'RacePass' in widget_class_name:  # Race Pass tab
+            if hasattr(self, 'race_pass_action'):
+                self.race_pass_action.setChecked(True)
+            self.calibration_wizard_btn.setVisible(False)
+            self.save_calibration_btn.setVisible(False)
+            
+        elif 'Community' in widget_class_name:  # Community tab
+            if hasattr(self, 'community_action'):
+                self.community_action.setChecked(True)
+            self.calibration_wizard_btn.setVisible(False)
+            self.save_calibration_btn.setVisible(False)
+            
+        else:  # Any other tab
+            # Hide calibration buttons for unknown tabs
+            self.calibration_wizard_btn.setVisible(False)
+            self.save_calibration_btn.setVisible(False)
+            
+        logger.debug(f"Tab changed to index {index}, widget: {widget_class_name}")
 
     def initialize_gamification_overview(self):
         """Initialize the gamification overview widget if it doesn't exist already."""
@@ -3081,9 +3111,32 @@ class MainWindow(QMainWindow):
         # Emit auth state changed signal
         self.auth_state_changed.emit(is_authenticated)
         
+        # Update any existing community widgets directly
+        self.update_existing_community_widgets(is_authenticated)
+        
         # Update protected features
         self.update_protected_features(is_authenticated)
     
+    def update_existing_community_widgets(self, is_authenticated: bool):
+        """Update any existing community widgets when authentication state changes."""
+        try:
+            # Check if we have a stored community widget reference
+            if hasattr(self, 'community_widget') and self.community_widget:
+                logger.info(f"Updating existing community widget with auth state: {is_authenticated}")
+                self.community_widget.handle_auth_state_change(is_authenticated)
+            
+            # Also check for community widgets in the stacked widget (fallback)
+            for i in range(self.stacked_widget.count()):
+                widget = self.stacked_widget.widget(i)
+                if hasattr(widget, '__class__') and 'Community' in widget.__class__.__name__:
+                    if hasattr(widget, 'handle_auth_state_change'):
+                        logger.info(f"Found community widget in stack at index {i}, updating auth state")
+                        widget.handle_auth_state_change(is_authenticated)
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error updating existing community widgets: {e}")
+
     def update_protected_features(self, is_authenticated: bool):
         """Enable/disable features based on authentication state."""
         # Example: Enable/disable Race Coach tab or specific actions
@@ -3812,33 +3865,128 @@ class MainWindow(QMainWindow):
     def get_current_user_id(self):
         """Get the current user ID for community features."""
         try:
-            from trackpro.database.supabase_client import supabase
-            user = supabase.get_user()
-            if user and hasattr(user, 'id'):
-                return user.id
-            elif user and hasattr(user, 'user') and hasattr(user.user, 'id'):
-                return user.user.id
+            # Import the global supabase instance that has the correct methods
+            from trackpro.database import supabase_client
+            if hasattr(supabase_client, 'supabase') and supabase_client.supabase:
+                # Check if user is authenticated first
+                if not supabase_client.supabase.is_authenticated():
+                    return None
+                    
+                user = supabase_client.supabase.get_user()
+                if user and hasattr(user, 'id'):
+                    return user.id
+                elif user and hasattr(user, 'user') and hasattr(user.user, 'id'):
+                    return user.user.id
+                else:
+                    return None
             else:
-                return 'guest_user'
+                return None
         except Exception as e:
             logger.warning(f"Could not get user ID: {e}")
-            return 'guest_user'
+            return None
     
     def open_community_interface(self):
-        """Open the main community interface."""
+        """Open the main community interface as an integrated tab."""
+        # First check if user is authenticated for some features
+        is_authenticated = False  # Default to false for safety
         try:
-            # Get managers and user ID
-            managers = self.get_community_managers()
-            user_id = self.get_current_user_id()
-            
-            # Open the community dialog using the imported function
-            open_community_dialog(self, managers, user_id, "social")
-            
-            logger.info("Opened community interface")
-            
+            # Import the global supabase instance that has the correct methods
+            from trackpro.database import supabase_client
+            if hasattr(supabase_client, 'supabase') and supabase_client.supabase:
+                is_authenticated = supabase_client.supabase.is_authenticated()
         except Exception as e:
-            logger.error(f"Error opening community interface: {e}")
-            QMessageBox.critical(self, "Error", f"Could not open community interface: {str(e)}")
+            logger.warning(f"Could not check authentication status: {e}")
+            is_authenticated = False
+            
+        try:
+            # Check if Community widget already exists in stacked widget
+            community_index = -1
+            for i in range(self.stacked_widget.count()):
+                widget = self.stacked_widget.widget(i)
+                if hasattr(widget, '__class__') and 'Community' in widget.__class__.__name__:
+                    community_index = i
+                    break
+            
+            if community_index >= 0:
+                logger.info(f"Community screen already exists at index {community_index}, switching to it")
+                self.stacked_widget.setCurrentIndex(community_index)
+                # Update menu action states
+                self.community_action.setChecked(True)
+                self.pedal_config_action.setChecked(False)
+                if hasattr(self, 'race_coach_action'):
+                    self.race_coach_action.setChecked(False)
+                if hasattr(self, 'race_pass_action'):
+                    self.race_pass_action.setChecked(False)
+                # Hide calibration buttons
+                self.calibration_wizard_btn.setVisible(False)
+                self.save_calibration_btn.setVisible(False)
+                return
+            
+            # Create the integrated community widget
+            try:
+                from trackpro.community.community_main_widget import CommunityMainWidget
+                from trackpro.database.supabase_client import get_supabase_client
+                
+                # Get the Supabase client
+                supabase_client = get_supabase_client()
+                
+                # Create community widget with Supabase client
+                community_widget = CommunityMainWidget(parent=self, supabase_client=supabase_client)
+                
+                # Set up managers and user ID if available
+                if is_authenticated:
+                    try:
+                        managers = self.get_community_managers()
+                        user_id = self.get_current_user_id()
+                        community_widget.set_managers(managers)
+                        community_widget.set_user_id(user_id)
+                        logger.info("Community widget configured with authenticated user data")
+                    except Exception as e:
+                        logger.warning(f"Could not set up community managers: {e}")
+                
+                # Connect authentication state changes to the community widget
+                self.auth_state_changed.connect(community_widget.handle_auth_state_change)
+                logger.info("Connected community widget to authentication state changes")
+                
+                # Store reference to community widget for later use
+                self.community_widget = community_widget
+                        
+                # Add to stacked widget and switch to it
+                community_index = self.stacked_widget.addWidget(community_widget)
+                
+                # Switch to the Community screen
+                self.stacked_widget.setCurrentIndex(community_index)
+                
+                # Update menu action states
+                self.community_action.setChecked(True)
+                self.pedal_config_action.setChecked(False)
+                if hasattr(self, 'race_coach_action'):
+                    self.race_coach_action.setChecked(False)
+                if hasattr(self, 'race_pass_action'):
+                    self.race_pass_action.setChecked(False)
+                    
+                # Hide calibration buttons
+                self.calibration_wizard_btn.setVisible(False)
+                self.save_calibration_btn.setVisible(False)
+                
+                logger.info(f"Community screen added at index {community_index} and switched to")
+                
+            except ImportError as import_error:
+                logger.error(f"Failed to import Community widget: {import_error}")
+                QMessageBox.critical(
+                    self,
+                    "Missing Component",
+                    f"The Community feature could not be loaded.\n\n"
+                    f"Error: {import_error}\n\n"
+                    "Please check that all community components are properly installed."
+                )
+            except Exception as e:
+                logger.error(f"Error creating Community widget: {e}")
+                QMessageBox.critical(self, "Component Error", f"Failed to initialize Community: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Unexpected error opening Community: {e}")
+            QMessageBox.critical(self, "Error", f"Unexpected error: {str(e)}")
     
     def open_account_settings(self):
         """Open the account settings interface."""

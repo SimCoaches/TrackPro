@@ -441,7 +441,8 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
         # Use the main client for the query
         if only_with_laps:
             # Query sessions that have at least one lap using EXISTS
-            query = main_supabase.client.table("sessions").select("*, tracks(name), cars(name)")
+            # CRITICAL FIX: Include track length_meters in the query
+            query = main_supabase.client.table("sessions").select("*, tracks(name, length_meters), cars(name)")
             
             # Add subquery to only include sessions with laps
             # Note: This uses a more complex approach since Supabase doesn't have direct EXISTS support
@@ -469,7 +470,8 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
                 result_data = []
         else:
             # Regular query for all sessions
-            query = main_supabase.client.table("sessions").select("*, tracks(name), cars(name)").limit(limit).order("created_at", desc=True)
+            # CRITICAL FIX: Include track length_meters in the query
+            query = main_supabase.client.table("sessions").select("*, tracks(name, length_meters), cars(name)").limit(limit).order("created_at", desc=True)
             result = query.execute()
             result_data = result.data or []
         
@@ -495,7 +497,7 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
                 
         logger.info(f"DATABASE DEBUG: Found {len(result_data)} sessions")
 
-        # Process results to flatten track/car names
+        # Process results to flatten track/car names and include track length
         processed_data = []
         if result_data:
             for session in result_data:
@@ -504,6 +506,15 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
                 
                 session['track_name'] = session.get('tracks', {}).get('name', 'Unknown Track') if session.get('tracks') else 'Unknown Track'
                 session['car_name'] = session.get('cars', {}).get('name', 'Unknown Car') if session.get('cars') else 'Unknown Car'
+                
+                # CRITICAL FIX: Extract and include track length from database
+                track_length = session.get('tracks', {}).get('length_meters', None) if session.get('tracks') else None
+                if track_length:
+                    session['track_length'] = track_length
+                    logger.info(f"DATABASE DEBUG: Session {session_id} track length: {track_length}m")
+                else:
+                    logger.warning(f"DATABASE DEBUG: No track length found for session {session_id}")
+                
                 # Remove nested structures if they exist
                 session.pop('tracks', None)
                 session.pop('cars', None)

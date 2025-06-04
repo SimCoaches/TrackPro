@@ -744,9 +744,10 @@ class SuperLapSessionWorker(QObject):
                 return
             
             # Get user sessions with car/track info
+            # CRITICAL FIX: Include track length_meters in the query
             sessions_result = (
                 main_supabase.client.table("sessions")
-                .select("id,car_id,track_id,created_at,cars(name),tracks(name)")
+                .select("id,car_id,track_id,created_at,cars(name),tracks(name, length_meters)")
                 .order("created_at", desc=True)
                 .limit(100)
                 .execute()
@@ -4377,9 +4378,10 @@ class SuperLapWidget(QWidget):
                 return
             
             # Get user sessions with car/track info
+            # CRITICAL FIX: Include track length_meters in the query
             sessions_result = (
                 main_supabase.client.table("sessions")
-                .select("id,car_id,track_id,created_at,cars(name),tracks(name)")
+                .select("id,car_id,track_id,created_at,cars(name),tracks(name, length_meters)")
                 .order("created_at", desc=True)
                 .limit(100)
                 .execute()

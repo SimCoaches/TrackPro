@@ -13,23 +13,50 @@ class SpeedGraphWidget(GraphBase):
         
         # Create the plot widget
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setBackground('k')  # Black background
+        self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
         self.plot_widget.setTitle("Speed vs Distance")
         self.plot_widget.setLabel('bottom', "Distance (m)")
-        self.plot_widget.setLabel('left', "Speed (km/h)")
         
-        # Create the crosshair items
-        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('w', width=1))
-        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('w', width=1))
+        # Configure Y-Axis for speed with better styling
+        left_axis = self.plot_widget.getAxis('left')
+        left_axis.setLabel("Speed (km/h)", color='#e6edf3')
+        left_axis.setTextPen('#e6edf3')
+        left_axis.setPen('#30363d')
+        
+        # Configure X-axis with better styling
+        bottom_axis = self.plot_widget.getAxis('bottom')
+        bottom_axis.setTextPen('#e6edf3')
+        bottom_axis.setPen('#30363d')
+        
+        # Style the plot title
+        title_item = self.plot_widget.plotItem.titleLabel
+        title_item.setAttr('color', '#34d399')
+        
+        # Show grid lines for both axes with modern styling
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
+        
+        # Disable mouse interaction
+        self.plot_widget.plotItem.vb.setMouseEnabled(x=False, y=False)
+        self.plot_widget.setMenuEnabled(False)
+        self.plot_widget.plotItem.vb.disableAutoRange()
+        
+        # Create a modern legend in the top-right corner
+        self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt',
+                                                 brush=(22, 27, 34, 180), 
+                                                 pen='#30363d')
+        
+        # Create crosshair lines with modern styling
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
+        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
         self.plot_widget.addItem(self.vLine, ignoreBounds=True)
         self.plot_widget.addItem(self.hLine, ignoreBounds=True)
         
-        # Create tooltip label
-        self.label = pg.TextItem(text="", color='white', anchor=(0, 0), border='w', fill=(0, 0, 0, 180))
-        self.plot_widget.addItem(self.label)
-        
-        # Create legend (will be populated when data is set)
-        self.legend = None
+        # Create text label for coordinates with modern styling
+        self.label = pg.TextItem(text='', color='#e6edf3', anchor=(0, 1),
+                                fill=pg.mkBrush(22, 27, 34, 180),
+                                border=pg.mkPen('#30363d'))
+        self.label.setPos(10, 10)
+        self.plot_widget.addItem(self.label, ignoreBounds=True)
         
         # Create debug info text display
         self.debug_info_text = pg.TextItem(html="", anchor=(0, 0))
@@ -57,14 +84,21 @@ class SpeedGraphWidget(GraphBase):
         # Connect mouse movement for crosshair
         self.plot_widget.scene().sigMouseMoved.connect(self.mouseMoved)
         
+        # Connect mouse movement to crosshair update
+        self.proxy = pg.SignalProxy(self.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
+        
+        # Initialize grid lines list for custom grid functionality
+        self.grid_lines = []
+        
         # Setup layout
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.plot_widget)
         self.setLayout(layout)
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.speed_curve = self.plot_widget.plot(pen=pg.mkPen('#00C8FF', width=2), name="Lap A Speed", autoDownsample=False, clipToView=False)
-        self.speed_curve_b = self.plot_widget.plot(pen=pg.mkPen('#88FFFF', width=2, style=Qt.SolidLine), name="Lap B Speed", autoDownsample=False, clipToView=False)
+        self.speed_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Speed", autoDownsample=False, clipToView=False)
+        self.speed_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Speed", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curves
         self.speed_curve_b.hide()
@@ -87,70 +121,84 @@ class SpeedGraphWidget(GraphBase):
 
     def mouseMoved(self, pos):
         """Handle mouse movement to update crosshairs and tooltip."""
-        if self.plot_widget.sceneBoundingRect().contains(pos):
-            mousePoint = self.plot_widget.plotItem.vb.mapSceneToView(pos)
-            x, y = mousePoint.x(), mousePoint.y()
+        try:
+            # Convert tuple to QPointF if needed (happens with SignalProxy)
+            if isinstance(pos, tuple):
+                from PyQt5.QtCore import QPointF
+                if len(pos) >= 2:
+                    pos = QPointF(pos[0], pos[1])
+                elif len(pos) == 1:
+                    pos = pos[0]
+                else:
+                    return  # Invalid tuple, skip this event
             
-            # Update crosshair positions
-            self.vLine.setPos(x)
-            self.hLine.setPos(y)
-            
-            # Find the actual speed values at the cursor position
-            speed_value_a = None
-            speed_value_b = None
-            distance = x
-            
-            # Find the closest data point from Lap A
-            if self.speed_curve.xData is not None and len(self.speed_curve.xData) > 0:
-                # Find the closest x point to the cursor
-                closest_idx = -1
-                min_distance = float('inf')
+            if self.plot_widget.sceneBoundingRect().contains(pos):
+                mousePoint = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+                x, y = mousePoint.x(), mousePoint.y()
                 
-                for i, x_val in enumerate(self.speed_curve.xData):
-                    dist = abs(x_val - x)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_idx = i
+                # Update crosshair positions
+                self.vLine.setPos(x)
+                self.hLine.setPos(y)
                 
-                if closest_idx >= 0:
-                    # Get actual speed value from the data
-                    if closest_idx < len(self.speed_curve.yData):
-                        speed_value_a = self.speed_curve.yData[closest_idx]
+                # Find the actual speed values at the cursor position
+                speed_value_a = None
+                speed_value_b = None
+                distance = x
+                
+                # Find the closest data point from Lap A
+                if self.speed_curve.xData is not None and len(self.speed_curve.xData) > 0:
+                    # Find the closest x point to the cursor
+                    closest_idx = -1
+                    min_distance = float('inf')
+                    
+                    for i, x_val in enumerate(self.speed_curve.xData):
+                        dist = abs(x_val - x)
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_idx = i
+                    
+                    if closest_idx >= 0:
+                        # Get actual speed value from the data
+                        if closest_idx < len(self.speed_curve.yData):
+                            speed_value_a = self.speed_curve.yData[closest_idx]
 
-            # In comparison mode, also get data from Lap B
-            if self.comparison_mode and self.speed_curve_b.xData is not None and len(self.speed_curve_b.xData) > 0:
-                # Find the closest x point to the cursor
-                closest_idx = -1
-                min_distance = float('inf')
+                # In comparison mode, also get data from Lap B
+                if self.comparison_mode and self.speed_curve_b.xData is not None and len(self.speed_curve_b.xData) > 0:
+                    # Find the closest x point to the cursor
+                    closest_idx = -1
+                    min_distance = float('inf')
+                    
+                    for i, x_val in enumerate(self.speed_curve_b.xData):
+                        dist = abs(x_val - x)
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_idx = i
+                    
+                    if closest_idx >= 0:
+                        # Get actual speed value from the data
+                        if closest_idx < len(self.speed_curve_b.yData):
+                            speed_value_b = self.speed_curve_b.yData[closest_idx]
                 
-                for i, x_val in enumerate(self.speed_curve_b.xData):
-                    dist = abs(x_val - x)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_idx = i
-                
-                if closest_idx >= 0:
-                    # Get actual speed value from the data
-                    if closest_idx < len(self.speed_curve_b.yData):
-                        speed_value_b = self.speed_curve_b.yData[closest_idx]
-            
-            # Update tooltip label with data
-            tooltip_text = f"Distance: {distance:.1f}m"
-            
-            if speed_value_a is not None:
-                tooltip_text += f"\nLap A Speed: {speed_value_a:.1f} km/h"
-                
-            if speed_value_b is not None:
-                tooltip_text += f"\nLap B Speed: {speed_value_b:.1f} km/h"
+                # Update tooltip label with data
+                tooltip_text = f"Distance: {distance:.1f}m"
                 
                 if speed_value_a is not None:
-                    # Calculate and display delta
-                    delta = speed_value_b - speed_value_a
-                    tooltip_text += f"\nDelta: {delta:+.1f} km/h"
-                
-            self.label.setText(tooltip_text)
-            self.label.setPos(x, y)
-            
+                    tooltip_text += f"\nLap A Speed: {speed_value_a:.1f} km/h"
+                    
+                if speed_value_b is not None:
+                    tooltip_text += f"\nLap B Speed: {speed_value_b:.1f} km/h"
+                    
+                    if speed_value_a is not None:
+                        # Calculate and display delta
+                        delta = speed_value_b - speed_value_a
+                        tooltip_text += f"\nDelta: {delta:+.1f} km/h"
+                    
+                self.label.setText(tooltip_text)
+                self.label.setPos(x, y)
+        except Exception as e:
+            # Silently handle any mouse movement errors to prevent console spam
+            pass
+        
     def reset_view(self):
         """Reset the view to default parameters."""
         # Set default view ranges for a new/empty plot
@@ -430,8 +478,8 @@ class SpeedGraphWidget(GraphBase):
             # Update title for single lap view
             self.plot_widget.setTitle("Speed vs Distance")
             
-            # Update grid based on track length
-            self.update_grid()
+            # Update grid based on track length (skip for now to prevent crashes)
+            # self.update_grid()
             
         except Exception as e:
             logger.error(f"Error updating speed graph: {e}", exc_info=True)
@@ -589,8 +637,8 @@ class SpeedGraphWidget(GraphBase):
         self.plot_widget.setTitle("Speed vs Distance (Comparison)")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
-        # Update grid based on track length
-        self.update_grid()
+        # Update grid based on track length (skip for now to prevent crashes)
+        # self.update_grid()
         
         # Force a redraw of the plot
         self.plot_widget.update()
