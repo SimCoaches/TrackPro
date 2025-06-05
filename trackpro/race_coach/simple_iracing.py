@@ -262,6 +262,9 @@ class SimpleIRacingAPI(QObject):
                 logger.info("Running iRacing variable debug function...")
                 self.debug_ir_vars()
             
+                # Also debug ABS/Accel fields specifically
+                self._debug_abs_accel_fields()
+            
             # Create telemetry dictionary with DIRECT dictionary access
             # based on the example code pattern
             telemetry = {}
@@ -350,6 +353,55 @@ class SimpleIRacingAPI(QObject):
             
             try: telemetry['SteeringWheelAngleMax'] = self.ir['SteeringWheelAngleMax']
             except: telemetry['SteeringWheelAngleMax'] = None
+
+            # --- CRITICAL MISSING FIELDS FOR LOCKUP DETECTION --- #
+            # Try multiple possible field names for ABS
+            abs_found = False
+            for abs_field in ['BrakeABSactive', 'ABSactive', 'BrakeABS', 'ABSOn']:
+                try: 
+                    abs_active = self.ir[abs_field]
+                    telemetry['BrakeABSactive'] = bool(abs_active)
+                    abs_found = True
+                    if self._debug_counter % 600 == 0:  # Log success occasionally
+                        logger.info(f"✅ Found ABS field: {abs_field} = {abs_active}")
+                    break
+                except: 
+                    continue
+            
+            if not abs_found:
+                if self._debug_counter % 300 == 0:
+                    logger.warning(f"❌ No ABS field found - tried: BrakeABSactive, ABSactive, BrakeABS, ABSOn")
+                telemetry['BrakeABSactive'] = False
+            
+            # Try multiple possible field names for longitudinal acceleration
+            accel_found = False
+            for accel_field in ['LongAccel', 'AccelLongitudinal', 'AccelLong', 'LongitudalAccel']:
+                try: 
+                    long_accel = self.ir[accel_field]
+                    telemetry['LongAccel'] = float(long_accel)
+                    accel_found = True
+                    if self._debug_counter % 600 == 0:  # Log success occasionally
+                        logger.info(f"✅ Found acceleration field: {accel_field} = {long_accel}")
+                    break
+                except: 
+                    continue
+            
+            if not accel_found:
+                if self._debug_counter % 300 == 0:
+                    logger.warning(f"❌ No acceleration field found - tried: LongAccel, AccelLongitudinal, AccelLong, LongitudalAccel")
+                telemetry['LongAccel'] = 0.0
+            
+            try: 
+                lat_accel = self.ir['LatAccel']
+                telemetry['LatAccel'] = float(lat_accel)
+            except Exception as e: 
+                telemetry['LatAccel'] = 0.0
+            
+            try: 
+                vert_accel = self.ir['VelocityZ']  # Alternative for vertical velocity
+                telemetry['VelocityZ'] = float(vert_accel)
+            except Exception as e: 
+                telemetry['VelocityZ'] = 0.0
 
             # --- Handle OnPitRoad (Critical for Lap Classification) --- #
             try:
@@ -855,6 +907,54 @@ class SimpleIRacingAPI(QObject):
             
         except Exception as e:
             logger.error(f"Error in debug_ir_vars: {e}", exc_info=True)
+    
+    def _debug_abs_accel_fields(self):
+        """Debug function to find ABS and acceleration fields for lockup detection."""
+        if not self.ir:
+            return
+            
+        try:
+            logger.info("🔍 Searching for ABS and acceleration fields...")
+            
+            # Check if _var_headers_dict is available for field discovery
+            if hasattr(self.ir, '_var_headers_dict'):
+                headers = self.ir._var_headers_dict
+                
+                # Search for ABS-related fields
+                abs_fields = []
+                accel_fields = []
+                brake_fields = []
+                
+                for field_name in headers.keys():
+                    field_lower = field_name.lower()
+                    if 'abs' in field_lower or 'brake' in field_lower:
+                        if 'abs' in field_lower:
+                            abs_fields.append(field_name)
+                        brake_fields.append(field_name)
+                    elif 'accel' in field_lower or 'long' in field_lower:
+                        accel_fields.append(field_name)
+                
+                logger.info(f"🔍 Found ABS-related fields: {abs_fields}")
+                logger.info(f"🔍 Found acceleration fields: {accel_fields}")
+                logger.info(f"🔍 Found brake-related fields: {brake_fields}")
+                
+                # Test accessing some of these fields
+                for field in abs_fields[:3]:  # Test first 3
+                    try:
+                        value = self.ir[field]
+                        logger.info(f"✅ {field} = {value}")
+                    except Exception as e:
+                        logger.info(f"❌ {field}: {e}")
+                
+                for field in accel_fields[:3]:  # Test first 3
+                    try:
+                        value = self.ir[field]
+                        logger.info(f"✅ {field} = {value}")
+                    except Exception as e:
+                        logger.info(f"❌ {field}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error in _debug_abs_accel_fields: {e}")
     
     def _get_player_car_idx(self):
         """Helper method to get the player's car index in the array data.

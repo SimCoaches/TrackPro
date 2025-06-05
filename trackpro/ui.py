@@ -29,6 +29,8 @@ from PyQt5.QtGui import (
     QPainter, QLinearGradient, QMouseEvent, QHideEvent, QShowEvent,
     QKeySequence, QDesktopServices, QPixmap
 )
+from PyQt5.QtWidgets import QGraphicsOpacityEffect
+from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 from .config import config
 from .pedals.calibration import CalibrationWizard # Added this import
@@ -801,11 +803,11 @@ class MainWindow(QMainWindow):
     def __init__(self, oauth_handler=None):
         """Initialize the main window."""
         super().__init__()
-        # Main window setup
+        # Main window setup with menu bar buttons - increased minimum size to prevent overlapping
         self.window_width = 1200
-        self.window_height = 900  # Increased from 800 to 900
+        self.window_height = 800
         self.setWindowTitle("TrackPro Configuration v1.5.0")
-        self.setMinimumSize(1000, 875)  # Increased minimum height from 700 to 800
+        self.setMinimumSize(1200, 850)  # Increased from 1000x700 to prevent overlapping
         self.setWindowIcon(QIcon(":/icons/app_icon.ico"))
 
         # Store the shared OAuth handler
@@ -820,115 +822,18 @@ class MainWindow(QMainWindow):
         # Set dark theme
         self.setup_dark_theme()
         
-        # Create menu bar
+        # Create authentication/navigation buttons FIRST (needed for menu bar)
+        self.create_auth_buttons()
+        
+        # Create menu bar (now that auth buttons exist)
         self.create_menu_bar()
         
-        # Create the main widget and layout
+        # Create the main widget and layout - CLEAN, no extra headers
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # Add authentication controls at the top
-        auth_layout = QHBoxLayout()
-        
-        # Add user info label
-        self.user_label = QLabel("Not logged in")
-        self.user_label.setStyleSheet("color: #888;")
-        auth_layout.addWidget(self.user_label)
-        
-        # Add cloud sync label
-        self.cloud_sync_label = QLabel("☁️ Sign in to enable cloud sync")
-        self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer;")
-        auth_layout.addWidget(self.cloud_sync_label)
-        
-        # Add login/signup buttons
-        self.login_btn = QPushButton("Login")
-        self.login_btn.clicked.connect(self.show_login_dialog)
-        self.login_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2a82da;
-                color: white;
-                padding: 5px 15px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #3a92ea;
-            }
-        """)
-        
-        self.signup_btn = QPushButton("Sign Up")
-        self.signup_btn.clicked.connect(self.show_signup_dialog)
-        self.signup_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: white;
-                padding: 5px 15px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #37be70;
-            }
-        """)
-        
-        self.logout_btn = QPushButton("Logout")
-        self.logout_btn.clicked.connect(self.handle_logout)
-        self.logout_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c0392b;
-                color: white;
-                padding: 5px 15px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #d0493b;
-            }
-        """)
-        self.logout_btn.hide()
-        
-        # Add community button
-        self.community_btn = QPushButton("🌐 Community")
-        self.community_btn.clicked.connect(self.open_community_interface)
-        self.community_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FF6B35;
-                color: white;
-                padding: 5px 15px;
-                border-radius: 3px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #FF8A65;
-            }
-        """)
-        self.community_btn.setToolTip("Access community features: social, teams, content sharing, and achievements")
-        
-        # Add account button (for logged-in users)
-        self.account_btn = QPushButton("⚙️ Account")
-        self.account_btn.clicked.connect(self.open_account_settings)
-        self.account_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #6C7293;
-                color: white;
-                padding: 5px 15px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #8A8FB0;
-            }
-        """)
-        self.account_btn.setToolTip("Manage your account settings and profile")
-        self.account_btn.hide()  # Initially hidden, shown when logged in
-        
-        auth_layout.addStretch()
-        auth_layout.addWidget(self.community_btn)
-        auth_layout.addWidget(self.account_btn)
-        auth_layout.addWidget(self.login_btn)
-        auth_layout.addWidget(self.signup_btn)
-        auth_layout.addWidget(self.logout_btn)
-        
-        layout.addLayout(auth_layout)
-        
-        # Add calibration wizard button
+        # Add calibration wizard buttons in a simple layout
         wizard_layout = QHBoxLayout()
         self.calibration_wizard_btn = QPushButton("Calibration Wizard")
         self.calibration_wizard_btn.setStyleSheet("""
@@ -944,7 +849,6 @@ class MainWindow(QMainWindow):
         """)
         self.calibration_wizard_btn.clicked.connect(self.open_calibration_wizard)
         
-        # Add save calibration button
         self.save_calibration_btn = QPushButton("Save Calibration")
         self.save_calibration_btn.setStyleSheet("""
             QPushButton {
@@ -960,7 +864,6 @@ class MainWindow(QMainWindow):
         """)
         self.save_calibration_btn.clicked.connect(self.save_calibration)
         
-        # Add buttons to the layout
         wizard_layout.addWidget(self.calibration_wizard_btn)
         wizard_layout.addWidget(self.save_calibration_btn)
         wizard_layout.addStretch()
@@ -973,6 +876,8 @@ class MainWindow(QMainWindow):
         # Create the main pedals screen
         pedals_screen = QWidget()
         pedals_layout = QVBoxLayout(pedals_screen)
+        pedals_layout.setContentsMargins(12, 12, 12, 12)  # Add margins for content
+        pedals_layout.setSpacing(8)  # Add some spacing back
         
         # Add pedal controls section
         pedals_section_layout = QHBoxLayout()
@@ -1021,18 +926,30 @@ class MainWindow(QMainWindow):
         self.update_notification.setVisible(False)
         layout.addWidget(self.update_notification, 0, Qt.AlignLeft)
         
-        # Create status bar
+        # Create enhanced status bar with login info
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
         
-        # Add version information to status bar
+        # Add version information to status bar (left side)
         version_label = QLabel(f"Version: {__version__}")
         self.statusBar.addWidget(version_label)
+        
+        # Add user info and cloud sync status to right side of status bar
+        self.user_label = QLabel("Not logged in")
+        self.user_label.setStyleSheet("color: #888; font-size: 10px; padding: 2px 8px;")
+        self.statusBar.addPermanentWidget(self.user_label)
+        
+        self.cloud_sync_label = QLabel("☁️ Sign in to enable cloud sync")
+        self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer; font-size: 10px; padding: 2px 8px;")
+        self.statusBar.addPermanentWidget(self.cloud_sync_label)
 
         # IMPORTANT: Update authentication state on startup to restore session
         # Use a longer delay to make sure all components are properly initialized
         logger.info("Scheduling authentication state update after initialization")
         QTimer.singleShot(500, self.update_auth_state)
+        
+        # Set up early notification system for immediate background monitoring
+        self.setup_early_notification_system()
     
     def closeEvent(self, event):
         """Handle window close event to ensure proper application shutdown."""
@@ -1597,6 +1514,111 @@ class MainWindow(QMainWindow):
         # Add spacing between Calibration and Output Monitor - REDUCED
         parent_layout.addSpacing(5)  # Reduced from 15 to 5
         
+        # Add compact Threshold Braking Assist for brake pedal only
+        if pedal_key == 'brake':
+            try:
+                # Create a compact threshold assist section inside deadzones
+                threshold_layout = QHBoxLayout()
+                
+                # Enable checkbox
+                self.threshold_enable_checkbox = QCheckBox("🎯 Threshold Assist")
+                self.threshold_enable_checkbox.setStyleSheet("""
+                    QCheckBox {
+                        font-size: 12px;
+                        font-weight: bold;
+                        color: #268bd2;
+                    }
+                    QCheckBox::indicator {
+                        width: 16px;
+                        height: 16px;
+                    }
+                    QCheckBox::indicator:checked {
+                        background-color: #27ae60;
+                        border: 2px solid #219a52;
+                    }
+                    QCheckBox::indicator:unchecked {
+                        background-color: #e74c3c;
+                        border: 2px solid #c0392b;
+                    }
+                """)
+                self.threshold_enable_checkbox.setToolTip(
+                    "🎯 Threshold Braking Assist\n\n"
+                    "Automatically prevents brake lockups by:\n"
+                    "• Learning when ABS activates in iRacing\n" 
+                    "• Setting optimal brake threshold automatically\n"
+                    "• Limiting brake force when you exceed the threshold\n\n"
+                    "Perfect threshold braking, every time!"
+                )
+                threshold_layout.addWidget(self.threshold_enable_checkbox)
+                
+                # Safety margin slider (compact)
+                threshold_slider = QSlider(Qt.Horizontal)
+                threshold_slider.setRange(10, 50)  # 1.0% to 5.0% (more reasonable range)
+                threshold_slider.setValue(30)  # Default 3.0% (better default)
+                threshold_slider.setMaximumWidth(80)
+                threshold_slider.setStyleSheet("""
+                    QSlider::groove:horizontal {
+                        border: 1px solid #444;
+                        height: 6px;
+                        background: #222;
+                        border-radius: 3px;
+                    }
+                    QSlider::handle:horizontal {
+                        background: #268bd2;
+                        border: 1px solid #1e6bb8;
+                        width: 14px;
+                        margin: -4px 0;
+                        border-radius: 7px;
+                    }
+                """)
+                threshold_slider.setToolTip(
+                    "🛡️ Safety Margin\n\n"
+                    "Controls how much brake force to reduce when you\n"
+                    "exceed the learned threshold:\n\n"
+                    "• 1-2%: Aggressive (maximum braking)\n"
+                    "• 3-4%: Balanced (recommended)\n"
+                    "• 5%+: Conservative (very safe)\n\n"
+                    "The system automatically learns your brake threshold.\n"
+                    "This slider only controls the safety reduction amount."
+                )
+                threshold_layout.addWidget(threshold_slider)
+                
+                # Safety margin value label
+                threshold_value_label = QLabel("3.0%")
+                threshold_value_label.setMinimumWidth(35)
+                threshold_value_label.setStyleSheet("font-size: 11px; color: #888;")
+                threshold_value_label.setToolTip("Current safety margin percentage")
+                threshold_layout.addWidget(threshold_value_label)
+                
+                # Status indicator (small)
+                threshold_status = QLabel("●")
+                threshold_status.setStyleSheet("color: #e74c3c; font-size: 14px;")
+                threshold_status.setToolTip(
+                    "🚥 Status Indicator\n\n"
+                    "🔴 Red: Disabled\n"
+                    "🟡 Yellow: Learning Mode (gathering data)\n"
+                    "🟢 Green: Active (preventing lockups)"
+                )
+                threshold_layout.addWidget(threshold_status)
+                
+                # Add to the deadzone group instead of creating new section
+                deadzone_layout.addLayout(threshold_layout)
+                
+                # Store references for main app
+                data['threshold_enable_checkbox'] = self.threshold_enable_checkbox
+                data['threshold_slider'] = threshold_slider
+                data['threshold_value_label'] = threshold_value_label
+                data['threshold_status'] = threshold_status
+                
+                # Connect slider to label update
+                threshold_slider.valueChanged.connect(
+                    lambda value: threshold_value_label.setText(f"{value/10.0:.1f}%")
+                )
+                
+                logger.info("Compact Threshold Braking Assist added to brake tab")
+            except Exception as e:
+                logger.warning(f"Could not add threshold assist controls: {e}")
+        
         # Output Monitor
         output_group = QGroupBox("Output Monitor")
         output_layout = QVBoxLayout()
@@ -2138,6 +2160,118 @@ class MainWindow(QMainWindow):
         # Reflect the loaded calibration in the monitor display
         self.update_monitor_display()
 
+    def create_auth_buttons(self):
+        """Create authentication and navigation buttons (will be added to menu bar)."""
+        # Community notification badge 
+        self.community_notification_badge = QLabel()
+        self.community_notification_badge.setFixedSize(16, 16)
+        self.community_notification_badge.setAlignment(Qt.AlignCenter)
+        self.community_notification_badge.setStyleSheet("""
+            QLabel {
+                background-color: #FF4444;
+                color: white;
+                border-radius: 8px;
+                font-size: 9px;
+                font-weight: bold;
+            }
+        """)
+        self.community_notification_badge.hide()
+        
+        # Community button with notification badge container
+        self.community_btn_container = QWidget()
+        community_container_layout = QHBoxLayout(self.community_btn_container)
+        community_container_layout.setContentsMargins(0, 0, 0, 0)
+        community_container_layout.setSpacing(2)
+        
+        self.community_btn = QPushButton("Community")
+        self.community_btn.clicked.connect(self.open_community_interface)
+        self.community_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF6B35;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-weight: bold;
+                font-size: 11px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #FF8A65;
+            }
+        """)
+        community_container_layout.addWidget(self.community_btn)
+        community_container_layout.addWidget(self.community_notification_badge)
+        
+        # Account button
+        self.account_btn = QPushButton("Account")
+        self.account_btn.clicked.connect(self.open_account_settings)
+        self.account_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6C7293;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 11px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #8A8FB0;
+            }
+        """)
+        self.account_btn.hide()
+        
+        # Login button
+        self.login_btn = QPushButton("Login")
+        self.login_btn.clicked.connect(self.show_login_dialog)
+        self.login_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a82da;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 11px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #3a92ea;
+            }
+        """)
+        
+        # Signup button
+        self.signup_btn = QPushButton("Sign Up")
+        self.signup_btn.clicked.connect(self.show_signup_dialog)
+        self.signup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 11px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #37be70;
+            }
+        """)
+        
+        # Logout button
+        self.logout_btn = QPushButton("Logout")
+        self.logout_btn.clicked.connect(self.handle_logout)
+        self.logout_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c0392b;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 3px;
+                font-size: 11px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #d0493b;
+            }
+        """)
+        self.logout_btn.hide()
+
     def create_menu_bar(self):
         """Create the main menu bar."""
         menu_bar = self.menuBar()
@@ -2243,13 +2377,29 @@ class MainWindow(QMainWindow):
         self.race_pass_action.setToolTip("Login required to access Race Pass features")
         menu_bar.addAction(self.race_pass_action)
         
-        # Add Community button to menu bar
+        # Add Community button to menu bar (for backward compatibility)
         self.community_action = QAction("🌐 Community", self)
         self.community_action.triggered.connect(self.open_community_interface)
         self.community_action.setCheckable(True)
         self.community_action.setChecked(False)
         self.community_action.setToolTip("Access community features: social, teams, content sharing, and achievements")
         menu_bar.addAction(self.community_action)
+        
+        # Create a container for the auth buttons in the menu bar corner
+        auth_container = QWidget()
+        auth_layout = QHBoxLayout(auth_container)
+        auth_layout.setContentsMargins(5, 2, 5, 2)
+        auth_layout.setSpacing(5)
+        
+        # Add authentication buttons to the container
+        auth_layout.addWidget(self.community_btn_container)
+        auth_layout.addWidget(self.account_btn)
+        auth_layout.addWidget(self.login_btn)
+        auth_layout.addWidget(self.signup_btn)
+        auth_layout.addWidget(self.logout_btn)
+        
+        # Set the container as the corner widget (top right)
+        menu_bar.setCornerWidget(auth_container, Qt.TopRightCorner)
         
         # Style the menu bar for dark theme
         menu_bar.setStyleSheet("""
@@ -2749,6 +2899,10 @@ class MainWindow(QMainWindow):
                         # Update calibration chart
                         if 'calibration_chart' in self._pedal_data[pedal]:
                             self._pedal_data[pedal]['calibration_chart'].set_deadzones(min_deadzone, max_deadzone)
+            
+            # Set up threshold assist controls if they exist
+            if 'brake' in self._pedal_data and 'threshold_enable_checkbox' in self._pedal_data['brake']:
+                logger.info("Threshold assist controls found and ready for app setup")
             
             # Defer curve list refresh to avoid blocking startup
             # This will be handled by the main app's delayed operations instead
@@ -3922,16 +4076,28 @@ class MainWindow(QMainWindow):
                 self.save_calibration_btn.setVisible(False)
                 return
             
-            # Create the integrated community widget
+            # Create or reuse the integrated community widget
             try:
-                from trackpro.community.community_main_widget import CommunityMainWidget
-                from trackpro.database.supabase_client import get_supabase_client
-                
-                # Get the Supabase client
-                supabase_client = get_supabase_client()
-                
-                # Create community widget with Supabase client
-                community_widget = CommunityMainWidget(parent=self, supabase_client=supabase_client)
+                # Check if background community widget already exists
+                if hasattr(self, 'background_community_widget') and self.background_community_widget:
+                    print("♻️ Reusing existing background community widget for UI")
+                    community_widget = self.background_community_widget
+                    
+                    # Ensure it's parented correctly for UI display and reset geometry
+                    community_widget.setParent(self)
+                    community_widget.setVisible(True)
+                    community_widget.show()
+                    community_widget.setGeometry(0, 0, 800, 600)  # Reset to normal size
+                else:
+                    print("📱 Creating new community widget for UI")
+                    from trackpro.community.community_main_widget import CommunityMainWidget
+                    from trackpro.database.supabase_client import get_supabase_client
+                    
+                    # Get the Supabase client
+                    supabase_client = get_supabase_client()
+                    
+                    # Create community widget with Supabase client
+                    community_widget = CommunityMainWidget(parent=self, supabase_client=supabase_client)
                 
                 # Set up managers and user ID if available
                 if is_authenticated:
@@ -3950,6 +4116,21 @@ class MainWindow(QMainWindow):
                 
                 # Store reference to community widget for later use
                 self.community_widget = community_widget
+                
+                # Connect notification signals (only if not already connected)
+                if hasattr(community_widget, 'notification_count_changed'):
+                    # Check if we're reusing the background widget (signals already connected)
+                    if hasattr(self, 'background_community_widget') and community_widget == self.background_community_widget:
+                        print("🔗 Signals already connected for background widget")
+                        # Reconnect authentication signals since parent changed
+                        try:
+                            self.auth_state_changed.disconnect(community_widget.handle_auth_state_change)
+                        except:
+                            pass  # Might not be connected
+                        self.auth_state_changed.connect(community_widget.handle_auth_state_change)
+                    else:
+                        print("🔗 Connecting notification signals for new widget")
+                        community_widget.notification_count_changed.connect(self.update_community_notification_badge)
                         
                 # Add to stacked widget and switch to it
                 community_index = self.stacked_widget.addWidget(community_widget)
@@ -3995,12 +4176,133 @@ class MainWindow(QMainWindow):
             managers = self.get_community_managers()
             user_id = self.get_current_user_id()
             
-            # Open the account settings using the imported function
-            open_account_settings(self, managers, user_id)
+            # Try to open the account settings using the imported function
+            if COMMUNITY_UI_AVAILABLE:
+                open_account_settings(self, managers, user_id)
+            else:
+                QMessageBox.information(self, "Account Settings", "Account settings are not available in this build.")
             
             logger.info("Opened account settings")
             
         except Exception as e:
             logger.error(f"Error opening account settings: {e}")
             QMessageBox.critical(self, "Error", f"Could not open account settings: {str(e)}")
+    
+    def update_community_notification_badge(self, count):
+        """Update the community button notification badge."""
+        try:
+            if hasattr(self, 'community_notification_badge'):
+                if count > 0:
+                    if count > 99:
+                        self.community_notification_badge.setText("99+")
+                    else:
+                        self.community_notification_badge.setText(str(count))
+                    self.community_notification_badge.show()
+                    
+                    # Update tooltip to include notification info
+                    tooltip = f"Access community features: social, teams, content sharing, and achievements ({count} notification{'s' if count != 1 else ''})"
+                    self.community_btn.setToolTip(tooltip)
+                    
+                    # Add subtle animation to draw attention
+                    self.animate_community_badge()
+                else:
+                    self.community_notification_badge.hide()
+                    # Reset tooltip
+                    self.community_btn.setToolTip("Access community features: social, teams, content sharing, and achievements")
+                    
+        except Exception as e:
+            logger.warning(f"Error updating community notification badge: {e}")
+    
+    def animate_community_badge(self):
+        """Add a subtle animation to the community notification badge."""
+        try:
+            if hasattr(self, 'community_notification_badge') and self.community_notification_badge.isVisible():
+                # Create a fade effect
+                effect = QGraphicsOpacityEffect()
+                self.community_notification_badge.setGraphicsEffect(effect)
+                
+                self.badge_animation = QPropertyAnimation(effect, b"opacity")
+                self.badge_animation.setDuration(800)
+                self.badge_animation.setStartValue(1.0)
+                self.badge_animation.setEndValue(0.6)
+                self.badge_animation.setEasingCurve(QEasingCurve.InOutQuad)
+                
+                # Set up auto-reverse
+                self.badge_animation.finished.connect(lambda: self.badge_animation.setDirection(
+                    QPropertyAnimation.Forward if self.badge_animation.direction() == QPropertyAnimation.Backward 
+                    else QPropertyAnimation.Backward
+                ))
+                self.badge_animation.finished.connect(self.badge_animation.start)
+                self.badge_animation.start()
+                
+        except Exception as e:
+            logger.warning(f"Error animating community badge: {e}")
+    
+    def setup_early_notification_system(self):
+        """Set up notification system immediately for background monitoring.
+        
+        This creates the community widget early to enable background Discord monitoring
+        and connects notification signals, even before user opens Community tab.
+        """
+        try:
+            print("🚀 Setting up early notification system for immediate background monitoring...")
+            
+            # Check if user is authenticated for community features
+            is_authenticated = False
+            try:
+                from trackpro.database import supabase_client
+                if hasattr(supabase_client, 'supabase') and supabase_client.supabase:
+                    is_authenticated = supabase_client.supabase.is_authenticated()
+            except Exception as e:
+                logger.warning(f"Could not check authentication status for early notifications: {e}")
+                is_authenticated = False
+                
+            # Create community widget in background for immediate monitoring
+            try:
+                from trackpro.community.community_main_widget import CommunityMainWidget
+                from trackpro.database.supabase_client import get_supabase_client
+                
+                # Get the Supabase client
+                supabase_client = get_supabase_client()
+                
+                # Create community widget in background - don't add to UI yet
+                self.background_community_widget = CommunityMainWidget(parent=None, supabase_client=supabase_client)
+                
+                # Make sure it's completely hidden and doesn't interfere with main UI
+                self.background_community_widget.setVisible(False)
+                self.background_community_widget.hide()
+                self.background_community_widget.setGeometry(-9999, -9999, 1, 1)
+                
+                # Set up managers and user ID if available
+                if is_authenticated:
+                    try:
+                        managers = self.get_community_managers()
+                        user_id = self.get_current_user_id()
+                        self.background_community_widget.set_managers(managers)
+                        self.background_community_widget.set_user_id(user_id)
+                        print("🔐 Background community widget configured with authenticated user data")
+                    except Exception as e:
+                        logger.warning(f"Could not set up background community managers: {e}")
+                
+                # CRITICAL: Connect notification signals immediately
+                if hasattr(self.background_community_widget, 'notification_count_changed'):
+                    self.background_community_widget.notification_count_changed.connect(self.update_community_notification_badge)
+                    print("✅ Background notification signals connected to main UI badge")
+                
+                # Connect authentication state changes
+                self.auth_state_changed.connect(self.background_community_widget.handle_auth_state_change)
+                
+                # Store reference but don't add to UI - this runs background monitoring
+                print("✅ Early notification system initialized - background monitoring active")
+                
+            except ImportError as import_error:
+                print(f"⚠️ Could not import Community widget for early notifications: {import_error}")
+                # This is not critical - user can still use app without community features
+            except Exception as e:
+                print(f"⚠️ Error setting up early notification system: {e}")
+                # Log but don't crash - community features are optional
+                
+        except Exception as e:
+            print(f"❌ Failed to setup early notification system: {e}")
+            # Don't crash the app - this is for enhancement only
     

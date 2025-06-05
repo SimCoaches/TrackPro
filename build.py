@@ -322,16 +322,71 @@ Section "Prerequisites"
             DetailPrint "HidHide requires a system restart"
         ${{EndIf}}
 
-        ; Run vJoy installer silently and wait
-        DetailPrint "Installing vJoy..."
+        ; Check if vJoy is already installed before attempting installation
+        DetailPrint "Checking for existing vJoy installation..."
+        
+        ; Check registry for vJoy
+        ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{8E31F76F-74C3-47F1-9550-E041EEDC5FBB}}_is1" "DisplayName"
+        ${{If}} $R0 != ""
+            DetailPrint "Found existing vJoy installation: $R0"
+            DetailPrint "Skipping vJoy installation to prevent conflicts"
+            Goto vjoy_done
+        ${{EndIf}}
+        
+        ; Check for vJoy files in common locations
+        ${{If}} ${{FileExists}} "$PROGRAMFILES64\vJoy\x64\vJoyInterface.dll"
+            DetailPrint "Found existing vJoy files in Program Files"
+            DetailPrint "Skipping vJoy installation to prevent conflicts"
+            Goto vjoy_done
+        ${{EndIf}}
+        
+        ${{If}} ${{FileExists}} "$PROGRAMFILES32\vJoy\x86\vJoyInterface.dll"
+            DetailPrint "Found existing vJoy files in Program Files (x86)"
+            DetailPrint "Skipping vJoy installation to prevent conflicts"
+            Goto vjoy_done
+        ${{EndIf}}
+
+        ; Run vJoy installer with SAFER FLAGS and better error handling
+        DetailPrint "Installing vJoy with improved compatibility..."
+        
         ; Save the installation path for resume
         WriteRegStr HKLM "${{RESUME_INSTALLATIONS_KEY}}" "${{RESUME_INSTALLATIONS_VALUE}}" "$EXEPATH"
-        ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS /TYPE=MINIMAL' $0
-        DetailPrint "vJoy installation complete with exit code: $0"
-        ${{If}} $0 == 3010
+        
+        ; Method 1: Try with safer silent flags (removed problematic /VERYSILENT and /TYPE=MINIMAL)
+        DetailPrint "Attempting vJoy installation - Method 1 (/SILENT)"
+        ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART' $0
+        
+        ; Check if installation was successful
+        ${{If}} $0 == 0
+            DetailPrint "vJoy installation completed successfully (exit code: 0)"
+        ${{ElseIf}} $0 == 3010
+            DetailPrint "vJoy installation completed, restart required (exit code: 3010)"
             StrCpy $NEEDS_RESTART "1"
-            DetailPrint "vJoy requires a system restart"
+        ${{Else}}
+            DetailPrint "vJoy installation Method 1 failed with exit code: $0"
+            
+            ; Method 2: Try with basic silent flag
+            DetailPrint "Attempting vJoy installation - Method 2 (/S)"
+            ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /S /NORESTART' $0
+            
+            ${{If}} $0 == 0
+                DetailPrint "vJoy installation successful with Method 2"
+            ${{ElseIf}} $0 == 3010
+                DetailPrint "vJoy installation successful with Method 2, restart required"
+                StrCpy $NEEDS_RESTART "1"
+            ${{Else}}
+                ; Both methods failed - show warning but continue
+                DetailPrint "WARNING: vJoy installation failed with both methods"
+                DetailPrint "Method 1 exit code: $0"
+                DetailPrint "TrackPro will work in test mode without vJoy"
+                
+                ; Show a non-blocking warning to the user
+                MessageBox MB_OK "vJoy installation failed. TrackPro will work in test mode."
+            ${{EndIf}}
         ${{EndIf}}
+        
+        vjoy_done:
+        DetailPrint "vJoy installation phase completed"
 
         ; Clean up temp files AFTER all installations are complete
         DetailPrint "Cleaning up temporary files..."
@@ -356,13 +411,7 @@ Section "Prerequisites"
         WriteRegDWORD ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "EstimatedSize" "$0"
 
         ; Show installation paths at the end
-        MessageBox MB_OK|MB_ICONINFORMATION \
-            "TrackPro v{version} has been installed to:$\n\
-            $PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe$\n\n\
-            Shortcuts have been created:$\n\
-            - Start Menu: $SMPROGRAMS\TrackPro\TrackPro v{version}.lnk$\n\
-            - Desktop: $DESKTOP\TrackPro v{version}.lnk$\n\n\
-            Please verify these locations after installation."
+        MessageBox MB_OK|MB_ICONINFORMATION "TrackPro v{version} has been installed successfully. Shortcuts have been created on Desktop and Start Menu. Please verify the installation completed correctly."
             
         ; Check if we need to restart
         ${{If}} $NEEDS_RESTART == "1"
@@ -971,6 +1020,7 @@ SectionEnd
             '--hidden-import=PyQt5.QtWebEngineWidgets',
             '--hidden-import=PyQt5.QtWebEngine',
             '--hidden-import=PyQt5.QtWebEngineCore',
+            '--hidden-import=PyQt5.QtMultimedia',
             '--hidden-import=PyQtWebEngine',
             '--hidden-import=pygame',
             '--hidden-import=win32serviceutil',

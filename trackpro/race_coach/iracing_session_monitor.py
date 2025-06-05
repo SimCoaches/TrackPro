@@ -772,7 +772,12 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                         # CRITICAL FIX: DISABLE SESSION CHAOS - Only create sessions when truly needed
                         # The session continuity logic is broken and causing multiple sessions for same iRacing session
                         session_changed = (session_id != last_session_id or subsession_id != last_subsession_id)
-                        track_changed = (iracing_track_id != last_processed_iracing_track_id or track_config != last_processed_track_config)
+                        
+                        # CRITICAL BUG FIX: Also check for car changes, not just track changes!
+                        # This was causing the bug where switching cars on the same track didn't create a new session
+                        track_or_car_changed = (iracing_track_id != last_processed_iracing_track_id or 
+                                               track_config != last_processed_track_config or
+                                               iracing_car_id != last_processed_iracing_car_id)
                         
                         # CRITICAL FIX: Only create new session if we don't have ANY session yet
                         # OR if the track/car actually changed (not just session ID changes)
@@ -782,18 +787,28 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                             # No session exists at all - create one
                             should_create_new_session = True
                             logger.info(f"[SESSION] Creating first session - no session exists")
-                        elif track_changed:
+                        elif track_or_car_changed:
                             # Track or car actually changed - legitimate new session
                             should_create_new_session = True 
-                            logger.info(f"[SESSION] Creating new session - track/car changed")
+                            
+                            # Detailed logging to show what changed
+                            changes = []
+                            if iracing_track_id != last_processed_iracing_track_id:
+                                changes.append(f"track ID {last_processed_iracing_track_id} -> {iracing_track_id}")
+                            if track_config != last_processed_track_config:
+                                changes.append(f"track config '{last_processed_track_config}' -> '{track_config}'")
+                            if iracing_car_id != last_processed_iracing_car_id:
+                                changes.append(f"car ID {last_processed_iracing_car_id} -> {iracing_car_id}")
+                            
+                            logger.info(f"[SESSION] Creating new session - changes detected: {', '.join(changes)}")
                         else:
                             # Session ID changed but track/car same - CONTINUE with existing session
                             logger.info(f"[SESSION] Keeping existing session {current_session_uuid} - only session ID changed")
                         
                         if should_create_new_session:
                             # Create new session (original logic)
-                            change_type = "session" if session_changed else "track/config" 
-                            print(f"Monitor: New {change_type} detected (ID: {session_id}, SubID: {subsession_id}, Track: {track_name}, Config: {track_config})")
+                            change_type = "session" if session_changed else "track/car/config" 
+                            print(f"Monitor: New {change_type} detected (ID: {session_id}, SubID: {subsession_id}, Track: {track_name}, Car: {car_name}, Config: {track_config})")
                             
                             # Update Supabase with new session data
                             if supabase_client and logged_in_user_id:

@@ -138,9 +138,13 @@ class VirtualJoystick:
             if acquired:
                 break
         
-        # If we couldn't acquire any device, raise the last error
+        # If we couldn't acquire any device, fall back to test mode
         if not acquired:
-            raise RuntimeError(last_error or "Failed to initialize vJoy: No devices available")
+            logger.warning(f"Could not acquire vJoy device: {last_error}")
+            logger.info("Falling back to test mode - vJoy output will be simulated")
+            self.test_mode = True
+            self.vjoy_device_id = 1
+            self.vjoy_acquired = False
     
     def update_axis(self, throttle: int, brake: int, clutch: int):
         """Update the virtual joystick axes."""

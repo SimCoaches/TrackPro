@@ -316,7 +316,12 @@ class TrackProApp:
             self.update_progress(40, "Setting up virtual joystick...")
             # Import VirtualJoystick just before use
             from .pedals.output import VirtualJoystick
-            self.output = VirtualJoystick()
+            try:
+                self.output = VirtualJoystick()
+            except RuntimeError as e:
+                logger.warning(f"vJoy initialization failed: {e}")
+                logger.info("Initializing vJoy in test mode")
+                self.output = VirtualJoystick(test_mode=True)
             
             # Update progress 50%
             self.update_progress(50, "Connecting hardware to interface...")
@@ -346,6 +351,11 @@ class TrackProApp:
             # Update progress 70%
             self.update_progress(70, "Loading calibration data...")
             self.load_calibration()
+            
+            # Update progress 75%
+            self.update_progress(75, "Setting up threshold braking assist...")
+            # Initialize threshold braking assist
+            self.setup_threshold_assist()
             
             # Update progress 80%
             self.update_progress(80, "Setting up HidHide...")
@@ -828,6 +838,10 @@ class TrackProApp:
                 
                 # Scale the value using calibration
                 output_value = self.hardware.apply_calibration(pedal, raw_value)
+                
+                # Apply threshold braking assist for brake pedal
+                if pedal == 'brake' and hasattr(self.hardware, 'process_brake_with_assist'):
+                    output_value = self.hardware.process_brake_with_assist(output_value)
                 
                 # Scale for vJoy (0-32767)
                 vjoy_value = int(output_value * 32767 / 65535)
@@ -1471,6 +1485,116 @@ class TrackProApp:
                 
         except Exception as e:
             logger.error(f"Error updating UI after curves initialized: {e}")
+    
+    def setup_threshold_assist(self):
+        """Set up threshold braking assist system."""
+        try:
+            # Enable threshold assist in hardware
+            self.hardware.enable_threshold_assist(False)  # Start disabled
+            
+            # Set up telemetry callback for threshold assist
+            # We'll connect to the race coach when it's available
+            def get_telemetry():
+                """Get current telemetry data for threshold assist."""
+                try:
+                    # Try to get telemetry from race coach widget
+                    if hasattr(self, 'window') and hasattr(self.window, 'stacked_widget'):
+                        for i in range(self.window.stacked_widget.count()):
+                            widget = self.window.stacked_widget.widget(i)
+                            if widget and hasattr(widget, 'iracing_api'):
+                                api = widget.iracing_api
+                                if hasattr(api, 'current_telemetry'):
+                                    telemetry = api.current_telemetry
+                                    # Update track/car context for threshold learning
+                                    track_name = telemetry.get('track_name', '')
+                                    car_name = telemetry.get('car_name', '')
+                                    if track_name and car_name:
+                                        self.hardware.update_track_car_context(track_name, car_name)
+                                    return telemetry
+                    return {}
+                except Exception as e:
+                    logger.debug(f"Error getting telemetry for threshold assist: {e}")
+                    return {}
+            
+            # Set the telemetry callback
+            self.hardware.set_telemetry_callback(get_telemetry)
+            
+            # Set default safety margin percentage  
+            self.hardware.set_threshold_reduction(3.0)
+            
+            # Connect threshold assist controls if they exist in the UI
+            if (hasattr(self, 'window') and hasattr(self.window, '_pedal_data') and 
+                'brake' in self.window._pedal_data and 
+                'threshold_enable_checkbox' in self.window._pedal_data['brake']):
+                
+                brake_data = self.window._pedal_data['brake']
+                
+                # Connect checkbox
+                checkbox = brake_data['threshold_enable_checkbox']
+                checkbox.toggled.connect(self.enable_threshold_assist)
+                
+                # Connect slider
+                slider = brake_data['threshold_slider']
+                slider.valueChanged.connect(lambda value: self.set_threshold_reduction(value / 10.0))
+                
+                # Store references for status updates
+                self.threshold_status_indicator = brake_data['threshold_status']
+                
+                # Set up status update timer
+                self.threshold_status_timer = QTimer()
+                self.threshold_status_timer.timeout.connect(self.update_threshold_status)
+                self.threshold_status_timer.start(500)  # Update every 500ms
+                
+                logger.info("Compact threshold assist controls connected to main app")
+            
+            logger.info("Threshold braking assist initialized")
+            
+        except Exception as e:
+            logger.error(f"Error setting up threshold braking assist: {e}")
+    
+    def enable_threshold_assist(self, enabled: bool):
+        """Enable or disable threshold braking assist."""
+        if hasattr(self, 'hardware'):
+            self.hardware.enable_threshold_assist(enabled)
+    
+    def set_threshold_reduction(self, percentage: float):
+        """Set threshold assist reduction percentage."""
+        if hasattr(self, 'hardware'):
+            self.hardware.set_threshold_reduction(percentage)
+    
+    def get_threshold_assist_status(self):
+        """Get current threshold assist status."""
+        if hasattr(self, 'hardware'):
+            return self.hardware.get_threshold_assist_status()
+        return {'enabled': False}
+    
+    def reset_threshold_learning(self):
+        """Reset threshold learning data."""
+        if hasattr(self, 'hardware'):
+            self.hardware.reset_threshold_learning()
+    
+    def update_threshold_status(self):
+        """Update the threshold assist status indicator."""
+        if hasattr(self, 'threshold_status_indicator') and self.hardware:
+            try:
+                status = self.hardware.get_threshold_assist_status()
+                enabled = status.get('enabled', False)
+                learning = status.get('learning_mode', True)
+                
+                if not enabled:
+                    # Disabled - red dot
+                    self.threshold_status_indicator.setStyleSheet("color: #e74c3c; font-size: 14px;")
+                    self.threshold_status_indicator.setToolTip("Threshold Assist: Disabled")
+                elif learning:
+                    # Learning - yellow dot
+                    self.threshold_status_indicator.setStyleSheet("color: #f39c12; font-size: 14px;")
+                    self.threshold_status_indicator.setToolTip("Threshold Assist: Learning Mode")
+                else:
+                    # Active - green dot
+                    self.threshold_status_indicator.setStyleSheet("color: #27ae60; font-size: 14px;")
+                    self.threshold_status_indicator.setToolTip("Threshold Assist: Active")
+            except Exception as e:
+                logger.debug(f"Error updating threshold status: {e}")
 
 def main():
     """Main entry point for the application."""
