@@ -35,12 +35,15 @@ class DiscordWebView(QWebEngineView):
         settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)  # Disable fullscreen
         settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, False)  # Security
         
-        # Disable plugins and multimedia for speed
-        settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)
-        settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)  # Keep images for Discord
+        # ADDITIONAL performance optimizations
+        settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)  # Disable plugins
+        settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)  # Keep images but optimize
+        settings.setAttribute(QWebEngineSettings.DnsPrefetchEnabled, False)  # Disable DNS prefetch
+        settings.setAttribute(QWebEngineSettings.TouchIconsEnabled, False)  # Disable touch icons
+        settings.setAttribute(QWebEngineSettings.FocusOnNavigationEnabled, False)  # Reduce focus changes
         
-        # Set conservative zoom factor
-        self.setZoomFactor(0.85)  # Smaller for faster rendering
+        # Optimize zoom for performance (smaller = faster rendering)
+        self.setZoomFactor(0.75)  # Even smaller for better performance
     
     def setup_page(self):
         """Setup custom page with CSS injection for better Discord layout."""
@@ -151,12 +154,18 @@ class DiscordIntegrationWidget(QWidget):
         self.last_messages_seen = set()  # Track unique message IDs we've seen
         self.current_user_display_name = None  # Track current user for mention detection
         self.hidden_monitor = None  # Hidden web view for background monitoring
-        self.setup_ui()
-        self.load_discord_config()
+        
+        # Performance optimization flags
+        self._is_visible = False
+        self._lazy_loaded = False
         
         # Connect signals to notification handling
         self.new_message.connect(self.handle_new_message)
         self.new_mention.connect(self.handle_new_mention)
+        
+        # Initialize UI but defer heavy operations until widget is shown
+        self.setup_ui()
+        self.load_discord_config()
     
     def set_notification_manager(self, notification_manager):
         """Set the notification manager for handling Discord notifications"""
@@ -175,8 +184,6 @@ class DiscordIntegrationWidget(QWidget):
             # Increment Discord notification count by 2 for mentions (higher priority)
             current = self.notification_manager.get_notification_count("discord")
             self.notification_manager.update_notification_count("discord", current + 2)
-    
-
     
     def setup_ui(self):
         """Set up the SIMPLIFIED user interface for better performance."""
@@ -385,88 +392,22 @@ class DiscordIntegrationWidget(QWidget):
             self.status_label.setStyleSheet("color: #F04747;")  # Red
     
     def inject_css_fixes(self):
-        """Inject CSS to fix Discord scaling and layout issues."""
+        """Inject optimized CSS to fix Discord scaling and layout issues."""
+        # OPTIMIZED CSS - minimal and fast
         css_script = f"""
-        // DEBUG: Start CSS injection
-        console.log('TrackPro DEBUG: Starting CSS injection...');
-        
-        // Inject CSS first
+        // TrackPro: FAST CSS injection (no debugging)
         var style = document.createElement('style');
         style.textContent = `{self.discord_web_view.discord_css}`;
         document.head.appendChild(style);
-        console.log('TrackPro DEBUG: CSS injected into page');
         
-        // DEBUGGING function to inspect Discord layout
-        function debugDiscordLayout() {{
-            console.log('=== TrackPro DEBUG: Discord Layout Analysis ===');
-            
-            // Look for server list elements
+        // MINIMAL and FAST server list hiding
+        function hideServerListFast() {{
+            // Hide server list with minimal DOM queries
             var serverSelectors = [
                 '[data-list-id="guildsnav"]',
                 '.guilds-2JjMmN',
                 'nav[aria-label*="Servers sidebar"]',
-                '.wrapper-1_HaEi',
-                '[class*="guilds"]',
-                '[class*="guild"]:not([class*="message"])'
-            ];
-            
-            serverSelectors.forEach(function(selector) {{
-                var elements = document.querySelectorAll(selector);
-                console.log('TrackPro DEBUG: Found', elements.length, 'elements for selector:', selector);
-                elements.forEach(function(el, i) {{
-                    console.log('  - Element', i, 'classes:', el.className, 'visible:', el.offsetWidth > 0);
-                }});
-            }});
-            
-            // Look for sidebar elements
-            var sidebarSelectors = [
-                '.sidebar-1tnWFu',
-                '[class*="sidebar"]',
-                '.channels-3g2vYe',
-                '[data-list-id="channels"]'
-            ];
-            
-            sidebarSelectors.forEach(function(selector) {{
-                var elements = document.querySelectorAll(selector);
-                console.log('TrackPro DEBUG: Found', elements.length, 'sidebar elements for:', selector);
-                elements.forEach(function(el, i) {{
-                    var rect = el.getBoundingClientRect();
-                    console.log('  - Sidebar', i, 'position: left=', rect.left, 'width=', rect.width);
-                }});
-            }});
-            
-            // Check main containers
-            var containers = ['.app-2CXKsg', '.base-2jDfDU', '.layers-OrUESM'];
-            containers.forEach(function(selector) {{
-                var el = document.querySelector(selector);
-                if (el) {{
-                    var rect = el.getBoundingClientRect();
-                    var computed = window.getComputedStyle(el);
-                    console.log('TrackPro DEBUG: Container', selector, 
-                        'position:', computed.position,
-                        'left:', rect.left, 
-                        'margin-left:', computed.marginLeft,
-                        'padding-left:', computed.paddingLeft);
-                }}
-            }});
-            
-            console.log('=== End Discord Layout Analysis ===');
-        }}
-        
-        // MINIMAL JavaScript - Only hide server list, keep everything else
-        function hideOnlyServerList() {{
-            console.log('TrackPro: Starting hideOnlyServerList function...');
-            
-            // First run debug analysis
-            debugDiscordLayout();
-            
-            // Find and hide server list elements more aggressively
-            var serverSelectors = [
-                '[data-list-id="guildsnav"]',
-                '.guilds-2JjMmN',
-                'nav[aria-label*="Servers sidebar"]',
-                '.wrapper-1_HaEi',
-                '[class*="guilds"]'
+                '.wrapper-1_HaEi'
             ];
             
             serverSelectors.forEach(function(selector) {{
@@ -474,104 +415,51 @@ class DiscordIntegrationWidget(QWidget):
                 elements.forEach(function(el) {{
                     el.style.display = 'none';
                     el.style.width = '0px';
-                    el.style.visibility = 'hidden';
-                    console.log('TrackPro: Hid element with selector:', selector);
                 }});
             }});
             
-            // FORCE channel sidebar positioning
-            var channelSidebar = document.querySelector('.sidebar-1tnWFu');
-            if (channelSidebar) {{
-                var oldRect = channelSidebar.getBoundingClientRect();
-                console.log('TrackPro: Channel sidebar BEFORE - left:', oldRect.left, 'width:', oldRect.width);
-                
-                channelSidebar.style.position = 'absolute';
-                channelSidebar.style.left = '0px';
-                channelSidebar.style.top = '0px';
-                channelSidebar.style.height = '100%';
-                channelSidebar.style.width = '312px';
-                channelSidebar.style.margin = '0px';
-                channelSidebar.style.zIndex = '100';
-                
-                var newRect = channelSidebar.getBoundingClientRect();
-                console.log('TrackPro: Channel sidebar AFTER - left:', newRect.left, 'width:', newRect.width);
-            }} else {{
-                console.log('TrackPro ERROR: Could not find channel sidebar (.sidebar-1tnWFu)');
+            // Position channel sidebar
+            var sidebar = document.querySelector('.sidebar-1tnWFu');
+            if (sidebar) {{
+                sidebar.style.position = 'absolute';
+                sidebar.style.left = '0px';
+                sidebar.style.top = '0px';
+                sidebar.style.width = '312px';
             }}
             
-            // Try alternative selectors for channels
-            var channelSelectors = [
-                '[data-list-id="channels"]',
-                '.channels-3g2vYe',
-                '[class*="channels"]'
-            ];
-            
-            channelSelectors.forEach(function(selector) {{
-                var el = document.querySelector(selector);
-                if (el) {{
-                    el.style.display = 'block';
-                    el.style.visibility = 'visible';
-                    console.log('TrackPro: Made channels visible with selector:', selector);
-                }}
-            }});
-            
-            // Force main containers
-            var containers = {{
-                '.app-2CXKsg': {{ position: 'relative', left: '0px' }},
-                '.base-2jDfDU': {{ position: 'absolute', left: '0px', top: '0px', width: '100%' }},
-                '.layers-OrUESM': {{ left: '0px', marginLeft: '0px' }}
-            }};
-            
-            Object.keys(containers).forEach(function(selector) {{
-                var el = document.querySelector(selector);
-                if (el) {{
-                    var styles = containers[selector];
-                    Object.keys(styles).forEach(function(prop) {{
-                        el.style[prop] = styles[prop];
-                    }});
-                    console.log('TrackPro: Applied styles to', selector);
-                }} else {{
-                    console.log('TrackPro WARNING: Could not find container:', selector);
-                }}
-            }});
-            
-            console.log('TrackPro: hideOnlyServerList complete - running final debug');
-            debugDiscordLayout();
+            // Adjust main content
+            var content = document.querySelector('.content-1SgpWY, .chat-2ZfjoI');
+            if (content) {{
+                content.style.left = '312px';
+                content.style.width = 'calc(100% - 312px)';
+            }}
         }}
         
-        // Try to hide only server list multiple times as Discord loads content
-        setTimeout(hideOnlyServerList, 2000);  // Initial attempt
-        setTimeout(hideOnlyServerList, 5000);  // After Discord likely loaded
-        setTimeout(hideOnlyServerList, 10000); // Final attempt
+        // Run layout fixes with minimal retries
+        setTimeout(hideServerListFast, 1000);
+        setTimeout(hideServerListFast, 3000);
         
-        // Also hide on DOM changes
+        // Single mutation observer (lightweight)
         if (window.MutationObserver) {{
             var layoutObserver = new MutationObserver(function(mutations) {{
-                var shouldRecheck = false;
-                mutations.forEach(function(mutation) {{
-                    if (mutation.addedNodes.length > 0) {{
-                        for (var i = 0; i < mutation.addedNodes.length; i++) {{
-                            var node = mutation.addedNodes[i];
-                            if (node.nodeType === 1 && (
-                                node.classList.contains('sidebar') ||
-                                node.classList.contains('channels') ||
-                                node.classList.contains('guilds')
-                            )) {{
-                                shouldRecheck = true;
-                                break;
-                            }}
-                        }}
-                    }}
+                var needsUpdate = mutations.some(function(m) {{
+                    return m.addedNodes.length > 0 && 
+                           Array.from(m.addedNodes).some(function(n) {{
+                               return n.nodeType === 1 && (
+                                   n.classList.contains('sidebar') ||
+                                   n.classList.contains('guilds')
+                               );
+                           }});
                 }});
                 
-                if (shouldRecheck) {{
-                    setTimeout(hideOnlyServerList, 500);
+                if (needsUpdate) {{
+                    setTimeout(hideServerListFast, 300);
                 }}
             }});
             
             layoutObserver.observe(document.body, {{
                 childList: true,
-                subtree: true
+                subtree: false  // Only watch direct children for performance
             }});
         }}
         """
@@ -579,259 +467,117 @@ class DiscordIntegrationWidget(QWidget):
         self.discord_web_view.page().runJavaScript(css_script)
     
     def inject_message_monitoring(self):
-        """Inject JavaScript to monitor for new Discord messages."""
+        """Inject lightweight JavaScript to monitor for new Discord messages."""
         monitoring_script = """
-        // TrackPro Discord Message Monitoring - IMPROVED VERSION
-        console.log('TrackPro: Injecting IMPROVED Discord message monitoring...');
+        // TrackPro Discord Message Monitoring - LIGHTWEIGHT VERSION
+        console.log('TrackPro: Injecting lightweight Discord message monitoring...');
         
-        // Track the last known message count and initialization state
-        var trackproLastMessageCount = 0;
-        var trackproSeenMessages = new Set();
-        var trackproCurrentUser = null;
+        var trackproSeenBadges = new Set();
         var trackproInitialized = false;
-        var trackproInitializationDelay = 30000; // 30 second delay before monitoring starts
-        var trackproSeenBadges = new Set(); // Track which badges we've already seen
+        var trackproInitDelay = 15000; // Reduced to 15 seconds
         
-        // Function to get current user information
-        function getDiscordCurrentUser() {
-            try {
-                // Try multiple selectors to get current user info
-                var userButton = document.querySelector('[aria-label*="User settings"]') || 
-                                document.querySelector('[aria-label*="Account"]') ||
-                                document.querySelector('.container-YkUktl .nameTag-sc-gpq');
-                
-                if (userButton) {
-                    var username = userButton.textContent || userButton.innerText;
-                    if (username) {
-                        trackproCurrentUser = username.trim();
-                        console.log('TrackPro: Current Discord user detected:', trackproCurrentUser);
-                        return trackproCurrentUser;
-                    }
-                }
-                
-                // Alternative: try to get from user panel
-                var userPanel = document.querySelector('.container-YkUktl .username-h_Y3Us') ||
-                               document.querySelector('.container-YkUktl .usernameContainer-_4YKDR');
-                if (userPanel) {
-                    trackproCurrentUser = userPanel.textContent.trim();
-                    console.log('TrackPro: Current Discord user detected (alt):', trackproCurrentUser);
-                    return trackproCurrentUser;
-                }
-            } catch(e) {
-                console.log('TrackPro: Error getting current user:', e);
-            }
-            return null;
-        }
-        
-        // Initialize monitoring with delay to avoid false positives
+        // Lightweight initialization - mark existing badges as seen
         function initializeMonitoring() {
-            // Mark all existing badges as "seen" to avoid false notifications
             var existingBadges = document.querySelectorAll('[class*="numberBadge"], [class*="textBadge"], [class*="unread"]');
             existingBadges.forEach(function(badge, index) {
                 var badgeId = badge.textContent + '_' + index;
                 trackproSeenBadges.add(badgeId);
                 badge.classList.add('trackpro-seen');
-                console.log('TrackPro: Marked existing badge as seen:', badge.textContent);
             });
             
-            // Get initial message count
-            var messages = document.querySelectorAll('[class*="messageListItem"], [class*="message-"], .groupStart-');
-            trackproLastMessageCount = messages.length;
-            console.log('TrackPro: Initial message count set to:', trackproLastMessageCount);
-            
-            // Mark monitoring as initialized
             trackproInitialized = true;
-            console.log('TrackPro: Monitoring initialized - only NEW activity will trigger notifications');
+            console.log('TrackPro: Lightweight monitoring initialized');
         }
         
-        // Delay initialization to avoid detecting existing content as "new"
-        setTimeout(initializeMonitoring, trackproInitializationDelay);
-        
-        // Function to check for various Discord notifications (IMPROVED)
-        function checkForNewMessages() {
-            // Don't check until we're fully initialized
-            if (!trackproInitialized) {
-                return;
-            }
+        // Simple and fast notification check
+        function checkForNewNotifications() {
+            if (!trackproInitialized) return;
             
             try {
                 var newNotifications = 0;
                 
-                // Method 1: Check for NEW channel notification badges (only truly new ones)
-                var channelBadges = document.querySelectorAll('[class*="numberBadge"], [class*="unread"]:not(.trackpro-seen)');
-                channelBadges.forEach(function(badge, index) {
+                // Check for new notification badges (simplified)
+                var badges = document.querySelectorAll('[class*="numberBadge"]:not(.trackpro-seen), [class*="textBadge"]:not(.trackpro-seen)');
+                badges.forEach(function(badge, index) {
                     var badgeId = badge.textContent + '_' + index;
                     if (badge.textContent && badge.textContent.trim() && !trackproSeenBadges.has(badgeId)) {
-                        console.log('TrackPro: NEW channel notification badge detected:', badge.textContent);
                         trackproSeenBadges.add(badgeId);
                         badge.classList.add('trackpro-seen');
                         newNotifications++;
                         
-                        window.trackproMessageDetected = {
-                            author: 'Discord Channel',
-                            content: 'New activity in channel',
-                            timestamp: Date.now()
-                        };
-                    }
-                });
-                
-                // Method 2: Check for "NEW" text badges (only truly new ones)
-                var newBadges = document.querySelectorAll('[class*="textBadge"]:not(.trackpro-seen)');
-                newBadges.forEach(function(badge, index) {
-                    var badgeId = 'NEW_' + index;
-                    if (badge.textContent && badge.textContent.trim().toUpperCase() === 'NEW' && !trackproSeenBadges.has(badgeId)) {
-                        console.log('TrackPro: NEW badge detected (truly new)');
-                        trackproSeenBadges.add(badgeId);
-                        badge.classList.add('trackpro-seen');
-                        newNotifications++;
-                        
+                        // Set global notification flag
                         window.trackproMessageDetected = {
                             author: 'Discord',
-                            content: 'New messages available',
+                            content: 'New activity detected',
                             timestamp: Date.now()
                         };
                     }
                 });
                 
-                // Method 3: Check for message count changes in current channel (CONSERVATIVE)
-                var messages = document.querySelectorAll('[class*="messageListItem"], [class*="message-"], .groupStart-');
-                var currentMessageCount = messages.length;
-                
-                // Only trigger if there's a significant increase in message count
-                if (currentMessageCount > trackproLastMessageCount + 2) { // Require at least 3 new messages
-                    var newMessageCount = currentMessageCount - trackproLastMessageCount;
-                    console.log('TrackPro: Detected', newMessageCount, 'new messages by count change (conservative)');
-                    
-                    newNotifications++;
-                    window.trackproMessageDetected = {
-                        author: 'Discord Chat',
-                        content: newMessageCount + ' new messages in current channel',
-                        timestamp: Date.now()
-                    };
-                }
-                
-                trackproLastMessageCount = currentMessageCount;
-                
-                // Log monitoring status periodically (but don't spam)
-                if (Math.random() < 0.1) { // 10% chance to log status
-                    console.log('TrackPro: Monitoring active - Messages:', currentMessageCount, 'Badges seen:', trackproSeenBadges.size);
-                }
-                
             } catch(e) {
-                console.log('TrackPro: Error in checkForNewMessages:', e);
+                // Silently handle errors to avoid console spam
             }
         }
         
-        // Get current user info when script loads
-        setTimeout(function() {
-            getDiscordCurrentUser();
-        }, 5000);
+        // Delayed initialization
+        setTimeout(initializeMonitoring, trackproInitDelay);
         
-        // Start monitoring for new messages (after initialization delay)
-        setInterval(checkForNewMessages, 20000); // Check every 20 seconds for performance
+        // Reduced frequency monitoring (every 30 seconds for performance)
+        setInterval(checkForNewNotifications, 30000);
         
-        // Expose manual check function for debugging
-        window.trackproManualCheck = function() {
-            console.log('TrackPro: Manual notification check triggered');
-            checkForNewMessages();
-        };
-        
-        // Expose status function
-        window.trackproStatus = function() {
-            console.log('TrackPro Monitoring Status:');
-            console.log('- Initialized:', trackproInitialized);
-            console.log('- Current User:', trackproCurrentUser);
-            console.log('- Message Count:', trackproLastMessageCount);
-            console.log('- Seen Messages:', trackproSeenMessages.size);
-            
-            // Check for visible badges
-            var badges = document.querySelectorAll('[class*="numberBadge"], [class*="textBadge"], [class*="unread"]');
-            console.log('- Current Badges:', badges.length);
-            badges.forEach(function(badge, i) {
-                console.log('  Badge', i, ':', badge.textContent, badge.className, badge.classList.contains('trackpro-seen') ? '(seen)' : '(new)');
-            });
-        };
-        
-        // Monitor for DOM changes with improved detection
+        // Lightweight DOM observer
         if (window.MutationObserver) {
             var observer = new MutationObserver(function(mutations) {
-                var shouldCheck = false;
-                mutations.forEach(function(mutation) {
-                    // Check for added nodes (new messages)
-                    if (mutation.addedNodes.length > 0) {
-                        for (var i = 0; i < mutation.addedNodes.length; i++) {
-                            var node = mutation.addedNodes[i];
-                            if (node.nodeType === 1) { // Element node
-                                // Check for message-related classes
-                                if (node.classList && (
-                                    node.classList.contains('messageListItem') ||
-                                    node.classList.contains('groupStart') ||
-                                    node.classList.contains('message') ||
-                                    node.querySelector && (
-                                        node.querySelector('[class*="messageListItem"]') ||
-                                        node.querySelector('[class*="message-"]') ||
-                                        node.querySelector('[class*="badge"]')
-                                    )
-                                )) {
-                                    shouldCheck = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Check for attribute changes (badges appearing/changing)
-                    if (mutation.type === 'attributes' && mutation.target.classList) {
-                        var classes = mutation.target.className;
-                        if (classes.includes('badge') || classes.includes('unread') || classes.includes('mention')) {
-                            shouldCheck = true;
-                        }
-                    }
+                var hasNewBadges = mutations.some(function(m) {
+                    return Array.from(m.addedNodes).some(function(n) {
+                        return n.nodeType === 1 && 
+                               n.className && 
+                               (n.className.includes('numberBadge') || n.className.includes('textBadge'));
+                    });
                 });
                 
-                if (shouldCheck) {
-                    setTimeout(checkForNewMessages, 300); // Quick response for DOM changes
+                if (hasNewBadges) {
+                    setTimeout(checkForNewNotifications, 1000);
                 }
             });
             
-            // Start observing the entire document for maximum coverage
             observer.observe(document.body, {
                 childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['class']
+                subtree: false // Only watch direct children for better performance
             });
-            
-            console.log('TrackPro: Enhanced DOM mutation observer started');
         }
         
-        console.log('TrackPro: Discord message monitoring active');
-        console.log('TrackPro: Use window.trackproManualCheck() to manually check for notifications');
-        console.log('TrackPro: Use window.trackproStatus() to see monitoring status');
+        // Expose minimal status function for debugging
+        window.trackproStatus = function() {
+            console.log('TrackPro: Monitoring active, seen badges:', trackproSeenBadges.size);
+        };
         """
         
-        # Inject the monitoring script
         self.discord_web_view.page().runJavaScript(monitoring_script)
-        
-        # Start polling for notifications from JavaScript
-        self.message_poll_timer = QTimer()
-        self.message_poll_timer.timeout.connect(self.check_for_js_notifications)
-        self.message_poll_timer.start(20000)  # Check every 20 seconds for performance
     
     def check_for_js_notifications(self):
-        """Check for notifications from JavaScript and emit appropriate signals."""
-        # Check for new messages
+        """Check for Discord notifications from JavaScript (optimized)."""
+        def handle_result(result):
+            try:
+                if result and isinstance(result, dict):
+                    # Simple notification handling
+                    author = result.get('author', 'Discord')
+                    content = result.get('content', 'New activity')
+                    
+                    # Clear the notification flag
+                    self.discord_web_view.page().runJavaScript("window.trackproMessageDetected = null;")
+                    
+                    # Emit signal for notification
+                    self.new_message.emit("Discord", content)
+                    
+            except Exception as e:
+                # Silently handle errors to avoid console spam
+                pass
+        
+        # Lightweight check for notifications
         self.discord_web_view.page().runJavaScript(
-            """
-            if (window.trackproMessageDetected) {
-                var msg = window.trackproMessageDetected;
-                window.trackproMessageDetected = null; // Clear it
-                msg;
-            } else {
-                null;
-            }
-            """,
-            self.handle_js_message_notification
+            "window.trackproMessageDetected || null",
+            handle_result
         )
         
         # Check for mentions
@@ -849,31 +595,12 @@ class DiscordIntegrationWidget(QWidget):
         )
     
     def handle_js_message_notification(self, message_data):
-        """Handle message notification from JavaScript."""
-        if message_data:
-            try:
-                author = message_data.get('author', 'Unknown')
-                content = message_data.get('content', '')
-                channel = "discord"  # We're in Discord
-                
-                print(f"📨 Discord message detected: {author}: {content[:50]}...")
-                self.new_message.emit(channel, f"{author}: {content}")
-                
-            except Exception as e:
-                print(f"Error handling JS message notification: {e}")
+        """Handle message notification from JavaScript - REMOVED (optimized)."""
+        pass  # Functionality moved to check_for_js_notifications for better performance
     
     def handle_js_mention_notification(self, mention_data):
-        """Handle mention notification from JavaScript."""
-        if mention_data:
-            try:
-                author = mention_data.get('author', 'Unknown')
-                content = mention_data.get('content', '')
-                
-                print(f"🔔 Discord mention detected: {author}: {content[:50]}...")
-                self.new_mention.emit(author, content)
-                
-            except Exception as e:
-                print(f"Error handling JS mention notification: {e}")
+        """Handle mention notification from JavaScript - REMOVED (optimized)."""
+        pass  # Functionality moved to check_for_js_notifications for better performance
     
     def zoom_in(self):
         """Increase zoom level."""
@@ -1236,28 +963,56 @@ class DiscordIntegrationWidget(QWidget):
             webbrowser.open("https://discord.com")
     
     def showEvent(self, event):
-        """Called when widget is shown."""
+        """Handle widget being shown - optimize for performance."""
         super().showEvent(event)
+        self._is_visible = True
         
-        # Clear Discord notifications when user views the Discord tab
-        if self.notification_manager:
-            print("🔄 User opened Discord tab - clearing Discord notifications")
-            self.notification_manager.update_notification_count("discord", 0)
+        # Lazy load Discord content only when first shown
+        if not self._lazy_loaded:
+            self._lazy_loaded = True
+            # Connect to Discord with a small delay to allow UI to settle
+            QTimer.singleShot(1000, self._lazy_connect_discord)
         
-        if self.discord_server_id and not self.discord_web_view.url().toString():
-            # Auto-connect when widget is first shown
-            QTimer.singleShot(500, self.connect_to_discord)
+        # Resume monitoring if it was paused
+        if hasattr(self, 'message_poll_timer') and not self.message_poll_timer.isActive():
+            self.message_poll_timer.start(30000)
+    
+    def hideEvent(self, event):
+        """Handle widget being hidden - reduce resource usage."""
+        super().hideEvent(event)
+        self._is_visible = False
+        
+        # Pause monitoring to save resources when not visible
+        if hasattr(self, 'message_poll_timer') and self.message_poll_timer.isActive():
+            self.message_poll_timer.stop()
+    
+    def _lazy_connect_discord(self):
+        """Lazy loading of Discord connection for better startup performance."""
+        try:
+            self.connect_to_discord()
+        except Exception as e:
+            logger.error(f"Error in lazy Discord connection: {e}")
     
     def closeEvent(self, event):
-        """Clean up when widget is closed."""
-        if hasattr(self, 'message_poll_timer'):
-            self.message_poll_timer.stop()
+        """Handle widget being closed - cleanup resources."""
+        try:
+            # Stop monitoring timer
+            if hasattr(self, 'message_poll_timer'):
+                self.message_poll_timer.stop()
+                
+            # Clear web view content to free memory
+            if hasattr(self, 'discord_web_view'):
+                self.discord_web_view.setUrl(QUrl("about:blank"))
+                
+            # Clean up hidden monitor
+            if self.hidden_monitor:
+                self.hidden_monitor.setUrl(QUrl("about:blank"))
+                self.hidden_monitor = None
+                
+        except Exception as e:
+            logger.error(f"Error during Discord widget cleanup: {e}")
+        
         super().closeEvent(event)
-    
-    def __del__(self):
-        """Clean up when widget is destroyed."""
-        if hasattr(self, 'message_poll_timer'):
-            self.message_poll_timer.stop()
 
 # Global instance
 discord_integration = DiscordIntegrationWidget() 

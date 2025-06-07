@@ -18,12 +18,28 @@ class CommunityDatabaseManager:
     def get_current_user_id(self):
         """Get the current authenticated user ID"""
         try:
+            # Method 1: Try get_user() for active session
             user = self.supabase.auth.get_user()
-            if user and user.user:
-                return str(user.user.id)
+            if user and hasattr(user, 'user') and user.user:
+                return user.user.id
+            
+            # Method 2: Try get_session() for session data
+            session = self.supabase.auth.get_session()
+            if session and hasattr(session, 'user') and session.user:
+                return session.user.id
+                
+            # Method 3: Check if there's a stored session we can access
+            try:
+                # Get the current session from auth storage
+                auth_response = self.supabase.auth.get_session()
+                if auth_response and hasattr(auth_response, 'user') and auth_response.user:
+                    return auth_response.user.id
+            except Exception as session_error:
+                print(f"Session retrieval failed: {session_error}")
+            
             return None
         except Exception as e:
-            print(f"Error getting current user: {e}")
+            print(f"Error getting current user ID: {e}")
             return None
     
     def get_user_profile(self, user_id: str) -> Dict:
@@ -355,6 +371,21 @@ class SocialManager(CommunityDatabaseManager):
             print(f"Error getting conversations: {e}")
             return []
     
+    def get_messages(self, conversation_id: str, limit: int = 50) -> List[Dict]:
+        """Get messages for a conversation."""
+        try:
+            response = self.supabase.from_("messages") \
+                .select("*, sender:user_profiles(username, display_name, avatar_url)") \
+                .eq("conversation_id", conversation_id) \
+                .order("created_at", desc=True) \
+                .limit(limit) \
+                .execute()
+            
+            return response.data if response.data else []
+        except Exception as e:
+            print(f"Error getting messages: {e}")
+            return []
+    
     def send_message(self, user_id: str, conversation_id: str, content: str) -> bool:
         """Send a message in a conversation"""
         try:
@@ -557,6 +588,22 @@ class CommunityManager(CommunityDatabaseManager):
             print(f"Error registering for event: {e}")
             return False
 
+    def unregister_from_event(self, user_id: str, event_id: str) -> bool:
+        """Unregister from an event."""
+        try:
+            response = self.supabase.from_("event_participants") \
+                .delete() \
+                .eq("event_id", event_id) \
+                .eq("user_id", user_id) \
+                .execute()
+
+            if response.status_code == 204 or (hasattr(response, 'data') and response.data):
+                return True
+            return False
+        except Exception as e:
+            print(f"Error unregistering from event: {e}")
+            return False
+
 
 class ContentManager(CommunityDatabaseManager):
     """Manager for shared content - setups, media, guides"""
@@ -708,6 +755,85 @@ class ContentManager(CommunityDatabaseManager):
             return True
         except Exception as e:
             print(f"Error downloading content: {e}")
+            return False
+
+    def delete_content(self, user_id: str, content_id: str, content_type: str) -> bool:
+        """Delete a piece of user content."""
+        try:
+            table_name = None
+            if content_type == 'Car Setup':
+                table_name = 'shared_setups'
+            elif content_type in ['Video', 'Screenshot', 'Guide', 'Replay', 'Media']:
+                table_name = 'shared_media'
+
+            if not table_name:
+                print(f"Unknown content type for deletion: {content_type}")
+                return False
+
+            # Ensure user owns the content before deleting
+            response = self.supabase.from_(table_name) \
+                .delete() \
+                .eq("id", content_id) \
+                .eq("user_id", user_id) \
+                .execute()
+
+            # The API response for delete might not contain data, so check for success differently
+            if response.status_code == 204 or (hasattr(response, 'data') and response.data):
+                print(f"Deleted content {content_id} from {table_name}")
+                return True
+            else:
+                print(f"Failed to delete content {content_id}. It might not exist or user does not have permission. Status: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"Error deleting content: {e}")
+            return False
+
+    def upload_content(self, user_id: str, content_data: Dict) -> bool:
+        """Upload new content."""
+        try:
+            content_type = content_data.get('type')
+            table_name = None
+            data_to_insert = {
+                'user_id': user_id,
+                'is_public': True,
+                'description': content_data.get('description'),
+                'tags': content_data.get('tags', []),
+                'rating': 0,
+                'download_count': 0,
+            }
+
+            if content_type == 'Car Setup':
+                table_name = 'shared_setups'
+                data_to_insert['name'] = content_data.get('title')
+                data_to_insert['setup_data'] = content_data.get('file_url', {})
+            elif content_type in ['Video', 'Screenshot', 'Guide', 'Replay']:
+                table_name = 'shared_media'
+                data_to_insert['title'] = content_data.get('title')
+                data_to_insert['media_type'] = content_type.lower()
+                data_to_insert['file_url'] = content_data.get('file_url')
+                data_to_insert['thumbnail_url'] = content_data.get('thumbnail_url')
+                data_to_insert['view_count'] = 0
+                data_to_insert['like_count'] = 0
+            
+            if not table_name:
+                print(f"Unknown content type for upload: {content_type}")
+                return False
+
+            self.supabase.from_(table_name).insert(data_to_insert).execute()
+            
+            # Post an activity feed update
+            social_manager = SocialManager(self.supabase)
+            social_manager.post_activity(
+                user_id,
+                'content_shared',
+                f"Shared a new {content_type}",
+                content_data.get('title'),
+                {'content_type': content_type, 'title': content_data.get('title')}
+            )
+
+            return True
+        except Exception as e:
+            print(f"Error uploading content: {e}")
             return False
 
 

@@ -409,6 +409,15 @@ class SignupDialog(BaseAuthDialog):
                 self.show_error("Internal error: OAuth handler is missing.")
                 return
 
+            # Check if OAuth is available and get the port
+            oauth_port = getattr(self.oauth_handler, 'oauth_port', 3000) if self.oauth_handler else 3000
+            
+            # Check if the callback server is actually running
+            if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
+                self.google_button.setEnabled(True)
+                self.show_error("Google signup is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password signup instead.")
+                return
+
             # Make sure we're connected
             if not supabase.check_connection():
                 if self.show_network_error("Cannot connect to server."):
@@ -423,8 +432,8 @@ class SignupDialog(BaseAuthDialog):
             self.oauth_handler.auth_completed.connect(self.on_oauth_completed)
             
             # Use the shared handler to start the Google OAuth flow
-            logger.info("Using shared OAuth handler to start Google signup")
-            response = self.oauth_handler.start_google_auth("http://localhost:3000")
+            logger.info(f"Using shared OAuth handler to start Google signup on port {oauth_port}")
+            response = self.oauth_handler.start_google_auth(f"http://localhost:{oauth_port}")
             
             if response and hasattr(response, 'url'):
                 # Open browser with the URL
@@ -455,6 +464,15 @@ class SignupDialog(BaseAuthDialog):
                 self.show_error("Internal error: OAuth handler is missing.")
                 return
 
+            # Check if OAuth is available and get the port
+            oauth_port = getattr(self.oauth_handler, 'oauth_port', 3000) if self.oauth_handler else 3000
+            
+            # Check if the callback server is actually running
+            if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
+                self.discord_button.setEnabled(True)
+                self.show_error("Discord signup is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password signup instead.")
+                return
+
             # Make sure we're connected
             if not supabase.check_connection():
                 if self.show_network_error("Cannot connect to server."):
@@ -470,8 +488,8 @@ class SignupDialog(BaseAuthDialog):
 
             # Use the shared handler to start the Discord OAuth flow with PKCE
             # The server is already running, so we don't need to manage it here
-            logger.info("Using shared OAuth handler to start Discord signup")
-            response = self.oauth_handler.start_discord_auth("http://localhost:3000")
+            logger.info(f"Using shared OAuth handler to start Discord signup on port {oauth_port}")
+            response = self.oauth_handler.start_discord_auth(f"http://localhost:{oauth_port}")
 
             if response and hasattr(response, 'url'):
                 # Here you would typically open a web browser with the URL

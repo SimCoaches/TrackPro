@@ -66,10 +66,7 @@ try:
 except ImportError:
     pass
 
-try:
-    from .threshold_assist_panel import ThresholdAssistPanel
-except ImportError:
-    pass
+# Threshold assist panel removed
 
 __all__ = [
     'MainWindow',
@@ -89,7 +86,6 @@ __all__ = [
     'AchievementCard',
     'UserAccountMainWidget',
     'ProfileEditDialog',
-    'ThresholdAssistPanel',
     'open_community_dialog',
     'open_social_features',
     'open_community_features',

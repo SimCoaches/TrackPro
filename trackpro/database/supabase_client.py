@@ -116,7 +116,8 @@ class SupabaseManager:
                 with open(self._auth_file, 'r') as f:
                     auth_data = json.load(f)
                 
-                if auth_data.get('access_token') and auth_data.get('refresh_token'):
+                # Check if we have the minimum required data
+                if auth_data.get('access_token'):
                     logger.info("Found saved authentication session")
                     self._saved_auth = auth_data
                     return True
@@ -127,6 +128,139 @@ class SupabaseManager:
         except Exception as e:
             logger.error(f"Error restoring authentication session: {e}")
             self._saved_auth = None
+            return False
+    
+    def _is_token_expired(self, expires_at):
+        """Check if a token is expired.
+        
+        Args:
+            expires_at: Token expiration timestamp
+            
+        Returns:
+            bool: True if token is expired or expiration is unknown
+        """
+        if not expires_at:
+            return True  # Assume expired if no expiration info
+        
+        try:
+            from datetime import datetime
+            
+            # Handle different timestamp formats
+            if isinstance(expires_at, (int, float)):
+                # Unix timestamp
+                expiry_time = datetime.fromtimestamp(expires_at)
+            elif isinstance(expires_at, str):
+                # ISO format timestamp
+                expiry_time = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            else:
+                return True  # Unknown format, assume expired
+            
+            # Add a 5-minute buffer to avoid using tokens that are about to expire
+            import time
+            current_time = datetime.fromtimestamp(time.time())
+            buffer_seconds = 300  # 5 minutes
+            
+            return (expiry_time.timestamp() - current_time.timestamp()) < buffer_seconds
+            
+        except Exception as e:
+            logger.warning(f"Error checking token expiration: {e}")
+            return True  # Assume expired on error
+    
+    def _restore_session_safely(self):
+        """Safely restore session without consuming refresh tokens unnecessarily.
+        
+        Returns:
+            bool: True if session was restored successfully, False otherwise
+        """
+        if not self._saved_auth or not self._client:
+            return False
+        
+        access_token = self._saved_auth.get('access_token')
+        refresh_token = self._saved_auth.get('refresh_token')
+        expires_at = self._saved_auth.get('expires_at')
+        
+        if not access_token:
+            logger.warning("No access token found in saved session")
+            return False
+        
+        try:
+            # First, check if the current access token is still valid
+            is_expired = self._is_token_expired(expires_at)
+            
+            if not is_expired:
+                logger.info("Access token appears to still be valid, attempting direct restoration")
+                try:
+                    # Try to set the session with both tokens but in a way that doesn't consume refresh token
+                    # Only pass refresh token if we have it, otherwise just access token
+                    if refresh_token:
+                        self._client.auth.set_session(access_token, refresh_token)
+                    else:
+                        # Some clients support setting just access token
+                        try:
+                            self._client.auth.set_session(access_token)
+                        except TypeError:
+                            # If single parameter doesn't work, pass empty string for refresh token
+                            self._client.auth.set_session(access_token, "")
+                    
+                    # Test if the session works by making a simple call
+                    session = self._client.auth.get_session()
+                    if session and hasattr(session, 'user') and session.user:
+                        logger.info("Session restored successfully with existing tokens")
+                        # Sync auth state with other modules after successful restoration
+                        self._sync_auth_state_with_modules()
+                        return True
+                    else:
+                        logger.info("Session restoration with existing tokens failed, token may be invalid")
+                        
+                except Exception as e:
+                    logger.info(f"Direct session restoration failed: {e}")
+                    # Fall through to refresh token logic
+            else:
+                logger.info("Access token appears to be expired")
+            
+            # If we reach here, either the token is expired or direct restoration failed
+            # Try to handle refresh by clearing and requiring re-authentication
+            if refresh_token:
+                logger.info("Access token expired or invalid, clearing session for fresh authentication")
+                try:
+                    # Instead of trying to refresh (which consumes the token), 
+                    # we'll clear the session and let the user re-authenticate
+                    # This prevents the "already used" refresh token error
+                    
+                    # First check if we can use the refresh token with a fresh login approach
+                    # Some Supabase clients support refreshing differently
+                    if hasattr(self._client.auth, 'refresh'):
+                        logger.info("Attempting to refresh session using auth.refresh method")
+                        response = self._client.auth.refresh()
+                        if response and hasattr(response, 'session') and response.session:
+                            logger.info("Session refreshed successfully using refresh method")
+                            remember_me = self._saved_auth.get('remember_me', True)
+                            self._save_session(response, remember_me)
+                            # Sync auth state with other modules after successful restoration
+                            self._sync_auth_state_with_modules()
+                            return True
+                    
+                    # If refresh method doesn't exist or fails, clear the session
+                    logger.info("Refresh token handling failed, clearing session to prevent future errors")
+                    self._clear_session()
+                    
+                except Exception as e:
+                    logger.warning(f"Session refresh handling failed: {e}")
+                    # If refresh fails, clear the saved session to prevent future errors
+                    if "already used" in str(e).lower() or "invalid" in str(e).lower():
+                        logger.info("Refresh token is invalid, clearing saved session")
+                        self._clear_session()
+            else:
+                logger.warning("No refresh token available for session restoration")
+                # Clear invalid session without refresh token
+                self._clear_session()
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error during safe session restoration: {e}")
+            # Clear problematic session data on any error
+            self._clear_session()
             return False
     
     def _save_session(self, response, remember_me=True):
@@ -248,22 +382,20 @@ class SupabaseManager:
                 if self._saved_auth and self._saved_auth.get('access_token'):
                     logger.info("Attempting to restore saved session...")
                     try:
-                        # Set the session on the client - include refresh token if available
-                        if self._saved_auth.get('refresh_token'):
-                            # Fix: Pass access_token and refresh_token as direct parameters
-                            # (not as a dictionary) to match the client's API expectations
-                            self._client.auth.set_session(
-                                self._saved_auth.get('access_token'),
-                                self._saved_auth.get('refresh_token')
-                            )
-                            logger.info("Session restored successfully using access and refresh tokens")
+                        # Use the new safe restoration method that properly handles token expiration
+                        session_restored = self._restore_session_safely()
+                        if session_restored:
+                            logger.info("Session restored successfully using safe method")
+                            # Sync auth state with other modules after successful restoration
+                            self._sync_auth_state_with_modules()
                         else:
-                            # Refresh token is missing, cannot restore session reliably
-                            logger.warning("Cannot restore session: Refresh token is missing from saved authentication data.")
-                            # Do not attempt to set session without refresh token
-                            # Let the subsequent get_session() call handle the state
+                            logger.info("Session restoration failed, user will need to sign in again")
+                            # Clear the invalid session data
+                            self._clear_session()
                     except Exception as e:
                         logger.warning(f"Failed to restore session: {e}")
+                        # Clear the problematic session data to prevent future errors
+                        self._clear_session()
                 
                 # Test connection with a simple operation
                 try:
@@ -501,6 +633,8 @@ class SupabaseManager:
             logger.info("Login successful")
             # Save session for persistence
             self._save_session(response)
+            # Sync auth state with other modules after successful sign-in
+            self._sync_auth_state_with_modules()
             return response
         
         try:
@@ -640,6 +774,9 @@ class SupabaseManager:
             # Save session for persistence
             self._save_session(response)
             
+            # Sync auth state with other modules after successful OAuth exchange
+            self._sync_auth_state_with_modules()
+            
             # Print user info for debugging
             if response and hasattr(response, 'user') and response.user:
                 logger.info(f"Authenticated user ID: {response.user.id}")
@@ -653,6 +790,40 @@ class SupabaseManager:
             logger.error(f"Code exchange error: {e}")
             raise
     
+    def _sync_auth_state_with_modules(self):
+        """Sync authentication state with other auth modules to ensure consistency."""
+        try:
+            # Try to update the legacy Supabase auth module if it exists
+            try:
+                from Supabase import auth as legacy_auth
+                if hasattr(legacy_auth, 'update_auth_state_from_client'):
+                    legacy_auth.update_auth_state_from_client()
+                    logger.info("Synced auth state with legacy Supabase auth module")
+            except ImportError:
+                pass  # Legacy module not available
+            
+            # Try to update the trackpro auth user manager if it exists
+            try:
+                from trackpro.auth import user_manager
+                # Update the current user in the user manager
+                current_user = self.get_user()
+                if current_user and hasattr(current_user, 'user'):
+                    # Set the current user in the user manager
+                    user_manager._current_user = user_manager.User(
+                        id=current_user.user.id,
+                        email=current_user.user.email,
+                        name=current_user.user.user_metadata.get('name', current_user.user.email),
+                        is_authenticated=True
+                    )
+                    logger.info("Synced auth state with trackpro user manager")
+                else:
+                    user_manager._current_user = None
+            except (ImportError, AttributeError):
+                pass  # User manager not available or different structure
+                
+        except Exception as e:
+            logger.warning(f"Error syncing auth state with modules: {e}")
+    
     def sign_out(self, force_clear=False):
         """Sign out the current user.
         
@@ -663,10 +834,15 @@ class SupabaseManager:
             logger.warning("Cannot sign out - Supabase is not connected")
             return
         
-        logger.info("Signing out user")
+        logger.info(f"Signing out user (force_clear={force_clear})")
         
         def signout_func():
-            self._client.auth.sign_out()
+            try:
+                self._client.auth.sign_out()
+                logger.info("Successfully signed out from Supabase client")
+            except Exception as e:
+                logger.warning(f"Error during Supabase sign out: {e}")
+                # Continue with local cleanup even if remote sign out fails
             
             # Check if we should clear the saved session
             should_clear = force_clear
@@ -678,7 +854,7 @@ class SupabaseManager:
                 should_clear = not remember_me
                 logger.info(f"Remember me preference is {remember_me}, {'clearing' if should_clear else 'keeping'} session data")
             else:
-                # Default to clearing if remember_me not found
+                # Default to clearing if remember_me not found or force_clear is True
                 should_clear = True
             
             # Clear saved session if needed
@@ -688,9 +864,17 @@ class SupabaseManager:
             else:
                 logger.info("Session retained for remember me")
             
-            logger.info("Sign out successful")
+            # Sync auth state with other modules
+            self._sync_auth_state_with_modules()
+            
+            logger.info("Sign out process completed successfully")
         
-        self._execute_with_retry(signout_func)
+        try:
+            self._execute_with_retry(signout_func)
+        except Exception as e:
+            logger.error(f"Error during sign out: {e}")
+            # Force clear session on sign out errors to prevent inconsistent state
+            self._clear_session()
     
     def enable(self) -> bool:
         """Enable Supabase integration.

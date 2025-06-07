@@ -263,20 +263,11 @@ class CommunityContentMixin:
         events_scroll.setStyleSheet("QScrollArea { border: none; }")
         
         events_content = QWidget()
-        events_layout = QVBoxLayout(events_content)
-        events_layout.setSpacing(12)
+        self.events_layout = QVBoxLayout(events_content)
+        self.events_layout.setSpacing(12)
         
-        # Sample events for demo
-        sample_events = [
-            ("Weekly GT3 Championship", "Silverstone", "Sunday 19:00", "12/20 registered", False, "Open", "event_1"),
-            ("Endurance Special", "Spa-Francorchamps", "Saturday 14:00", "8/16 registered", True, "Team Event", "event_2"),
-        ]
-        
-        for event_name, track, date_time, registration, is_registered, event_type, event_id in sample_events:
-            event_card = self.create_event_card(event_name, track, date_time, registration, is_registered, event_type, event_id)
-            events_layout.addWidget(event_card)
-            
-        events_layout.addStretch()
+        self.refresh_events()
+
         events_scroll.setWidget(events_content)
         layout.addWidget(events_scroll)
         
@@ -305,31 +296,70 @@ class CommunityContentMixin:
         header_layout.addWidget(filter_combo)
         layout.addLayout(header_layout)
         
-        # Create content with sample data
+        # Create content with real data from database
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea { border: none; }")
         
         content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setSpacing(12)
+        self.my_content_layout = QVBoxLayout(content_widget)
+        self.my_content_layout.setSpacing(12)
         
-        # Sample content items
-        content_items = [
-            ("Silverstone Hotlap Setup", "Car Setup", "McLaren 720S", "45 downloads", "2 days ago"),
-            ("Monza Onboard Video", "Video", "Formula 1", "123 views", "5 days ago"),
-        ]
+        self.refresh_my_content()
         
-        for title, content_type, category, stats, uploaded in content_items:
-            content_card = self.create_content_card(title, content_type, category, stats, uploaded, True)
-            content_layout.addWidget(content_card)
-            
-        content_layout.addStretch()
         scroll_area.setWidget(content_widget)
         layout.addWidget(scroll_area)
         
         return widget
     
+    def refresh_my_content(self):
+        """Refreshes the 'My Content' panel with data from the database."""
+        if not hasattr(self, 'my_content_layout'):
+            return
+
+        # Clear existing widgets
+        while self.my_content_layout.count():
+            child = self.my_content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # Load real content from database
+        if hasattr(self, 'db_managers') and self.db_managers and 'content_manager' in self.db_managers and hasattr(self, 'user_id') and self.user_id:
+            try:
+                content_items = self.db_managers['content_manager'].get_user_content(self.user_id)
+                
+                if content_items:
+                    for item in content_items:
+                        content_card = self.create_content_card(
+                            item['id'],
+                            item['title'],
+                            item.get('type', 'Media'),
+                            item.get('category', 'General'),
+                            item.get('stats', '0 views'),
+                            self.format_time_ago(item.get('uploaded')),
+                            is_mine=True
+                        )
+                        self.my_content_layout.addWidget(content_card)
+                else:
+                    empty_label = QLabel("You haven't shared any content yet. Go to the Upload tab to share!")
+                    empty_label.setAlignment(Qt.AlignCenter)
+                    empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
+                    empty_label.setWordWrap(True)
+                    self.my_content_layout.addWidget(empty_label)
+
+            except Exception as e:
+                error_label = QLabel(f"Could not load your content: {str(e)}")
+                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']}; padding: 40px;")
+                self.my_content_layout.addWidget(error_label)
+        else:
+            placeholder_label = QLabel("Log in and connect to the database to see your content.")
+            placeholder_label.setAlignment(Qt.AlignCenter)
+            placeholder_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
+            self.my_content_layout.addWidget(placeholder_label)
+
+        self.my_content_layout.addStretch()
+
     def create_browse_content_panel(self):
         """Create browse content panel"""
         widget = QWidget()
@@ -372,16 +402,36 @@ class CommunityContentMixin:
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(12)
         
-        # Sample browse content
-        content_items = [
-            ("Ultimate F1 Wet Setup", "Car Setup", "Formula 1", "1.2K downloads", "by SpeedKing47"),
-            ("Nürburgring Master Class", "Video", "Tutorial", "5.8K views", "by RacingAcademy"),
-        ]
-        
-        for title, content_type, category, stats, author in content_items:
-            content_card = self.create_browse_content_card(title, content_type, category, stats, author)
-            content_layout.addWidget(content_card)
-            
+        # Load real featured content from database
+        if hasattr(self, 'db_managers') and self.db_managers and 'content_manager' in self.db_managers:
+            try:
+                content_items = self.db_managers['content_manager'].get_featured_content()
+                if content_items:
+                    for item in content_items:
+                        content_card = self.create_browse_content_card(
+                            item['title'],
+                            item.get('type', 'Media'),
+                            item.get('category', 'General'),
+                            item.get('stats', '0 views'),
+                            item.get('author', 'by Anonymous')
+                        )
+                        content_layout.addWidget(content_card)
+                else:
+                    empty_label = QLabel("No featured content available right now. Check back later!")
+                    empty_label.setAlignment(Qt.AlignCenter)
+                    empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
+                    content_layout.addWidget(empty_label)
+            except Exception as e:
+                error_label = QLabel(f"Could not load featured content: {str(e)}")
+                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']}; padding: 40px;")
+                content_layout.addWidget(error_label)
+        else:
+            placeholder_label = QLabel("Connect to the database to browse community content.")
+            placeholder_label.setAlignment(Qt.AlignCenter)
+            placeholder_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
+            content_layout.addWidget(placeholder_label)
+
         content_layout.addStretch()
         scroll_area.setWidget(content_widget)
         layout.addWidget(scroll_area)
@@ -431,8 +481,9 @@ class CommunityContentMixin:
         desc_input.setStyleSheet(self._get_input_style())
         
         # Upload button
-        upload_btn = QPushButton("Share Content")
+        upload_btn = QPushButton("Select File & Share Content")
         upload_btn.setStyleSheet(self._get_button_style(CommunityTheme.COLORS['accent'], large=True))
+        upload_btn.clicked.connect(self.upload_content_action)
         
         form_layout.addWidget(QLabel("Content Type:"))
         form_layout.addWidget(type_combo)
@@ -442,11 +493,60 @@ class CommunityContentMixin:
         form_layout.addWidget(desc_input)
         form_layout.addWidget(upload_btn)
         
+        # Store references for upload_content_action
+        self.upload_type_combo = type_combo
+        self.upload_title_input = title_input
+        self.upload_desc_input = desc_input
+        
         layout.addWidget(form_widget)
         layout.addStretch()
         
         return widget
     
+    def upload_content_action(self):
+        """Handle content upload."""
+        if not hasattr(self, 'db_managers') or not self.db_managers or 'content_manager' not in self.db_managers:
+            QMessageBox.warning(self, "Error", "Database connection not available.")
+            return
+
+        # Get data from upload form
+        content_type = self.upload_type_combo.currentText()
+        title = self.upload_title_input.text()
+        description = self.upload_desc_input.toPlainText()
+
+        if not title:
+            QMessageBox.warning(self, "Error", "Title is required.")
+            return
+
+        # Open file dialog to select the file to upload
+        file_path, _ = QFileDialog.getOpenFileName(self, f"Select {content_type} file")
+
+        if not file_path:
+            return  # User cancelled
+
+        # In a real scenario, you would upload the file to Supabase Storage and get a URL.
+        # For now, we use the local file path as a placeholder to show the UI is connected.
+        file_url = f"file:///{file_path}"
+        
+        content_data = {
+            'type': content_type,
+            'title': title,
+            'description': description,
+            'file_url': file_url
+        }
+
+        try:
+            success = self.db_managers['content_manager'].upload_content(self.user_id, content_data)
+            if success:
+                QMessageBox.information(self, "Success", f"'{title}' has been shared successfully!")
+                self.upload_title_input.clear()
+                self.upload_desc_input.clear()
+                self.refresh_my_content()  # Refresh the content panel
+            else:
+                QMessageBox.warning(self, "Error", "Failed to share content.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred while uploading: {str(e)}")
+
     # Helper methods for creating cards and items
     def create_team_card(self, team_name, member_count, description, role, active):
         """Create a team card widget"""
@@ -602,6 +702,8 @@ class CommunityContentMixin:
         else:
             status_btn = QPushButton("Register")
             status_btn.setStyleSheet(self._get_button_style(CommunityTheme.COLORS['accent']))
+            if event_id:
+                status_btn.clicked.connect(lambda: self.register_for_event_action(event_id, event_name))
         
         details_btn = QPushButton("View Details")
         details_btn.setStyleSheet(self._get_button_style(CommunityTheme.COLORS['surface'], secondary=True))
@@ -616,7 +718,7 @@ class CommunityContentMixin:
         
         return card_widget
     
-    def create_content_card(self, title, content_type, category, stats, uploaded, is_mine=False):
+    def create_content_card(self, content_id, title, content_type, category, stats, uploaded, is_mine=False):
         """Create a content card"""
         card_widget = QWidget()
         card_widget.setStyleSheet(self._get_card_style())
@@ -665,6 +767,7 @@ class CommunityContentMixin:
             
             delete_btn = QPushButton("Delete")
             delete_btn.setStyleSheet(self._get_button_style("#DC2626"))
+            delete_btn.clicked.connect(lambda: self.delete_content_action(content_id, title, content_type))
             
             actions_layout.addWidget(edit_btn)
             actions_layout.addWidget(delete_btn)
@@ -760,6 +863,47 @@ class CommunityContentMixin:
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Error joining club: {str(e)}")
     
+    def delete_content_action(self, content_id, title, content_type):
+        """Handle content deletion."""
+        if not hasattr(self, 'db_managers') or not self.db_managers or 'content_manager' not in self.db_managers:
+            QMessageBox.warning(self, "Error", "Database connection not available.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Content",
+            f"Are you sure you want to delete '{title}'?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                success = self.db_managers['content_manager'].delete_content(self.user_id, content_id, content_type)
+                if success:
+                    QMessageBox.information(self, "Success", f"'{title}' has been deleted.")
+                    self.refresh_my_content()
+                else:
+                    QMessageBox.warning(self, "Error", "Failed to delete content. You may not have permission or it may have already been deleted.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Error deleting content: {str(e)}")
+    
+    def register_for_event_action(self, event_id, event_name):
+        """Register for an event."""
+        if not hasattr(self, 'db_managers') or not self.db_managers or 'community_manager' not in self.db_managers:
+            QMessageBox.warning(self, "Error", "Database connection not available.")
+            return
+        
+        try:
+            success = self.db_managers['community_manager'].register_for_event(self.user_id, event_id)
+            if success:
+                QMessageBox.information(self, "Success", f"Successfully registered for {event_name}!")
+                self.refresh_events()
+            else:
+                QMessageBox.warning(self, "Error", "Failed to register for event. It might be full or you might already be registered.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error registering for event: {str(e)}")
+
     # Helper style methods
     def _get_tab_style(self):
         """Get tab widget style"""
@@ -845,4 +989,38 @@ class CommunityContentMixin:
             QWidget:hover {{
                 background-color: {CommunityTheme.COLORS['surface']};
             }}
-        """ 
+        """
+
+    def refresh_events(self):
+        """Refreshes the events panel with data from the database."""
+        if not hasattr(self, 'events_layout'):
+            return
+
+        while self.events_layout.count():
+            child = self.events_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        if hasattr(self, 'db_managers') and self.db_managers and 'community_manager' in self.db_managers and hasattr(self, 'user_id') and self.user_id:
+            try:
+                event_items = self.db_managers['community_manager'].get_community_events(self.user_id)
+                if event_items:
+                    for item in event_items:
+                        event_card = self.create_event_card(
+                            item['title'],
+                            item.get('track_name', 'TBD'),
+                            self.format_time_ago(item.get('start_time')),
+                            item.get('registration_info', '0/0 registered'),
+                            item.get('is_registered', False),
+                            item.get('event_type', 'Open'),
+                            item.get('id')
+                        )
+                        self.events_layout.addWidget(event_card)
+                else:
+                    self.events_layout.addWidget(QLabel("No upcoming events found."))
+            except Exception as e:
+                self.events_layout.addWidget(QLabel(f"Error loading events: {e}"))
+        else:
+            self.events_layout.addWidget(QLabel("Connect to DB to see events."))
+        
+        self.events_layout.addStretch() 

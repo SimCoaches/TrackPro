@@ -353,9 +353,8 @@ class TrackProApp:
             self.load_calibration()
             
             # Update progress 75%
-            self.update_progress(75, "Setting up threshold braking assist...")
-            # Initialize threshold braking assist
-            self.setup_threshold_assist()
+            self.update_progress(75, "Threshold assist functionality removed...")
+            # Threshold assist functionality has been removed
             
             # Update progress 80%
             self.update_progress(80, "Setting up HidHide...")
@@ -398,203 +397,108 @@ class TrackProApp:
     def create_startup_progress(self):
         """Create and show a startup progress dialog."""
         try:
+            from PyQt5.QtGui import QPixmap
             # Create the progress dialog
             self.startup_dialog = QDialog(None, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
             self.startup_dialog.setWindowTitle("TrackPro Starting")
-            self.startup_dialog.setFixedSize(600, 350)
-            
+            self.startup_dialog.setFixedSize(450, 250)
+
             # Center dialog on screen
             screen_geometry = self.app.desktop().screenGeometry()
             x = (screen_geometry.width() - self.startup_dialog.width()) // 2
             y = (screen_geometry.height() - self.startup_dialog.height()) // 2
             self.startup_dialog.move(x, y)
-            
-            # Set up the layout
+
+            # Set up layout
             layout = QVBoxLayout(self.startup_dialog)
-            layout.setContentsMargins(30, 30, 30, 30)
-            layout.setSpacing(20)
-            
-            # Try to add logo if available
-            logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
-                                   "trackpro", "resources", "images", "trackpro_logo_small.png")
-            
+            layout.setContentsMargins(10, 10, 10, 20)
+            layout.setSpacing(8)
+
+            # Sim Coaches Logo
+            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'images', 'sclogo.png')
             if os.path.exists(logo_path):
-                from PyQt5.QtGui import QPixmap
+                logo_pixmap = QPixmap(logo_path)
                 logo_label = QLabel()
-                pixmap = QPixmap(logo_path)
-                # Scale logo to fit nicely
-                scaled_pixmap = pixmap.scaled(250, 125, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                logo_label.setPixmap(scaled_pixmap)
+                logo_label.setPixmap(logo_pixmap.scaled(120, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 logo_label.setAlignment(Qt.AlignCenter)
                 layout.addWidget(logo_label)
-            else:
-                # Fallback to text-based title
-                title_label = QLabel("TrackPro")
-                title_label.setStyleSheet("""
-                    font-size: 32px; 
-                    font-weight: bold; 
-                    color: #dc3230;
-                    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-                """)
-                title_label.setAlignment(Qt.AlignCenter)
-                layout.addWidget(title_label)
-                
-                # Add version label
-                version_label = QLabel("Racing Telemetry System")
-                version_label.setStyleSheet("""
-                    font-size: 16px; 
-                    color: #268bd2;
-                    font-weight: 500;
-                """)
-                version_label.setAlignment(Qt.AlignCenter)
-                layout.addWidget(version_label)
+
+            # Main Title
+            title_label = QLabel("TrackPro")
+            title_label.setStyleSheet("""
+                font-size: 40px; 
+                font-weight: 900; 
+                color: #f0f0f0;
+                text-shadow: 3px 3px 5px rgba(0,0,0,0.8);
+            """)
+            title_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(title_label)
             
-            # Add status label with enhanced styling
-            self.status_label = QLabel("Starting...")
+            # Subtitle
+            version_label = QLabel("Racing Telemetry System")
+            version_label.setStyleSheet("""
+                font-size: 14px; 
+                font-style: italic;
+                color: #c0392b;
+                font-weight: bold;
+            """)
+            version_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(version_label)
+
+            layout.addStretch(1)
+
+            # Status Label
+            self.status_label = QLabel("Starting TrackPro...")
             self.status_label.setAlignment(Qt.AlignCenter)
+            self.status_label.setWordWrap(True)
             self.status_label.setStyleSheet("""
-                font-size: 16px; 
-                color: #ffc107;
-                font-weight: 500;
-                padding: 10px;
-                background-color: rgba(255, 193, 7, 0.1);
-                border-radius: 8px;
-                border: 1px solid rgba(255, 193, 7, 0.3);
+                font-size: 12px; 
+                color: #aaa;
+                min-height: 25px;
             """)
             layout.addWidget(self.status_label)
             
-            # Add progress bar with enhanced styling
+            # Progress Bar
             self.progress_bar = QProgressBar()
             self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(0)
-            self.progress_bar.setTextVisible(True)
-            self.progress_bar.setFormat("%p%")
-            self.progress_bar.setFixedHeight(30)
+            self.progress_bar.setValue(5)
+            self.progress_bar.setTextVisible(False)
+            self.progress_bar.setFixedHeight(6)
             layout.addWidget(self.progress_bar)
             
-            # Set dialog style with racing theme
+            # Set gangster dark theme
             self.startup_dialog.setStyleSheet("""
                 QDialog {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                        stop:0 #2c3e50, stop:0.5 #34495e, stop:1 #2c3e50);
-                    border: 3px solid #268bd2;
-                    border-radius: 15px;
+                    background-color: #1a1a1a;
+                    border: 2px solid #c0392b;
+                    border-radius: 8px;
                 }
                 QProgressBar {
-                    border: 2px solid #34495e;
-                    border-radius: 15px;
-                    text-align: center;
-                    background-color: #ecf0f1;
-                    color: #2c3e50;
-                    font-weight: bold;
-                    font-size: 14px;
+                    border: none;
+                    background-color: #333;
+                    border-radius: 3px;
                 }
                 QProgressBar::chunk {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                        stop:0 #dc3230, stop:0.5 #e74c3c, stop:1 #dc3230);
-                    border-radius: 13px;
-                    margin: 1px;
-                }
-                QLabel {
-                    background-color: transparent;
+                    background: #c0392b;
+                    border-radius: 3px;
                 }
             """)
-            
-            # Create enhanced animation effects
-            self.pulse_timer = QTimer()
-            self.pulse_timer.setInterval(50)
-            self.pulse_direction = 1
-            self.pulse_value = 0
-            self.glow_intensity = 0
-            self.glow_direction = 1
-            
-            def pulse_progress():
-                try:
-                    if not hasattr(self, 'progress_bar') or not self.progress_bar:
-                        # Progress bar no longer exists, stop the timer
-                        if hasattr(self, 'pulse_timer') and self.pulse_timer:
-                            self.pulse_timer.stop()
-                        return
-                        
-                    if self.progress_bar.value() > 0:
-                        # Stop pulsing once real progress starts
-                        self.pulse_timer.stop()
-                        return
-                    
-                    # Update pulse animation
-                    self.pulse_value += self.pulse_direction * 2
-                    if self.pulse_value >= 100:
-                        self.pulse_direction = -1
-                    elif self.pulse_value <= 0:
-                        self.pulse_direction = 1
-                    
-                    # Update glow effect
-                    self.glow_intensity += self.glow_direction * 5
-                    if self.glow_intensity >= 100:
-                        self.glow_direction = -1
-                    elif self.glow_intensity <= 20:
-                        self.glow_direction = 1
-                    
-                    # Apply animated styles
-                    glow_alpha = int(self.glow_intensity * 2.55)
-                    border_glow = f"rgba(38, 139, 210, {glow_alpha})"
-                    
-                    # Animated progress bar with racing stripes effect
-                    stripe_offset = (self.pulse_value % 40) - 20
-                    
-                    self.progress_bar.setStyleSheet(f"""
-                        QProgressBar {{
-                            border: 2px solid {border_glow};
-                            border-radius: 15px;
-                            text-align: center;
-                            background-color: #ecf0f1;
-                            color: #2c3e50;
-                            font-weight: bold;
-                            font-size: 14px;
-                        }}
-                        QProgressBar::chunk {{
-                            background: qlineargradient(x1:{stripe_offset/100}, y1:0, x2:{(stripe_offset/100)+0.3}, y2:0, 
-                                stop:0 #dc3230, stop:0.3 #e74c3c, stop:0.6 #dc3230, stop:1 #c0392b);
-                            border-radius: 13px;
-                            margin: 1px;
-                        }}
-                    """)
-                    
-                    # Animate status label glow
-                    status_glow = f"rgba(255, 193, 7, {int(self.glow_intensity * 1.5)})"
-                    self.status_label.setStyleSheet(f"""
-                        font-size: 16px; 
-                        color: #ffc107;
-                        font-weight: 500;
-                        padding: 10px;
-                        background-color: rgba(255, 193, 7, 0.1);
-                        border-radius: 8px;
-                        border: 2px solid {status_glow};
-                    """)
-                    
-                except Exception as e:
-                    # If there's an error in the pulse timer, just stop it
-                    logger.error(f"Error in pulse timer: {e}")
-                    if hasattr(self, 'pulse_timer') and self.pulse_timer:
-                        self.pulse_timer.stop()
-            
-            self.pulse_timer.timeout.connect(pulse_progress)
-            self.pulse_timer.start()
-            
-            # Show the dialog
+
+            # Show the dialog immediately
             self.startup_dialog.show()
+            self.startup_dialog.raise_()
+            self.startup_dialog.activateWindow()
             
             # Process events to make sure dialog is displayed
             self.app.processEvents()
             
-            logger.info("Startup progress dialog created successfully")
+            logger.info("Gangster startup progress dialog created successfully")
         except Exception as e:
-            # If there's an error creating the dialog, log it and continue without a progress bar
             logger.error(f"Error creating startup progress dialog: {e}")
             logger.error(traceback.format_exc())
-            # Ensure pulse_timer is None to avoid further errors
-            self.pulse_timer = None
             self.startup_dialog = None
+            self.status_label = None
+            self.progress_bar = None
     
     def update_progress(self, value, status_text):
         """Update the progress bar value and status text."""
@@ -986,6 +890,7 @@ class TrackProApp:
     
     def setup_oauth_handler(self):
         """Set up the OAuth handler for the application."""
+        self.oauth_callback_server = None
         try:
             # Create the shared OAuth handler
             logger.info("Setting up OAuth handler")
@@ -995,24 +900,56 @@ class TrackProApp:
             self.oauth_handler.auth_completed.connect(self.handle_auth_state_change)
             
             # Check if port 3000 is available
+            port_available = False
             try:
                 # Try to bind to the port to check if it's available
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.bind(('127.0.0.1', 3000))
                 sock.close()
                 logger.info("Port 3000 is available for callback server")
-            except socket.error:
-                logger.warning("Port 3000 is already in use. OAuth callback may fail.")
+                port_available = True
+            except socket.error as e:
+                logger.error(f"Port 3000 is already in use: {e}")
+                # Try to find an alternative port
+                for alt_port in [3001, 3002, 3003, 8080, 8081]:
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.bind(('127.0.0.1', alt_port))
+                        sock.close()
+                        logger.info(f"Using alternative port {alt_port} for callback server")
+                        # We'll need to update the redirect URL in OAuth calls
+                        self.oauth_port = alt_port
+                        port_available = True
+                        break
+                    except socket.error:
+                        continue
                 
+                if not port_available:
+                    logger.error("No available ports found for OAuth callback server")
+                    raise Exception("No available ports for OAuth callback server")
+                        
             # Start the callback server
-            self.oauth_callback_server = self.oauth_handler.setup_callback_server()
+            if not hasattr(self, 'oauth_port'):
+                self.oauth_port = 3000
+                
+            logger.info(f"Starting OAuth callback server on port {self.oauth_port}")
+            self.oauth_callback_server = self.oauth_handler.setup_callback_server(port=self.oauth_port)
             
-            logger.info("OAuth handler initialized successfully")
+            if self.oauth_callback_server is None:
+                raise Exception("Failed to start OAuth callback server")
+                
+            logger.info(f"OAuth handler initialized successfully with callback server on port {self.oauth_port}")
+            
         except Exception as e:
-            logger.error(f"Error setting up OAuth handler: {e}")
-            # Create a placeholder handler just so the UI doesn't crash
+            logger.error(f"Error setting up OAuth handler: {e}", exc_info=True)
+            # Create a placeholder handler but mark OAuth as unavailable
             self.oauth_handler = oauth_handler.OAuthHandler()
             self.oauth_callback_server = None
+            self.oauth_port = None
+            
+            # Show a warning to the user that OAuth won't work
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(2000, lambda: self.show_oauth_error(str(e)))
     
     def cleanup(self, force_unhide=True):
         """Clean up resources before application closes."""
@@ -1315,6 +1252,26 @@ class TrackProApp:
         warning.setWindowModality(Qt.NonModal)
         warning.show()
     
+    def show_oauth_error(self, error_message):
+        """Show an error message about OAuth functionality being unavailable."""
+        message = (
+            f"OAuth authentication (Discord/Google login) is currently unavailable.\n\n"
+            f"Error: {error_message}\n\n"
+            f"You can still use TrackPro with email/password login or in offline mode.\n"
+            f"To fix this issue, try:\n"
+            f"• Closing any applications using port 3000\n"
+            f"• Restarting TrackPro as administrator\n"
+            f"• Checking your firewall settings"
+        )
+        
+        error_dialog = QMessageBox(self.window if hasattr(self, 'window') else None)
+        error_dialog.setIcon(QMessageBox.Warning)
+        error_dialog.setWindowTitle("OAuth Authentication Unavailable")
+        error_dialog.setText(message)
+        error_dialog.setStandardButtons(QMessageBox.Ok)
+        error_dialog.setWindowModality(Qt.NonModal)
+        error_dialog.show()
+    
     def handle_auth_state_change(self, is_authenticated):
         """Handles the authentication state change from the OAuth handler or initial load."""
         # Prevent running during initial startup before hardware is ready
@@ -1368,8 +1325,13 @@ class TrackProApp:
                 # Don't disable Supabase completely, just don't force login
                 # This allows the user to login later if they want
             
-            # Show the main window immediately
+            # Show the main window immediately for better responsiveness
             self.window.show()
+            self.window.raise_()
+            self.window.activateWindow()
+            
+            # Process events to make window responsive immediately
+            QApplication.processEvents()
             
             # Start the event loop
             exit_code = self.app.exec_()
@@ -1485,116 +1447,6 @@ class TrackProApp:
                 
         except Exception as e:
             logger.error(f"Error updating UI after curves initialized: {e}")
-    
-    def setup_threshold_assist(self):
-        """Set up threshold braking assist system."""
-        try:
-            # Enable threshold assist in hardware
-            self.hardware.enable_threshold_assist(False)  # Start disabled
-            
-            # Set up telemetry callback for threshold assist
-            # We'll connect to the race coach when it's available
-            def get_telemetry():
-                """Get current telemetry data for threshold assist."""
-                try:
-                    # Try to get telemetry from race coach widget
-                    if hasattr(self, 'window') and hasattr(self.window, 'stacked_widget'):
-                        for i in range(self.window.stacked_widget.count()):
-                            widget = self.window.stacked_widget.widget(i)
-                            if widget and hasattr(widget, 'iracing_api'):
-                                api = widget.iracing_api
-                                if hasattr(api, 'current_telemetry'):
-                                    telemetry = api.current_telemetry
-                                    # Update track/car context for threshold learning
-                                    track_name = telemetry.get('track_name', '')
-                                    car_name = telemetry.get('car_name', '')
-                                    if track_name and car_name:
-                                        self.hardware.update_track_car_context(track_name, car_name)
-                                    return telemetry
-                    return {}
-                except Exception as e:
-                    logger.debug(f"Error getting telemetry for threshold assist: {e}")
-                    return {}
-            
-            # Set the telemetry callback
-            self.hardware.set_telemetry_callback(get_telemetry)
-            
-            # Set default safety margin percentage  
-            self.hardware.set_threshold_reduction(3.0)
-            
-            # Connect threshold assist controls if they exist in the UI
-            if (hasattr(self, 'window') and hasattr(self.window, '_pedal_data') and 
-                'brake' in self.window._pedal_data and 
-                'threshold_enable_checkbox' in self.window._pedal_data['brake']):
-                
-                brake_data = self.window._pedal_data['brake']
-                
-                # Connect checkbox
-                checkbox = brake_data['threshold_enable_checkbox']
-                checkbox.toggled.connect(self.enable_threshold_assist)
-                
-                # Connect slider
-                slider = brake_data['threshold_slider']
-                slider.valueChanged.connect(lambda value: self.set_threshold_reduction(value / 10.0))
-                
-                # Store references for status updates
-                self.threshold_status_indicator = brake_data['threshold_status']
-                
-                # Set up status update timer
-                self.threshold_status_timer = QTimer()
-                self.threshold_status_timer.timeout.connect(self.update_threshold_status)
-                self.threshold_status_timer.start(500)  # Update every 500ms
-                
-                logger.info("Compact threshold assist controls connected to main app")
-            
-            logger.info("Threshold braking assist initialized")
-            
-        except Exception as e:
-            logger.error(f"Error setting up threshold braking assist: {e}")
-    
-    def enable_threshold_assist(self, enabled: bool):
-        """Enable or disable threshold braking assist."""
-        if hasattr(self, 'hardware'):
-            self.hardware.enable_threshold_assist(enabled)
-    
-    def set_threshold_reduction(self, percentage: float):
-        """Set threshold assist reduction percentage."""
-        if hasattr(self, 'hardware'):
-            self.hardware.set_threshold_reduction(percentage)
-    
-    def get_threshold_assist_status(self):
-        """Get current threshold assist status."""
-        if hasattr(self, 'hardware'):
-            return self.hardware.get_threshold_assist_status()
-        return {'enabled': False}
-    
-    def reset_threshold_learning(self):
-        """Reset threshold learning data."""
-        if hasattr(self, 'hardware'):
-            self.hardware.reset_threshold_learning()
-    
-    def update_threshold_status(self):
-        """Update the threshold assist status indicator."""
-        if hasattr(self, 'threshold_status_indicator') and self.hardware:
-            try:
-                status = self.hardware.get_threshold_assist_status()
-                enabled = status.get('enabled', False)
-                learning = status.get('learning_mode', True)
-                
-                if not enabled:
-                    # Disabled - red dot
-                    self.threshold_status_indicator.setStyleSheet("color: #e74c3c; font-size: 14px;")
-                    self.threshold_status_indicator.setToolTip("Threshold Assist: Disabled")
-                elif learning:
-                    # Learning - yellow dot
-                    self.threshold_status_indicator.setStyleSheet("color: #f39c12; font-size: 14px;")
-                    self.threshold_status_indicator.setToolTip("Threshold Assist: Learning Mode")
-                else:
-                    # Active - green dot
-                    self.threshold_status_indicator.setStyleSheet("color: #27ae60; font-size: 14px;")
-                    self.threshold_status_indicator.setToolTip("Threshold Assist: Active")
-            except Exception as e:
-                logger.debug(f"Error updating threshold status: {e}")
 
 def main():
     """Main entry point for the application."""

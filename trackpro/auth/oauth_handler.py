@@ -31,6 +31,8 @@ class OAuthHandler(QObject):
         # Store the code verifier for PKCE
         self.code_verifier = None
         self.pending_provider = None
+        # Store the OAuth port for use by dialogs
+        self.oauth_port = 3000
     
     def register_custom_uri_scheme(self):
         """
@@ -138,7 +140,8 @@ class OAuthHandler(QObject):
             if "provider not found" in error_msg.lower():
                 error_msg = "Discord provider not configured in Supabase. Please configure Discord OAuth in your Supabase dashboard."
             elif "redirect_to" in error_msg.lower():
-                error_msg = "Invalid redirect URL. Please check that your Discord OAuth application has http://localhost:3000 registered as a redirect URI."
+                redirect_url = redirect_url or "http://localhost:3000"
+                error_msg = f"Invalid redirect URL. Please check that your Discord OAuth application has {redirect_url} registered as a redirect URI."
             
             raise ValueError(f"Discord authentication error: {error_msg}")
     
@@ -255,6 +258,9 @@ class OAuthHandler(QObject):
         import http.server
         import threading
         import socketserver
+        
+        # Store the port being used
+        self.oauth_port = port
         
         # Handler for callback requests
         class CallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -502,12 +508,16 @@ class OAuthHandler(QObject):
         
         httpd = CustomTCPServer(("127.0.0.1", port), handler)
         
-        server_thread = threading.Thread(target=httpd.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-        
-        logger.info(f"Started callback server on port {port}")
-        return httpd
+        try:
+            server_thread = threading.Thread(target=httpd.serve_forever)
+            server_thread.daemon = True
+            server_thread.start()
+            
+            logger.info(f"Started callback server on port {port}")
+            return httpd
+        except Exception as e:
+            logger.error(f"Failed to start callback server on port {port}: {e}")
+            return None
     
     def shutdown_callback_server(self, server):
         """

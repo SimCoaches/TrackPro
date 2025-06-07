@@ -2,7 +2,7 @@ AirDensity                        Density of air at start/finish line, kg/m^3
 AirPressure                       Pressure of air at start/finish line, Pa
 AirTemp                           Temperature of air at start/finish line, C
 Brake                             0=brake released to 1=max pedal force, %
-BrakeABSactive                    true if abs is currently reducing brake force pressure,
+# BrakeABSactive field removed - ABS functionality no longer used
 BrakeRaw                          Raw brake input 0=brake released to 1=max pedal force, %
 CamCameraNumber                   Active camera number,
 CamCameraState                    State of camera system, irsdk_CameraState

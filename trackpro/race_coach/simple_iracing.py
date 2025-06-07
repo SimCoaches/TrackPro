@@ -71,6 +71,9 @@ class SimpleIRacingAPI(QObject):
         # Add deferred monitoring parameters
         self._deferred_monitor_params = None
         
+        # Store current telemetry for external access (needed for ABS system)
+        self.current_telemetry = {}
+        
         logger.info("SimpleIRacingAPI initialized")
     
     def __del__(self):
@@ -262,8 +265,7 @@ class SimpleIRacingAPI(QObject):
                 logger.info("Running iRacing variable debug function...")
                 self.debug_ir_vars()
             
-                # Also debug ABS/Accel fields specifically
-                self._debug_abs_accel_fields()
+                            # ABS debug functionality removed
             
             # Create telemetry dictionary with DIRECT dictionary access
             # based on the example code pattern
@@ -354,24 +356,33 @@ class SimpleIRacingAPI(QObject):
             try: telemetry['SteeringWheelAngleMax'] = self.ir['SteeringWheelAngleMax']
             except: telemetry['SteeringWheelAngleMax'] = None
 
-            # --- CRITICAL MISSING FIELDS FOR LOCKUP DETECTION --- #
-            # Try multiple possible field names for ABS
-            abs_found = False
-            for abs_field in ['BrakeABSactive', 'ABSactive', 'BrakeABS', 'ABSOn']:
-                try: 
-                    abs_active = self.ir[abs_field]
-                    telemetry['BrakeABSactive'] = bool(abs_active)
-                    abs_found = True
-                    if self._debug_counter % 600 == 0:  # Log success occasionally
-                        logger.info(f"✅ Found ABS field: {abs_field} = {abs_active}")
-                    break
-                except: 
-                    continue
+            # --- WHEEL RPM DATA FOR TELEMETRY --- #
+                            # Wheel RPM data for telemetry
+            wheel_rpm_fields = ['WheelLFRPM', 'WheelRFRPM', 'WheelLRRPM', 'WheelRRRPM']
+            wheel_rpms_found = []
             
-            if not abs_found:
-                if self._debug_counter % 300 == 0:
-                    logger.warning(f"❌ No ABS field found - tried: BrakeABSactive, ABSactive, BrakeABS, ABSOn")
-                telemetry['BrakeABSactive'] = False
+            for wheel_field in wheel_rpm_fields:
+                try:
+                    wheel_rpm = self.ir[wheel_field]
+                    telemetry[wheel_field] = float(wheel_rpm)
+                    wheel_rpms_found.append(wheel_field)
+                except:
+                    # Try alternative field names
+                    alt_field = wheel_field.replace('RPM', 'Rpm').replace('WheelLF', 'WheelLF').replace('WheelRF', 'WheelRF').replace('WheelLR', 'WheelLR').replace('WheelRR', 'WheelRR')
+                    try:
+                        wheel_rpm = self.ir[alt_field]
+                        telemetry[wheel_field] = float(wheel_rpm)
+                        wheel_rpms_found.append(f"{wheel_field} (as {alt_field})")
+                    except:
+                        telemetry[wheel_field] = 0.0
+            
+            # Log wheel RPM status occasionally
+            if self._debug_counter % 300 == 0 and wheel_rpms_found:
+                logger.info(f"✅ Found wheel RPMs: {wheel_rpms_found}")
+            elif self._debug_counter % 600 == 0 and len(wheel_rpms_found) < 4:
+                logger.warning(f"⚠️ Missing wheel RPMs: {[f for f in wheel_rpm_fields if f not in [w.split(' ')[0] for w in wheel_rpms_found]]}")
+
+            # ABS field detection removed - no longer needed for lockup detection
             
             # Try multiple possible field names for longitudinal acceleration
             accel_found = False
@@ -670,6 +681,10 @@ class SimpleIRacingAPI(QObject):
                         
                         display_telemetry = telemetry.copy()
                         display_telemetry['speed'] = speed * 3.6 # Convert for UI
+                        
+                        # Store current telemetry for external access
+                        self.current_telemetry = telemetry.copy()
+                        
                         for callback in self._telemetry_callbacks:
                              try: callback(display_telemetry)
                              except Exception as e: logger.error(f"Error in telemetry callback: {e}")
@@ -908,53 +923,7 @@ class SimpleIRacingAPI(QObject):
         except Exception as e:
             logger.error(f"Error in debug_ir_vars: {e}", exc_info=True)
     
-    def _debug_abs_accel_fields(self):
-        """Debug function to find ABS and acceleration fields for lockup detection."""
-        if not self.ir:
-            return
-            
-        try:
-            logger.info("🔍 Searching for ABS and acceleration fields...")
-            
-            # Check if _var_headers_dict is available for field discovery
-            if hasattr(self.ir, '_var_headers_dict'):
-                headers = self.ir._var_headers_dict
-                
-                # Search for ABS-related fields
-                abs_fields = []
-                accel_fields = []
-                brake_fields = []
-                
-                for field_name in headers.keys():
-                    field_lower = field_name.lower()
-                    if 'abs' in field_lower or 'brake' in field_lower:
-                        if 'abs' in field_lower:
-                            abs_fields.append(field_name)
-                        brake_fields.append(field_name)
-                    elif 'accel' in field_lower or 'long' in field_lower:
-                        accel_fields.append(field_name)
-                
-                logger.info(f"🔍 Found ABS-related fields: {abs_fields}")
-                logger.info(f"🔍 Found acceleration fields: {accel_fields}")
-                logger.info(f"🔍 Found brake-related fields: {brake_fields}")
-                
-                # Test accessing some of these fields
-                for field in abs_fields[:3]:  # Test first 3
-                    try:
-                        value = self.ir[field]
-                        logger.info(f"✅ {field} = {value}")
-                    except Exception as e:
-                        logger.info(f"❌ {field}: {e}")
-                
-                for field in accel_fields[:3]:  # Test first 3
-                    try:
-                        value = self.ir[field]
-                        logger.info(f"✅ {field} = {value}")
-                    except Exception as e:
-                        logger.info(f"❌ {field}: {e}")
-                        
-        except Exception as e:
-            logger.error(f"Error in _debug_abs_accel_fields: {e}")
+    # ABS debug function removed - no longer needed for lockup detection
     
     def _get_player_car_idx(self):
         """Helper method to get the player's car index in the array data.

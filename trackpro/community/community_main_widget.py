@@ -404,15 +404,8 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         self.activity_refresh_timer.timeout.connect(self.refresh_activity_feed)
         self.activity_refresh_timer.start(15000)  # Refresh every 15 seconds
         
-        # Initialize delayed auth retry timer (for session sync issues)
-        self.auth_retry_timer = QTimer()
-        self.auth_retry_timer.setSingleShot(True)  # Only run once
-        self.auth_retry_timer.timeout.connect(self.retry_auth_setup)
-        
         # Initialize automated racing achievement system
         self.racing_achievement_monitor = None
-        if self.user_id and self.db_managers:
-            self.setup_racing_achievement_monitor()
         
         self.setup_ui()
         
@@ -443,7 +436,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         layout.addWidget(self.navigation)
         layout.addWidget(self.content_stack)
         
-        # Set initial section
+        # Set initial section - this will check authentication state
         self.switch_section("social")
         
     def create_section_widgets(self):
@@ -460,6 +453,92 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         # Track which sections have been loaded
         self.loaded_sections = set()
             
+    def create_login_required_widget(self, section_id):
+        """Create a login required widget that blocks all content until user signs in"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setContentsMargins(50, 50, 50, 50)
+        
+        # Large lock icon
+        icon_label = QLabel("🔐")
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet(f"font-size: 64px; color: {CommunityTheme.COLORS['accent']};")
+        layout.addWidget(icon_label)
+        
+        # Title
+        title_label = QLabel("Sign In Required")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet(f"""
+            color: {CommunityTheme.COLORS['text_primary']};
+            font-size: 24px;
+            font-weight: bold;
+            margin: 20px 0px 10px 0px;
+        """)
+        layout.addWidget(title_label)
+        
+        # Section-specific message
+        section_messages = {
+            "social": "Connect with fellow racers and share achievements",
+            "discord": "Set up Discord integration for real-time communication",
+            "community": "Join racing teams, clubs, and community events", 
+            "content": "Share and discover car setups, guides, and media",
+            "achievements": "Track your racing progress and unlock achievements",
+            "account": "Manage your profile and racing statistics"
+        }
+        
+        section_message = section_messages.get(section_id, "Access community features")
+        message_label = QLabel(f"Sign in to {section_message}")
+        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet(f"""
+            color: {CommunityTheme.COLORS['text_secondary']};
+            font-size: 14px;
+            margin: 0px 0px 30px 0px;
+            max-width: 400px;
+        """)
+        layout.addWidget(message_label)
+        
+        # Login button
+        login_button = QPushButton("🔑 Sign In to TrackPro")
+        login_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {CommunityTheme.COLORS['accent']};
+                color: white;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+                min-width: 150px;
+                border: 2px solid {CommunityTheme.COLORS['accent']};
+            }}
+            QPushButton:hover {{
+                background-color: #FF8A65;
+                border-color: #FF8A65;
+            }}
+            QPushButton:pressed {{
+                background-color: #FF5722;
+                border-color: #FF5722;
+            }}
+        """)
+        login_button.clicked.connect(self.open_login_dialog)
+        layout.addWidget(login_button)
+        
+        # Additional info
+        info_label = QLabel("All community features require authentication to protect user privacy and enable personalized experiences.")
+        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet(f"""
+            color: {CommunityTheme.COLORS['text_secondary']};
+            font-size: 11px;
+            margin: 20px 0px 0px 0px;
+            max-width: 500px;
+            font-style: italic;
+        """)
+        layout.addWidget(info_label)
+        
+        return widget
+
     def create_placeholder_widget(self, message):
         """Create a placeholder widget for sections that aren't available"""
         widget = QWidget()
@@ -617,19 +696,40 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         print(f"Loading community section: {section_id}")
         
         try:
-            # Create the appropriate widget based on section_id
-            if section_id == "social":
-                self.social_widget = self.create_modern_social_widget()
-            elif section_id == "discord":
-                self.discord_widget = self.create_discord_widget()
-            elif section_id == "community":
-                self.community_widget = self.create_modern_community_widget()
-            elif section_id == "content":
-                self.content_widget = self.create_modern_content_widget()
-            elif section_id == "achievements":
-                self.achievements_widget = self.create_modern_achievements_widget()
-            elif section_id == "account":
-                self.account_widget = self.create_modern_account_widget()
+            # CHECK AUTHENTICATION FIRST - if not authenticated, show login screen for ALL sections
+            if not self.user_id or not self.supabase_client:
+                print(f"User not authenticated, showing login screen for {section_id}")
+                # Create login screen for this section
+                login_widget = self.create_login_required_widget(section_id)
+                
+                # Assign to the appropriate section
+                if section_id == "social":
+                    self.social_widget = login_widget
+                elif section_id == "discord":
+                    self.discord_widget = login_widget
+                elif section_id == "community":
+                    self.community_widget = login_widget
+                elif section_id == "content":
+                    self.content_widget = login_widget
+                elif section_id == "achievements":
+                    self.achievements_widget = login_widget
+                elif section_id == "account":
+                    self.account_widget = login_widget
+            else:
+                # User is authenticated, create the actual content widget
+                print(f"User authenticated, loading real content for {section_id}")
+                if section_id == "social":
+                    self.social_widget = self.create_modern_social_widget()
+                elif section_id == "discord":
+                    self.discord_widget = self.create_discord_widget()
+                elif section_id == "community":
+                    self.community_widget = self.create_modern_community_widget()
+                elif section_id == "content":
+                    self.content_widget = self.create_modern_content_widget()
+                elif section_id == "achievements":
+                    self.achievements_widget = self.create_modern_achievements_widget()
+                elif section_id == "account":
+                    self.account_widget = self.create_modern_account_widget()
             
             # Mark as loaded
             self.loaded_sections.add(section_id)
@@ -666,139 +766,144 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         """Get the currently active section"""
         return self.current_section
     
-    def handle_auth_state_change(self, is_authenticated):
-        """Handle authentication state changes and refresh the community widget"""
+    def handle_auth_state_change(self, user_or_bool: Optional[Any]):
+        """
+        Handle authentication state changes and refresh the community widget.
+        Can receive either a user object OR a boolean indicating auth state.
+        """
         try:
-            print(f"Community widget: Authentication state changed to {is_authenticated}")
+            # Debug: Print received object structure
+            print(f"🔍 Community widget: Received auth data: {type(user_or_bool)} = {user_or_bool}")
             
-            if is_authenticated:
-                # User just logged in - refresh the community widget with authenticated content
-                from trackpro.database.supabase_client import get_supabase_client, supabase
+            # Handle both user objects and boolean auth states
+            is_authenticated = False
+            user_id = None
+            
+            # Check if this is a boolean auth state signal
+            if isinstance(user_or_bool, bool):
+                print(f"🔍 Received boolean auth state: {user_or_bool}")
+                if user_or_bool:
+                    # Boolean True means authenticated, but we need to get the actual user
+                    print("🔍 Boolean True received, fetching actual user data...")
+                    try:
+                        from trackpro.database.supabase_client import get_supabase_client
+                        client = get_supabase_client()
+                        if client and client.is_authenticated():
+                            user_response = client.get_user()
+                            if user_response and hasattr(user_response, 'user') and user_response.user:
+                                is_authenticated = True
+                                user_id = user_response.user.id
+                                print(f"🔍 Retrieved user ID from client: {user_id}")
+                            elif user_response and hasattr(user_response, 'id') and user_response.id:
+                                is_authenticated = True
+                                user_id = user_response.id
+                                print(f"🔍 Retrieved user ID directly: {user_id}")
+                            else:
+                                print("⚠️ Client authenticated but couldn't get user details")
+                                # Keep existing user if we have one
+                                if self.user_id:
+                                    is_authenticated = True
+                                    user_id = self.user_id
+                                    print(f"🔍 Keeping existing user ID: {user_id}")
+                        else:
+                            print("⚠️ Client not authenticated despite boolean True")
+                    except Exception as e:
+                        print(f"⚠️ Error fetching user from boolean signal: {e}")
+                        # Fallback: if we have an existing user and boolean is True, keep them
+                        if self.user_id:
+                            is_authenticated = True
+                            user_id = self.user_id
+                            print(f"🔍 Fallback: keeping existing user ID: {user_id}")
+                else:
+                    # Boolean False means logged out
+                    is_authenticated = False
+                    user_id = None
+                    print("🔍 Boolean False received - user logged out")
+            else:
+                # Handle user object (existing logic)
+                if user_or_bool is not None:
+                    # Try different possible user object structures
+                    if hasattr(user_or_bool, 'id') and user_or_bool.id:
+                        # Direct user object
+                        is_authenticated = True
+                        user_id = user_or_bool.id
+                        print(f"🔍 Found user ID directly: {user_id}")
+                    elif hasattr(user_or_bool, 'user') and user_or_bool.user and hasattr(user_or_bool.user, 'id') and user_or_bool.user.id:
+                        # Nested user object (common in Supabase responses)
+                        is_authenticated = True
+                        user_id = user_or_bool.user.id
+                        print(f"🔍 Found user ID in nested structure: {user_id}")
+                    elif hasattr(user_or_bool, 'email'):
+                        # Alternative: user object with email but no id
+                        is_authenticated = True
+                        user_id = getattr(user_or_bool, 'id', user_or_bool.email)  # Fallback to email if no id
+                        print(f"🔍 Found user with email: {user_or_bool.email}, using ID: {user_id}")
+                    else:
+                        print(f"🔍 User object structure not recognized: {dir(user_or_bool) if hasattr(user_or_bool, '__dict__') else str(user_or_bool)}")
+            
+            print(f"🔐 Community widget: Auth state change processed. Authenticated: {is_authenticated}, User ID: {user_id}")
+
+            if is_authenticated and user_id:
+                # Check if the user ID has actually changed to prevent unnecessary reloads
+                if self.user_id == user_id and self.supabase_client is not None:
+                    print("✅ Community widget: User ID and client already set. No refresh needed.")
+                    return
+
+                self.user_id = user_id
+                print(f"🔑 Community widget: User ID set to {self.user_id}")
+
+                from trackpro.database.supabase_client import get_supabase_client
                 from trackpro.community.database_managers import create_community_managers
                 
-                # Get fresh Supabase client and managers
                 supabase_client = get_supabase_client()
                 if supabase_client:
-                    # Use the raw client, not the manager
                     self.supabase_client = supabase_client
                     self.db_managers = create_community_managers(supabase_client)
                     
-                    # Try multiple ways to get current user ID with retries
-                    self.user_id = None
-                    max_retries = 3
-                    for attempt in range(max_retries):
-                        try:
-                            # Try getting from the managers first
-                            if self.db_managers and 'user_manager' in self.db_managers:
-                                self.user_id = self.db_managers['user_manager'].get_current_user_id()
-                            
-                            # If that fails, try getting directly from supabase client
-                            if not self.user_id and supabase_client:
-                                try:
-                                    user = supabase_client.auth.get_user()
-                                    if user and hasattr(user, 'user') and user.user:
-                                        self.user_id = user.user.id
-                                except Exception as e:
-                                    print(f"Error getting user from client: {e}")
-                            
-                            # If we got a user ID, break out of retry loop
-                            if self.user_id:
-                                break
-                                
-                            # Wait a bit before retrying
-                            if attempt < max_retries - 1:
-                                import time
-                                print(f"Community widget: Retry {attempt + 1} - waiting for session sync...")
-                                time.sleep(0.5)
-                                
-                        except Exception as e:
-                            print(f"Community widget: Attempt {attempt + 1} failed to get user ID: {e}")
-                            if attempt < max_retries - 1:
-                                import time
-                                time.sleep(0.5)
+                    # Reload all content for the new user - this will replace login screens with real content
+                    print("🔄 Community widget: Reloading all sections with authenticated content...")
+                    self.reload_all_sections()
+                    self.setup_racing_achievement_monitor()
                     
-                    print(f"Community widget: Updated user ID to {self.user_id}")
-                    
-                    # Only proceed if we have a valid user ID
-                    if self.user_id:
-                        # Clear existing widgets
-                        while self.content_stack.count():
-                            widget = self.content_stack.widget(0)
-                            self.content_stack.removeWidget(widget)
-                            if widget:
-                                widget.deleteLater()
-                        
-                        # Reset section widgets for lazy loading with the new authentication state
-                        self.create_section_widgets()
-                        
-                        # Switch back to the current section to show the updated content (will lazy load)
-                        self.switch_section(self.current_section)
-                        
-                        # Set up racing achievement automation for authenticated user
-                        self.setup_racing_achievement_monitor()
-                        
-                        print("Community widget: Successfully refreshed with authenticated content")
-                    else:
-                        print("Community widget: Could not get user ID immediately, will retry in 2 seconds...")
-                        # Start delayed retry timer
-                        self.auth_retry_timer.start(2000)  # Retry in 2 seconds
+                    print("✅ Community widget: Successfully unlocked all community features!")
                 else:
-                    print("Community widget: Failed to get Supabase client after auth state change")
+                    print("❌ Community widget: Failed to get Supabase client after auth state change.")
             else:
-                # User logged out - show login placeholders
+                # User logged out or no valid user data
+                if self.user_id is None and self.supabase_client is None:
+                    print("✅ Community widget: Already logged out. No refresh needed.")
+                    return # Already logged out
+
+                print("🔒 Community widget: User logged out or invalid, locking all sections...")
                 self.supabase_client = None
                 self.db_managers = {}
                 self.user_id = None
                 
-                # Clear existing widgets
-                while self.content_stack.count():
-                    widget = self.content_stack.widget(0)
-                    self.content_stack.removeWidget(widget)
-                    if widget:
-                        widget.deleteLater()
-                
-                # Reset section widgets for lazy loading with login prompts
-                self.create_section_widgets()
-                self.switch_section(self.current_section)
-                
-                print("Community widget: Successfully refreshed with login prompts")
+                # Reload all sections - this will show login screens for all sections
+                self.reload_all_sections()
+                print("🔐 Community widget: All sections locked. Login required to access content.")
                 
         except Exception as e:
-            print(f"Error handling auth state change in community widget: {e}")
+            print(f"❌ Error handling auth state change in community widget: {e}")
             import traceback
             traceback.print_exc()
-    
-    def retry_auth_setup(self):
-        """Retry authentication setup after a delay (fallback for session sync issues)"""
-        try:
-            print("Community widget: Retrying authentication setup...")
-            from trackpro.database.supabase_client import get_supabase_client
-            
-            # Get the client directly
-            supabase_client = get_supabase_client()
-            if not supabase_client:
-                print("Community widget: No Supabase client available, canceling retry")
-                return
-            
-            # Try to get user ID again
-            user_id = None
-            try:
-                user = supabase_client.auth.get_user()
-                if user and hasattr(user, 'user') and user.user:
-                    user_id = user.user.id
-            except Exception as e:
-                print(f"Community widget: Retry failed to get user: {e}")
-            
-            if user_id:
-                print(f"Community widget: Retry successful - got user ID: {user_id}")
-                # Force a fresh auth state change with the now-working session
-                self.handle_auth_state_change(True)
-            else:
-                print("Community widget: Retry failed - still no user ID")
-                
-        except Exception as e:
-            print(f"Error in auth retry: {e}")
 
+    def reload_all_sections(self):
+        """Clears and reloads all section widgets."""
+        # Clear existing widgets from the stack
+        while self.content_stack.count():
+            widget = self.content_stack.widget(0)
+            self.content_stack.removeWidget(widget)
+            if widget:
+                widget.deleteLater()
+        
+        # Reset the tracking of loaded sections and widget references
+        self.loaded_sections.clear()
+        self.create_section_widgets()
+        
+        # Restore the currently selected section, which will trigger a lazy load
+        self.switch_section(self.current_section)
+    
     def get_notification_manager(self):
         """Get the notification manager for external access"""
         return self.notification_manager
@@ -1135,10 +1240,6 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             import traceback
             traceback.print_exc()
     
-
-    
-
-    
     def clear_all_notifications(self):
         """Clear all notifications"""
         for section in ["social", "discord", "community", "content", "achievements", "account"]:
@@ -1384,6 +1485,35 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             # Fallback: directly update notification for testing
             current = self.notification_manager.get_notification_count("discord")
             self.notification_manager.update_notification_count("discord", current + 1)
+
+    def force_auth_refresh(self):
+        """Force refresh of authentication state - called by main app after successful login"""
+        try:
+            print("Community widget: Force refreshing authentication state...")
+            from trackpro.database.supabase_client import get_supabase_client
+            
+            # Get the authenticated client
+            supabase_client = get_supabase_client()
+            if supabase_client:
+                # Check if we can get user info immediately
+                user_id = None
+                try:
+                    user_response = supabase_client.auth.get_user()
+                    if user_response and hasattr(user_response, 'user') and user_response.user:
+                        user_id = user_response.user.id
+                        print(f"Community widget: Force refresh - got user ID: {user_id}")
+                except Exception as e:
+                    print(f"Community widget: Force refresh - couldn't get user immediately: {e}")
+                
+                # Force a fresh authentication handling
+                self.handle_auth_state_change(True)
+                return True
+            else:
+                print("Community widget: Force refresh - no client available")
+                return False
+        except Exception as e:
+            print(f"Error in force auth refresh: {e}")
+            return False
 
 
 # Factory function for creating the community widget

@@ -330,6 +330,9 @@ class CommunitySocialMixin:
         notes_layout.addWidget(notes_input)
         notes_layout.addWidget(send_note_btn)
         layout.addWidget(notes_widget)
+
+        self.quick_notes_input = notes_input
+        send_note_btn.clicked.connect(self.send_quick_note)
         
         # Recent quick notes
         recent_notes_label = QLabel("Recent Quick Notes:")
@@ -337,13 +340,79 @@ class CommunitySocialMixin:
         recent_notes_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_primary']}; font-weight: bold; margin-top: 8px;")
         layout.addWidget(recent_notes_label)
         
-        # NO FAKE DATA - only show real notes from database
-        # Real notes would be loaded from database here when that functionality is implemented
+        # Real notes from database
+        self.quick_notes_layout = QVBoxLayout()
+        layout.addLayout(self.quick_notes_layout)
+
+        self.refresh_quick_notes()
             
         layout.addStretch()
         
         return widget
         
+    def refresh_quick_notes(self):
+        """Refreshes the quick notes panel with recent messages."""
+        if not hasattr(self, 'quick_notes_layout'):
+            return
+
+        # Clear existing notes
+        while self.quick_notes_layout.count():
+            child = self.quick_notes_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        if hasattr(self, 'db_managers') and self.db_managers and 'social_manager' in self.db_managers and hasattr(self, 'user_id') and self.user_id:
+            try:
+                conversations = self.db_managers['social_manager'].get_conversations(self.user_id)
+                if conversations:
+                    # For simplicity, show messages from the most recent conversation
+                    most_recent_conv = sorted(conversations, key=lambda c: c.get('updated_at', ''), reverse=True)[0]
+                    self.current_conversation_id = most_recent_conv['id']
+
+                    messages = self.db_managers['social_manager'].get_messages(self.current_conversation_id)
+                    
+                    for msg in messages[:5]: # Show last 5 messages
+                        sender_name = msg['sender']['display_name'] if msg.get('sender') else 'Unknown'
+                        note_item = self.create_quick_note_item(
+                            sender_name,
+                            msg['content'],
+                            self.format_time_ago(msg['created_at'])
+                        )
+                        self.quick_notes_layout.addWidget(note_item)
+                else:
+                    self.quick_notes_layout.addWidget(QLabel("No recent conversations."))
+                    self.current_conversation_id = None
+            except Exception as e:
+                self.quick_notes_layout.addWidget(QLabel(f"Error loading notes: {e}"))
+                self.current_conversation_id = None
+        else:
+            self.quick_notes_layout.addWidget(QLabel("Connect to DB to see notes."))
+            self.current_conversation_id = None
+    
+    def send_quick_note(self):
+        """Sends a message in the current quick notes conversation."""
+        if not hasattr(self, 'db_managers') or not self.db_managers or 'social_manager' in self.db_managers:
+            QMessageBox.warning(self, "Error", "Database connection not available.")
+            return
+
+        if not hasattr(self, 'current_conversation_id') or not self.current_conversation_id:
+            QMessageBox.warning(self, "Error", "No active conversation to send a note to.")
+            return
+
+        note_content = self.quick_notes_input.toPlainText().strip()
+        if not note_content:
+            return
+
+        try:
+            success = self.db_managers['social_manager'].send_message(self.user_id, self.current_conversation_id, note_content)
+            if success:
+                self.quick_notes_input.clear()
+                self.refresh_quick_notes()
+            else:
+                QMessageBox.warning(self, "Error", "Failed to send note.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error sending note: {e}")
+
     def create_racing_activity_item(self, icon, activity_type, description, time_ago):
         """Create a racing-specific activity item."""
         item_widget = QWidget()

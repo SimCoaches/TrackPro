@@ -11,7 +11,7 @@ from ..database import calibration_manager, supabase
 from trackpro.database.user_manager import user_manager
 from ..race_coach.debouncer import trackpro_debouncer
 from .curve_cache import curve_cache
-from .threshold_braking_assist import ThresholdBrakingAssist
+# ABS system imports removed
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,10 @@ class HardwareInput:
         self.joystick = None
         self.pedals_connected = False
         
-        # Find our pedal device (or Xbox controller for testing)
+        # Add time tracking for dt calculation
+        self._last_process_time = time.time()
+        
+        # Find our pedal device
         for i in range(pygame.joystick.get_count()):
             joy = pygame.joystick.Joystick(i)
             joy.init()
@@ -34,22 +37,7 @@ class HardwareInput:
             if "Sim Coaches P1 Pro Pedals" in device_name:
                 self.joystick = joy
                 self.pedals_connected = True
-                self.using_xbox_controller = False
                 logger.info(f"Found P1 Pro Pedals: {device_name}")
-                break
-            elif test_mode and ("Xbox" in device_name or "Controller" in device_name or "xbox" in device_name.lower()):
-                self.joystick = joy
-                self.pedals_connected = True  
-                self.using_xbox_controller = True
-                logger.info(f"Found Xbox Controller for testing: {device_name}")
-                # Map Xbox controller axes for testing
-                self.THROTTLE_AXIS = 4  # Right trigger
-                self.BRAKE_AXIS = 5     # Left trigger  
-                self.CLUTCH_AXIS = 1    # Right stick Y
-                
-                # Xbox triggers have range -1 to 1, but start at -1 (not pressed)
-                # We'll handle this in the read_pedals method
-                logger.info("Xbox Controller mapping: RT=Throttle, LT=Brake, RStick=Clutch")
                 break
         
         if not self.pedals_connected:
@@ -58,7 +46,6 @@ class HardwareInput:
             # Setup mock values for when no pedals are connected
             self.available_axes = 3
             self.axis_values = [0.0, 0.0, 0.0]  # Default values for throttle, brake, clutch
-            self.using_xbox_controller = False
         else:
             self.available_axes = self.joystick.get_numaxes()
             logger.info(f"Detected {self.available_axes} axes on the pedals")
@@ -66,7 +53,7 @@ class HardwareInput:
         # Load calibration data
         self.calibration = self._load_calibration()
         
-        # Load axis mappings
+        # Load axis mappings from file
         self.axis_mappings = self._load_axis_mappings()
         
         # Default axis mappings if not loaded
@@ -110,11 +97,9 @@ class HardwareInput:
         # Setup debounced calibration operations (Phase 3 optimization)
         trackpro_debouncer.setup_calibration_operations(self._execute_calibration_save)
         
-        # Initialize threshold braking assist system
-        self.threshold_assist = ThresholdBrakingAssist()
-        self._telemetry_callback = None
+        # ABS system functionality removed
         
-        logger.info("Threshold Braking Assist system initialized")
+        logger.info("Hardware input initialized")
 
     def ensure_curves_initialized(self):
         """Ensure curves are initialized (called lazily when needed)."""
@@ -789,21 +774,10 @@ class HardwareInput:
                     try:
                         raw_value = self.joystick.get_axis(axis_num)
                         
-                        # Handle Xbox controller triggers differently
-                        if hasattr(self, 'using_xbox_controller') and self.using_xbox_controller:
-                            if axis_name in ['throttle', 'brake']:
-                                # Xbox triggers: -1 (not pressed) to 1 (fully pressed)
-                                # Convert to 0-65535 range
-                                trigger_value = (raw_value + 1) / 2.0  # Convert -1,1 to 0,1
-                                scaled_value = int(trigger_value * 65535)
-                            else:
-                                # Regular joystick axis for clutch (right stick)
-                                scaled_value = int((raw_value + 1) * 32767)
-                        else:
-                            # Convert to 0-65535 range (16-bit)
-                            # Note: The hardware is 12-bit (0-4096), but we scale to 16-bit for better resolution
-                            # This is the RAW value that should be displayed in the UI
-                            scaled_value = int((raw_value + 1) * 32767)
+                        # Convert to 0-65535 range (16-bit)
+                        # Note: The hardware is 12-bit (0-4096), but we scale to 16-bit for better resolution
+                        # This is the RAW value that should be displayed in the UI
+                        scaled_value = int((raw_value + 1) * 32767)
                         
                         # Store the raw scaled value without applying calibration range
                         values[axis_name] = scaled_value
@@ -1003,43 +977,13 @@ class HardwareInput:
                         'points': [(0, 0), (25, 15), (50, 40), (75, 75), (100, 100)],
                         'curve_type': 'Progressive'
                     },
-                    {
-                        'name': 'ABS Simulation',
-                        'points': [(0, 0), (25, 30), (50, 50), (75, 65), (100, 80)],
-                        'curve_type': 'ABS Simulation'
-                    },
-                    # Enhanced ABS variations
-                    {
-                        'name': 'ABS Racing',
-                        'points': [(0, 0), (20, 25), (40, 45), (60, 60), (80, 75), (100, 85)],
-                        'curve_type': 'ABS Racing'
-                    },
-                    {
-                        'name': 'ABS Competition',
-                        'points': [(0, 0), (15, 20), (30, 40), (50, 60), (70, 75), (90, 85), (100, 90)],
-                        'curve_type': 'ABS Competition'
-                    },
+                    # ABS curve presets removed
                     {
                         'name': 'Trail Braking',
                         'points': [(0, 0), (15, 5), (30, 20), (50, 45), (70, 75), (85, 95), (100, 100)],
                         'curve_type': 'Trail Braking'
                     },
-                    {
-                        'name': 'Threshold Braking',
-                        'points': [(0, 0), (20, 10), (40, 25), (60, 50), (80, 90), (90, 98), (100, 100)],
-                        'curve_type': 'Threshold Braking'
-                    },
-                    # Enhanced Threshold Braking variations
-                    {
-                        'name': 'Precision Threshold',
-                        'points': [(0, 0), (15, 8), (30, 18), (45, 35), (60, 65), (75, 85), (85, 95), (100, 100)],
-                        'curve_type': 'Precision Threshold'
-                    },
-                    {
-                        'name': 'Race Threshold',
-                        'points': [(0, 0), (10, 5), (25, 15), (40, 30), (55, 55), (70, 80), (85, 95), (100, 100)],
-                        'curve_type': 'Race Threshold'
-                    },
+                    # Threshold braking curves removed
                     {
                         'name': 'Wet Weather',
                         'points': [(0, 0), (20, 5), (40, 15), (60, 30), (80, 60), (100, 85)],
@@ -1210,69 +1154,25 @@ class HardwareInput:
         with open(cal_file, 'w') as f:
             json.dump(calibration, f)
     
-    # Threshold Braking Assist Methods
+    # Threshold assist methods removed
     def set_telemetry_callback(self, callback_func):
         """Set the telemetry callback function to get real-time iRacing data."""
         self._telemetry_callback = callback_func
-        logger.info("Telemetry callback set for threshold braking assist")
+        logger.info("Telemetry callback set")
     
-    def enable_threshold_assist(self, enabled: bool):
-        """Enable or disable threshold braking assist."""
-        self.threshold_assist.set_enabled(enabled)
-        logger.info(f"Threshold braking assist {'enabled' if enabled else 'disabled'}")
+    # enable_threshold_assist method removed - threshold assist functionality disabled
     
-    def set_threshold_reduction(self, percentage: float):
-        """Set the brake force reduction percentage for threshold assist."""
-        self.threshold_assist.reduction_percentage = percentage / 100.0
-        logger.info(f"Threshold assist reduction set to {percentage}%")
+    # set_threshold_reduction method removed - threshold assist functionality disabled
     
-    def update_track_car_context(self, track_name: str, car_name: str):
-        """Update the track/car context for threshold assist learning."""
-        if track_name and car_name:
-            self.threshold_assist.set_track_car_context(track_name, car_name)
+    # update_track_car_context method removed - threshold assist functionality disabled
     
-    def process_brake_with_assist(self, raw_brake_value: int) -> int:
-        """
-        Process brake input with threshold assist if enabled.
-        
-        Args:
-            raw_brake_value: Raw brake value (0-65535)
-            
-        Returns:
-            Modified brake value with assist applied
-        """
-        if not self.threshold_assist.enabled:
-            return raw_brake_value
-        
-        # Get current telemetry data if callback is available
-        telemetry = {}
-        if self._telemetry_callback:
-            try:
-                telemetry = self._telemetry_callback()
-            except Exception as e:
-                logger.warning(f"Error getting telemetry for threshold assist: {e}")
-        
-        # Convert to 0.0-1.0 range for processing
-        normalized_brake = raw_brake_value / 65535.0
-        
-        # Apply threshold assist
-        assisted_brake = self.threshold_assist.process_brake_input(normalized_brake, telemetry)
-        
-        # Convert back to 0-65535 range
-        return int(assisted_brake * 65535)
+    # process_brake_with_assist method removed - threshold assist functionality disabled
+# Method body removed - threshold assist functionality disabled
     
-    def get_threshold_assist_status(self) -> dict:
-        """Get current status of threshold braking assist."""
-        return self.threshold_assist.get_status()
+    # get_threshold_assist_status method removed - threshold assist functionality disabled
     
-    def reset_threshold_learning(self, track_car: str = None):
-        """Reset threshold assist learning data."""
-        self.threshold_assist.reset_learning(track_car)
+    # reset_threshold_learning method removed - threshold assist functionality disabled
     
-    def export_threshold_settings(self) -> dict:
-        """Export threshold assist settings for saving."""
-        return self.threshold_assist.export_settings()
+    # export_threshold_settings method removed - threshold assist functionality disabled
     
-    def import_threshold_settings(self, settings: dict):
-        """Import threshold assist settings from saved data."""
-        self.threshold_assist.import_settings(settings) 
+    # import_threshold_settings method removed - threshold assist functionality disabled 

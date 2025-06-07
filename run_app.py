@@ -5,6 +5,7 @@ import ctypes
 import subprocess
 import time
 import logging
+import argparse
 from datetime import datetime
 from PyQt5 import QtWebEngineWidgets
 from PyQt5.QtCore import Qt
@@ -52,8 +53,6 @@ logger = logging.getLogger("TrackPro_Run")
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from trackpro.main import main
 
 def is_admin():
     """Check if the current process has admin privileges."""
@@ -552,11 +551,32 @@ def show_early_splash():
         logger.error(f"Error creating early splash screen: {e}")
         return None
 
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='TrackPro - Racing Telemetry System')
+    # Xbox controller arguments removed
+    parser.add_argument('--dev', action='store_true',
+                       help='Development mode (allows multiple instances)')
+    parser.add_argument('--force', action='store_true',
+                       help='Force start (allows multiple instances)')
+    parser.add_argument('--console', action='store_true',
+                       help='Keep console window open')
+    
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    # Global declaration for lazy import
+    global trackpro_main
+    trackpro_main = None
+    
     logger.info(f"Starting TrackPro run script at {datetime.now()}")
+    
+    # Parse command line arguments
+    args = parse_arguments()
     
     # Log initial information
     logger.info(f"Arguments: {sys.argv}")
+    # Xbox controller functionality removed
     logger.info(f"Running as admin: {is_admin()}")
     
     # Check for update mode
@@ -605,8 +625,8 @@ if __name__ == "__main__":
     # Import auth module later to avoid initial circular dependencies
     from Supabase import auth as supabase_auth
     
-    # Check if another instance is already running
-    if not check_single_instance():
+    # Check if another instance is already running (unless dev/force mode)
+    if not (args.dev or args.force) and not check_single_instance():
         logger.warning("Another instance of TrackPro is already running")
         if early_splash:
             early_splash.close()
@@ -622,7 +642,9 @@ if __name__ == "__main__":
     
     try:
         logger.info("Importing trackpro.main module...")
-        from trackpro.main import main
+        # Lazy import to reduce initial load time
+        if trackpro_main is None:
+            from trackpro.main import main as trackpro_main
         
         # Close early splash before starting main app
         if early_splash:
@@ -630,7 +652,7 @@ if __name__ == "__main__":
         
         logger.info("Starting TrackPro main function...")
         # Main application entry point - Supabase client gets initialized here
-        main()
+        trackpro_main()
         
         logger.info("TrackPro main function completed normally")
     except ImportError as e:

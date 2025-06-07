@@ -6,6 +6,7 @@ import logging
 import traceback
 import time
 import math
+from typing import Optional, Any
 
 # Version information - hardcoded to avoid cyclic imports
 __version__ = "1.5.0"
@@ -1516,108 +1517,8 @@ class MainWindow(QMainWindow):
         
         # Add compact Threshold Braking Assist for brake pedal only
         if pedal_key == 'brake':
-            try:
-                # Create a compact threshold assist section inside deadzones
-                threshold_layout = QHBoxLayout()
-                
-                # Enable checkbox
-                self.threshold_enable_checkbox = QCheckBox("🎯 Threshold Assist")
-                self.threshold_enable_checkbox.setStyleSheet("""
-                    QCheckBox {
-                        font-size: 12px;
-                        font-weight: bold;
-                        color: #268bd2;
-                    }
-                    QCheckBox::indicator {
-                        width: 16px;
-                        height: 16px;
-                    }
-                    QCheckBox::indicator:checked {
-                        background-color: #27ae60;
-                        border: 2px solid #219a52;
-                    }
-                    QCheckBox::indicator:unchecked {
-                        background-color: #e74c3c;
-                        border: 2px solid #c0392b;
-                    }
-                """)
-                self.threshold_enable_checkbox.setToolTip(
-                    "🎯 Threshold Braking Assist\n\n"
-                    "Automatically prevents brake lockups by:\n"
-                    "• Learning when ABS activates in iRacing\n" 
-                    "• Setting optimal brake threshold automatically\n"
-                    "• Limiting brake force when you exceed the threshold\n\n"
-                    "Perfect threshold braking, every time!"
-                )
-                threshold_layout.addWidget(self.threshold_enable_checkbox)
-                
-                # Safety margin slider (compact)
-                threshold_slider = QSlider(Qt.Horizontal)
-                threshold_slider.setRange(10, 50)  # 1.0% to 5.0% (more reasonable range)
-                threshold_slider.setValue(30)  # Default 3.0% (better default)
-                threshold_slider.setMaximumWidth(80)
-                threshold_slider.setStyleSheet("""
-                    QSlider::groove:horizontal {
-                        border: 1px solid #444;
-                        height: 6px;
-                        background: #222;
-                        border-radius: 3px;
-                    }
-                    QSlider::handle:horizontal {
-                        background: #268bd2;
-                        border: 1px solid #1e6bb8;
-                        width: 14px;
-                        margin: -4px 0;
-                        border-radius: 7px;
-                    }
-                """)
-                threshold_slider.setToolTip(
-                    "🛡️ Safety Margin\n\n"
-                    "Controls how much brake force to reduce when you\n"
-                    "exceed the learned threshold:\n\n"
-                    "• 1-2%: Aggressive (maximum braking)\n"
-                    "• 3-4%: Balanced (recommended)\n"
-                    "• 5%+: Conservative (very safe)\n\n"
-                    "The system automatically learns your brake threshold.\n"
-                    "This slider only controls the safety reduction amount."
-                )
-                threshold_layout.addWidget(threshold_slider)
-                
-                # Safety margin value label
-                threshold_value_label = QLabel("3.0%")
-                threshold_value_label.setMinimumWidth(35)
-                threshold_value_label.setStyleSheet("font-size: 11px; color: #888;")
-                threshold_value_label.setToolTip("Current safety margin percentage")
-                threshold_layout.addWidget(threshold_value_label)
-                
-                # Status indicator (small)
-                threshold_status = QLabel("●")
-                threshold_status.setStyleSheet("color: #e74c3c; font-size: 14px;")
-                threshold_status.setToolTip(
-                    "🚥 Status Indicator\n\n"
-                    "🔴 Red: Disabled\n"
-                    "🟡 Yellow: Learning Mode (gathering data)\n"
-                    "🟢 Green: Active (preventing lockups)"
-                )
-                threshold_layout.addWidget(threshold_status)
-                
-                # Add to the deadzone group instead of creating new section
-                deadzone_layout.addLayout(threshold_layout)
-                
-                # Store references for main app
-                data['threshold_enable_checkbox'] = self.threshold_enable_checkbox
-                data['threshold_slider'] = threshold_slider
-                data['threshold_value_label'] = threshold_value_label
-                data['threshold_status'] = threshold_status
-                
-                # Connect slider to label update
-                threshold_slider.valueChanged.connect(
-                    lambda value: threshold_value_label.setText(f"{value/10.0:.1f}%")
-                )
-                
-                logger.info("Compact Threshold Braking Assist added to brake tab")
-            except Exception as e:
-                logger.warning(f"Could not add threshold assist controls: {e}")
+            # This feature has been removed.
+            pass
         
         # Output Monitor
         output_group = QGroupBox("Output Monitor")
@@ -2900,10 +2801,6 @@ class MainWindow(QMainWindow):
                         if 'calibration_chart' in self._pedal_data[pedal]:
                             self._pedal_data[pedal]['calibration_chart'].set_deadzones(min_deadzone, max_deadzone)
             
-            # Set up threshold assist controls if they exist
-            if 'brake' in self._pedal_data and 'threshold_enable_checkbox' in self._pedal_data['brake']:
-                logger.info("Threshold assist controls found and ready for app setup")
-            
             # Defer curve list refresh to avoid blocking startup
             # This will be handled by the main app's delayed operations instead
             # to prevent multiple curve loading calls during startup
@@ -3193,52 +3090,38 @@ class MainWindow(QMainWindow):
     def handle_logout(self):
         """Handle user logout."""
         try:
-            # Force clear the session when explicitly logging out via the UI
-            # This ensures that even with "Remember Me" checked, an explicit logout clears the session
-            supabase.sign_out(force_clear=True)
+            # Sign out from Supabase
+            supabase.sign_out(force_clear=True)  # Force clear the session
+            
+            # Update the authentication state immediately
             self.update_auth_state()
-            QMessageBox.information(self, "Success", "Logged out successfully")
+            
+            # Notify community widget directly about logout
+            self.update_existing_community_widgets(None)
+            
+            # Show success message
+            QMessageBox.information(self, "Logged Out", "You have been successfully logged out.")
+            
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to logout: {str(e)}")
-            logger.error(f"Logout error: {e}")
-    
+            logger.error(f"Error during logout: {e}")
+            # Even if logout fails, clear the UI state
+            try:
+                self.update_auth_state()
+                self.update_existing_community_widgets(None)
+            except Exception as ui_error:
+                logger.error(f"Error updating UI during logout: {ui_error}")
+            
+            QMessageBox.warning(self, "Logout", "Logout completed with some issues, but you have been signed out locally.")
+
     def update_auth_state(self):
-        """Update the UI based on authentication state."""
+        """Update UI and functionality based on authentication state."""
         is_authenticated = supabase.is_authenticated()
+        user = supabase.get_user()
         
         logger.info(f"Updating authentication state - User is authenticated: {is_authenticated}")
-        
-        # Update user label
-        if is_authenticated:
-            user = supabase.get_user()
-            if user:
-                try:
-                    # Get user metadata through user_manager which now has better handling
-                    metadata = user_manager.get_user_metadata(user)
-                    user_email = None
-                    
-                    # Try to get email from different response structures
-                    if hasattr(user, 'email'):
-                        user_email = user.email
-                    elif hasattr(user, 'user') and hasattr(user.user, 'email'):
-                        user_email = user.user.email
-                        
-                    display_name = metadata.get('display_name', user_email or 'User')
-                    self.user_label.setText(f"Logged in as: {display_name}")
-                    self.user_label.setStyleSheet("color: #2ecc71;")
-                    logger.info(f"Updated UI to show user: {display_name}")
-                except Exception as e:
-                    logger.error(f"Error updating user label: {e}")
-                    self.user_label.setText("Logged in")
-                    self.user_label.setStyleSheet("color: #2ecc71;")
-        else:
-            self.user_label.setText("Not logged in | Click to sign in")
-            self.user_label.setStyleSheet("color: #3498db; text-decoration: underline; cursor: pointer;")
-            # Make the label clickable to open login dialog
-            self.user_label.mousePressEvent = lambda e: self.show_login_dialog()
-            logger.info("Updated UI to show not logged in state")
-        
-        # Update button visibility
+        logger.info(f"User object type: {type(user)}, User: {user}")
+
+        # Update auth buttons
         self.login_btn.setVisible(not is_authenticated)
         self.signup_btn.setVisible(not is_authenticated)
         self.logout_btn.setVisible(is_authenticated)
@@ -3254,48 +3137,79 @@ class MainWindow(QMainWindow):
         # Update cloud sync status in menu if the label exists
         if hasattr(self, 'cloud_sync_label'):
             if is_authenticated:
-                self.cloud_sync_label.setText("🔄 Cloud Sync Enabled")
-                self.cloud_sync_label.setStyleSheet("color: #2ecc71;")
+                self.cloud_sync_label.setText("☁️ Cloud Sync Enabled")
+                self.cloud_sync_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px; padding: 2px 8px;")
             else:
                 self.cloud_sync_label.setText("☁️ Sign in to enable cloud sync")
-                self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer;")
+                self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer; font-size: 10px; padding: 2px 8px;")
                 # Make the label clickable to open login dialog
                 self.cloud_sync_label.mousePressEvent = lambda e: self.show_login_dialog()
         
-        # Emit auth state changed signal
-        self.auth_state_changed.emit(is_authenticated)
-        
-        # Update any existing community widgets directly
-        self.update_existing_community_widgets(is_authenticated)
-        
-        # Update protected features
+        # Update any widgets that depend on authentication state
         self.update_protected_features(is_authenticated)
-    
-    def update_existing_community_widgets(self, is_authenticated: bool):
-        """Update any existing community widgets when authentication state changes."""
-        try:
-            # Check if we have a stored community widget reference
-            if hasattr(self, 'community_widget') and self.community_widget:
-                logger.info(f"Updating existing community widget with auth state: {is_authenticated}")
-                self.community_widget.handle_auth_state_change(is_authenticated)
-            
-            # Also check for community widgets in the stacked widget (fallback)
+        
+        # Update any existing community widgets in the stack
+        # Pass the authentication state directly if user object is problematic
+        if is_authenticated and not user:
+            # If authenticated but user object is None, create a basic user representation
+            logger.warning("Authenticated but user object is None, creating basic user object")
+            try:
+                # Try to get user from the supabase client directly
+                from trackpro.database.supabase_client import get_supabase_client
+                client = get_supabase_client()
+                if client and client.client:
+                    session = client.client.auth.get_session()
+                    if session and session.user:
+                        user = session.user
+                        logger.info(f"Retrieved user from session: {user}")
+                    else:
+                        # Create a minimal user object to indicate authentication
+                        class MinimalUser:
+                            def __init__(self):
+                                self.id = "authenticated_user"
+                                self.email = "unknown@authenticated.user"
+                        user = MinimalUser()
+                        logger.info("Created minimal user object for authenticated state")
+            except Exception as e:
+                logger.warning(f"Failed to get user from session: {e}")
+        
+        # Pass None for user when not authenticated to ensure logout is processed
+        self.update_existing_community_widgets(user if is_authenticated else None)
+        
+        # Emit signal to notify other parts of the application
+        self.auth_state_changed.emit(is_authenticated)
+
+    def update_existing_community_widgets(self, user: Optional[Any]):
+        """Find and update any existing community widgets."""
+        logger.info(f"Updating existing community widget with auth state: {user is not None}")
+        
+        if hasattr(self, 'stacked_widget'):
             for i in range(self.stacked_widget.count()):
                 widget = self.stacked_widget.widget(i)
-                if hasattr(widget, '__class__') and 'Community' in widget.__class__.__name__:
+                # Check if it's our community widget
+                if widget and 'CommunityMainWidget' in widget.__class__.__name__:
+                    logger.info(f"Found community widget in stack at index {i}, updating auth state")
                     if hasattr(widget, 'handle_auth_state_change'):
-                        logger.info(f"Found community widget in stack at index {i}, updating auth state")
-                        widget.handle_auth_state_change(is_authenticated)
-                    break
-                    
-        except Exception as e:
-            logger.error(f"Error updating existing community widgets: {e}")
-
+                        # Pass the user object directly
+                        widget.handle_auth_state_change(user)
+                    break # Assuming only one community widget
+    
     def update_protected_features(self, is_authenticated: bool):
-        """Enable/disable features based on authentication state."""
-        # Example: Enable/disable Race Coach tab or specific actions
+        """Enable or disable features that require authentication."""
+        # Race Pass
+        if hasattr(self, 'race_pass_action'):
+            self.race_pass_action.setEnabled(is_authenticated)
+            if is_authenticated:
+                self.race_pass_action.setToolTip("Access Race Pass features")
+            else:
+                self.race_pass_action.setToolTip("Login required to access Race Pass features")
+                self.race_pass_action.setChecked(False)
+                # Switch back to pedal config if Race Pass was active
+                if self.stacked_widget.currentWidget() is not None and \
+                   isinstance(self.stacked_widget.currentWidget(), RacePassViewWidget):
+                    self.open_pedal_config()
         
-        # Make Race Coach menu item checkable only when authenticated
+        # Race Coach
         if hasattr(self, 'race_coach_action'):
             self.race_coach_action.setEnabled(True)  # Always enable to show login message
             if is_authenticated:
@@ -3307,6 +3221,30 @@ class MainWindow(QMainWindow):
                 if self.stacked_widget.currentWidget() is not None and \
                    isinstance(self.stacked_widget.currentWidget(), RaceCoachWidget):
                     self.open_pedal_config()
+        
+        # Community
+        if hasattr(self, 'community_action'):
+            self.community_action.setEnabled(is_authenticated)
+            if is_authenticated:
+                self.community_action.setToolTip("Access community features: social, teams, content sharing, and achievements")
+            else:
+                self.community_action.setToolTip("Login required to access community features")
+                self.community_action.setChecked(False)
+                # Switch back to pedal config if Community was active
+                if self.stacked_widget.currentWidget() is not None:
+                    try:
+                        # Check if current widget is a community widget by class name
+                        current_widget = self.stacked_widget.currentWidget()
+                        if hasattr(current_widget, '__class__') and 'Community' in current_widget.__class__.__name__:
+                            self.open_pedal_config()
+                    except Exception as e:
+                        logger.warning(f"Error checking current widget during logout: {e}")
+                        # Safe fallback - just switch to pedal config
+                        self.open_pedal_config()
+        
+        # Pedal Config
+        self.pedal_config_action.setEnabled(True)
+        self.pedal_config_action.setChecked(True)
         
         # Trigger initial load for RaceCoachWidget if authenticated and widget exists
         if is_authenticated:
@@ -4040,7 +3978,29 @@ class MainWindow(QMainWindow):
             return None
     
     def open_community_interface(self):
-        """Open the main community interface as an integrated tab."""
+        """Open the main community interface in the stacked widget."""
+        
+        # Prevent opening if not authenticated
+        if not supabase.is_authenticated():
+            self.show_login_dialog()
+            # After login attempt, re-check authentication status
+            if not supabase.is_authenticated():
+                # If still not authenticated, show a message and switch to a default tab
+                QMessageBox.warning(self, "Login Required", "You must be logged in to access the community.")
+                if hasattr(self, 'community_action'):
+                    self.community_action.setChecked(False)
+                # Ensure pedal config action is checked
+                if hasattr(self, 'pedal_config_action'):
+                    self.pedal_config_action.setChecked(True)
+                self.open_pedal_config()
+                return
+
+        # Check if community widget already exists
+        if hasattr(self, 'community_widget') and self.community_widget:
+            # If it exists, just switch to it
+            self.stacked_widget.setCurrentWidget(self.community_widget)
+            return
+
         # First check if user is authenticated for some features
         is_authenticated = False  # Default to false for safety
         try:

@@ -822,11 +822,7 @@ class HardwareInput:
                         'points': [(0, 0), (15, 5), (30, 20), (50, 45), (70, 75), (85, 95), (100, 100)],
                         'curve_type': 'Trail Braking'
                     },
-                    {
-                        'name': 'Threshold Braking',
-                        'points': [(0, 0), (20, 10), (40, 25), (60, 50), (80, 90), (90, 98), (100, 100)],
-                        'curve_type': 'Threshold Braking'
-                    },
+                    # Threshold braking curve removed
                     {
                         'name': 'Wet Weather',
                         'points': [(0, 0), (20, 5), (40, 15), (60, 30), (80, 60), (100, 85)],

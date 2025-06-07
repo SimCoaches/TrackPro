@@ -205,13 +205,23 @@ class LoginDialog(BaseAuthDialog):
             # Set the pending provider
             self.pending_provider = "google"
             
+            # Check if OAuth is available and get the port
+            oauth_port = getattr(self.oauth_handler, 'oauth_port', 3000) if self.oauth_handler else 3000
+            
+            # Check if the callback server is actually running
+            if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
+                self.show_error("Google login is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password login instead.")
+                return
+            
             # Make sure we're connected
             if not self.check_connection():
                 if self.show_network_error("Cannot connect to server to authenticate with Google."):
                     return
             
             # Open Google OAuth flow
-            response = supabase.sign_in_with_google("app://callback")
+            redirect_url = f"http://localhost:{oauth_port}"
+            logger.info(f"Starting Google OAuth with redirect URL: {redirect_url}")
+            response = supabase.sign_in_with_google(redirect_url)
             if response and hasattr(response, 'url'):
                 # Open browser with the URL
                 webbrowser.open(response.url)
@@ -325,6 +335,15 @@ class LoginDialog(BaseAuthDialog):
                 self.discord_button.setEnabled(True)
                 return
 
+            # Check if OAuth is available and get the port
+            oauth_port = getattr(self.oauth_handler, 'oauth_port', 3000) if self.oauth_handler else 3000
+            
+            # Check if the callback server is actually running
+            if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
+                self.discord_button.setEnabled(True)
+                self.show_error("Discord login is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password login instead.")
+                return
+
             # Make sure we're connected
             if not self.check_connection():
                 self.discord_button.setEnabled(True)
@@ -341,9 +360,9 @@ class LoginDialog(BaseAuthDialog):
 
             # Use the shared handler to start the Discord OAuth flow with PKCE
             # The server is already running, so we don't need to manage it here
-            logger.info("Using shared OAuth handler to start Discord login")
+            logger.info(f"Using shared OAuth handler to start Discord login on port {oauth_port}")
             try:
-                response = self.oauth_handler.start_discord_auth("http://localhost:3000")
+                response = self.oauth_handler.start_discord_auth(f"http://localhost:{oauth_port}")
 
                 if response and hasattr(response, 'url'):
                     # Open browser with the URL

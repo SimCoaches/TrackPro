@@ -500,7 +500,7 @@ class VideosTab(QWidget):
                     {
                         "id": 2,
                         "title": "Braking Techniques",
-                        "description": "Master threshold braking and trail braking for better corner entry.",
+                        "description": "Master trail braking for better corner entry.",
                         "duration": "18:45",
                         "video_id": "dQw4w9WgXcQ",
                         "completed": False

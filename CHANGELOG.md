@@ -233,7 +233,7 @@
 - Curve management UI with save, load, and delete functionality
 - Default curve presets for each pedal type:
   - Throttle: Racing, Smooth, Aggressive
-  - Brake: Hard Braking, Progressive, ABS Simulation
+  - Brake: Hard Braking, Progressive
   - Clutch: Quick Engage, Gradual, Race Start
 - Improved implementation of curve types (Linear, Exponential, Logarithmic, S-Curve)
 - Custom curve type for user-defined curves

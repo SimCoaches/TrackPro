@@ -22,7 +22,7 @@ RuntimeError: vJoy device 4 is not installed or disabled
 ```
 
 ### **Root Cause:**
-1. **Device 1**: Was held by the test UI you ran earlier (`test_threshold_ui.py`)
+1. **Device 1**: Was held by a test process running earlier
 2. **Devices 2-4**: Only vJoy device 1 is installed on your system
 3. **No Fallback**: The old code crashed instead of gracefully handling the conflict
 
@@ -54,7 +54,7 @@ RuntimeError: vJoy device 4 is not installed or disabled
 python run_app.py
 ```
 - **Result**: Will automatically fall back to test mode if vJoy is busy
-- **Threshold Assist**: ✅ **STILL WORKS** - all features functional in test mode
+- **Functionality**: All standard pedal features work in test mode
 
 ### **Method 2: Clean Start (If Issues Persist)**
 ```bash
@@ -67,29 +67,27 @@ python run_app.py
 
 ---
 
-## Threshold Braking Assist Status 🎯
+## TrackPro Features Status 🎯
 
-### **✅ GOOD NEWS: Everything Still Works!**
+### **✅ Available Features:**
 
-The threshold braking assist system **successfully initialized**:
-
-```
-trackpro.pedals.threshold_braking_assist - INFO - Threshold Braking Assist initialized (reduction: 2.0%)
-trackpro.pedals.hardware_input - INFO - Threshold Braking Assist system initialized
-```
-
-**Features Available:**
-- ✅ Automatic brake force limiting
-- ✅ ABS detection from iRacing telemetry
-- ✅ Learning system for optimal threshold
-- ✅ Context-aware per track/car
-- ✅ Real-time adjustment
+**Standard Functionality:**
+- ✅ Pedal calibration and curve configuration
+- ✅ Real-time pedal input processing
+- ✅ vJoy output to iRacing
+- ✅ Race Coach integration
+- ✅ Cloud sync and profile management
 
 ### **Test Mode vs. Production Mode**
-| Mode | vJoy Output | Threshold Assist | iRacing Integration |
+| Mode | vJoy Output | Standard Features | iRacing Integration |
 |------|------------|------------------|-------------------|
 | **Test Mode** | Simulated | ✅ Fully Functional | ✅ Full Access |
 | **Production** | Real Hardware | ✅ Fully Functional | ✅ Full Access |
+
+### **Removed Features:**
+- ❌ **Threshold assist system**: This functionality has been completely removed
+- ❌ **Automatic brake force limiting**: No longer available
+- ❌ **Advanced brake features**: Standard brake curves only
 
 ---
 
@@ -97,8 +95,8 @@ trackpro.pedals.hardware_input - INFO - Threshold Braking Assist system initiali
 
 ### **What Test Mode Does:**
 1. **Simulates vJoy Output**: Logs axis values instead of sending to virtual device
-2. **Full Functionality**: All TrackPro features work normally
-3. **iRacing Integration**: Still reads telemetry and applies assists
+2. **Full Functionality**: All standard TrackPro features work normally
+3. **iRacing Integration**: Still reads telemetry for Race Coach features
 4. **UI Works**: All controls and monitoring functional
 
 ### **When You'll See Test Mode:**
@@ -140,44 +138,37 @@ python run_app.py --test-mode
 
 ## Testing Your Setup 🎮
 
-### **Test Commands Available:**
+### **Available Tests:**
 
-1. **GUI Test** (with Xbox controller support):
+1. **Basic pedal test**:
 ```bash
-python test_threshold_ui.py
+python quick_vjoy_test.py
 ```
 
-2. **Command Line Test**:
-```bash
-python test_threshold_assist.py
-```
-
-3. **Full TrackPro**:
+2. **Full TrackPro**:
 ```bash
 python run_app.py
 ```
 
 ### **What Each Test Does:**
-- **GUI Test**: Beautiful interface, real-time monitoring, learning indicators
-- **CLI Test**: Interactive commands, automated sequences, status checks  
-- **Full App**: Complete TrackPro with all features
+- **Quick test**: Basic vJoy output verification
+- **Full App**: Complete TrackPro with all standard features
 
 ---
 
 ## Next Steps 🎯
 
-### **For Immediate Testing:**
+### **For Normal Use:**
 1. **Start TrackPro**: `python run_app.py` 
-2. **Load iRacing**: Start any car/track
-3. **Test Braking**: Press brake pedal hard to trigger ABS
-4. **Watch Learning**: System will learn optimal threshold
-5. **Feel Assist**: Brake force automatically limited at perfect threshold
+2. **Configure Pedals**: Use calibration wizard for setup
+3. **Load iRacing**: Start any car/track
+4. **Drive**: Standard pedal input with your configured curves
 
-### **For Xbox Controller Testing:**
-1. **Connect Xbox Controller**
-2. **Run**: `python test_threshold_ui.py`
-3. **Use**: Left Trigger = Brake, Right Trigger = Throttle
-4. **Test**: Pull brake trigger to 100% to simulate ABS activation
+### **For Testing:**
+1. **Connect your pedals**
+2. **Run**: `python run_app.py`
+3. **Calibrate**: Set up your pedal curves
+4. **Test**: Standard brake/throttle/clutch functionality
 
 ---
 
@@ -188,24 +179,23 @@ python run_app.py
 - ✅ `trackpro/main.py` - Better error handling
 - ✅ `stop_tests.py` - Process cleanup tool
 
-### **Threshold Assist Integration:**
-- ✅ Monitors `BrakeABSactive` from iRacing
-- ✅ Learns optimal brake threshold per track/car
-- ✅ Automatically limits brake force when input exceeds threshold
-- ✅ Never reduces more than 15%, only above 30% brake input
-- ✅ Gradual reduction instead of hard cuts
+### **Standard Pedal Features:**
+- ✅ Multiple calibration curve types (Linear, Exponential, etc.)
+- ✅ Custom curve creation and saving
+- ✅ Deadzone configuration
+- ✅ Real-time input monitoring
+- ✅ Profile management and cloud sync
 
 ### **Safety Features:**
-- ✅ Only activates when ABS would trigger
-- ✅ Context-aware (different thresholds per track/car)
-- ✅ Configurable reduction percentage (default 2%)
-- ✅ Learning can be reset if needed
-- ✅ Can be enabled/disabled on-the-fly
+- ✅ Automatic test mode fallback
+- ✅ Graceful error handling
+- ✅ Process cleanup utilities
+- ✅ Comprehensive logging
 
 ---
 
 ## Success! 🎉
 
-Your **Threshold Braking Assist** is now fully functional! The vJoy conflict was just a startup issue - all your core features work perfectly. Whether in test mode or production mode, you'll get the same perfect brake force limiting that keeps you at optimal threshold regardless of how hard you press the brake pedal.
+Your TrackPro system is now fully functional! The vJoy conflict was just a startup issue - all your standard pedal features work perfectly. Whether in test mode or production mode, you'll get reliable pedal input processing with all the calibration and curve features TrackPro offers.
 
-**The system works exactly as envisioned: Perfect threshold braking, every time! 🏁** 
+**Standard pedal functionality works perfectly! 🏁** 
