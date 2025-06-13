@@ -97,8 +97,8 @@ class SteeringGraphWidget(GraphBase):
         self.setLayout(layout)
         
         # Initialize plot items with modern colors matching the new design
-        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Steering", autoDownsample=False, clipToView=False)
-        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Steering", autoDownsample=False, clipToView=False)
+        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Your Steering", autoDownsample=False, clipToView=False)
+        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Super Lap Steering", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curve
         self.steering_curve_b.hide()
@@ -184,7 +184,7 @@ class SteeringGraphWidget(GraphBase):
                         tooltip = f"""
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                                <span style='color: #00AAFF;'>Steering {direction_a}: {abs(steering_value_a):.0f}%</span>
+                                <span style='color: #00AAFF;'>Your: {direction_a} {abs(steering_value_a):.0f}%</span>
                             </div>
                         """
                     else:
@@ -200,8 +200,8 @@ class SteeringGraphWidget(GraphBase):
                         tooltip = f"""
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                                <span style='color: #00AAFF;'>Lap A: {direction_a} {abs(steering_value_a):.0f}%</span><br>
-                                <span style='color: #88CCFF;'>Lap B: {direction_b} {abs(steering_value_b):.0f}%</span>
+                                <span style='color: #00AAFF;'>Your: {direction_a} {abs(steering_value_a):.0f}%</span><br>
+                                <span style='color: #88CCFF;'>Super Lap: {direction_b} {abs(steering_value_b):.0f}%</span>
                             </div>
                         """
                     
@@ -521,9 +521,9 @@ class SteeringGraphWidget(GraphBase):
         if self.legend:
             self.legend.clear()  # Make sure to clear the legend again before adding items
             if is_valid_a:
-                 self.legend.addItem(self.steering_curve, "Lap A Steering")
+                 self.legend.addItem(self.steering_curve, "Your Steering")
             if is_valid_b:
-                 self.legend.addItem(self.steering_curve_b, "Lap B Steering")
+                 self.legend.addItem(self.steering_curve_b, "Super Lap Steering")
 
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()
@@ -656,9 +656,9 @@ class SteeringGraphWidget(GraphBase):
             # Ensure legend is updated
             if self.legend:
                 self.legend.clear()
-                self.legend.addItem(self.steering_curve, "Lap A Steering")
+                self.legend.addItem(self.steering_curve, "Your Steering")
                 if comp_distances: # Only add comparison item if it has data
-                     self.legend.addItem(self.steering_curve_b, "Lap B Steering")
+                     self.legend.addItem(self.steering_curve_b, "Super Lap Steering")
 
             return True
 

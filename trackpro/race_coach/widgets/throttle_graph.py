@@ -104,8 +104,8 @@ class ThrottleGraphWidget(GraphBase):
         self.setLayout(layout)
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.throttle_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Throttle", autoDownsample=False, clipToView=False)
-        self.throttle_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Throttle", autoDownsample=False, clipToView=False)
+        self.throttle_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Your Throttle", autoDownsample=False, clipToView=False)
+        self.throttle_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Super Lap Throttle", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curves
         self.throttle_curve_b.hide()
@@ -188,7 +188,7 @@ class ThrottleGraphWidget(GraphBase):
                         tooltip = f"""
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span> &nbsp;
-                                <span style='color: #00FF00;'>Throttle: {throttle_value_a:.0f}%</span>
+                                <span style='color: #00FF00;'>Your Throttle: {throttle_value_a:.0f}%</span>
                             </div>
                         """
                     else:
@@ -196,8 +196,8 @@ class ThrottleGraphWidget(GraphBase):
                         tooltip = f"""
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                                <span style='color: #00FF00;'>Lap A Throttle: {throttle_value_a:.0f}%</span> &nbsp;
-                                <span style='color: #88FF88;'>Lap B Throttle: {throttle_value_b:.0f}%</span>
+                                <span style='color: #00FF00;'>Your Throttle: {throttle_value_a:.0f}%</span> &nbsp;
+                                <span style='color: #88FF88;'>Super Lap Throttle: {throttle_value_b:.0f}%</span>
                             </div>
                         """
                     
@@ -655,9 +655,9 @@ class ThrottleGraphWidget(GraphBase):
         if self.legend:
             self.legend.clear()  # Make sure to clear the legend again before adding items
             if is_valid_a:
-                 self.legend.addItem(self.throttle_curve, "Lap A Throttle")
+                 self.legend.addItem(self.throttle_curve, "Your Throttle")
             if is_valid_b:
-                 self.legend.addItem(self.throttle_curve_b, "Lap B Throttle")
+                 self.legend.addItem(self.throttle_curve_b, "Super Lap Throttle")
 
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()

@@ -12,7 +12,8 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QMessageBox, QDialog, QTextEdit, QTabWidget
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QPixmap
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,10 @@ class SuperLapSessionWorker(QObject):
                 track_id = session.get('track_id')
                 
                 if car_id and track_id:
-                    # Check if ML data exists for this car/track combo
+                    # Check if SuperLap data exists for this car/track combo
                     try:
-                        ml_check = (
-                            main_supabase.client.table("laps_ml")
+                        super_lap_check = (
+                            main_supabase.client.table("super_laps_ml")
                             .select("id")
                             .eq("car_id", car_id)
                             .eq("track_id", track_id)
@@ -76,10 +77,10 @@ class SuperLapSessionWorker(QObject):
                             .execute()
                         )
                         
-                        if ml_check.data:  # ML data exists for this car/track
+                        if super_lap_check.data:  # SuperLap data exists for this car/track
                             valid_sessions.append(session)
-                    except Exception as ml_error:
-                        print(f"Error checking ML data for session {session.get('id')}: {ml_error}")
+                    except Exception as super_lap_error:
+                        print(f"Error checking SuperLap data for session {session.get('id')}: {super_lap_error}")
                         # Include session anyway for now during development
                         valid_sessions.append(session)
                         continue
@@ -190,7 +191,7 @@ class SuperLapMLLapWorker(QObject):
             self.finished.emit()
 
     def _get_filtered_ml_laps(self, car_id, track_id):
-        """Get ML laps filtered by car and track from Supabase laps_ml table."""
+        """Get SuperLaps filtered by car and track from Supabase super_laps_ml table."""
         if not car_id or not track_id:
             return []
             
@@ -198,89 +199,210 @@ class SuperLapMLLapWorker(QObject):
             from trackpro.database.supabase_client import supabase as main_supabase
             
             if not main_supabase or not main_supabase.is_authenticated():
-                print("No authenticated Supabase client available for ML laps")
+                print("No authenticated Supabase client available for SuperLaps")
                 return []
             
-            # Query the laps_ml table for ML-optimized laps matching this car/track combo
-            ml_laps_result = (
-                main_supabase.client.table("laps_ml")
+            # Query the super_laps_ml table for SuperLaps matching this car/track combo
+            super_laps_result = (
+                main_supabase.client.table("super_laps_ml")
                 .select("*")
                 .eq("car_id", car_id)
                 .eq("track_id", track_id)
-                .order("confidence_score", desc=True)  # Best confidence first
-                .limit(10)  # Limit to top 10 ML laps
+                .order("confidence_level", desc=True)  # Best confidence first
+                .limit(10)  # Limit to top 10 SuperLaps
                 .execute()
             )
             
-            if not ml_laps_result.data:
-                print(f"No ML laps found for car_id={car_id}, track_id={track_id}")
+            if not super_laps_result.data:
+                print(f"No SuperLaps found for car_id={car_id}, track_id={track_id}")
                 return []
             
-            ml_laps = []
-            for ml_lap in ml_laps_result.data:
+            super_laps = []
+            for super_lap in super_laps_result.data:
                 if self.is_cancelled:
                     return []
                 
-                # Get additional optimization details if available
-                optimization_details = {}
-                
-                # Try to get brake points from ml_optimizations table
-                try:
-                    opt_result = (
-                        main_supabase.client.table("ml_optimizations")
-                        .select("optimization_type,details")
-                        .eq("ml_lap_id", ml_lap.get("id"))
-                        .execute()
-                    )
-                    
-                    if opt_result.data:
-                        for opt in opt_result.data:
-                            opt_type = opt.get("optimization_type")
-                            details = opt.get("details", {})
-                            
-                            if isinstance(details, str):
-                                import json
-                                try:
-                                    details = json.loads(details)
-                                except:
-                                    details = {}
-                            
-                            if opt_type == "brake_points":
-                                optimization_details["brake_points"] = details.get("points", [])
-                            elif opt_type == "throttle_points":
-                                optimization_details["throttle_points"] = details.get("points", [])
-                            elif opt_type == "racing_line":
-                                optimization_details["racing_line"] = details.get("sections", [])
-                                
-                except Exception as opt_error:
-                    print(f"Error fetching optimization details: {opt_error}")
-                
-                # Build the ML lap data structure
-                ml_lap_data = {
-                    'id': ml_lap.get('id'),
-                    'lap_time': ml_lap.get('lap_time', 0),
-                    'predicted_improvement_ms': ml_lap.get('predicted_improvement_ms', 0),
-                    'confidence_score': ml_lap.get('confidence_score', 0),
-                    'optimization_method': ml_lap.get('optimization_method', 'ml_analysis'),
-                    'model_used': ml_lap.get('model_used', 'AI Model'),
+                # Build the SuperLap data structure
+                super_lap_data = {
+                    'id': super_lap.get('id'),
+                    'lap_time': super_lap.get('total_time', 0),  # Use total_time from super_laps_ml
+                    'confidence_score': super_lap.get('confidence_level', 0),  # Use confidence_level
+                    'optimization_method': 'super_lap_analysis',
+                    'model_used': 'SuperLap AI',
                     'car_id': car_id,
                     'track_id': track_id,
-                    'created_at': ml_lap.get('created_at'),
-                    **optimization_details  # Add brake_points, throttle_points, racing_line
+                    'created_at': super_lap.get('created_at'),
+                    'sector_combination': super_lap.get('sector_combination', {}),
+                    'sector_1_time': super_lap.get('sector_1_time'),
+                    'sector_2_time': super_lap.get('sector_2_time'),
+                    'sector_3_time': super_lap.get('sector_3_time'),
                 }
                 
-                ml_laps.append(ml_lap_data)
+                super_laps.append(super_lap_data)
             
-            print(f"Found {len(ml_laps)} ML laps for car_id={car_id}, track_id={track_id}")
-            return ml_laps
+            print(f"Found {len(super_laps)} SuperLaps for car_id={car_id}, track_id={track_id}")
+            return super_laps
             
         except Exception as e:
-            print(f"Error fetching ML laps from Supabase: {e}")
+            print(f"Error fetching SuperLaps from Supabase: {e}")
             return []
 
     def cancel(self):
         self.is_cancelled = True
         
+    def stop_monitoring(self):
+        """Alias for cancel to match cleanup interface."""
+        self.cancel()
+
+
+# --- SuperLap Telemetry Worker ---
+class SuperLapTelemetryWorker(QObject):
+    """Worker to fetch telemetry data for both user lap and super lap in the background."""
+    
+    telemetry_loaded = pyqtSignal(object, object)  # (user_data, super_lap_data)
+    error = pyqtSignal(str)  # (error_message)
+    finished = pyqtSignal()
+
+    def __init__(self, user_lap_id, super_lap_id):
+        super().__init__()
+        self.user_lap_id = user_lap_id
+        self.super_lap_id = super_lap_id
+        self.is_cancelled = False
+
+    def _calculate_lap_stats(self, telemetry_points):
+        """Calculate statistics for a lap from telemetry points."""
+        if not telemetry_points:
+            return None
+            
+        stats = {
+            'max_speed': 0,
+            'avg_speed': 0,
+            'max_throttle': 0,
+            'avg_throttle': 0,
+            'max_brake': 0,
+            'avg_brake': 0,
+            'max_rpm': 0,
+            'avg_rpm': 0,
+            'point_count': len(telemetry_points)
+        }
+        
+        # Calculate stats
+        speeds = []
+        throttles = []
+        brakes = []
+        rpms = []
+        
+        for point in telemetry_points:
+            if 'speed' in point and point['speed'] is not None:
+                speeds.append(point['speed'])
+            if 'throttle' in point and point['throttle'] is not None:
+                throttles.append(point['throttle'])
+            if 'brake' in point and point['brake'] is not None:
+                brakes.append(point['brake'])
+            if 'rpm' in point and point['rpm'] is not None:
+                rpms.append(point['rpm'])
+        
+        if speeds:
+            stats['max_speed'] = max(speeds)
+            stats['avg_speed'] = sum(speeds) / len(speeds)
+        
+        if throttles:
+            stats['max_throttle'] = max(throttles)
+            stats['avg_throttle'] = sum(throttles) / len(throttles)
+            
+        if brakes:
+            stats['max_brake'] = max(brakes)
+            stats['avg_brake'] = sum(brakes) / len(brakes)
+            
+        if rpms:
+            stats['max_rpm'] = max(rpms)
+            stats['avg_rpm'] = sum(rpms) / len(rpms)
+        
+        return stats
+
+    def run(self):
+        """Fetch telemetry data for both user lap and super lap."""
+        try:
+            from Supabase.database import get_telemetry_points, get_super_lap_telemetry_points
+            
+            user_result = None
+            super_lap_result = None
+            error_messages = []
+            
+            # Fetch user lap data
+            if self.user_lap_id and not self.is_cancelled:
+                try:
+                    logger.info(f"Fetching user lap telemetry for lap_id: {self.user_lap_id}")
+                    user_result_tuple = get_telemetry_points(self.user_lap_id)
+                    if user_result_tuple[0] is not None:
+                        user_points = user_result_tuple[0]
+                        user_stats = self._calculate_lap_stats(user_points)
+                        user_result = {
+                            'points': user_points,
+                            'stats': user_stats
+                        }
+                        logger.info(f"Successfully loaded {len(user_points)} user telemetry points")
+                    else:
+                        error_msg = f"User lap telemetry: {user_result_tuple[1]}"
+                        error_messages.append(error_msg)
+                        logger.warning(error_msg)
+                except Exception as e:
+                    error_msg = f"Error fetching user lap telemetry: {str(e)}"
+                    error_messages.append(error_msg)
+                    logger.error(error_msg, exc_info=True)
+            
+            # Fetch super lap data with enhanced debugging
+            if self.super_lap_id and not self.is_cancelled:
+                try:
+                    logger.info(f"Fetching SuperLap telemetry for super_lap_id: {self.super_lap_id}")
+                    super_lap_result_tuple = get_super_lap_telemetry_points(self.super_lap_id)
+                    if super_lap_result_tuple[0] is not None:
+                        super_lap_points = super_lap_result_tuple[0]
+                        super_lap_stats = self._calculate_lap_stats(super_lap_points)
+                        super_lap_result = {
+                            'points': super_lap_points,
+                            'stats': super_lap_stats
+                        }
+                        logger.info(f"Successfully loaded {len(super_lap_points)} SuperLap telemetry points")
+                        
+                        # Debug: Log first few points to verify data structure
+                        if super_lap_points and len(super_lap_points) > 0:
+                            sample_point = super_lap_points[0]
+                            logger.info(f"SuperLap telemetry sample point fields: {list(sample_point.keys())}")
+                            logger.info(f"SuperLap telemetry sample values: {dict(list(sample_point.items())[:5])}")
+                    else:
+                        error_msg = f"Super lap telemetry: {super_lap_result_tuple[1]}"
+                        error_messages.append(error_msg)
+                        logger.warning(error_msg)
+                        
+                        # Additional debugging for SuperLap telemetry failures
+                        logger.info(f"SuperLap telemetry reconstruction failed for super_lap_id: {self.super_lap_id}")
+                        logger.info(f"Error details: {super_lap_result_tuple[1]}")
+                        
+                except Exception as e:
+                    error_msg = f"Error fetching super lap telemetry: {str(e)}"
+                    error_messages.append(error_msg)
+                    logger.error(error_msg, exc_info=True)
+            
+            if not self.is_cancelled:
+                if error_messages and not user_result and not super_lap_result:
+                    # Only emit error if we have no data at all
+                    self.error.emit("; ".join(error_messages))
+                else:
+                    # Emit what we have, even if partial
+                    self.telemetry_loaded.emit(user_result, super_lap_result)
+                    if error_messages:
+                        logger.warning(f"Partial telemetry data loaded with warnings: {'; '.join(error_messages)}")
+                    
+        except Exception as e:
+            logger.error(f"Error in SuperLap telemetry fetch worker: {e}", exc_info=True)
+            self.error.emit(str(e))
+        
+        self.finished.emit()
+
+    def cancel(self):
+        self.is_cancelled = True
+
     def stop_monitoring(self):
         """Alias for cancel to match cleanup interface."""
         self.cancel()
@@ -307,56 +429,63 @@ class SuperLapWidget(QWidget):
     def setup_ui(self):
         """Set up the comprehensive SuperLap analysis UI."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(3)
         
-        # Compact header section with session context
+        # MINIMAL header section - maximum space for telemetry!
         header_frame = QFrame()
         header_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
         header_frame.setStyleSheet("""
             background-color: #1a1a1a;
-            border: 1px solid #444;
+            border: 2px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #FF4500, stop:0.3 #FF6600, stop:0.7 #FF8800, stop:1 #FF4500);
             border-radius: 6px;
-            padding: 10px;
+            padding: 3px;
         """)
         header_layout = QVBoxLayout(header_frame)
-        header_layout.setSpacing(3)
+        header_layout.setSpacing(0)
+        header_layout.setContentsMargins(3, 3, 3, 3)
         
-        # Title
-        title_label = QLabel("SuperLap Analysis")
-        title_label.setStyleSheet("""
-            color: #00ff88;
-            font-size: 22px;
-            font-weight: bold;
-            margin-bottom: 2px;
-        """)
-        title_label.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(title_label)
+        # Logo
+        logo_label = QLabel()
+        logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'resources', 'images', 'superlap_logo.png')
         
-        # Session context
-        self.session_context_label = QLabel("Select a session to see AI-optimized racing lines for your car/track combo")
-        self.session_context_label.setStyleSheet("""
-            color: #cccccc;
-            font-size: 12px;
-            font-style: normal;
-            background-color: transparent;
-        """)
-        self.session_context_label.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(self.session_context_label)
+        if os.path.exists(logo_path):
+            pixmap = QPixmap(logo_path)
+            # Scale to banner-friendly size that maintains aspect ratio
+            scaled_pixmap = pixmap.scaled(800, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(scaled_pixmap)
+        else:
+            # Fallback to text if logo file not found
+            logo_label.setText("SUPERLAP ANALYSIS")
+            logo_label.setStyleSheet("""
+                color: #FF4500;
+                background-color: transparent;
+                font-size: 24px;
+                font-weight: bold;
+                margin-bottom: 2px;
+            """)
+        
+        logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setStyleSheet("background-color: transparent; margin: 0px; padding: 0px;")
+        header_layout.addWidget(logo_label)
+        
+        # Remove session context to save space - info is already in the session dropdown
         
         main_layout.addWidget(header_frame)
         
-        # Combined session and lap selection in one compact frame
+        # Minimal controls frame
         controls_frame = QFrame()
         controls_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
         controls_frame.setStyleSheet("""
             background-color: #111;
             border: 1px solid #444;
             border-radius: 5px;
-            padding: 8px;
+            padding: 4px;
         """)
         controls_layout = QVBoxLayout(controls_frame)
-        controls_layout.setSpacing(6)
+        controls_layout.setSpacing(2)
+        controls_layout.setContentsMargins(3, 3, 3, 3)
         
         # Session selection row
         session_row = QHBoxLayout()
@@ -413,6 +542,13 @@ class SuperLapWidget(QWidget):
         self.reset_connection_button.clicked.connect(self._reset_iracing_connection)
         session_row.addWidget(self.reset_connection_button)
         
+        # Add SuperLap diagnostic button
+        self.diagnostic_button = QPushButton("🔍 Diagnose")
+        self.diagnostic_button.setToolTip("Run diagnostics on selected SuperLap telemetry")
+        self.diagnostic_button.setStyleSheet("padding: 5px 10px; background-color: #444; color: #00FFFF;")
+        self.diagnostic_button.clicked.connect(self._run_superlap_diagnostics)
+        session_row.addWidget(self.diagnostic_button)
+        
         controls_layout.addLayout(session_row)
         
         # Lap selection row
@@ -450,15 +586,15 @@ class SuperLapWidget(QWidget):
         
         # ML lap selection
         ml_lap_label = QLabel("SuperLap:")
-        ml_lap_label.setStyleSheet("color: #00ff88; font-weight: bold; min-width: 70px;")
+        ml_lap_label.setStyleSheet("color: #00ffff; font-weight: bold; min-width: 70px;")
         lap_row.addWidget(ml_lap_label)
         
         self.ml_lap_combo = QComboBox()
         self.ml_lap_combo.setStyleSheet("""
             QComboBox {
-                background-color: #1a3d1a;
-                color: #00ff88;
-                border: 1px solid #00ff88;
+                background-color: #1a3d3d;
+                color: #00ffff;
+                border: 1px solid #00ffff;
                 border-radius: 3px;
                 padding: 4px;
                 min-height: 20px;
@@ -470,7 +606,7 @@ class SuperLapWidget(QWidget):
                 image: none;
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
-                border-top: 5px solid #00ff88;
+                border-top: 5px solid #00ffff;
             }
         """)
         self.ml_lap_combo.currentTextChanged.connect(self.on_ml_lap_changed)
@@ -478,11 +614,11 @@ class SuperLapWidget(QWidget):
         
         lap_row.addSpacing(10)
         
-        # Analyze button (renamed from Compare)
+        # Analyze button
         self.compare_button = QPushButton("Analyze Performance")
         self.compare_button.setStyleSheet("""
             QPushButton {
-                background-color: #00ff88;
+                background-color: #00ffff;
                 color: black;
                 border: none;
                 border-radius: 4px;
@@ -492,7 +628,7 @@ class SuperLapWidget(QWidget):
                 min-width: 120px;
             }
             QPushButton:hover {
-                background-color: #00cc6a;
+                background-color: #00cccc;
             }
             QPushButton:disabled {
                 background-color: #555;
@@ -507,51 +643,9 @@ class SuperLapWidget(QWidget):
         
         main_layout.addWidget(controls_frame)
         
-        # Create tabbed analysis view with reduced margins
-        self.analysis_tabs = QTabWidget()
-        self.analysis_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #444;
-                background-color: #111;
-                border-radius: 3px;
-                margin-top: -1px;
-            }
-            QTabBar::tab {
-                background-color: #333;
-                color: #CCC;
-                padding: 6px 12px;
-                margin-right: 2px;
-                border-top-left-radius: 3px;
-                border-top-right-radius: 3px;
-                min-width: 80px;
-            }
-            QTabBar::tab:selected {
-                background-color: #444;
-                color: #00ff88;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover {
-                background-color: #3a3a3a;
-            }
-        """)
-        
-        # Performance Overview Tab
-        self.overview_tab = self.create_overview_tab()
-        self.analysis_tabs.addTab(self.overview_tab, "Overview")
-        
-        # Sector Analysis Tab
-        self.sector_tab = self.create_sector_analysis_tab()
-        self.analysis_tabs.addTab(self.sector_tab, "Sectors")
-        
-        # Driving Technique Tab
-        self.technique_tab = self.create_technique_analysis_tab()
-        self.analysis_tabs.addTab(self.technique_tab, "Technique")
-        
-        # Telemetry Comparison Tab
-        self.telemetry_tab = self.create_telemetry_comparison_tab()
-        self.analysis_tabs.addTab(self.telemetry_tab, "Telemetry")
-        
-        main_layout.addWidget(self.analysis_tabs)
+        # Create telemetry comparison interface directly (no tabs)
+        self.telemetry_comparison_widget = self.create_telemetry_comparison_interface()
+        main_layout.addWidget(self.telemetry_comparison_widget)
         
         # Load initial data
         self.refresh_data()
@@ -865,44 +959,181 @@ class SuperLapWidget(QWidget):
         layout.addStretch()
         return tab
     
-    def create_telemetry_comparison_tab(self):
-        """Create the telemetry comparison tab."""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+    def create_telemetry_comparison_interface(self):
+        """Create the main telemetry comparison interface."""
+        from trackpro.race_coach.widgets.throttle_graph import ThrottleGraphWidget
+        from trackpro.race_coach.widgets.brake_graph import BrakeGraphWidget
+        from trackpro.race_coach.widgets.steering_graph import SteeringGraphWidget
+        from trackpro.race_coach.widgets.speed_graph import SpeedGraphWidget
+        from PyQt5.QtWidgets import QScrollArea
         
-        # Placeholder for telemetry graphs
-        graphs_frame = QFrame()
-        graphs_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
-        graphs_frame.setStyleSheet("""
-            background-color: #1a1a1a;
-            border: 1px solid #444;
+        widget = QWidget()
+        main_layout = QVBoxLayout(widget)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
+        
+        # Lap times comparison header
+        times_frame = QFrame()
+        times_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        times_frame.setStyleSheet("""
+            background-color: #2d2d30;
+            border: 1px solid #3c3c3c;
             border-radius: 6px;
-            padding: 10px;
+            padding: 6px;
         """)
-        graphs_layout = QVBoxLayout(graphs_frame)
-        graphs_layout.setSpacing(5)
+        times_layout = QHBoxLayout(times_frame)
+        times_layout.setSpacing(15)
+        times_layout.setContentsMargins(8, 4, 8, 4)
         
-        graphs_title = QLabel("📈 Telemetry Comparison")
-        graphs_title.setStyleSheet("color: #00ff88; font-size: 14px; font-weight: bold; margin-bottom: 5px;")
-        graphs_layout.addWidget(graphs_title)
+        # User lap time
+        self.user_lap_time_label = QLabel("Your Lap: --:--.---")
+        self.user_lap_time_label.setStyleSheet("""
+            color: #e0e0e0;
+            font-size: 14px;
+            font-weight: bold;
+            background-color: transparent;
+        """)
+        times_layout.addWidget(self.user_lap_time_label)
         
-        self.telemetry_placeholder = QLabel("Detailed telemetry comparison graphs will be displayed here.\nThis will include throttle, brake, steering, and speed traces overlaid with the SuperLap data.")
-        self.telemetry_placeholder.setStyleSheet("""
-            color: #666;
+        # VS separator
+        vs_label = QLabel("VS")
+        vs_label.setStyleSheet("""
+            color: #58a6ff;
             font-size: 12px;
-            font-style: italic;
-            padding: 30px;
-            text-align: center;
+            font-weight: bold;
+            background-color: transparent;
         """)
-        self.telemetry_placeholder.setAlignment(Qt.AlignCenter)
-        graphs_layout.addWidget(self.telemetry_placeholder)
+        times_layout.addWidget(vs_label)
         
-        layout.addWidget(graphs_frame)
+        # Super lap time
+        self.super_lap_time_label = QLabel("SuperLap: --:--.---")
+        self.super_lap_time_label.setStyleSheet("""
+            color: #00d4ff;
+            font-size: 14px;
+            font-weight: bold;
+            background-color: transparent;
+        """)
+        times_layout.addWidget(self.super_lap_time_label)
         
-        layout.addStretch()
-        return tab
+        # Delta
+        self.delta_label = QLabel("Δ: --:--.---")
+        self.delta_label.setStyleSheet("""
+            color: #ff6b6b;
+            font-size: 14px;
+            font-weight: bold;
+            background-color: transparent;
+        """)
+        times_layout.addWidget(self.delta_label)
+        
+        times_layout.addStretch()
+        main_layout.addWidget(times_frame)
+        
+        # Create scroll area for graphs
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+            }
+            QScrollBar:vertical {
+                background-color: #21262d;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #58a6ff;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #79c0ff;
+            }
+        """)
+        
+        # Content widget for the scroll area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        content_layout.setSpacing(8)
+        
+        # Speed graph
+        self.speed_graph = SpeedGraphWidget()
+        speed_container = self._create_graph_container(self.speed_graph, "Speed Comparison")
+        content_layout.addWidget(speed_container)
+        
+        # Throttle graph
+        self.throttle_graph = ThrottleGraphWidget()
+        throttle_container = self._create_graph_container(self.throttle_graph, "Throttle Comparison")
+        content_layout.addWidget(throttle_container)
+        
+        # Brake graph
+        self.brake_graph = BrakeGraphWidget()
+        brake_container = self._create_graph_container(self.brake_graph, "Brake Comparison")
+        content_layout.addWidget(brake_container)
+        
+        # Steering graph
+        self.steering_graph = SteeringGraphWidget()
+        steering_container = self._create_graph_container(self.steering_graph, "Steering Comparison")
+        content_layout.addWidget(steering_container)
+        
+        # Message/status label
+        self.telemetry_status_label = QLabel("Select laps above and click 'Analyze Performance' to compare telemetry")
+        self.telemetry_status_label.setStyleSheet("""
+            color: #e0e0e0;
+            font-size: 14px;
+            font-style: italic;
+            padding: 20px;
+            text-align: center;
+            background-color: transparent;
+        """)
+        self.telemetry_status_label.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(self.telemetry_status_label)
+        
+        content_layout.addStretch()
+        
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+        
+        return widget
+    
+    def _create_graph_container(self, graph_widget, title):
+        """Create a styled container for a graph widget."""
+        container = QFrame()
+        container.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        container.setStyleSheet("""
+            QFrame {
+                background-color: #2d2d30;
+                border: 1px solid #3c3c3c;
+                border-radius: 6px;
+                padding: 8px;
+            }
+        """)
+        
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        
+        # Title label
+        title_label = QLabel(title)
+        title_label.setStyleSheet("""
+            color: #58a6ff;
+            font-size: 12px;
+            font-weight: bold;
+            background-color: transparent;
+            margin-bottom: 4px;
+        """)
+        layout.addWidget(title_label)
+        
+        # Graph widget
+        graph_widget.setMinimumHeight(180)
+        graph_widget.setMaximumHeight(220)
+        layout.addWidget(graph_widget)
+        
+        return container
     
     def refresh_data(self):
         """Refresh the session and lap data from Supabase asynchronously."""
@@ -975,25 +1206,17 @@ class SuperLapWidget(QWidget):
         """Handle session loading errors."""
         self.session_combo.clear()
         self.session_combo.addItem(f"Error: {error_message}", None)
-        self.session_context_label.setText("Error loading session data. Please try again.")
     
     def on_session_changed(self):
         """Handle session selection change."""
         current_session = self.session_combo.currentData()
         if current_session:
             self.current_session_info = current_session
-            # Extract car and track names from the nested objects
-            car_name = current_session.get('cars', {}).get('name', 'Unknown Car') if current_session.get('cars') else 'Unknown Car'
-            track_name = current_session.get('tracks', {}).get('name', 'Unknown Track') if current_session.get('tracks') else 'Unknown Track'
-            
-            self.session_context_label.setText(f"Analyzing: {car_name} at {track_name}")
-            
             # Load laps for this session
             self.load_user_laps()
             self.load_ml_laps()
         else:
             self.current_session_info = None
-            self.session_context_label.setText("Select a session to see AI-optimized racing lines")
             self.user_lap_combo.clear()
             self.ml_lap_combo.clear()
     
@@ -1140,13 +1363,10 @@ class SuperLapWidget(QWidget):
             self.ml_laps = ml_laps_data
             for lap in ml_laps_data:
                 lap_time = lap.get('lap_time', 0)
-                improvement = lap.get('predicted_improvement_ms', 0)
-                confidence = lap.get('confidence_score', 0)
                 model = lap.get('model_used', 'AI Model')
                 
                 time_str = self._format_time(lap_time) if lap_time > 0 else "Invalid"
-                improvement_str = f"-{improvement/1000:.3f}s" if improvement > 0 else "No improvement"
-                display_text = f"{model}: {time_str} ({improvement_str}, {confidence*100:.0f}% confidence)"
+                display_text = f"{model}: {time_str}"
                 self.ml_lap_combo.addItem(display_text, lap['id'])
         else:
             self.ml_laps = []
@@ -1173,7 +1393,7 @@ class SuperLapWidget(QWidget):
         self.compare_button.setEnabled(user_lap_id is not None and ml_lap_id is not None)
     
     def analyze_performance(self):
-        """Analyze the selected user lap against the SuperLap."""
+        """Analyze the selected user lap against the SuperLap with telemetry comparison."""
         user_lap_id = self.user_lap_combo.currentData()
         ml_lap_id = self.ml_lap_combo.currentData()
         
@@ -1187,121 +1407,367 @@ class SuperLapWidget(QWidget):
         if not self.current_user_lap or not self.current_ml_lap:
             return
         
-        # Update the overview tab
-        self._update_overview_tab()
-        
-        # TODO: Update other tabs with detailed analysis
-        # For now, show placeholder messages
-        self._update_placeholder_tabs()
+        try:
+            # Update status
+            self.telemetry_status_label.setText("Loading telemetry data for comparison...")
+            
+            # Load telemetry comparison data
+            self._load_telemetry_comparison(user_lap_id, ml_lap_id)
+            
+            logger.info(f"Starting telemetry comparison for User Lap {self.current_user_lap.get('lap_number')} vs ML Lap")
+            
+        except Exception as e:
+            logger.error(f"Error in performance analysis: {e}")
+            QMessageBox.warning(self, "Analysis Error", f"Error analyzing performance: {str(e)}")
     
-    def _update_overview_tab(self):
-        """Update the overview tab with analysis results."""
-        if not self.current_user_lap or not self.current_ml_lap:
+    def _load_telemetry_comparison(self, user_lap_id, super_lap_id):
+        """Load telemetry data for comparison between user lap and super lap."""
+        # Don't start new threads if widget is being destroyed
+        if self._is_being_destroyed:
             return
         
-        # Update lap times
-        user_time = self.current_user_lap.get('lap_time', 0)
-        ml_time = self.current_ml_lap.get('lap_time', 0)
-        time_diff = user_time - ml_time
+        # Check if telemetry loading is already in progress
+        if self._is_thread_running('telemetry_comparison'):
+            logger.info("Telemetry comparison loading already in progress, skipping duplicate request")
+            return
         
-        self.user_time_label.setText(f"Your Time: {self._format_time(user_time)}")
-        self.ml_time_label.setText(f"SuperLap Time: {self._format_time(ml_time)}")
-        self.time_diff_label.setText(f"Potential Improvement: {self._format_time(abs(time_diff))}")
+        # Show detailed loading status
+        if user_lap_id and super_lap_id:
+            self.telemetry_status_label.setText("Loading telemetry data for both user lap and SuperLap...")
+        elif user_lap_id:
+            self.telemetry_status_label.setText("Loading user lap telemetry data...")
+        elif super_lap_id:
+            self.telemetry_status_label.setText("Loading SuperLap telemetry data...")
+        else:
+            self.telemetry_status_label.setText("No laps selected for comparison")
+            return
+            
+        # Create worker for telemetry loading
+        telemetry_thread = QThread()
+        telemetry_worker = SuperLapTelemetryWorker(user_lap_id, super_lap_id)
+        telemetry_worker.moveToThread(telemetry_thread)
         
-        # Update AI analysis info
-        confidence = self.current_ml_lap.get('confidence_score', 0)
-        method = self.current_ml_lap.get('optimization_method', 'ml_analysis')
-        model = self.current_ml_lap.get('model_used', 'AI Model')
+        # Track this thread for cleanup with unique identifier
+        thread_id = f'telemetry_comparison_{id(telemetry_thread)}'
+        self.active_threads.append((thread_id, telemetry_thread, telemetry_worker))
         
-        self.confidence_label.setText(f"AI Confidence: {confidence*100:.0f}%")
-        self.method_label.setText(f"Analysis Method: {method}")
-        self.model_label.setText(f"AI Model: {model}")
+        # Connect signals
+        telemetry_thread.started.connect(telemetry_worker.run)
+        telemetry_worker.telemetry_loaded.connect(self._on_telemetry_comparison_loaded)
+        telemetry_worker.error.connect(self._on_telemetry_comparison_error)
+        telemetry_worker.finished.connect(telemetry_thread.quit)
+        telemetry_worker.finished.connect(telemetry_worker.deleteLater)
+        telemetry_thread.finished.connect(telemetry_thread.deleteLater)
+        telemetry_thread.finished.connect(lambda: self._remove_thread_from_tracking(thread_id))
         
-        # Update insights
-        insights_text = self._generate_insights()
-        self.insights_list.setText(insights_text)
-        
-        # Update performance bars (placeholder values for now)
-        self._update_performance_bars()
+        # Start the thread
+        telemetry_thread.start()
+        logger.info(f"Started telemetry loading thread for user_lap_id={user_lap_id}, super_lap_id={super_lap_id}")
     
-    def _generate_insights(self):
-        """Generate personalized insights based on the lap comparison."""
-        if not self.current_ml_lap:
-            return "No analysis available"
-        
-        insights = []
-        
-        # Check for brake points
-        brake_points = self.current_ml_lap.get('brake_points', [])
-        if brake_points:
-            insights.append(f"• Found {len(brake_points)} optimized brake points")
-        
-        # Check for throttle points
-        throttle_points = self.current_ml_lap.get('throttle_points', [])
-        if throttle_points:
-            insights.append(f"• Identified {len(throttle_points)} throttle application improvements")
-        
-        # Check for racing line
-        racing_line = self.current_ml_lap.get('racing_line', [])
-        if racing_line:
-            insights.append(f"• Racing line optimization available for {len(racing_line)} sections")
-        
-        # Add general improvement potential
-        improvement_ms = self.current_ml_lap.get('predicted_improvement_ms', 0)
-        if improvement_ms > 0:
-            insights.append(f"• Total potential improvement: {improvement_ms/1000:.3f} seconds")
-        
-        return "\n".join(insights) if insights else "Analyzing lap data..."
+    def _on_telemetry_comparison_loaded(self, user_data, super_lap_data):
+        """Handle loaded telemetry comparison data."""
+        try:
+            if not user_data and not super_lap_data:
+                self.telemetry_status_label.setText("No telemetry data available for comparison")
+                return
+            
+            # Enhanced status messages based on what data we have
+            status_parts = []
+            if user_data:
+                user_points_count = len(user_data.get('points', []))
+                status_parts.append(f"User lap: {user_points_count} points")
+            else:
+                status_parts.append("User lap: No data")
+            
+            if super_lap_data:
+                super_points_count = len(super_lap_data.get('points', []))
+                status_parts.append(f"SuperLap: {super_points_count} points")
+            else:
+                status_parts.append("SuperLap: No data")
+            
+            # Update lap times in header
+            if self.current_user_lap and self.current_ml_lap:
+                user_time = self.current_user_lap.get('lap_time', 0)
+                super_time = self.current_ml_lap.get('lap_time', 0)
+                
+                self.user_lap_time_label.setText(f"Your Lap: {self._format_time(user_time)}")
+                self.super_lap_time_label.setText(f"SuperLap: {self._format_time(super_time)}")
+                
+                # Calculate delta
+                if user_time > 0 and super_time > 0:
+                    delta = user_time - super_time
+                    delta_text = f"Δ: {'+' if delta > 0 else ''}{self._format_time(abs(delta))}"
+                    self.delta_label.setText(delta_text)
+                    
+                    # Update color based on delta
+                    if delta > 0:
+                        self.delta_label.setStyleSheet("""
+                            color: #ff6b6b;
+                            font-size: 16px;
+                            font-weight: bold;
+                            background-color: transparent;
+                        """)
+                    else:
+                        self.delta_label.setStyleSheet("""
+                            color: #00d4ff;
+                            font-size: 16px;
+                            font-weight: bold;
+                            background-color: transparent;
+                        """)
+            
+            # Get track length for graph scaling
+            track_length = 0
+            if self.current_session_info and self.current_session_info.get('tracks'):
+                track_length = self.current_session_info['tracks'].get('length_meters', 0)
+            
+            # Update all graphs with comparison data
+            if user_data and super_lap_data:
+                self._update_graphs_with_comparison(user_data, super_lap_data, track_length)
+                status_message = f"Telemetry comparison loaded: {' | '.join(status_parts)}"
+                self.telemetry_status_label.setText(status_message)
+                logger.info(status_message)
+            elif user_data:
+                self._update_graphs_with_single_data(user_data, track_length, is_user=True)
+                status_message = f"Only user telemetry available: {status_parts[0]}"
+                self.telemetry_status_label.setText(status_message)
+                logger.warning(status_message)
+            elif super_lap_data:
+                self._update_graphs_with_single_data(super_lap_data, track_length, is_user=False)
+                status_message = f"Only SuperLap telemetry available: {status_parts[1]}"
+                self.telemetry_status_label.setText(status_message)
+                logger.warning(status_message)
+            
+            logger.info("Telemetry comparison updated successfully")
+            
+        except Exception as e:
+            error_message = f"Error processing telemetry comparison: {str(e)}"
+            logger.error(error_message, exc_info=True)
+            self.telemetry_status_label.setText(error_message)
     
-    def _update_performance_bars(self):
-        """Update the performance comparison bars."""
-        # Placeholder implementation - in a real app, these would be calculated from telemetry
-        aspects = {
-            'brake_efficiency': 75,
-            'cornering_speed': 82,
-            'throttle_application': 68,
-            'racing_line': 90,
-            'consistency': 85
-        }
+    def _on_telemetry_comparison_error(self, error_message):
+        """Handle telemetry comparison loading errors with enhanced messaging."""
+        # Parse the error message to provide more specific feedback
+        if "SuperLap" in error_message and "not found" in error_message:
+            user_friendly_message = "SuperLap telemetry reconstruction failed - sector data may be incomplete"
+        elif "No telemetry points found" in error_message:
+            user_friendly_message = "No telemetry data available for the selected laps"
+        elif "Authentication" in error_message:
+            user_friendly_message = "Database authentication required for telemetry access"
+        elif "sector combination" in error_message:
+            user_friendly_message = "SuperLap sector data is missing or invalid"
+        else:
+            user_friendly_message = f"Telemetry loading error: {error_message}"
         
-        for aspect_key, score in aspects.items():
-            if aspect_key in self.performance_bars:
-                progress_bar, score_label = self.performance_bars[aspect_key]
-                progress_bar.setValue(score)
-                score_label.setText(f"{score}/100")
+        self.telemetry_status_label.setText(user_friendly_message)
+        logger.error(f"Telemetry comparison error: {error_message}")
+        
+        # If it's a SuperLap-specific error, suggest trying a different SuperLap
+        if "SuperLap" in error_message:
+            logger.info("Suggestion: Try selecting a different SuperLap or user lap for comparison")
     
-    def _update_placeholder_tabs(self):
-        """Update placeholder tabs with temporary messages."""
-        # Sector analysis placeholder
-        self.sector_tips.setText(
-            "Sector analysis coming soon!\n\n"
-            "This will show:\n"
-            "• Sector-by-sector time comparison\n"
-            "• Specific areas where time is lost\n"
-            "• Targeted improvement suggestions for each sector"
-        )
-        
-        # Technique analysis placeholder
-        self.brake_analysis.setText(
-            "Brake point analysis will show:\n"
-            "• Optimal brake points for each corner\n"
-            "• Comparison with your current brake points\n"
-            "• Specific distance/speed recommendations"
-        )
-        
-        self.throttle_analysis.setText(
-            "Throttle application analysis will show:\n"
-            "• Corner exit throttle application timing\n"
-            "• Throttle modulation through corners\n"
-            "• Areas where earlier throttle application is possible"
-        )
-        
-        self.line_analysis.setText(
-            "Racing line analysis will show:\n"
-            "• Optimal racing line visualization\n"
-            "• Comparison with your current line\n"
-            "• Specific apex and track-out point recommendations"
-        )
+    def _update_graphs_with_comparison(self, user_data, super_lap_data, track_length):
+        """Update all graphs with comparison data using proper field mapping."""
+        try:
+            # Prepare lap data format for graph widgets with field mapping (same as telemetry tab)
+            user_lap_data = None
+            super_lap_data_mapped = None
+            
+            # Map user data fields
+            if user_data and user_data.get('points'):
+                mapped_points = []
+                for point in user_data['points']:
+                    mapped_point = point.copy()
+                    
+                    # Critical mapping: Convert database field names to graph widget expectations
+                    if 'track_position' in mapped_point:
+                        # Convert track_position to actual distance in meters
+                        track_pos = mapped_point['track_position']
+                        if 0 <= track_pos <= 1:
+                            # Normalized position, convert to actual distance
+                            mapped_point['LapDist'] = track_pos * track_length
+                        else:
+                            # Already in meters
+                            mapped_point['LapDist'] = track_pos
+                    
+                    # Ensure all required fields exist with defaults and correct capitalization
+                    mapped_point.setdefault('LapDist', 0)
+                    
+                    # Map lowercase to titlecase field names that graph widgets expect
+                    if 'throttle' in mapped_point:
+                        mapped_point['Throttle'] = mapped_point['throttle']
+                    if 'brake' in mapped_point:
+                        mapped_point['Brake'] = mapped_point['brake']
+                    if 'steering' in mapped_point:
+                        # Use raw steering values directly - they appear to already be normalized
+                        raw_steering = mapped_point['steering']
+                        if raw_steering is not None:
+                            # Clamp to -1 to 1 range but don't scale since values are already appropriate
+                            normalized_steering = max(-1.0, min(1.0, raw_steering))
+                            mapped_point['Steering'] = normalized_steering
+                        else:
+                            mapped_point['Steering'] = 0.0
+                    if 'speed' in mapped_point:
+                        mapped_point['Speed'] = mapped_point['speed']
+                    
+                    # Set defaults for titlecase fields
+                    mapped_point.setdefault('Throttle', 0)
+                    mapped_point.setdefault('Brake', 0) 
+                    mapped_point.setdefault('Steering', 0)
+                    mapped_point.setdefault('Speed', 0)
+                    mapped_point.setdefault('timestamp', 0)
+                    mapped_point.setdefault('rpm', 0)
+                    
+                    mapped_points.append(mapped_point)
+                
+                user_lap_data = {'points': mapped_points}
+                logger.info(f"Mapped {len(mapped_points)} points for user lap")
+            
+            # Map super lap data fields
+            if super_lap_data and super_lap_data.get('points'):
+                mapped_points = []
+                for point in super_lap_data['points']:
+                    mapped_point = point.copy()
+                    
+                    # Critical mapping: Convert database field names to graph widget expectations
+                    if 'track_position' in mapped_point:
+                        # Convert track_position to actual distance in meters
+                        track_pos = mapped_point['track_position']
+                        if 0 <= track_pos <= 1:
+                            # Normalized position, convert to actual distance
+                            mapped_point['LapDist'] = track_pos * track_length
+                        else:
+                            # Already in meters
+                            mapped_point['LapDist'] = track_pos
+                    
+                    # Ensure all required fields exist with defaults and correct capitalization
+                    mapped_point.setdefault('LapDist', 0)
+                    
+                    # Map lowercase to titlecase field names that graph widgets expect
+                    if 'throttle' in mapped_point:
+                        mapped_point['Throttle'] = mapped_point['throttle']
+                    if 'brake' in mapped_point:
+                        mapped_point['Brake'] = mapped_point['brake']
+                    if 'steering' in mapped_point:
+                        # Use raw steering values directly - they appear to already be normalized
+                        raw_steering = mapped_point['steering']
+                        if raw_steering is not None:
+                            # Clamp to -1 to 1 range but don't scale since values are already appropriate
+                            normalized_steering = max(-1.0, min(1.0, raw_steering))
+                            mapped_point['Steering'] = normalized_steering
+                        else:
+                            mapped_point['Steering'] = 0.0
+                    if 'speed' in mapped_point:
+                        mapped_point['Speed'] = mapped_point['speed']
+                    
+                    # Set defaults for titlecase fields
+                    mapped_point.setdefault('Throttle', 0)
+                    mapped_point.setdefault('Brake', 0)
+                    mapped_point.setdefault('Steering', 0)
+                    mapped_point.setdefault('Speed', 0)
+                    mapped_point.setdefault('timestamp', 0)
+                    mapped_point.setdefault('rpm', 0)
+                    
+                    mapped_points.append(mapped_point)
+                
+                super_lap_data_mapped = {'points': mapped_points}
+                logger.info(f"Mapped {len(mapped_points)} points for super lap")
+            
+            # Update graphs with properly mapped data
+            if user_lap_data and super_lap_data_mapped:
+                # Update speed graph
+                if hasattr(self, 'speed_graph'):
+                    self.speed_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                
+                # Update throttle graph
+                if hasattr(self, 'throttle_graph'):
+                    self.throttle_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                
+                # Update brake graph
+                if hasattr(self, 'brake_graph'):
+                    self.brake_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                
+                # Update steering graph
+                if hasattr(self, 'steering_graph'):
+                    self.steering_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                
+        except Exception as e:
+            logger.error(f"Error updating graphs with comparison data: {e}")
+    
+    def _update_graphs_with_single_data(self, lap_data, track_length, is_user=True):
+        """Update all graphs with single lap data using proper field mapping."""
+        try:
+            # Map data fields (same as telemetry tab)
+            mapped_lap_data = None
+            
+            if lap_data and lap_data.get('points'):
+                mapped_points = []
+                for point in lap_data['points']:
+                    mapped_point = point.copy()
+                    
+                    # Critical mapping: Convert database field names to graph widget expectations
+                    if 'track_position' in mapped_point:
+                        # Convert track_position to actual distance in meters
+                        track_pos = mapped_point['track_position']
+                        if 0 <= track_pos <= 1:
+                            # Normalized position, convert to actual distance
+                            mapped_point['LapDist'] = track_pos * track_length
+                        else:
+                            # Already in meters
+                            mapped_point['LapDist'] = track_pos
+                    
+                    # Ensure all required fields exist with defaults and correct capitalization
+                    mapped_point.setdefault('LapDist', 0)
+                    
+                    # Map lowercase to titlecase field names that graph widgets expect
+                    if 'throttle' in mapped_point:
+                        mapped_point['Throttle'] = mapped_point['throttle']
+                    if 'brake' in mapped_point:
+                        mapped_point['Brake'] = mapped_point['brake']
+                    if 'steering' in mapped_point:
+                        # Use raw steering values directly - they appear to already be normalized
+                        raw_steering = mapped_point['steering']
+                        if raw_steering is not None:
+                            # Clamp to -1 to 1 range but don't scale since values are already appropriate
+                            normalized_steering = max(-1.0, min(1.0, raw_steering))
+                            mapped_point['Steering'] = normalized_steering
+                        else:
+                            mapped_point['Steering'] = 0.0
+                    if 'speed' in mapped_point:
+                        mapped_point['Speed'] = mapped_point['speed']
+                    
+                    # Set defaults for titlecase fields
+                    mapped_point.setdefault('Throttle', 0)
+                    mapped_point.setdefault('Brake', 0)
+                    mapped_point.setdefault('Steering', 0)
+                    mapped_point.setdefault('Speed', 0)
+                    mapped_point.setdefault('timestamp', 0)
+                    mapped_point.setdefault('rpm', 0)
+                    
+                    mapped_points.append(mapped_point)
+                
+                mapped_lap_data = {'points': mapped_points}
+                logger.info(f"Mapped {len(mapped_points)} points for {'user' if is_user else 'super'} lap")
+            
+            # Update graphs with properly mapped data
+            if mapped_lap_data:
+                # Update speed graph
+                if hasattr(self, 'speed_graph'):
+                    self.speed_graph.update_graph(mapped_lap_data, track_length)
+                
+                # Update throttle graph
+                if hasattr(self, 'throttle_graph'):
+                    self.throttle_graph.update_graph(mapped_lap_data, track_length)
+                
+                # Update brake graph
+                if hasattr(self, 'brake_graph'):
+                    self.brake_graph.update_graph(mapped_lap_data, track_length)
+                
+                # Update steering graph
+                if hasattr(self, 'steering_graph'):
+                    self.steering_graph.update_graph(mapped_lap_data, track_length)
+                
+        except Exception as e:
+            logger.error(f"Error updating graphs with single data: {e}")
     
     def _format_time(self, time_in_seconds):
         """Format time in seconds to MM:SS.mmm format."""
@@ -1350,6 +1816,194 @@ class SuperLapWidget(QWidget):
             self.parent_widget.reset_iracing_connection()
         else:
             QMessageBox.information(self, "Reset Connection", "iRacing connection reset functionality not available in this context.")
+    
+    def _run_superlap_diagnostics(self):
+        """Run comprehensive diagnostics on the selected SuperLap."""
+        try:
+            super_lap_id = self.ml_lap_combo.currentData()
+            
+            if not super_lap_id:
+                QMessageBox.information(self, "Diagnostics", "Please select a SuperLap first.")
+                return
+            
+            # Create diagnostic dialog
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("SuperLap Telemetry Diagnostics")
+            dialog.setFixedSize(800, 600)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Text area for diagnostic output
+            diagnostic_text = QTextEdit()
+            diagnostic_text.setStyleSheet("""
+                QTextEdit {
+                    background-color: #1a1a1a;
+                    color: #e0e0e0;
+                    border: 1px solid #444;
+                    font-family: 'Courier New', monospace;
+                    font-size: 11px;
+                }
+            """)
+            layout.addWidget(diagnostic_text)
+            
+            # Close button
+            close_button = QPushButton("Close")
+            close_button.clicked.connect(dialog.accept)
+            layout.addWidget(close_button)
+            
+            # Run diagnostics
+            diagnostic_text.append("🔍 SUPERLAP TELEMETRY DIAGNOSTICS")
+            diagnostic_text.append("=" * 50)
+            diagnostic_text.append(f"SuperLap ID: {super_lap_id}")
+            diagnostic_text.append("")
+            
+            # Get SuperLap info
+            try:
+                from trackpro.database.supabase_client import supabase as main_supabase
+                
+                if main_supabase and main_supabase.is_authenticated():
+                    # Get SuperLap details
+                    super_lap_result = (
+                        main_supabase.client.table("super_laps_ml")
+                        .select("*")
+                        .eq("id", super_lap_id)
+                        .execute()
+                    )
+                    
+                    if super_lap_result.data:
+                        super_lap = super_lap_result.data[0]
+                        diagnostic_text.append("📊 SuperLap Details:")
+                        diagnostic_text.append(f"   Car ID: {super_lap.get('car_id')}")
+                        diagnostic_text.append(f"   Track ID: {super_lap.get('track_id')}")
+                        diagnostic_text.append(f"   Total Time: {super_lap.get('total_time', 'N/A')}")
+                        diagnostic_text.append(f"   Confidence Level: {super_lap.get('confidence_level', 'N/A')}")
+                        diagnostic_text.append(f"   Created: {super_lap.get('created_at', 'N/A')}")
+                        diagnostic_text.append("")
+                        
+                        # Check sector combination
+                        sector_combination = super_lap.get('sector_combination')
+                        diagnostic_text.append("🏁 Sector Combination Analysis:")
+                        if sector_combination:
+                            diagnostic_text.append(f"   Type: {type(sector_combination).__name__}")
+                            if isinstance(sector_combination, list):
+                                diagnostic_text.append(f"   Format: List of lap/sector references")
+                                diagnostic_text.append(f"   Count: {len(sector_combination)} entries")
+                                for i, entry in enumerate(sector_combination[:3]):  # Show first 3
+                                    diagnostic_text.append(f"   Entry {i+1}: {entry}")
+                                if len(sector_combination) > 3:
+                                    diagnostic_text.append(f"   ... and {len(sector_combination) - 3} more")
+                            elif isinstance(sector_combination, dict):
+                                diagnostic_text.append(f"   Format: Dictionary of sector times")
+                                diagnostic_text.append(f"   Keys: {list(sector_combination.keys())}")
+                            else:
+                                diagnostic_text.append(f"   Format: Unknown ({sector_combination})")
+                        else:
+                            diagnostic_text.append("   ❌ No sector combination data found!")
+                        diagnostic_text.append("")
+                        
+                        # Try telemetry reconstruction
+                        diagnostic_text.append("🔧 Telemetry Reconstruction Test:")
+                        try:
+                            from Supabase.database import get_super_lap_telemetry_points
+                            
+                            result = get_super_lap_telemetry_points(super_lap_id)
+                            if result[0] is not None:
+                                points = result[0]
+                                diagnostic_text.append(f"   ✅ Success: {len(points)} telemetry points retrieved")
+                                diagnostic_text.append(f"   Message: {result[1]}")
+                                
+                                if points:
+                                    sample_point = points[0]
+                                    diagnostic_text.append(f"   Sample point fields: {list(sample_point.keys())}")
+                                    diagnostic_text.append(f"   Track position range: {min(p.get('track_position', 0) for p in points):.3f} - {max(p.get('track_position', 0) for p in points):.3f}")
+                                    
+                                    # Check for sector data in points
+                                    has_sector_data = any('current_sector' in p for p in points)
+                                    diagnostic_text.append(f"   Has sector data: {has_sector_data}")
+                                    
+                            else:
+                                diagnostic_text.append(f"   ❌ Failed: {result[1]}")
+                                
+                        except Exception as e:
+                            diagnostic_text.append(f"   ❌ Exception: {str(e)}")
+                        
+                        diagnostic_text.append("")
+                        
+                        # Check for related telemetry data
+                        car_id = super_lap.get('car_id')
+                        track_id = super_lap.get('track_id')
+                        
+                        if car_id and track_id:
+                            diagnostic_text.append("🔍 Related Data Check:")
+                            
+                            # Check for sessions
+                            sessions_result = (
+                                main_supabase.client.table("sessions")
+                                .select("id,created_at")
+                                .eq("car_id", car_id)
+                                .eq("track_id", track_id)
+                                .limit(5)
+                                .order("created_at", desc=True)
+                                .execute()
+                            )
+                            
+                            if sessions_result.data:
+                                diagnostic_text.append(f"   Sessions found: {len(sessions_result.data)}")
+                                for session in sessions_result.data[:3]:
+                                    diagnostic_text.append(f"     - {session['id']} ({session['created_at']})")
+                                
+                                # Check laps in first session
+                                first_session_id = sessions_result.data[0]['id']
+                                laps_result = (
+                                    main_supabase.client.table("laps")
+                                    .select("id,lap_time,is_valid")
+                                    .eq("session_id", first_session_id)
+                                    .limit(3)
+                                    .execute()
+                                )
+                                
+                                if laps_result.data:
+                                    diagnostic_text.append(f"   Laps in latest session: {len(laps_result.data)}")
+                                    for lap in laps_result.data:
+                                        # Check for telemetry points
+                                        telemetry_count = (
+                                            main_supabase.client.table("telemetry_points")
+                                            .select("id", count="exact")
+                                            .eq("lap_id", lap['id'])
+                                            .execute()
+                                        )
+                                        count = telemetry_count.count if telemetry_count.count else 0
+                                        diagnostic_text.append(f"     - Lap {lap['id']}: {count} telemetry points")
+                                
+                            else:
+                                diagnostic_text.append("   ❌ No sessions found for this car/track combination")
+                    
+                    else:
+                        diagnostic_text.append("❌ SuperLap not found in database!")
+                
+                else:
+                    diagnostic_text.append("❌ Database connection not available!")
+                    
+            except Exception as e:
+                diagnostic_text.append(f"❌ Diagnostic error: {str(e)}")
+                import traceback
+                diagnostic_text.append("\nFull traceback:")
+                diagnostic_text.append(traceback.format_exc())
+            
+            diagnostic_text.append("")
+            diagnostic_text.append("🎯 Recommendations:")
+            diagnostic_text.append("1. Check if sector combination data is properly formatted")
+            diagnostic_text.append("2. Verify that referenced laps have telemetry data")
+            diagnostic_text.append("3. Ensure current_sector field is populated in telemetry points")
+            diagnostic_text.append("4. Try selecting a different SuperLap if this one fails")
+            
+            dialog.exec_()
+            
+        except Exception as e:
+            logger.error(f"Error running SuperLap diagnostics: {e}", exc_info=True)
+            QMessageBox.critical(self, "Diagnostic Error", f"Error running diagnostics: {str(e)}")
     
     def cleanup(self):
         """Clean up any running threads when the widget is destroyed."""

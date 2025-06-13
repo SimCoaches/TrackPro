@@ -722,4 +722,213 @@ def get_ml_optimizations(limit: int = 50, track_id: int = None):
 
 # --- End ML Lap helpers ---
 
+# --- End Telemetry / Lap helpers ---
+
+def get_super_lap_telemetry_points(super_lap_id: str, columns: Optional[list[str]] = None):
+    """Get reconstructed telemetry points for a SuperLap by combining sector data from different laps."""
+    if not super_lap_id:
+        return None, "super_lap_id is required"
+
+    # Use the EXACT same authentication approach as get_telemetry_points()
+    supabase_client = None
+    
+    # First try direct import from trackpro's client
+    try:
+        from trackpro.database.supabase_client import supabase as app_supabase
+        if app_supabase and app_supabase.is_authenticated():
+            supabase_client = app_supabase.client
+            return _execute_super_lap_telemetry_query(supabase_client, super_lap_id, columns)
+    except (ImportError, AttributeError):
+        pass
+    
+    # Then try the module-level supabase client
+    try:
+        from .client import supabase
+        if supabase and hasattr(supabase, 'client') and supabase.client:
+            try:
+                auth_session = supabase.client.auth.get_session()
+                has_user = auth_session and hasattr(auth_session, 'user') and auth_session.user is not None
+                if has_user:
+                    supabase_client = supabase.client
+                    return _execute_super_lap_telemetry_query(supabase_client, super_lap_id, columns)
+            except Exception:
+                pass
+    except (ImportError, AttributeError):
+        pass
+    
+    # Try explicit authentication from auth module as last resort
+    try:
+        from .client import supabase
+        from . import auth
+        if auth.is_logged_in():
+            session_token = auth.get_session_token()
+            if session_token and supabase.client:
+                supabase.auth.set_session(session_token)
+                try:
+                    auth_session = supabase.client.auth.get_session()
+                    if auth_session and hasattr(auth_session, 'user') and auth_session.user:
+                        supabase_client = supabase.client
+                        return _execute_super_lap_telemetry_query(supabase_client, super_lap_id, columns)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+        
+    # If we get here, all attempts to obtain an authenticated client failed
+    return None, "Failed to obtain authenticated Supabase client for SuperLap telemetry access"
+
+
+def _execute_super_lap_telemetry_query(client, super_lap_id: str, columns: Optional[list[str]] = None):
+    """Execute SuperLap telemetry reconstruction using the EXACT same pattern as _execute_telemetry_query."""
+    if not super_lap_id:
+        return None, "super_lap_id is required"
+
+    try:
+        # First, get the SuperLap data to understand its sector combination
+        super_lap_query = client.table("super_laps_ml").select("*").eq("id", super_lap_id)
+        super_lap_result = super_lap_query.execute()
+        
+        if not super_lap_result.data:
+            return None, f"SuperLap with ID {super_lap_id} not found"
+        
+        super_lap = super_lap_result.data[0]
+        sector_combination = super_lap.get('sector_combination')
+        
+        print(f"SuperLap {super_lap_id}: {super_lap.get('name', 'Unknown')}")
+        
+        # Handle array-based sector combination
+        if isinstance(sector_combination, list) and len(sector_combination) > 0:
+            return _get_sector_telemetry_using_working_method(client, sector_combination, columns)
+        
+        # Handle time-based format - use fallback
+        elif isinstance(sector_combination, dict):
+            print("Time-based sector format - trying fallback")
+            return _get_fallback_telemetry_for_superlap(client, super_lap, columns)
+        
+        else:
+            return None, f"Invalid sector_combination format: {type(sector_combination)}"
+            
+    except Exception as e:
+        return None, f"Failed to retrieve SuperLap telemetry due to an exception: {str(e)}"
+
+
+def _get_sector_telemetry_using_working_method(client, sector_combination, columns: Optional[list[str]] = None):
+    """Get telemetry for each sector using the EXACT same method as the working _execute_telemetry_query."""
+    all_points = []
+    page_size = 1000  # Same as working function
+    
+    try:
+        sel = "*" if columns is None else ",".join(columns)
+        
+        print(f"Reconstructing telemetry from {len(sector_combination)} sectors")
+        
+        # Process each sector using the EXACT same pagination approach as working function
+        for i, sector_ref in enumerate(sector_combination):
+            lap_id = sector_ref.get('lap_id')
+            sector_number = sector_ref.get('sector_number')
+            
+            if not lap_id or not sector_number:
+                print(f"Warning: Invalid sector reference at index {i}: {sector_ref}")
+                continue
+            
+            # Use EXACT same pagination pattern as _execute_telemetry_query
+            current_offset = 0
+            sector_points = []
+            
+            while True:
+                query = (
+                    client.table("telemetry_points")
+                    .select(sel)
+                    .eq("lap_id", lap_id)
+                    .eq("current_sector", sector_number)  # Add sector filter
+                    .order("track_position")  # Same ordering as working function
+                    .range(current_offset, current_offset + page_size - 1)  # Same pagination
+                )
+                
+                result = query.execute()
+
+                if result.data:
+                    sector_points.extend(result.data)
+                    if len(result.data) < page_size:
+                        # Last page fetched
+                        break
+                    current_offset += len(result.data)
+                else:
+                    # No more data
+                    break
+            
+            if sector_points:
+                print(f"  Sector {sector_number}: {len(sector_points)} points")
+                all_points.extend(sector_points)
+            else:
+                print(f"  Sector {sector_number}: No points found")
+        
+        if all_points:
+            # Sort by track position to ensure proper order across sectors
+            all_points.sort(key=lambda p: p.get('track_position', 0))
+            print(f"Successfully reconstructed {len(all_points)} telemetry points")
+            return all_points, f"Retrieved {len(all_points)} SuperLap telemetry points"
+        else:
+            return None, "No telemetry points could be reconstructed from any sector"
+            
+    except Exception as e:
+        return None, f"Failed to retrieve SuperLap telemetry due to an exception: {str(e)}"
+
+
+def _get_fallback_telemetry_for_superlap(client, super_lap, columns: Optional[list[str]] = None):
+    """Get fallback telemetry for time-based SuperLaps by finding the best lap for this car/track."""
+    try:
+        # First try the human benchmark lap if it exists
+        benchmark_lap_id = super_lap.get('human_benchmark_lap_id')
+        if benchmark_lap_id:
+            print(f"Using human benchmark lap {benchmark_lap_id}")
+            return get_telemetry_points(benchmark_lap_id, columns)
+        
+        # Get car and track IDs from the SuperLap
+        car_id = super_lap.get('car_id')
+        track_id = super_lap.get('track_id')
+        
+        if not car_id or not track_id:
+            return None, "SuperLap missing car_id or track_id for fallback lookup"
+        
+        print(f"Searching for best lap for car_id={car_id}, track_id={track_id}")
+        
+        # Find the best lap for this car/track combination using a simple, working query
+        # Use the same approach as the working telemetry queries
+        sessions_result = client.table("sessions").select("id").eq("car_id", car_id).eq("track_id", track_id).execute()
+        
+        if not sessions_result.data:
+            return None, f"No sessions found for car_id={car_id}, track_id={track_id}"
+        
+        # Get session IDs
+        session_ids = [s['id'] for s in sessions_result.data]
+        print(f"Found {len(session_ids)} sessions for this car/track combo")
+        
+        # Find best lap from these sessions
+        best_lap = None
+        best_time = float('inf')
+        
+        for session_id in session_ids:
+            laps_result = client.table("laps").select("id, lap_time").eq(
+                "session_id", session_id
+            ).eq("is_valid", True).order("lap_time").limit(5).execute()
+            
+            if laps_result.data:
+                for lap in laps_result.data:
+                    lap_time = lap.get('lap_time', float('inf'))
+                    if lap_time < best_time:
+                        best_time = lap_time
+                        best_lap = lap
+        
+        if best_lap:
+            best_lap_id = best_lap['id']
+            print(f"Using best lap {best_lap_id} (time: {best_time:.3f}s) as SuperLap fallback")
+            return get_telemetry_points(best_lap_id, columns)
+        else:
+            return None, f"No valid laps found for car_id={car_id}, track_id={track_id}"
+            
+    except Exception as e:
+        print(f"Error in fallback telemetry lookup: {e}")
+        return None, f"Error getting fallback telemetry: {str(e)}"
+
 # --- End Telemetry / Lap helpers --- 

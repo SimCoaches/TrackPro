@@ -105,8 +105,8 @@ class BrakeGraphWidget(GraphBase):
         self.setLayout(layout)
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.brake_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Brake", autoDownsample=False, clipToView=False)
-        self.brake_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Brake", autoDownsample=False, clipToView=False)
+        self.brake_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Your Brake", autoDownsample=False, clipToView=False)
+        self.brake_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Super Lap Brake", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curves
         self.brake_curve_b.hide()
@@ -185,10 +185,10 @@ class BrakeGraphWidget(GraphBase):
                 tooltip_text = f"Distance: {distance:.1f}m"
                 
                 if brake_value_a is not None:
-                    tooltip_text += f"\nLap A Brake: {brake_value_a:.1f}%"
+                    tooltip_text += f"\nYour Brake: {brake_value_a:.1f}%"
                     
                 if brake_value_b is not None:
-                    tooltip_text += f"\nLap B Brake: {brake_value_b:.1f}%"
+                    tooltip_text += f"\nSuper Lap Brake: {brake_value_b:.1f}%"
                     
                     if brake_value_a is not None:
                         # Calculate and display delta
@@ -621,9 +621,9 @@ class BrakeGraphWidget(GraphBase):
         if self.legend:
             self.legend.clear()  # Make sure to clear the legend again before adding items
             if is_valid_a:
-                 self.legend.addItem(self.brake_curve, "Lap A Brake")
+                 self.legend.addItem(self.brake_curve, "Your Brake")
             if is_valid_b:
-                 self.legend.addItem(self.brake_curve_b, "Lap B Brake")
+                 self.legend.addItem(self.brake_curve_b, "Super Lap Brake")
 
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()

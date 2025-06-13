@@ -171,8 +171,8 @@ class InitialLoadWorker(QObject):
             if not self.is_cancelled:
                 try:
                     # get_sessions returns (data, message) tuple
-                    # Only get sessions that have laps for the telemetry tab
-                    sessions_result = get_sessions(only_with_laps=True)
+                    # Get ALL user sessions (like SuperLap tab) - don't filter by only_with_laps as it's unreliable
+                    sessions_result = get_sessions(user_only=True)
                     if sessions_result[0] is not None:  # Check if data is not None
                         sessions = sessions_result[0]  # Extract data from tuple
                         self.sessions_loaded.emit(sessions, "Sessions with laps loaded successfully")

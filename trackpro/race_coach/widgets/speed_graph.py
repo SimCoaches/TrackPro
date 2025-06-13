@@ -97,8 +97,8 @@ class SpeedGraphWidget(GraphBase):
         self.setLayout(layout)
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.speed_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Lap A Speed", autoDownsample=False, clipToView=False)
-        self.speed_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Lap B Speed", autoDownsample=False, clipToView=False)
+        self.speed_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Your Speed", autoDownsample=False, clipToView=False)
+        self.speed_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Super Lap Speed", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curves
         self.speed_curve_b.hide()
@@ -183,10 +183,10 @@ class SpeedGraphWidget(GraphBase):
                 tooltip_text = f"Distance: {distance:.1f}m"
                 
                 if speed_value_a is not None:
-                    tooltip_text += f"\nLap A Speed: {speed_value_a:.1f} km/h"
+                    tooltip_text += f"\nYour Speed: {speed_value_a:.1f} km/h"
                     
                 if speed_value_b is not None:
-                    tooltip_text += f"\nLap B Speed: {speed_value_b:.1f} km/h"
+                    tooltip_text += f"\nSuper Lap Speed: {speed_value_b:.1f} km/h"
                     
                     if speed_value_a is not None:
                         # Calculate and display delta
@@ -604,9 +604,9 @@ class SpeedGraphWidget(GraphBase):
         if self.legend:
             self.legend.clear()  # Make sure to clear the legend again before adding items
             if is_valid_a:
-                 self.legend.addItem(self.speed_curve, "Lap A Speed")
+                 self.legend.addItem(self.speed_curve, "Your Speed")
             if is_valid_b:
-                 self.legend.addItem(self.speed_curve_b, "Lap B Speed")
+                 self.legend.addItem(self.speed_curve_b, "Super Lap Speed")
 
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()
