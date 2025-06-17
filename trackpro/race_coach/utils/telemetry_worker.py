@@ -1,5 +1,7 @@
 import logging
 import threading
+import queue
+import time
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
 
 from trackpro.race_coach.utils.telemetry_validation import validate_lap_telemetry
@@ -146,70 +148,223 @@ class TelemetrySaveWorker(QObject):
         logger.info("Telemetry save operation cancelled")
 
 
-class TelemetryMonitorWorker(QObject):
-    """Worker for monitoring real-time telemetry coverage during a lap."""
+class TelemetryMonitorWorker(QThread):
+    """Dedicated thread worker for AI coaching telemetry processing.
+    
+    This worker runs in its own thread completely independent of the main telemetry flow.
+    The main telemetry callback only queues data here - no blocking operations.
+    """
     
     # Signal emitted with coverage updates
     coverage_updated = pyqtSignal(float, object)  # coverage percentage, diagnostics
     
-    def __init__(self, buffer_size=5000, superlap_id: str = None):
-        """Initialize the telemetry monitor.
+    def __init__(self, buffer_size=5000):
+        """Initialize the telemetry monitor thread.
         
         Args:
             buffer_size: Maximum number of telemetry points to keep in buffer
-            superlap_id: The ID of the superlap to use for AI coaching.
         """
         super().__init__()
         self.telemetry_buffer = []
         self.buffer_size = buffer_size
         self.is_monitoring = False
-        self.lock = threading.Lock()
+        self.should_stop = False
         
-        self.ai_coach = None
-        if superlap_id:
-            try:
-                self.ai_coach = AICoach(superlap_id=superlap_id)
-                logger.info(f"AI Coach initialized for superlap_id: {superlap_id}")
-            except Exception as e:
-                logger.error(f"Failed to initialize AI Coach: {e}")
+        # Thread-safe queue for telemetry data
+        self.telemetry_queue = queue.Queue()
+        
+        # AI coach instance
+        self._ai_coach = None
+        
+        # Counters for debugging
+        self._telemetry_point_count = 0
+        self._queue_drops = 0
+        
+        # Performance tracking
+        self._last_process_time = time.time()
+        
+        # Start the dedicated thread
+        self.start()
+        logger.info("🧵 [AI WORKER THREAD] Dedicated AI coaching thread started")
+
+    @property
+    def ai_coach(self):
+        """Get the AI coach instance."""
+        return self._ai_coach
+    
+    @ai_coach.setter
+    def ai_coach(self, value):
+        """Set the AI coach instance with debug logging."""
+        logger.info(f"🎙️ [AI COACH ASSIGNMENT] Setting AI coach: {value is not None}")
+        if value is not None:
+            logger.info(f"🎙️ [AI COACH ASSIGNMENT] AI coach type: {type(value)}")
+            if hasattr(value, 'superlap_points'):
+                logger.info(f"🎙️ [AI COACH ASSIGNMENT] AI coach has {len(getattr(value, 'superlap_points', []))} superlap points")
+        self._ai_coach = value
 
     def add_telemetry_point(self, point):
-        """Add a new telemetry point to the buffer and process for coaching.
+        """Add a new telemetry point to the processing queue.
+        
+        This method is called from the main telemetry thread and MUST be non-blocking.
+        It only queues the data - all processing happens in the dedicated AI thread.
         
         Args:
             point: Dictionary with telemetry data
         """
-        with self.lock:
-            self.telemetry_buffer.append(point)
+        try:
+            # Non-blocking queue add with immediate return
+            self.telemetry_queue.put_nowait(point)
             
-            # Trim buffer if it exceeds max size
-            if len(self.telemetry_buffer) > self.buffer_size:
-                self.telemetry_buffer = self.telemetry_buffer[-self.buffer_size:]
+            # Occasional debug logging (every 10 seconds worth of data)
+            self._telemetry_point_count += 1
+            if self._telemetry_point_count % 600 == 0:  # Every 10 seconds at ~60Hz
+                queue_size = self.telemetry_queue.qsize()
+                logger.info(f"🚀 [AI QUEUE] Point #{self._telemetry_point_count} queued - Queue size: {queue_size}, Drops: {self._queue_drops}")
+                print(f"🧵 [AI THREAD] Telemetry queued: #{self._telemetry_point_count}, Queue: {queue_size}")
+                
+        except queue.Full:
+            # Queue is full - drop this point to prevent blocking
+            self._queue_drops += 1
+            if self._queue_drops % 100 == 0:  # Log every 100 drops
+                logger.warning(f"⚠️ [AI QUEUE] Dropped {self._queue_drops} telemetry points - AI thread overloaded")
+    
+    def run(self):
+        """Main thread loop for processing AI coaching telemetry.
+        
+        This runs in a dedicated thread completely separate from the main telemetry flow.
+        """
+        logger.info("🧵 [AI THREAD] AI coaching telemetry thread started")
+        
+        last_log_time = time.time()
+        points_processed = 0
+        
+        while not self.should_stop:
+            try:
+                # Wait for telemetry data (blocking, but only in AI thread)
+                try:
+                    point = self.telemetry_queue.get(timeout=1.0)  # 1 second timeout
+                except queue.Empty:
+                    continue  # No data available, check if should stop
+                
+                points_processed += 1
+                
+                # Only process if we're actively monitoring
+                if self.is_monitoring:
+                    # Add to buffer for coverage calculation
+                    self.telemetry_buffer.append(point)
+                    
+                    # Trim buffer if it exceeds max size
+                    if len(self.telemetry_buffer) > self.buffer_size:
+                        self.telemetry_buffer = self.telemetry_buffer[-self.buffer_size:]
+                    
+                    # Calculate coverage (emits signal to main thread)
+                    self._calculate_coverage()
+                    
+                    # Process for AI coaching if available
+                    if self._ai_coach:
+                        self._process_ai_coaching(point, points_processed)
+                
+                # Debug logging every 10 seconds
+                current_time = time.time()
+                if current_time - last_log_time >= 10.0:
+                    queue_size = self.telemetry_queue.qsize()
+                    processing_rate = points_processed / (current_time - last_log_time)
+                    
+                    ai_status = "ACTIVE" if (self._ai_coach and self.is_monitoring) else "INACTIVE"
+                    logger.info(f"🧵 [AI THREAD] Processed {points_processed} points in 10s ({processing_rate:.1f}/s) - Queue: {queue_size}, AI: {ai_status}")
+                    
+                    if self._ai_coach and self.is_monitoring:
+                        print(f"🎯 [AI COACHING] Processing at {processing_rate:.1f} points/sec - Queue: {queue_size}")
+                    
+                    last_log_time = current_time
+                    points_processed = 0
+                
+                # Mark task as done
+                self.telemetry_queue.task_done()
+                
+            except Exception as e:
+                logger.error(f"❌ [AI THREAD] Error in AI coaching thread: {e}")
+                
+        logger.info("🧵 [AI THREAD] AI coaching telemetry thread stopped")
+    
+    def _process_ai_coaching(self, point, point_number):
+        """Process telemetry for AI coaching.
+        
+        This runs in the dedicated AI thread - safe to do blocking operations.
+        """
+        try:
+            # Map iRacing field names to AI coach expected field names
+            ai_coach_point = {
+                'track_position': point.get('LapDistPct', point.get('track_position')),
+                'speed': point.get('Speed', point.get('speed', 0)),
+                'throttle': point.get('Throttle', point.get('throttle', 0)),
+                'brake': point.get('Brake', point.get('brake', 0)),
+                'steering': point.get('SteeringWheelAngle', point.get('steering', 0)),
+            }
             
-            # If monitoring is active, calculate coverage
-            if self.is_monitoring:
-                self._calculate_coverage()
-
-        # Process for AI coaching if the coach is available and running
-        if self.ai_coach and self.is_monitoring:
-            self.ai_coach.process_realtime_telemetry(point)
+            # Only process if we have essential data
+            if ai_coach_point['track_position'] is not None:
+                # Log every 5 seconds instead of every second (300 points at ~60Hz)
+                if point_number % 300 == 0:
+                    logger.info(f"✅ [AI TELEMETRY ACTIVE] Point #{point_number} -> AI Coach: pos={ai_coach_point['track_position']:.3f}, speed={ai_coach_point['speed']:.1f} km/h")
+                    print(f"🎙️ [AI COACHING] Processing: pos={ai_coach_point['track_position']:.3f}, speed={ai_coach_point['speed']:.1f} km/h")
+                
+                # Process with AI coach (safe to block in dedicated thread)
+                self._ai_coach.process_realtime_telemetry(ai_coach_point)
+                
+            else:
+                # Log missing data less frequently
+                if point_number % 600 == 0:  # Every 10 seconds instead of 5
+                    logger.debug(f"⚠️ [AI COACH] Skipping - no track position data. Keys: {list(point.keys())}")
+                    
+        except Exception as e:
+            logger.error(f"❌ [AI COACH ERROR] Error processing telemetry: {e}")
     
     def start_monitoring(self):
         """Start monitoring telemetry coverage and coaching."""
+        logger.info(f"🎙️ [MONITOR START] start_monitoring() called")
+        logger.info(f"🎙️ [MONITOR START] AI coach available: {self._ai_coach is not None}")
+        logger.info(f"🎙️ [MONITOR START] Current monitoring state: {self.is_monitoring}")
+        
         self.is_monitoring = True
-        logger.info("Telemetry coverage monitoring and coaching started")
-        self._calculate_coverage()
+        logger.info("🧵 [AI THREAD] Telemetry coverage monitoring and coaching started")
+        logger.info(f"🎙️ [MONITOR START] New monitoring state: {self.is_monitoring}")
+        
+        # Clear any old buffer data
+        self.telemetry_buffer = []
+        
+        # Return True to signal successful start
+        return True
     
     def stop_monitoring(self):
         """Stop monitoring telemetry coverage and coaching."""
+        logger.info(f"🎙️ [MONITOR STOP] stop_monitoring() called")
+        logger.info(f"🎙️ [MONITOR STOP] AI coach available: {self._ai_coach is not None}")
+        logger.info(f"🎙️ [MONITOR STOP] Current monitoring state: {self.is_monitoring}")
+        
         self.is_monitoring = False
-        logger.info("Telemetry coverage monitoring and coaching stopped")
+        logger.info("🧵 [AI THREAD] Telemetry coverage monitoring and coaching stopped")
+        logger.info(f"🎙️ [MONITOR STOP] New monitoring state: {self.is_monitoring}")
+        
+        # Return True to signal successful stop
+        return True
+    
+    def stop_thread(self):
+        """Stop the AI coaching thread."""
+        logger.info("🧵 [AI THREAD] Stopping AI coaching thread...")
+        self.should_stop = True
+        
+        # Wait for thread to finish (with timeout)
+        if self.wait(5000):  # 5 second timeout
+            logger.info("🧵 [AI THREAD] AI coaching thread stopped cleanly")
+        else:
+            logger.warning("⚠️ [AI THREAD] AI coaching thread stop timeout - forcing termination")
+            self.terminate()
     
     def clear_buffer(self):
         """Clear the telemetry buffer."""
-        with self.lock:
-            self.telemetry_buffer = []
-            logger.info("Telemetry buffer cleared")
+        self.telemetry_buffer = []
+        logger.info("🧵 [AI THREAD] Telemetry buffer cleared")
     
     def get_buffer_copy(self):
         """Get a copy of the current telemetry buffer.
@@ -217,13 +372,11 @@ class TelemetryMonitorWorker(QObject):
         Returns:
             list: Copy of current telemetry points
         """
-        with self.lock:
-            return self.telemetry_buffer.copy()
+        return self.telemetry_buffer.copy()
     
     def _calculate_coverage(self):
         """Calculate current telemetry coverage and emit signal."""
-        with self.lock:
-            buffer_copy = self.telemetry_buffer.copy()
+        buffer_copy = self.telemetry_buffer.copy()
         
         # Extract track positions
         positions = [p.get('track_position') for p in buffer_copy if p.get('track_position') is not None]
@@ -244,7 +397,9 @@ class TelemetryMonitorWorker(QObject):
             "min_pos": min_pos,
             "max_pos": max_pos,
             "total_points": len(buffer_copy),
-            "is_complete": min_pos <= 0.02 and max_pos >= 0.98
+            "is_complete": min_pos <= 0.02 and max_pos >= 0.98,
+            "queue_size": self.telemetry_queue.qsize(),
+            "drops": self._queue_drops
         }
         
         self.coverage_updated.emit(coverage, diagnostics) 

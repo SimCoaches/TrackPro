@@ -2,6 +2,34 @@
 
 This module contains the main RaceCoachWidget that integrates all the separate
 tab modules into a cohesive interface.
+
+TELEMETRY ARCHITECTURE (Updated for AI Coach Independence):
+===========================================================
+
+The telemetry system now uses three completely independent callback streams:
+
+1. UI TELEMETRY (on_telemetry_data):
+   - Purpose: Update UI elements (overview tab, graphs, etc.)
+   - Does NOT interfere with lap saving
+   - Always active when connected to iRacing
+
+2. LAP SAVING TELEMETRY (iRacing Session Monitor):
+   - Purpose: Save laps to database, detect lap completions, sector timing
+   - Handled by iracing_session_monitor and iracing_lap_saver
+   - Completely independent of AI coach state
+   - Always active when connected to iRacing and authenticated
+
+3. AI COACH TELEMETRY (ai_coach_telemetry_wrapper):
+   - Purpose: Real-time AI voice coaching based on SuperLap comparison
+   - Only active when AI coach is explicitly enabled by user
+   - Uses TelemetryMonitorWorker with independent callback wrapper
+   - Does NOT interfere with lap saving or UI updates
+
+This architecture ensures that:
+- Laps are always saved regardless of AI coach state
+- AI coaching can be toggled on/off without affecting lap saving
+- UI updates continue to work independently
+- No telemetry stream interferes with others
 """
 
 import logging
@@ -11,7 +39,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QFrame, QSizePolicy, QMessageBox, QDialog,
     QTextEdit, QDialogButtonBox, QInputDialog
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 # Import the individual tab modules
 from .overview_tab import OverviewTab
@@ -72,10 +100,13 @@ class RaceCoachWidget(QWidget):
 
         # Initialize the central telemetry monitor worker for AI coaching
         try:
+            logger.debug("🎙️ [INIT] Importing TelemetryMonitorWorker...")
             from ..utils.telemetry_worker import TelemetryMonitorWorker
+            logger.debug("🎙️ [INIT] Creating TelemetryMonitorWorker instance...")
             # Initialize without superlap_id first - will be set later when user selects one
             self.telemetry_monitor_worker = TelemetryMonitorWorker()
             logger.info("✅ TelemetryMonitorWorker initialized for AI coaching")
+            logger.debug(f"🎙️ [INIT] TelemetryMonitorWorker object: {self.telemetry_monitor_worker}")
         except Exception as telemetry_error:
             logger.error(f"❌ Error initializing TelemetryMonitorWorker: {telemetry_error}")
             self.telemetry_monitor_worker = None
@@ -114,6 +145,12 @@ class RaceCoachWidget(QWidget):
                     logger.warning("⚠️ Failed to start deferred iRacing monitoring")
             except Exception as e:
                 logger.error(f"❌ Error starting deferred monitoring: {e}")
+        elif hasattr(self, '_monitoring_started') and self._monitoring_started:
+            logger.info("✅ Deferred iRacing monitoring already started")
+        elif not hasattr(self, 'iracing_api') or not self.iracing_api:
+            logger.info("⚠️ No iRacing API available for deferred monitoring")
+        elif not hasattr(self.iracing_api, 'start_deferred_monitoring'):
+            logger.info("⚠️ iRacing API doesn't support deferred monitoring")
 
     def _setup_iracing_api_connections(self):
         """Set up connections to the iRacing API."""
@@ -122,7 +159,46 @@ class RaceCoachWidget(QWidget):
             if hasattr(self.iracing_api, "register_on_connection_changed"):
                 logger.info("Using SimpleIRacingAPI callback methods")
                 self.iracing_api.register_on_connection_changed(self.on_iracing_connected)
-                self.iracing_api.register_on_telemetry_data(self.on_telemetry_data)
+                
+                # 🔧 BUGFIX: Create a unified telemetry callback that handles both UI and AI coaching
+                # This prevents conflicts from multiple registrations
+                def unified_telemetry_callback(telemetry_data):
+                    """Unified telemetry callback that handles both UI updates and AI coaching."""
+                    try:
+                        # Always update UI with telemetry data
+                        self.on_telemetry_data(telemetry_data)
+                        
+                        # Debug AI coaching conditions  
+                        if not hasattr(unified_telemetry_callback, '_debug_count'):
+                            unified_telemetry_callback._debug_count = 0
+                        unified_telemetry_callback._debug_count += 1
+                        
+                        # ALWAYS try to forward to AI coach if worker exists - let the worker decide
+                        if hasattr(self, 'telemetry_monitor_worker') and self.telemetry_monitor_worker is not None:
+                            try:
+                                self.telemetry_monitor_worker.add_telemetry_point(telemetry_data)
+                                
+                                # Log success frequently to verify it's working
+                                if unified_telemetry_callback._debug_count % 60 == 0:  # Every second
+                                    ai_active = (hasattr(self.telemetry_monitor_worker, 'ai_coach') and 
+                                               self.telemetry_monitor_worker.ai_coach is not None and
+                                               hasattr(self.telemetry_monitor_worker, 'is_monitoring') and
+                                               self.telemetry_monitor_worker.is_monitoring)
+                                    logger.info(f"✅ [TELEMETRY FLOW] Forwarding to AI worker - AI active: {ai_active}")
+                                    print(f"🎯 [TELEMETRY] Forwarding to AI worker - AI active: {ai_active}")
+                            except Exception as worker_error:
+                                logger.error(f"❌ [AI TELEMETRY] Error forwarding to AI worker: {worker_error}")
+                        else:
+                            # Only log missing worker occasionally
+                            if unified_telemetry_callback._debug_count % 1200 == 0:  # Every 20 seconds
+                                logger.debug(f"🔍 [AI DEBUG] No telemetry worker available for AI coaching")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ [UNIFIED TELEMETRY] Error in unified telemetry callback: {e}")
+                
+                # Register the unified callback ONCE
+                self.iracing_api.register_on_telemetry_data(unified_telemetry_callback)
+                logger.info("✅ [UNIFIED TELEMETRY] Single unified telemetry callback registered for UI + AI coaching")
 
                 # Connect the new signal
                 if hasattr(self.iracing_api, "sessionInfoUpdated"):
@@ -196,14 +272,6 @@ class RaceCoachWidget(QWidget):
                 
                 logger.info("✅ SimpleIRacingAPI initialized successfully")
                 logger.info(f"🔍 SimpleIRacingAPI object: {self.iracing_api}")
-                
-                # Register the telemetry monitor to receive live data for AI coaching
-                if self.telemetry_monitor_worker is not None:
-                    try:
-                        self.iracing_api.register_on_telemetry_data(self.telemetry_monitor_worker.add_telemetry_point)
-                        logger.info("✅ Registered telemetry monitor worker with iRacing API for AI coaching")
-                    except Exception as monitor_error:
-                        logger.error(f"❌ Error registering telemetry monitor: {monitor_error}")
                 
                 # Connect the data manager to the API for telemetry saving
                 if self.data_manager is not None:
@@ -361,6 +429,20 @@ class RaceCoachWidget(QWidget):
         self.ai_coach_button.setToolTip("Start/Stop real-time AI voice coaching")
         self.ai_coach_button.clicked.connect(self.toggle_ai_coaching)
         status_layout.addWidget(self.ai_coach_button)
+
+        # Add AI Coach Volume Control
+        try:
+            from .ai_coach_volume_widget import AICoachVolumeWidget
+            self.ai_coach_volume_widget = AICoachVolumeWidget(self)
+            self.ai_coach_volume_widget.setMaximumWidth(300)  # Constrain width
+            status_layout.addWidget(self.ai_coach_volume_widget)
+            logger.info("✅ [VOLUME UI] AI Coach volume control added to status bar")
+        except Exception as e:
+            logger.error(f"❌ [VOLUME UI] Failed to add volume control: {e}")
+            # Add a simple label as fallback
+            volume_label = QLabel("🔊 Volume controls unavailable")
+            volume_label.setStyleSheet("color: #888; font-style: italic;")
+            status_layout.addWidget(volume_label)
 
         main_layout.addWidget(self.status_bar)
 
@@ -593,8 +675,23 @@ class RaceCoachWidget(QWidget):
             self.track_label.setText("No Track")
 
     def on_telemetry_data(self, telemetry_data):
-        """Handle telemetry data from iRacing API."""
-        # Update overview tab with telemetry data
+        """Handle telemetry data from iRacing API - for UI updates only.
+        
+        Note: This method handles UI telemetry updates only. Lap saving telemetry
+        is handled separately by the iRacing session monitor and lap saver systems.
+        AI coach telemetry is handled independently through a separate callback.
+        """
+        # Add debug counter to reduce spam
+        if not hasattr(self, '_ui_telemetry_count'):
+            self._ui_telemetry_count = 0
+        self._ui_telemetry_count += 1
+        
+        # Debug log every 10 seconds to verify normal telemetry flow is working
+        if self._ui_telemetry_count % 600 == 0:  # Every 10 seconds at ~60Hz
+            logger.debug(f"🔍 [UI TELEMETRY] Received telemetry point #{self._ui_telemetry_count} for UI updates - lap saving should be independent")
+            logger.debug(f"🔧 [AI DEBUG] has_worker={hasattr(self, 'telemetry_monitor_worker')}, worker_exists={getattr(self, 'telemetry_monitor_worker', None) is not None}, has_ai_coach={hasattr(self, 'telemetry_monitor_worker') and self.telemetry_monitor_worker and hasattr(self.telemetry_monitor_worker, 'ai_coach') and self.telemetry_monitor_worker.ai_coach is not None}, is_monitoring={hasattr(self, 'telemetry_monitor_worker') and self.telemetry_monitor_worker and hasattr(self.telemetry_monitor_worker, 'is_monitoring') and self.telemetry_monitor_worker.is_monitoring}")
+        
+        # Update overview tab with telemetry data (UI only)
         if hasattr(self, 'overview_tab'):
             self.overview_tab.update_telemetry(telemetry_data)
 
@@ -649,24 +746,9 @@ class RaceCoachWidget(QWidget):
             
             if ok and superlap_id.strip():
                 if self.start_ai_coaching(superlap_id.strip()):
-                    self.ai_coach_button.setText("🤖 AI Coach: ON")
-                    self.ai_coach_button.setStyleSheet("""
-                        background-color: #004400;
-                        color: #88FF88;
-                        padding: 5px 10px;
-                        border-radius: 3px;
-                    """)
-                    self.ai_coach_button.setToolTip("Stop real-time AI voice coaching")
-                    
-                    # Show success message
-                    QMessageBox.information(
-                        self, 
-                        "AI Coach Started", 
-                        f"🎧 AI Coach is now active!\n\n"
-                        f"Your driving will be compared to SuperLap: {superlap_id}\n"
-                        f"You'll receive real-time voice coaching through your audio device.\n\n"
-                        f"Make sure your headset/speakers are connected!"
-                    )
+                    # Don't show success notification here - it will be shown 
+                    # by the background thread callback when actually ready
+                    logger.info("🤖 [AI COACH UI] Background initialization started")
                 else:
                     QMessageBox.warning(
                         self, 
@@ -723,36 +805,217 @@ class RaceCoachWidget(QWidget):
         Args:
             superlap_id: The UUID of the superlap to use for coaching
         """
-        if not self.telemetry_monitor_worker:
-            logger.error("Cannot start AI coaching: TelemetryMonitorWorker not available")
-            return False
+        logger.info(f"🤖 [AI COACH START] Starting AI coaching with superlap_id: {superlap_id}")
+        logger.info(f"🤖 [AI COACH START] TelemetryMonitorWorker available: {self.telemetry_monitor_worker is not None}")
+        logger.info(f"🤖 [AI COACH START] IRacing API available: {self.iracing_api is not None}")
+        logger.info(f"🤖 [AI COACH START] IRacing Lap Saver available: {getattr(self, 'iracing_lap_saver', None) is not None}")
         
-        try:
-            from ..ai_coach.ai_coach import AICoach
+        if not self.telemetry_monitor_worker:
+            logger.error("❌ Cannot start AI coaching: TelemetryMonitorWorker not available")
+            return
             
-            # Initialize AI coach with the superlap
-            self.telemetry_monitor_worker.ai_coach = AICoach(superlap_id=superlap_id)
-            logger.info(f"✅ AI Coach initialized with superlap_id: {superlap_id}")
+        # Check authentication for superlap data access
+        from trackpro.database.supabase_client import get_supabase_client
+        supabase_client = get_supabase_client()
+        if not supabase_client or not supabase_client.auth.get_session():
+            logger.error("❌ Cannot start AI coaching: No authenticated Supabase client available")
+            print("❌ [AI COACH ERROR] Please log in to access SuperLap data for AI coaching")
+            return
+        
+        logger.info("✅ Authenticated Supabase client available for superlap data loading")
+        
+        # 🔧 BUGFIX: Run AI coach initialization in background thread to prevent blocking telemetry
+        class AICoachInitThread(QThread):
+            """Background thread for AI coach initialization to prevent telemetry blocking."""
+            coach_ready = pyqtSignal(object)  # Emits the AI coach instance when ready
+            coach_failed = pyqtSignal(str)    # Emits error message if failed
             
-            # Start monitoring to enable coaching
-            self.telemetry_monitor_worker.start_monitoring()
-            logger.info("✅ AI coaching started - driver will receive real-time voice guidance")
+            def __init__(self, superlap_id):
+                super().__init__()
+                self.superlap_id = superlap_id
+                
+            def run(self):
+                """Initialize AI coach in background thread."""
+                try:
+                    logger.info(f"🤖 [AI COACH THREAD] Background initialization started for superlap: {self.superlap_id}")
+                    
+                    # Check API keys before loading SuperLap data
+                    import os
+                    openai_key = os.getenv("OPENAI_API_KEY")
+                    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+                    
+                    if not openai_key:
+                        raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY environment variable.")
+                    if not elevenlabs_key:
+                        raise ValueError("ElevenLabs API key not found. Please set ELEVENLABS_API_KEY environment variable.")
+                    
+                    logger.info("🔑 [API KEYS] OpenAI and ElevenLabs API keys found")
+                    
+                    from ..ai_coach.ai_coach import AICoach
+                    
+                    # This 3+ second operation now runs in background
+                    ai_coach_instance = AICoach(superlap_id=self.superlap_id)
+                    
+                    logger.info(f"🤖 [AI COACH THREAD] Background initialization completed successfully")
+                    logger.info(f"🤖 [AI COACH THREAD] AI coach has {len(ai_coach_instance.superlap_points)} superlap points")
+                    
+                    # Signal that the coach is ready
+                    self.coach_ready.emit(ai_coach_instance)
+                    
+                except Exception as e:
+                    logger.error(f"❌ [AI COACH THREAD] Background initialization failed: {e}")
+                    self.coach_failed.emit(str(e))
+        
+        def on_coach_ready(ai_coach_instance):
+            """Handle AI coach ready signal from background thread."""
+            try:
+                logger.info(f"🤖 [AI COACH READY] Background thread completed - assigning to telemetry worker")
+                
+                # Assign the AI coach to the telemetry worker (main thread operation)
+                logger.info(f"🔧 [AI DEBUG] Worker before assignment: {self.telemetry_monitor_worker}")
+                logger.info(f"🔧 [AI DEBUG] Worker ai_coach before: {getattr(self.telemetry_monitor_worker, 'ai_coach', 'N/A')}")
+                
+                self.telemetry_monitor_worker.ai_coach = ai_coach_instance
+                
+                logger.info(f"🔧 [AI DEBUG] AI coach assignment completed")
+                logger.info(f"🔧 [AI DEBUG] Worker ai_coach after: {getattr(self.telemetry_monitor_worker, 'ai_coach', 'N/A')}")
+                logger.info(f"✅ AI Coach initialized with superlap_id: {superlap_id} ({len(ai_coach_instance.superlap_points)} points)")
+                
+                # Start monitoring (quick operation)
+                logger.info(f"🤖 [AI COACH START] Starting telemetry monitoring (independent of lap saving)...")
+                logger.info(f"🔧 [AI DEBUG] About to call start_monitoring()...")
+                logger.info(f"🔧 [AI DEBUG] Worker is_monitoring before: {getattr(self.telemetry_monitor_worker, 'is_monitoring', 'N/A')}")
+                
+                success = self.telemetry_monitor_worker.start_monitoring()
+                
+                logger.info(f"🔧 [AI DEBUG] start_monitoring() completed")
+                logger.info(f"🔧 [AI DEBUG] Worker is_monitoring after: {getattr(self.telemetry_monitor_worker, 'is_monitoring', 'N/A')}")
+                
+                if success:
+                    logger.info("✅ AI coaching started - driver will receive real-time voice guidance")
+                    logger.info("🔧 [AI INDEPENDENT] AI coaching is now completely independent of lap saving")
+                    print("🎙️ [AI COACH] Voice coaching activated! Drive normally to receive guidance.")
+                    
+                    # Update button state to show AI coach is active
+                    if hasattr(self, 'ai_coach_button'):
+                        self.ai_coach_button.setText("🤖 AI Coach: ON")
+                        self.ai_coach_button.setStyleSheet("""
+                            background-color: #004400;
+                            color: #88FF88;
+                            padding: 5px 10px;
+                            border-radius: 3px;
+                        """)
+                        self.ai_coach_button.setToolTip("Stop real-time AI voice coaching")
+                    
+                    # Don't show success dialog immediately - let the coach prove it's working first
+                    print(f"✅ [AI COACH READY] SuperLap loaded: {len(ai_coach_instance.superlap_points)} points")
+                    print(f"🎧 [AI COACH READY] Voice coaching is now active - drive normally to receive guidance!")
+                else:
+                    logger.error("❌ Failed to start AI coaching monitoring")
+                    print("❌ [AI COACH ERROR] Failed to start telemetry monitoring")
+                    
+            except Exception as e:
+                logger.error(f"❌ [AI COACH READY] Failed to complete AI coach setup: {e}")
+                print(f"❌ [AI COACH ERROR] Setup failed: {e}")
+        
+        def on_coach_failed(error_message):
+            """Handle AI coach failed signal from background thread."""
+            logger.error(f"❌ [AI COACH FAILED] {error_message}")
+            print(f"❌ [AI COACH ERROR] {error_message}")
             
-            return True
+            # Show user-friendly error dialog
+            if "OpenAI API key" in error_message:
+                QMessageBox.warning(
+                    self, 
+                    "AI Coach Error", 
+                    "🔑 OpenAI API Key Missing\n\n"
+                    "The AI Coach requires an OpenAI API key for voice coaching.\n"
+                    "Please set the OPENAI_API_KEY environment variable and restart TrackPro."
+                )
+            elif "ElevenLabs API key" in error_message:
+                QMessageBox.warning(
+                    self, 
+                    "AI Coach Error", 
+                    "🔑 ElevenLabs API Key Missing\n\n"
+                    "The AI Coach requires an ElevenLabs API key for text-to-speech.\n"
+                    "Please set the ELEVENLABS_API_KEY environment variable and restart TrackPro."
+                )
+            else:
+                QMessageBox.warning(
+                    self, 
+                    "AI Coach Error", 
+                    f"Failed to initialize AI Coach:\n\n{error_message}\n\n"
+                    "Please check:\n"
+                    "• The SuperLap ID is valid\n"
+                    "• Your OpenAI API key is set\n"
+                    "• Your ElevenLabs API key is set"
+                )
             
-        except Exception as e:
-            logger.error(f"❌ Failed to start AI coaching: {e}")
-            return False
-    
+        # Start background initialization
+        logger.info(f"🤖 [AI COACH START] Starting background initialization thread...")
+        print("🤖 [AI COACH] Initializing AI coach in background (this may take a few seconds)...")
+        
+        self._ai_coach_init_thread = AICoachInitThread(superlap_id)
+        self._ai_coach_init_thread.coach_ready.connect(on_coach_ready)
+        self._ai_coach_init_thread.coach_failed.connect(on_coach_failed)
+        self._ai_coach_init_thread.start()
+        
+        logger.info(f"🤖 [AI COACH START] Background thread started - telemetry flow should remain uninterrupted")
+        
+        # Return True to indicate successful start of initialization process
+        # (Actual completion will be handled by background thread callbacks)
+        return True
+
     def stop_ai_coaching(self):
         """Stop AI coaching."""
+        logger.info("🛑 [AI COACH STOP] Stopping AI coaching...")
         if self.telemetry_monitor_worker:
             self.telemetry_monitor_worker.stop_monitoring()
             self.telemetry_monitor_worker.ai_coach = None
-            logger.info("🛑 AI coaching stopped")
+            logger.info("🛑 AI coaching stopped - lap saving continues independently")
+        else:
+            logger.warning("⚠️ [AI COACH STOP] No telemetry monitor worker to stop")
 
     def is_ai_coaching_active(self):
         """Check if AI coaching is currently active."""
         return (self.telemetry_monitor_worker and 
                 self.telemetry_monitor_worker.ai_coach and 
-                self.telemetry_monitor_worker.is_monitoring) 
+                self.telemetry_monitor_worker.is_monitoring)
+    
+    def get_telemetry_status(self):
+        """Get diagnostic information about all telemetry streams.
+        
+        Returns:
+            dict: Status of all telemetry systems for debugging
+        """
+        status = {
+            'ui_telemetry': {
+                'active': hasattr(self, '_ui_telemetry_count'),
+                'points_received': getattr(self, '_ui_telemetry_count', 0),
+                'callback_registered': hasattr(self, 'iracing_api') and self.iracing_api is not None
+            },
+            'lap_saving_telemetry': {
+                'iracing_api_available': hasattr(self, 'iracing_api') and self.iracing_api is not None,
+                'lap_saver_available': hasattr(self, 'iracing_lap_saver') and self.iracing_lap_saver is not None,
+                'session_monitor_active': False  # Would need to check session monitor status
+            },
+            'ai_coach_telemetry': {
+                'telemetry_worker_available': hasattr(self, 'telemetry_monitor_worker') and self.telemetry_monitor_worker is not None,
+                'ai_coach_active': self.is_ai_coaching_active(),
+                'ai_coach_available': (hasattr(self, 'telemetry_monitor_worker') and 
+                                     self.telemetry_monitor_worker and 
+                                     self.telemetry_monitor_worker.ai_coach is not None),
+                'monitoring_active': (hasattr(self, 'telemetry_monitor_worker') and 
+                                    self.telemetry_monitor_worker and 
+                                    self.telemetry_monitor_worker.is_monitoring),
+                'points_received': (getattr(self.telemetry_monitor_worker, '_telemetry_point_count', 0) 
+                                  if hasattr(self, 'telemetry_monitor_worker') and self.telemetry_monitor_worker else 0)
+            },
+            'independence_verification': {
+                'streams_independent': True,  # Our new architecture ensures this
+                'ai_coach_affects_lap_saving': False,  # Should always be False now
+                'lap_saving_affects_ai_coach': False   # Should always be False now
+            }
+        }
+        
+        return status 

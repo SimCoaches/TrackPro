@@ -686,6 +686,24 @@ class SimpleIRacingAPI(QObject):
 
                 # --- Notify Callbacks --- #
                 if telemetry:
+                    # Always trigger callbacks for real-time telemetry (AI coach needs this!)
+                    display_telemetry = telemetry.copy()
+                    display_telemetry['speed'] = speed * 3.6  # Convert for UI
+                    
+                    # Store current telemetry for external access
+                    self.current_telemetry = telemetry.copy()
+                    
+                    # Always trigger telemetry callbacks for real-time data (regardless of lap processing)
+                    # Only log callback debug info every 10 seconds to reduce spam
+                    if self._telemetry_count % 600 == 0:  # Every 10 seconds at ~60Hz
+                        logger.debug(f"🎙️ [TELEMETRY CALLBACKS] Triggering {len(self._telemetry_callbacks)} callbacks with telemetry data")
+                    for callback in self._telemetry_callbacks:
+                        try: 
+                            callback(display_telemetry)
+                        except Exception as e: 
+                            logger.error(f"Error in telemetry callback: {e}")
+                    
+                    # Process lap information for UI display if available
                     if lap_info_to_pass_to_ui:
                         # Properly handle different formats of lap_info_to_pass_to_ui
                         if isinstance(lap_info_to_pass_to_ui, (list, tuple)) and len(lap_info_to_pass_to_ui) > 0:
@@ -714,15 +732,8 @@ class SimpleIRacingAPI(QObject):
                             if self._telemetry_count % 600 == 0:
                                 logger.warning(f"lap_info_to_pass_to_ui in unexpected format: {type(lap_info_to_pass_to_ui)}")
                         
-                        display_telemetry = telemetry.copy()
-                        display_telemetry['speed'] = speed * 3.6 # Convert for UI
-                        
-                        # Store current telemetry for external access
-                        self.current_telemetry = telemetry.copy()
-                        
-                        for callback in self._telemetry_callbacks:
-                             try: callback(display_telemetry)
-                             except Exception as e: logger.error(f"Error in telemetry callback: {e}")
+                        # Lap information processed successfully - no additional callback processing needed
+                        # (callbacks were already triggered above regardless of lap processing)
             elif self._telemetry_count % 60 == 0:
                 logger.warning(f"Missing essential telemetry: LapDistPct={telemetry.get('LapDistPct')}, SessionTimeSecs={telemetry.get('SessionTimeSecs')}")
                         

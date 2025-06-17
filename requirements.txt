@@ -52,3 +52,4 @@ sounddevice>=0.4.0  # Uncomment if you add advanced audio features
 openai>=1.86.0
 elevenlabs>=0.2.27
 soundfile>=0.12.1
+pydub>=0.25.1
