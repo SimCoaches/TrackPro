@@ -238,7 +238,7 @@ def _find_or_create_base_track(supabase: Client, track_name: str, iracing_track_
         print(f"Error in _find_or_create_base_track: {str(e)}")
         return None
 
-def update_supabase_data(supabase, user_id, track_name, car_name, track_id, car_id, session_type, session_id, subsession_id, track_config, track_length, track_location):
+def update_supabase_data(supabase, user_id, track_name, car_name, track_id, car_id, session_type, iracing_session_id, iracing_subsession_id, track_config, track_length, track_location):
     """Update Supabase with the latest iRacing data."""
     print(f"Updating Supabase with Track: {track_name}, Car: {car_name}, Config: {track_config}")
     
@@ -348,15 +348,24 @@ def update_supabase_data(supabase, user_id, track_name, car_name, track_id, car_
         # ------------- SESSION -------------
         # Create a new session record
         print(f"Creating new session record: User={user_id}, TrackDB_ID={track_db_id}, CarDB_ID={car_db_id}, Type={session_type}")
+        print(f"iRacing Session IDs: SessionID={iracing_session_id}, SubSessionID={iracing_subsession_id}")
         
-        session_insert = supabase.table('sessions').insert({
+        session_data = {
             'user_id': user_id,
             'track_id': track_db_id,
             'car_id': car_db_id,
             'session_type': session_type,
             'session_date': 'now()',
             'created_at': 'now()'
-        }).execute()
+        }
+        
+        # Add iRacing session IDs for resumption support
+        if iracing_session_id is not None:
+            session_data['iracing_session_id'] = iracing_session_id
+        if iracing_subsession_id is not None:
+            session_data['iracing_subsession_id'] = iracing_subsession_id
+        
+        session_insert = supabase.table('sessions').insert(session_data).execute()
         
         print(f"Session insert response: {session_insert.data}")
         
@@ -416,17 +425,17 @@ def update_supabase_data(supabase, user_id, track_name, car_name, track_id, car_
         traceback.print_exc()
         return None
 
-def create_supabase_session(supabase: Client, user_id_str, db_track_id, db_car_id, session_type):
+def create_supabase_session(supabase: Client, user_id_str, db_track_id, db_car_id, session_type, iracing_session_id=None, iracing_subsession_id=None):
     """Creates a new session record and returns its UUID if successful."""
     session_uuid = None # Initialize return value
     if not supabase: # Check passed-in client
         print("Supabase client not provided to create_supabase_session.", file=sys.stderr)
         return session_uuid
-    # ... (rest of the function is identical to the previous version) ...
     if not user_id_str or not db_track_id or not db_car_id:
         print("Missing required data for session creation (UserID, TrackDB_ID, CarDB_ID).", file=sys.stderr)
         return session_uuid
     print(f"Creating new session record: User={user_id_str}, TrackDB_ID={db_track_id}, CarDB_ID={db_car_id}, Type={session_type}")
+    print(f"iRacing Session IDs: SessionID={iracing_session_id}, SubSessionID={iracing_subsession_id}")
     try:
         session_data = {
             'user_id': user_id_str,
@@ -434,6 +443,13 @@ def create_supabase_session(supabase: Client, user_id_str, db_track_id, db_car_i
             'car_id': db_car_id,
             'session_type': session_type,
         }
+        
+        # Add iRacing session IDs for resumption support
+        if iracing_session_id is not None:
+            session_data['iracing_session_id'] = iracing_session_id
+        if iracing_subsession_id is not None:
+            session_data['iracing_subsession_id'] = iracing_subsession_id
+            
         response = supabase.table('sessions').insert(session_data).execute()
         print(f"Session insert response: {response.data}")
         if response.data and response.data[0].get('id') is not None:
@@ -461,7 +477,14 @@ def run_irsdk_parse():
         if ir.is_connected:
             # Parse data directly to a file
             ir.parse_to(DATA_TXT_PATH)
-            print("Successfully parsed iRacing data to file using Python module")
+            # Only log this occasionally, not every time
+            if not hasattr(run_irsdk_parse, 'log_counter'):
+                run_irsdk_parse.log_counter = 0
+            run_irsdk_parse.log_counter += 1
+            
+            # Log every 300 calls (about once every 5 seconds at 60Hz)
+            if run_irsdk_parse.log_counter % 300 == 0:
+                print("Successfully parsed iRacing data to file using Python module")
             return True
         else:
             print("Failed to connect to iRacing for parsing")
@@ -483,6 +506,7 @@ def parse_data_file():
     track_config = None
     track_length = None
     track_location = None
+
     
     try:
         with open(DATA_TXT_PATH, 'r', encoding='utf-8') as f:
@@ -634,6 +658,10 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
     
     # Check if the thread should exit
     thread_should_stop = False
+    
+    # Track when we last logged session setup to prevent spam - use function attribute for persistence
+    if not hasattr(_monitor_loop, 'last_session_setup_logged'):
+        _monitor_loop.last_session_setup_logged = False
 
     # Main monitoring loop
     while not should_stop and not thread_should_stop:
@@ -779,14 +807,128 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                                                track_config != last_processed_track_config or
                                                iracing_car_id != last_processed_iracing_car_id)
                         
+                        # CRITICAL FIX: Skip entire session logic if nothing changed and we already have a session
+                        if (current_session_uuid is not None and 
+                            not session_changed and 
+                            not track_or_car_changed and
+                            _monitor_loop.last_session_setup_logged):
+                            # Nothing changed, session already configured - skip all session logic
+                            continue
+                        
                         # CRITICAL FIX: Only create new session if we don't have ANY session yet
                         # OR if the track/car actually changed (not just session ID changes)
                         should_create_new_session = False
                         
                         if current_session_uuid is None:
-                            # No session exists at all - create one
+                            # No session exists at all - check if we can resume an existing iRacing session
                             should_create_new_session = True
-                            logger.info(f"[SESSION] Creating first session - no session exists")
+                            
+                            # RESUME LOGIC: Check if there's already a session for this track/car combination
+                            if supabase_client and logged_in_user_id:
+                                try:
+                                    # For offline testing (session_id=0), we need smarter detection
+                                    # Look for sessions with same track, car, and session type within recent hours
+                                    
+                                    # First get the track and car database IDs by looking them up directly
+                                    target_track_id = None
+                                    target_car_id = None
+                                    
+                                    # Look up car ID
+                                    if iracing_car_id is not None:
+                                        car_response = supabase_client.table('cars').select('id').eq('iracing_car_id', iracing_car_id).execute()
+                                        if car_response.data and len(car_response.data) > 0:
+                                            target_car_id = car_response.data[0]['id']
+                                            print(f"Monitor: Found car ID {target_car_id} for iRacing car {iracing_car_id} ({car_name})")
+                                        else:
+                                            print(f"Monitor: ❌ No car found for iRacing car {iracing_car_id} ({car_name})")
+                                    
+                                    # Look up track ID (use the same logic as the main session creation)
+                                    if iracing_track_id is not None and track_config is not None:
+                                        # Use direct track lookup like in update_supabase_data function
+                                        track_response = supabase_client.table('tracks').select('id').eq('iracing_track_id', iracing_track_id).eq('config', track_config).execute()
+                                        if track_response.data and len(track_response.data) > 0:
+                                            target_track_id = track_response.data[0]['id']
+                                            print(f"Monitor: Found track ID {target_track_id} for iRacing track {iracing_track_id} ({track_name} - {track_config})")
+                                        else:
+                                            print(f"Monitor: ❌ No track found for iRacing track {iracing_track_id} ({track_name} - {track_config})")
+                                    else:
+                                        print(f"Monitor: ❌ Cannot search for track - missing iracing_track_id ({iracing_track_id}) or track_config ({track_config})")
+                                    
+                                    # If we found both track and car IDs, search for existing sessions
+                                    existing_session_result = None
+                                    if target_track_id and target_car_id:
+                                        # Look for recent sessions with same user, track, car, session type AND iRacing session ID
+                                        import datetime
+                                        
+                                        # For offline testing (session_id=0), use shorter window since session IDs aren't unique
+                                        if session_id == 0:
+                                            cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+                                            print(f"Monitor: 🔍 OFFLINE SESSION: Using 1-hour window for session_id=0")
+                                        else:
+                                            cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=4)
+                                            print(f"Monitor: 🔍 ONLINE SESSION: Using 4-hour window for session_id={session_id}")
+                                        
+                                        existing_session_query = supabase_client.table("sessions").select(
+                                            "id, track_id, car_id, session_type, created_at, iracing_session_id, iracing_subsession_id"
+                                        ).eq("user_id", logged_in_user_id).eq(
+                                            "track_id", target_track_id
+                                        ).eq("car_id", target_car_id).eq(
+                                            "session_type", session_type
+                                        ).eq("iracing_session_id", session_id).eq(
+                                            "iracing_subsession_id", subsession_id
+                                        ).gte("created_at", cutoff_time.isoformat()).order("created_at", desc=True).limit(1)
+                                        
+                                        existing_session_result = existing_session_query.execute()
+                                        print(f"Monitor: 🔍 Searching for sessions with iRacing SessionID={session_id}, SubSessionID={subsession_id}")
+                                        
+                                        if existing_session_result.data:
+                                            # Found exact match for iRacing session - this is the same iRacing session
+                                            existing_session = existing_session_result.data[0]
+                                            print(f"Monitor: 🎯 EXACT MATCH: Found existing session for iRacing SessionID={session_id}")
+                                            print(f"Monitor: Database session: {existing_session['id']} (created: {existing_session['created_at']})")
+                                            print(f"Monitor: ✅ This is the SAME iRacing session - safe to resume")
+                                    else:
+                                        print(f"Monitor: ❌ Could not find track/car IDs - Track: {target_track_id}, Car: {target_car_id}")
+                                        existing_session_result = None
+                                    
+                                    if existing_session_result and existing_session_result.data and len(existing_session_result.data) > 0:
+                                        # Found existing session - resume it!
+                                        existing_session_uuid = existing_session['id']  # existing_session already extracted above
+                                        
+                                        # Only log and reset if this is a different session than we're currently tracking
+                                        if current_session_uuid != existing_session_uuid:
+                                            current_session_uuid = existing_session_uuid
+                                            should_create_new_session = False
+                                            _monitor_loop.last_session_setup_logged = False  # Reset logging for session resume
+                                            
+                                            # CRITICAL FIX: Immediately restore tracking variables when resuming
+                                            # This prevents session fragmentation on restart
+                                            last_processed_iracing_track_id = iracing_track_id
+                                            last_processed_iracing_car_id = iracing_car_id
+                                            last_processed_track_config = track_config
+                                            last_session_id = session_id
+                                            last_subsession_id = subsession_id
+                                            
+                                            print(f"Monitor: 🔄 RESUMING existing session {current_session_uuid}")
+                                            print(f"Monitor: Found by SMART detection - Track: {track_name}, Car: {car_name}, Type: {session_type}")
+                                            print(f"Monitor: Session was created at {existing_session['created_at']}")
+                                            print(f"Monitor: ✅ Restored tracking variables to prevent session fragmentation")
+                                            logger.info(f"[SESSION RESUME] Found existing session {current_session_uuid} via smart detection")
+                                            logger.info(f"[SESSION RESUME] ✅ Restored tracking variables - Track: {iracing_track_id}, Car: {iracing_car_id}, Config: {track_config}")
+                                        else:
+                                            # Already tracking this session, no need to log
+                                            should_create_new_session = False
+                                    else:
+                                        print(f"Monitor: 🆕 NEW iRacing SESSION: No existing session found for SessionID={session_id}")
+                                        print(f"Monitor: Creating new database session for Track: {track_name}, Car: {car_name}, Type: {session_type}")
+                                        logger.info(f"[SESSION] Creating new session - no existing session found for iRacing SessionID={session_id}")
+                                        
+                                except Exception as e:
+                                    print(f"Monitor: Error checking for existing session: {e}")
+                                    logger.info(f"[SESSION] Creating first session - error checking existing: {e}")
+                            else:
+                                logger.info(f"[SESSION] Creating first session - no session exists")
+                                
                         elif track_or_car_changed:
                             # Track or car actually changed - legitimate new session
                             should_create_new_session = True 
@@ -805,7 +947,15 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                             # Session ID changed but track/car same - CONTINUE with existing session
                             logger.info(f"[SESSION] Keeping existing session {current_session_uuid} - only session ID changed")
                         
+                        # Initialize session variables for both new and existing sessions
+                        session_uuid = None
+                        track_db_id = None
+                        car_db_id = None
+                        
                         if should_create_new_session:
+                            # Reset the logging flag for new session creation
+                            _monitor_loop.last_session_setup_logged = False
+                            
                             # Create new session (original logic)
                             change_type = "session" if session_changed else "track/car/config" 
                             print(f"Monitor: New {change_type} detected (ID: {session_id}, SubID: {subsession_id}, Track: {track_name}, Car: {car_name}, Config: {track_config})")
@@ -851,65 +1001,109 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                                     traceback.print_exc()
                             else:
                                 print("Monitor: Using existing session.")
+                        else:
+                            # Using existing session - get the current session data
+                            session_uuid = current_session_uuid
+                            if not _monitor_loop.last_session_setup_logged:
+                                print(f"Monitor: Using existing session: {session_uuid}")
                             
-                            # Common session setup for both new and resumed sessions
-                            if session_uuid:
-                                # CRITICAL FIX: Record session creation time to prevent rapid succession
-                                _monitor_loop._last_session_creation_time = time.time()
-                                
-                                # CRITICAL FIX: Update ALL session tracking variables consistently
-                                current_session_uuid = session_uuid
+                            # We need to get the track_db_id and car_db_id for the existing session
+                            # Query the database to get this information
+                            if supabase_client and session_uuid:
+                                try:
+                                    session_query = supabase_client.table("sessions").select("track_id, car_id").eq("id", session_uuid).execute()
+                                    if session_query.data and len(session_query.data) > 0:
+                                        track_db_id = session_query.data[0]['track_id']
+                                        car_db_id = session_query.data[0]['car_id']
+                                        if not _monitor_loop.last_session_setup_logged:
+                                            print(f"Monitor: Retrieved database IDs for existing session - Track: {track_db_id}, Car: {car_db_id}")
+                                    else:
+                                        if not _monitor_loop.last_session_setup_logged:
+                                            print(f"Monitor: Warning: Could not retrieve database IDs for existing session {session_uuid}")
+                                except Exception as e:
+                                    if not _monitor_loop.last_session_setup_logged:
+                                        print(f"Monitor: Error retrieving existing session data: {e}")
+                            
+                            # CRITICAL FIX: Update tracking variables for resumed sessions too!
+                            # This prevents the monitor from thinking the session changed on next loop
+                            if not _monitor_loop.last_session_setup_logged:
                                 last_processed_iracing_track_id = iracing_track_id
                                 last_processed_iracing_car_id = iracing_car_id
                                 last_processed_track_config = track_config
                                 last_session_id = session_id
                                 last_subsession_id = subsession_id
-                                
-                                session_action = "created"
+                                print(f"Monitor: ✅ Updated tracking variables for resumed session")
+                                logger.info(f"[SESSION MONITOR] ✅ Updated tracking variables for resumed session - SessionID: {session_id}, Track: {iracing_track_id}, Config: {track_config}")
+                            
+                        # Common session setup for both new and existing sessions
+                        if session_uuid and track_db_id and car_db_id:
+                            # CRITICAL FIX: Record session creation time to prevent rapid succession
+                            _monitor_loop._last_session_creation_time = time.time()
+                            
+                            # CRITICAL FIX: Update ALL session tracking variables consistently
+                            current_session_uuid = session_uuid
+                            last_processed_iracing_track_id = iracing_track_id
+                            last_processed_iracing_car_id = iracing_car_id
+                            last_processed_track_config = track_config
+                            last_session_id = session_id
+                            last_subsession_id = subsession_id
+                            
+                            session_action = "created" if should_create_new_session else "resumed"
+                            if not _monitor_loop.last_session_setup_logged:
                                 logger.info(f"[SESSION MONITOR] ✅ Session {session_action}: {session_uuid}")
                                 logger.info(f"[SESSION MONITOR] ✅ Updated tracking variables - SessionID: {session_id}, Track: {iracing_track_id}, Config: {track_config}")
-                                
-                                # Notify the lap saver of the session with safety check
-                                if lap_saver_instance:
-                                    try:
-                                        # CRITICAL FIX: Use proper database IDs and new session context method
-                                        if hasattr(lap_saver_instance, 'set_session_context'):
-                                            # Use the new method with proper database IDs
-                                            lap_saver_instance.set_session_context(
-                                                session_id=session_uuid,
-                                                track_id=track_db_id,  # ✅ Correct database ID
-                                                car_id=car_db_id,      # ✅ Correct database ID
-                                                session_type=session_type
-                                            )
-                                            print(f"Monitor: ✅ Set session context with database IDs")
-                                        else:
-                                            # Fallback to old method for compatibility
-                                            lap_saver_instance._current_session_id = session_uuid
-                                            lap_saver_instance._current_track_id = track_db_id
-                                            lap_saver_instance._current_car_id = car_db_id
-                                            lap_saver_instance._current_session_type = session_type
-                                            print(f"Monitor: ⚠️  Used fallback session setting (no set_session_context method)")
-                                        
-                                        # Reset lap tracking state for new/resumed session
-                                        lap_saver_instance._current_lap_number = 0
-                                        lap_saver_instance._is_first_telemetry = True
-                                        lap_saver_instance._current_lap_data = []
-                                        lap_saver_instance._best_lap_time = float('inf')
-                                        lap_saver_instance._current_lap_id = None
-                                        
-                                        session_action = "created"
-                                        print(f"Monitor: Session ID {session_action} in lap saver: {session_uuid}")
-                                        print(f"Monitor: ✅ Lap saver configured with correct database IDs")
-                                        
-                                        # Also ensure the session is explicitly initialized in the IRacingLapSaver
-                                        if hasattr(lap_saver_instance, 'start_session'):
-                                            print(f"Monitor: Explicitly starting session in lap saver")
-                                            lap_saver_instance.start_session(track_name, car_name, session_type)
-                                    except RuntimeError as re:
-                                        if "wrapped C/C++ object" in str(re):
-                                            print(f"Monitor: LapSaver C++ object deleted during session reset: {re}")
-                                        else:
-                                            raise
+                            
+                            # Notify the lap saver of the session with safety check
+                            if lap_saver_instance and not _monitor_loop.last_session_setup_logged:
+                                try:
+                                    # CRITICAL FIX: Use proper database IDs and new session context method
+                                    if hasattr(lap_saver_instance, 'set_session_context'):
+                                        # Use the new method with proper database IDs
+                                        lap_saver_instance.set_session_context(
+                                            session_id=session_uuid,
+                                            track_id=track_db_id,  # ✅ Correct database ID
+                                            car_id=car_db_id,      # ✅ Correct database ID
+                                            session_type=session_type
+                                        )
+                                        print(f"Monitor: ✅ Set session context with database IDs")
+                                    else:
+                                        # Fallback to old method for compatibility
+                                        lap_saver_instance._current_session_id = session_uuid
+                                        lap_saver_instance._current_track_id = track_db_id
+                                        lap_saver_instance._current_car_id = car_db_id
+                                        lap_saver_instance._current_session_type = session_type
+                                        print(f"Monitor: ⚠️  Used fallback session setting (no set_session_context method)")
+                                    
+                                    # Reset lap tracking state for new/resumed session
+                                    lap_saver_instance._current_lap_number = 0
+                                    lap_saver_instance._is_first_telemetry = True
+                                    lap_saver_instance._current_lap_data = []
+                                    lap_saver_instance._best_lap_time = float('inf')
+                                    lap_saver_instance._current_lap_id = None
+                                    
+                                    print(f"Monitor: ✅ Lap saver configured with session {session_uuid}")
+                                    
+                                    # Also ensure the session is explicitly initialized in the IRacingLapSaver
+                                    if hasattr(lap_saver_instance, 'start_session'):
+                                        print(f"Monitor: Explicitly starting session in lap saver")
+                                        lap_saver_instance.start_session(track_name, car_name, session_type)
+                                except RuntimeError as re:
+                                    if "wrapped C/C++ object" in str(re):
+                                        print(f"Monitor: LapSaver C++ object deleted during session reset: {re}")
+                                    else:
+                                        raise
+                            
+                            # Mark that we've logged the session setup to prevent spam
+                            _monitor_loop.last_session_setup_logged = True
+                        else:
+                            if not _monitor_loop.last_session_setup_logged:
+                                missing = []
+                                if not session_uuid: missing.append("session_uuid")
+                                if not track_db_id: missing.append("track_db_id") 
+                                if not car_db_id: missing.append("car_db_id")
+                                print(f"Monitor: ❌ Cannot configure lap saver - missing: {', '.join(missing)}")
+                                # Mark as logged even if failed to prevent repeated error messages
+                                _monitor_loop.last_session_setup_logged = True
                     else:
                         print("Monitor: Skipping update: Failed to parse essential data.")
         except RuntimeError as re:
@@ -919,7 +1113,7 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                 break
             else:
                 print(f"Monitor: Runtime error in main loop: {re}", file=sys.stderr)
-                time.sleep(1)
+            time.sleep(1)
         except Exception as e:
             print(f"Monitor: Error in main loop: {e}", file=sys.stderr)
             if is_connected:

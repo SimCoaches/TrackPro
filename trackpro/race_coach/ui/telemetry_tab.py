@@ -887,10 +887,6 @@ class TelemetryTab(QWidget):
             for point in left_data['points']:
                 mapped_point = point.copy()
                 
-                # DEBUG: Log available field names in the first point
-                if mapped_points == []:  # First point
-                    logger.info(f"DEBUG: Available fields in left lap point: {list(point.keys())}")
-                
                 # Critical mapping: Convert database field names to graph widget expectations
                 if 'track_position' in mapped_point:
                     # Convert track_position to actual distance in meters
@@ -908,10 +904,8 @@ class TelemetryTab(QWidget):
                 # Map lowercase to titlecase field names that graph widgets expect
                 if 'throttle' in mapped_point:
                     mapped_point['Throttle'] = mapped_point['throttle']
-                    logger.debug(f"Mapped throttle: {mapped_point['throttle']} -> Throttle: {mapped_point['Throttle']}")
                 if 'brake' in mapped_point:
                     mapped_point['Brake'] = mapped_point['brake']
-                    logger.debug(f"Mapped brake: {mapped_point['brake']} -> Brake: {mapped_point['Brake']}")
                 if 'steering' in mapped_point:
                     # Use raw steering values directly - they appear to already be normalized
                     # Raw values like 0.167 are appropriate for the -1 to 1 graph range
@@ -920,12 +914,10 @@ class TelemetryTab(QWidget):
                         # Clamp to -1 to 1 range but don't scale since values are already appropriate
                         normalized_steering = max(-1.0, min(1.0, raw_steering))
                         mapped_point['Steering'] = normalized_steering
-                        logger.debug(f"Mapped steering: {raw_steering} -> Steering: {normalized_steering:.3f}")
                     else:
                         mapped_point['Steering'] = 0.0
                 if 'speed' in mapped_point:
                     mapped_point['Speed'] = mapped_point['speed']
-                    logger.debug(f"Mapped speed: {mapped_point['speed']} -> Speed: {mapped_point['Speed']}")
                 
                 # Set defaults for titlecase fields
                 mapped_point.setdefault('Throttle', 0)
@@ -946,10 +938,6 @@ class TelemetryTab(QWidget):
             for point in right_data['points']:
                 mapped_point = point.copy()
                 
-                # DEBUG: Log available field names in the first point
-                if mapped_points == []:  # First point
-                    logger.info(f"DEBUG: Available fields in right lap point: {list(point.keys())}")
-                
                 # Critical mapping: Convert database field names to graph widget expectations
                 if 'track_position' in mapped_point:
                     # Convert track_position to actual distance in meters
@@ -967,10 +955,8 @@ class TelemetryTab(QWidget):
                 # Map lowercase to titlecase field names that graph widgets expect
                 if 'throttle' in mapped_point:
                     mapped_point['Throttle'] = mapped_point['throttle']
-                    logger.debug(f"Right lap - Mapped throttle: {mapped_point['throttle']} -> Throttle: {mapped_point['Throttle']}")
                 if 'brake' in mapped_point:
                     mapped_point['Brake'] = mapped_point['brake']
-                    logger.debug(f"Right lap - Mapped brake: {mapped_point['brake']} -> Brake: {mapped_point['Brake']}")
                 if 'steering' in mapped_point:
                     # Use raw steering values directly - they appear to already be normalized
                     # Raw values like 0.167 are appropriate for the -1 to 1 graph range
@@ -979,12 +965,10 @@ class TelemetryTab(QWidget):
                         # Clamp to -1 to 1 range but don't scale since values are already appropriate
                         normalized_steering = max(-1.0, min(1.0, raw_steering))
                         mapped_point['Steering'] = normalized_steering
-                        logger.debug(f"Right lap - Mapped steering: {raw_steering} -> Steering: {normalized_steering:.3f}")
                     else:
                         mapped_point['Steering'] = 0.0
                 if 'speed' in mapped_point:
                     mapped_point['Speed'] = mapped_point['speed']
-                    logger.debug(f"Right lap - Mapped speed: {mapped_point['speed']} -> Speed: {mapped_point['Speed']}")
                 
                 # Set defaults for titlecase fields
                 mapped_point.setdefault('Throttle', 0)
@@ -1009,19 +993,15 @@ class TelemetryTab(QWidget):
             
             # Comparison mode - update all graphs with both laps
             if hasattr(self, 'throttle_graph'):
-                logger.info("DEBUG: Updating throttle graph with comparison data")
                 self.throttle_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
             
             if hasattr(self, 'brake_graph'):
-                logger.info("DEBUG: Updating brake graph with comparison data")
                 self.brake_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
             if hasattr(self, 'steering_graph'):
-                logger.info("DEBUG: Updating steering graph with comparison data")
                 self.steering_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
             if hasattr(self, 'speed_graph'):
-                logger.info("DEBUG: Updating speed graph with comparison data")
                 self.speed_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
         elif left_lap_data:

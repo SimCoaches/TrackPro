@@ -9,7 +9,7 @@ import math
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTabWidget, QFrame, QSizePolicy, QMessageBox, QDialog,
-    QTextEdit, QDialogButtonBox
+    QTextEdit, QDialogButtonBox, QInputDialog
 )
 from PyQt5.QtCore import Qt, QTimer
 
@@ -69,6 +69,16 @@ class RaceCoachWidget(QWidget):
         logger.info("🔍 Calling setup_ui()...")
         self.setup_ui()
         logger.info("✅ setup_ui() completed")
+
+        # Initialize the central telemetry monitor worker for AI coaching
+        try:
+            from ..utils.telemetry_worker import TelemetryMonitorWorker
+            # Initialize without superlap_id first - will be set later when user selects one
+            self.telemetry_monitor_worker = TelemetryMonitorWorker()
+            logger.info("✅ TelemetryMonitorWorker initialized for AI coaching")
+        except Exception as telemetry_error:
+            logger.error(f"❌ Error initializing TelemetryMonitorWorker: {telemetry_error}")
+            self.telemetry_monitor_worker = None
 
         # Mark basic initialization as complete
         self._initialization_complete = True
@@ -187,6 +197,14 @@ class RaceCoachWidget(QWidget):
                 logger.info("✅ SimpleIRacingAPI initialized successfully")
                 logger.info(f"🔍 SimpleIRacingAPI object: {self.iracing_api}")
                 
+                # Register the telemetry monitor to receive live data for AI coaching
+                if self.telemetry_monitor_worker is not None:
+                    try:
+                        self.iracing_api.register_on_telemetry_data(self.telemetry_monitor_worker.add_telemetry_point)
+                        logger.info("✅ Registered telemetry monitor worker with iRacing API for AI coaching")
+                    except Exception as monitor_error:
+                        logger.error(f"❌ Error registering telemetry monitor: {monitor_error}")
+                
                 # Connect the data manager to the API for telemetry saving
                 if self.data_manager is not None:
                     try:
@@ -226,6 +244,15 @@ class RaceCoachWidget(QWidget):
                                 logger.debug(f"Added user_id to session_info: {user_id}")
                         else:
                             logger.warning("No authenticated user available from auth module")
+                            # BUGFIX: Start basic iRacing connection even without authentication
+                            # The app should still be able to monitor iRacing for telemetry
+                            logger.info("Starting basic iRacing connection without cloud features")
+                            self.iracing_api._deferred_monitor_params = {
+                                'supabase_client': None,  # No cloud saving
+                                'user_id': 'anonymous',
+                                'lap_saver': None  # No lap saving
+                            }
+                            logger.info("✅ Deferred basic iRacing monitoring setup for offline use")
                     except Exception as user_error:
                         logger.error(f"Error getting current user for lap saver: {user_error}")
                     
@@ -238,6 +265,16 @@ class RaceCoachWidget(QWidget):
                                 logger.error("Failed to connect lap saver to SimpleIRacingAPI")
                     except Exception as ls_error:
                         logger.error(f"Error connecting Supabase lap saver to SimpleIRacingAPI: {ls_error}")
+                
+                # ADDITIONAL BUGFIX: If no deferred monitor params were set above, create basic ones
+                if not hasattr(self.iracing_api, '_deferred_monitor_params') or not self.iracing_api._deferred_monitor_params:
+                    logger.info("No deferred monitor params set - creating basic offline monitoring setup")
+                    self.iracing_api._deferred_monitor_params = {
+                        'supabase_client': None,  # No cloud saving
+                        'user_id': 'anonymous',
+                        'lap_saver': None  # No lap saving
+                    }
+                    logger.info("✅ Basic offline iRacing monitoring setup complete")
                 
                 # Set up API connections
                 self._setup_iracing_api_connections()
@@ -312,6 +349,18 @@ class RaceCoachWidget(QWidget):
         self.lap_debug_button.setToolTip("View lap recording status and save partial laps")
         self.lap_debug_button.clicked.connect(self.show_lap_debug_dialog)
         status_layout.addWidget(self.lap_debug_button)
+        
+        # Add AI Coach control button
+        self.ai_coach_button = QPushButton("🤖 AI Coach: OFF")
+        self.ai_coach_button.setStyleSheet("""
+            background-color: #333;
+            color: #AAA;
+            padding: 5px 10px;
+            border-radius: 3px;
+        """)
+        self.ai_coach_button.setToolTip("Start/Stop real-time AI voice coaching")
+        self.ai_coach_button.clicked.connect(self.toggle_ai_coaching)
+        status_layout.addWidget(self.ai_coach_button)
 
         main_layout.addWidget(self.status_bar)
 
@@ -344,18 +393,10 @@ class RaceCoachWidget(QWidget):
         self.telemetry_tab = TelemetryTab(self)
         self.tab_widget.addTab(self.telemetry_tab, "Telemetry")
 
-        # Create the SuperLap Tab with lazy loading
-        superlap_tab = QWidget()  # Placeholder widget initially
-        superlap_layout = QVBoxLayout(superlap_tab)
-        superlap_placeholder = QLabel("SuperLap analysis will load when you switch to this tab")
-        superlap_placeholder.setAlignment(Qt.AlignCenter)
-        superlap_placeholder.setStyleSheet("color: #666; font-style: italic; padding: 50px;")
-        superlap_layout.addWidget(superlap_placeholder)
-        
-        # Store reference for lazy loading later
-        self._superlap_tab_widget = superlap_tab
-        self._superlap_widget = None  # Will be created when needed
-        self.tab_widget.addTab(superlap_tab, "SuperLap")
+        # Create a placeholder for the SuperLap tab
+        self.superlap_placeholder = QWidget()
+        self.tab_widget.addTab(self.superlap_placeholder, "")
+        self._create_superlap_tab_title(self.tab_widget.count() - 1)
 
         # Create the Videos Tab
         videos_tab = VideosTab(self)
@@ -364,163 +405,137 @@ class RaceCoachWidget(QWidget):
         # Add tab widget to main layout
         main_layout.addWidget(self.tab_widget)
         
-        # Connect tab change signal for lazy loading
+        # Connect tab change signal
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        # Immediately try to create the SuperLap widget without an auth check
+        QTimer.singleShot(50, self._create_superlap_widget_deferred)
 
         # Save operation progress indicator
         self.save_progress_dialog = None
 
+    def _create_superlap_tab_title(self, tab_index):
+        """Create a custom title for the SuperLap tab with an icon."""
+        try:
+            import os
+            from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel
+            from PyQt5.QtGui import QPixmap
+            from PyQt5.QtCore import Qt
+            
+            # Create custom tab widget - SMALL container
+            tab_title_widget = QWidget()
+            # Remove background styling to prevent weird box when selected
+            tab_title_widget.setStyleSheet("background: transparent;")
+            # Make tab container SMALL but let logo be larger
+            tab_title_widget.setFixedHeight(32)
+            tab_layout = QHBoxLayout(tab_title_widget)
+            # Zero margins to let logo extend beyond container if needed
+            tab_layout.setContentsMargins(0, 0, 0, 0)
+            tab_layout.setSpacing(0)
+            
+            # Add logo only (no text since tab already has text)
+            logo_label = QLabel()
+            # Remove background styling and allow logo to extend beyond bounds
+            logo_label.setStyleSheet("background: transparent;")
+            logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'resources', 'images', 'superlap_logo.png')
+            
+            if os.path.exists(logo_path):
+                pixmap = QPixmap(logo_path)
+                # Make logo LARGE regardless of small container size
+                scaled_pixmap = pixmap.scaled(220, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                logo_label.setPixmap(scaled_pixmap)
+            else:
+                # Fallback if logo file not found
+                logger.warning(f"SuperLap logo not found at {logo_path}")
+                logo_label.setText("⚡")
+                logo_label.setStyleSheet("color: #FF4500; font-size: 14px; background: transparent;")
+            
+            # Center the logo both horizontally and vertically
+            logo_label.setAlignment(Qt.AlignCenter)
+            # Add stretchers to center the logo in the layout
+            tab_layout.addStretch()
+            tab_layout.addWidget(logo_label, 0, Qt.AlignCenter)
+            tab_layout.addStretch()
+            
+            # Replace the tab text with empty string to avoid duplication
+            self.tab_widget.setTabText(tab_index, "")
+            
+            # Set the custom widget as the tab content
+            self.tab_widget.tabBar().setTabButton(tab_index, self.tab_widget.tabBar().LeftSide, tab_title_widget)
+            
+        except Exception as e:
+            logger.error(f"Error creating SuperLap tab title with logo: {e}")
+            # Keep the default text title if logo creation fails
+
     def _on_tab_changed(self, index):
-        """Handle tab changes to implement lazy loading for SuperLap tab."""
-        try:
-            # Check if this is the SuperLap tab (index 2, since we removed Sector Timing)
-            if index == 2 and self._superlap_widget is None:
-                logger.info("SuperLap tab accessed for first time - creating widget asynchronously")
-                
-                # Check network connectivity first
-                try:
-                    from ...database.supabase_client import supabase as main_supabase
-                    if not main_supabase or not main_supabase.is_authenticated():
-                        # Show offline message instead of trying to load
-                        self._show_superlap_offline_message()
-                        return
-                except Exception as connectivity_error:
-                    logger.warning(f"SuperLap: Network connectivity issue, showing offline mode: {connectivity_error}")
-                    self._show_superlap_offline_message()
-                    return
-                
-                # Create a loading placeholder first
-                loading_widget = QWidget()
-                loading_layout = QVBoxLayout(loading_widget)
-                loading_label = QLabel("🔄 Loading SuperLap Analysis...")
-                loading_label.setAlignment(Qt.AlignCenter)
-                loading_label.setStyleSheet("color: #00ff88; font-size: 18px; font-weight: bold; padding: 50px;")
-                loading_layout.addWidget(loading_label)
-                
-                # Replace placeholder with loading widget immediately
-                while self._superlap_tab_widget.layout().count():
-                    child = self._superlap_tab_widget.layout().takeAt(0)
-                    if child.widget():
-                        child.widget().deleteLater()
-                
-                self._superlap_tab_widget.layout().addWidget(loading_widget)
-                
-                # Use QTimer to defer the actual widget creation to avoid blocking
-                QTimer.singleShot(100, self._create_superlap_widget_deferred)
-                
-        except Exception as e:
-            logger.error(f"Error in _on_tab_changed: {e}")
-
-    def _show_superlap_offline_message(self):
-        """Show offline message for SuperLap tab."""
-        try:
-            offline_widget = QWidget()
-            offline_layout = QVBoxLayout(offline_widget)
-            offline_layout.setAlignment(Qt.AlignCenter)
+        """Handle tab changes, especially for lazy loading."""
+        tab_text = self.tab_widget.tabText(index)
+        current_widget = self.tab_widget.widget(index)
+        
+        # Check if this is the SuperLap tab
+        if hasattr(self, 'superlap_tab') and current_widget is self.superlap_tab:
+            # SuperLap tab is active - check if it needs data refresh
+            try:
+                if hasattr(self.superlap_tab, 'session_combo') and self.superlap_tab.session_combo.count() <= 1:
+                    # Empty or just has "No sessions found" - refresh data
+                    logger.info("SuperLap tab accessed with empty dropdown, refreshing data...")
+                    self.superlap_tab.refresh_data()
+            except Exception as refresh_error:
+                logger.error(f"Error refreshing SuperLap data on tab change: {refresh_error}")
+        elif "SuperLap" in tab_text and self.superlap_placeholder is not None:
+            # If the placeholder is still there, try creating the real widget
+            logger.info("Switched to SuperLap tab, ensuring it is loaded.")
+            self._create_superlap_widget_deferred()
             
-            # Icon
-            icon_label = QLabel("🌐")
-            icon_label.setAlignment(Qt.AlignCenter)
-            icon_label.setStyleSheet("font-size: 48px; margin-bottom: 20px;")
-            offline_layout.addWidget(icon_label)
-            
-            # Title
-            title_label = QLabel("SuperLap Analysis - Offline Mode")
-            title_label.setAlignment(Qt.AlignCenter)
-            title_label.setStyleSheet("color: #ffaa00; font-size: 20px; font-weight: bold; margin-bottom: 10px;")
-            offline_layout.addWidget(title_label)
-            
-            # Message
-            message_label = QLabel("SuperLap analysis requires an internet connection to access AI-powered lap optimization data.\n\nPlease check your connection and try again.")
-            message_label.setAlignment(Qt.AlignCenter)
-            message_label.setStyleSheet("color: #cccccc; font-size: 14px; line-height: 1.5; padding: 20px;")
-            message_label.setWordWrap(True)
-            offline_layout.addWidget(message_label)
-            
-            # Retry button
-            retry_button = QPushButton("Retry Connection")
-            retry_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #3498db;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 10px 20px;
-                    font-weight: bold;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: #2980b9;
-                }
-            """)
-            retry_button.clicked.connect(self._retry_superlap_connection)
-            offline_layout.addWidget(retry_button, 0, Qt.AlignCenter)
-            
-            # Replace placeholder with offline widget
-            while self._superlap_tab_widget.layout().count():
-                child = self._superlap_tab_widget.layout().takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            
-            self._superlap_tab_widget.layout().addWidget(offline_widget)
-            
-        except Exception as e:
-            logger.error(f"Error showing SuperLap offline message: {e}")
-
-    def _retry_superlap_connection(self):
-        """Retry SuperLap connection."""
-        try:
-            # Reset the widget state
-            self._superlap_widget = None
-            
-            # Trigger tab change again to retry loading
-            self._on_tab_changed(2)  # SuperLap tab index
-            
-        except Exception as e:
-            logger.error(f"Error retrying SuperLap connection: {e}")
-
     def _create_superlap_widget_deferred(self):
-        """Create the SuperLap widget in a deferred manner to avoid blocking the UI."""
+        """Create and embed the SuperLapWidget, replacing the placeholder."""
+        # If the real widget is already created, do nothing
+        if self.superlap_placeholder is None:
+            return
+
+        logger.info("Creating SuperLap widget...")
         try:
-            logger.info("Creating SuperLap widget in deferred execution")
+            # Replace the placeholder with the actual SuperLapWidget
+            self.superlap_tab = SuperLapWidget(parent=self)
             
-            # Create the actual SuperLap widget
-            self._superlap_widget = SuperLapWidget(self)
-            
-            # Replace the loading widget with the real widget
-            while self._superlap_tab_widget.layout().count():
-                child = self._superlap_tab_widget.layout().takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            
-            # Add the real SuperLap widget
-            self._superlap_tab_widget.layout().addWidget(self._superlap_widget)
-            
-            logger.info("SuperLap widget created and added to tab successfully")
-            
+            # Get the index of the placeholder
+            idx = self.tab_widget.indexOf(self.superlap_placeholder)
+            if idx != -1:
+                # Remove placeholder, insert real tab, and set it as current
+                self.tab_widget.removeTab(idx)
+                self.tab_widget.insertTab(idx, self.superlap_tab, "")
+                self._create_superlap_tab_title(idx)
+                self.tab_widget.setCurrentIndex(idx)
+                
+                # BUGFIX: Initialize the SuperLap data after creating the widget
+                # This was missing and causing the empty dropdown issue
+                try:
+                    logger.info("Loading SuperLap session data...")
+                    self.superlap_tab.refresh_data()
+                    logger.info("SuperLap data refresh initiated successfully")
+                except Exception as refresh_error:
+                    logger.error(f"Error refreshing SuperLap data: {refresh_error}")
+                
+                # Cleanup placeholder
+                self.superlap_placeholder.deleteLater()
+                self.superlap_placeholder = None
+                logger.info("SuperLap tab created and replaced placeholder.")
+            else:
+                logger.error("Could not find SuperLap placeholder tab.")
+
         except Exception as e:
-            logger.error(f"Error creating SuperLap widget: {e}")
-            
-            # Show error message in the tab
-            error_widget = QWidget()
-            error_layout = QVBoxLayout(error_widget)
-            error_label = QLabel(f"❌ Error loading SuperLap: {str(e)}")
+            logger.error(f"Failed to create SuperLap widget: {e}", exc_info=True)
+            # Optionally show an error message in the UI
+            error_label = QLabel(f"Error loading SuperLap tab: {e}")
             error_label.setAlignment(Qt.AlignCenter)
-            error_label.setStyleSheet("color: #ff6666; font-size: 16px; padding: 50px;")
-            error_layout.addWidget(error_label)
-            
-            # Replace with error widget
-            while self._superlap_tab_widget.layout().count():
-                child = self._superlap_tab_widget.layout().takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            
-            self._superlap_tab_widget.layout().addWidget(error_widget)
+            idx = self.tab_widget.indexOf(self.superlap_placeholder)
+            if idx != -1:
+                self.tab_widget.removeTab(idx)
+                self.tab_widget.insertTab(idx, error_label, "SuperLap")
+                self.tab_widget.setCurrentIndex(idx)
 
     def on_iracing_connected(self, is_connected, session_info=None):
-        """Handle connection status changes from iRacing API."""
-        logger.info(f"UI: on_iracing_connected called with is_connected={is_connected}")
-        self.is_connected = is_connected
+        """Handle iRacing connection status changes."""
         self._update_connection_status()
 
     def on_session_info_changed(self, session_info):
@@ -533,7 +548,18 @@ class RaceCoachWidget(QWidget):
         if payload is None:
             payload = {"is_connected": self.is_connected, "session_info": self.session_info}
             
-        logger.debug(f"UI received update signal with payload: {payload}")
+        # Only log essential info, not the entire massive payload with raw session info
+        session_info = payload.get('session_info', {})
+        
+        # Add debug counter to reduce spam
+        if not hasattr(self, '_ui_debug_counter'):
+            self._ui_debug_counter = 0
+        self._ui_debug_counter += 1
+        
+        # Only log UI updates every 10 minutes instead of every 50ms
+        if self._ui_debug_counter % 36000 == 0:  # 60Hz * 60s * 10min = 36000
+            logger.debug(f"UI received update signal: connected={payload.get('is_connected')}, track={session_info.get('current_track')}, car={session_info.get('current_car')}")
+        
         # Extract info from the payload sent by the signal
         is_connected = payload.get("is_connected", False)
         session_info = payload.get("session_info", {})
@@ -574,14 +600,82 @@ class RaceCoachWidget(QWidget):
 
     def toggle_diagnostic_mode(self):
         """Toggle diagnostic mode for lap detection."""
-        # Implementation would go here
-        current_text = self.diagnostic_mode_button.text()
-        if "OFF" in current_text:
-            self.diagnostic_mode_button.setText("🔍 Diagnostics: ON")
-            self.diagnostic_mode_button.setStyleSheet("background-color: #0A5A0A; color: #00FF00; padding: 5px 10px; border-radius: 3px;")
+        if hasattr(self, 'iracing_lap_saver') and self.iracing_lap_saver:
+            current_mode = getattr(self.iracing_lap_saver, '_diagnostic_mode', False)
+            self.iracing_lap_saver._diagnostic_mode = not current_mode
+            new_mode = self.iracing_lap_saver._diagnostic_mode
+            
+            # Update button text and style
+            if new_mode:
+                self.diagnostic_mode_button.setText("🔍 Diagnostics: ON")
+                self.diagnostic_mode_button.setStyleSheet("""
+                    background-color: #004400;
+                    color: #88FF88;
+                    padding: 5px 10px;
+                    border-radius: 3px;
+                """)
+            else:
+                self.diagnostic_mode_button.setText("🔍 Diagnostics: OFF")
+                self.diagnostic_mode_button.setStyleSheet("""
+                    background-color: #333;
+                    color: #AAA;
+                    padding: 5px 10px;
+                    border-radius: 3px;
+                """)
+            
+            logger.info(f"Diagnostic mode toggled to: {new_mode}")
+
+    def toggle_ai_coaching(self):
+        """Toggle AI coaching on/off."""
+        if self.is_ai_coaching_active():
+            # Stop coaching
+            self.stop_ai_coaching()
+            self.ai_coach_button.setText("🤖 AI Coach: OFF")
+            self.ai_coach_button.setStyleSheet("""
+                background-color: #333;
+                color: #AAA;
+                padding: 5px 10px;
+                border-radius: 3px;
+            """)
+            self.ai_coach_button.setToolTip("Start real-time AI voice coaching")
         else:
-            self.diagnostic_mode_button.setText("🔍 Diagnostics: OFF")
-            self.diagnostic_mode_button.setStyleSheet("background-color: #333; color: #AAA; padding: 5px 10px; border-radius: 3px;")
+            # Need to get superlap ID - for now, show a dialog
+            superlap_id, ok = QInputDialog.getText(
+                self, 
+                'AI Coach Setup', 
+                'Enter SuperLap ID for AI coaching:\n(You can find this in the SuperLap tab)',
+                text=''
+            )
+            
+            if ok and superlap_id.strip():
+                if self.start_ai_coaching(superlap_id.strip()):
+                    self.ai_coach_button.setText("🤖 AI Coach: ON")
+                    self.ai_coach_button.setStyleSheet("""
+                        background-color: #004400;
+                        color: #88FF88;
+                        padding: 5px 10px;
+                        border-radius: 3px;
+                    """)
+                    self.ai_coach_button.setToolTip("Stop real-time AI voice coaching")
+                    
+                    # Show success message
+                    QMessageBox.information(
+                        self, 
+                        "AI Coach Started", 
+                        f"🎧 AI Coach is now active!\n\n"
+                        f"Your driving will be compared to SuperLap: {superlap_id}\n"
+                        f"You'll receive real-time voice coaching through your audio device.\n\n"
+                        f"Make sure your headset/speakers are connected!"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, 
+                        "AI Coach Error", 
+                        "Failed to start AI coaching. Check that:\n"
+                        "• The SuperLap ID is valid\n"
+                        "• Your OpenAI API key is set\n"
+                        "• Your ElevenLabs API key is set"
+                    )
 
     def show_lap_debug_dialog(self):
         """Show lap debug dialog."""
@@ -621,4 +715,44 @@ class RaceCoachWidget(QWidget):
     def get_track_length(self):
         """Get track length for telemetry widgets."""
         # Implementation would get track length from session info
-        return None 
+        return None
+
+    def start_ai_coaching(self, superlap_id: str):
+        """Start AI coaching with the specified superlap as reference.
+        
+        Args:
+            superlap_id: The UUID of the superlap to use for coaching
+        """
+        if not self.telemetry_monitor_worker:
+            logger.error("Cannot start AI coaching: TelemetryMonitorWorker not available")
+            return False
+        
+        try:
+            from ..ai_coach.ai_coach import AICoach
+            
+            # Initialize AI coach with the superlap
+            self.telemetry_monitor_worker.ai_coach = AICoach(superlap_id=superlap_id)
+            logger.info(f"✅ AI Coach initialized with superlap_id: {superlap_id}")
+            
+            # Start monitoring to enable coaching
+            self.telemetry_monitor_worker.start_monitoring()
+            logger.info("✅ AI coaching started - driver will receive real-time voice guidance")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start AI coaching: {e}")
+            return False
+    
+    def stop_ai_coaching(self):
+        """Stop AI coaching."""
+        if self.telemetry_monitor_worker:
+            self.telemetry_monitor_worker.stop_monitoring()
+            self.telemetry_monitor_worker.ai_coach = None
+            logger.info("🛑 AI coaching stopped")
+
+    def is_ai_coaching_active(self):
+        """Check if AI coaching is currently active."""
+        return (self.telemetry_monitor_worker and 
+                self.telemetry_monitor_worker.ai_coach and 
+                self.telemetry_monitor_worker.is_monitoring) 

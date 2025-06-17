@@ -37,7 +37,7 @@ pywin32-ctypes>=0.2.0
 
 # Optional: Better audio support for notifications
 # pygame already handles most audio needs but you might want:
-# sounddevice>=0.4.0  # Uncomment if you add advanced audio features
+sounddevice>=0.4.0  # Uncomment if you add advanced audio features
 
 # Optional: Enhanced image processing
 # scikit-image>=0.19.0  # Uncomment if you add computer vision features
@@ -47,3 +47,8 @@ pywin32-ctypes>=0.2.0
 # pytest-qt>=4.0.0
 # black>=22.0.0
 # flake8>=4.0.0
+
+# AI Coach dependencies
+openai>=1.86.0
+elevenlabs>=0.2.27
+soundfile>=0.12.1

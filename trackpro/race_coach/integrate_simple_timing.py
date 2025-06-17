@@ -66,9 +66,8 @@ class SimpleSectorTimingIntegration:
             completed_sectors = progress['completed_sectors']
             
             # Debug: Log when we cross each 1/10th boundary (every 50 frames to reduce spam)
-            if self.frame_count % 50 == 0:
-                logger.info(f"🎯 [10-SECTOR DEBUG] Lap {current_lap}: Position {lap_dist_pct:.3f} → "
-                           f"Sector {current_sector}/10, Completed: {completed_sectors}/10")
+            # Only log significant events, not every frame
+            # logger.info(f"🎯 [10-SECTOR DEBUG] Lap {current_lap}: Position {lap_dist_pct:.3f} → Sector {current_sector}/{total_sectors}, Completed: {completed_sectors}/{total_sectors}")
             
             # Debug: Log when sectors complete
             if completed_sectors > self.last_completed_sectors:

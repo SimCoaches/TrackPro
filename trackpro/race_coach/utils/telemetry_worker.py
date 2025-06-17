@@ -4,6 +4,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, QThread
 
 from trackpro.race_coach.utils.telemetry_validation import validate_lap_telemetry
 from trackpro.database.supabase_client import get_supabase_client
+from trackpro.race_coach.ai_coach.ai_coach import AICoach
 
 logger = logging.getLogger(__name__)
 
@@ -151,20 +152,29 @@ class TelemetryMonitorWorker(QObject):
     # Signal emitted with coverage updates
     coverage_updated = pyqtSignal(float, object)  # coverage percentage, diagnostics
     
-    def __init__(self, buffer_size=5000):
+    def __init__(self, buffer_size=5000, superlap_id: str = None):
         """Initialize the telemetry monitor.
         
         Args:
             buffer_size: Maximum number of telemetry points to keep in buffer
+            superlap_id: The ID of the superlap to use for AI coaching.
         """
         super().__init__()
         self.telemetry_buffer = []
         self.buffer_size = buffer_size
-        self.is_running = False
+        self.is_monitoring = False
         self.lock = threading.Lock()
-    
+        
+        self.ai_coach = None
+        if superlap_id:
+            try:
+                self.ai_coach = AICoach(superlap_id=superlap_id)
+                logger.info(f"AI Coach initialized for superlap_id: {superlap_id}")
+            except Exception as e:
+                logger.error(f"Failed to initialize AI Coach: {e}")
+
     def add_telemetry_point(self, point):
-        """Add a new telemetry point to the buffer.
+        """Add a new telemetry point to the buffer and process for coaching.
         
         Args:
             point: Dictionary with telemetry data
@@ -177,19 +187,23 @@ class TelemetryMonitorWorker(QObject):
                 self.telemetry_buffer = self.telemetry_buffer[-self.buffer_size:]
             
             # If monitoring is active, calculate coverage
-            if self.is_running:
+            if self.is_monitoring:
                 self._calculate_coverage()
+
+        # Process for AI coaching if the coach is available and running
+        if self.ai_coach and self.is_monitoring:
+            self.ai_coach.process_realtime_telemetry(point)
     
     def start_monitoring(self):
-        """Start monitoring telemetry coverage."""
-        self.is_running = True
-        logger.info("Telemetry coverage monitoring started")
+        """Start monitoring telemetry coverage and coaching."""
+        self.is_monitoring = True
+        logger.info("Telemetry coverage monitoring and coaching started")
         self._calculate_coverage()
     
     def stop_monitoring(self):
-        """Stop monitoring telemetry coverage."""
-        self.is_running = False
-        logger.info("Telemetry coverage monitoring stopped")
+        """Stop monitoring telemetry coverage and coaching."""
+        self.is_monitoring = False
+        logger.info("Telemetry coverage monitoring and coaching stopped")
     
     def clear_buffer(self):
         """Clear the telemetry buffer."""

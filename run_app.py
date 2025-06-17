@@ -39,17 +39,130 @@ try:
 except Exception:
     pass  # If patching fails, continue anyway
 
-# Set up logging
-# File logging has been removed
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Enhanced error logging setup
+def setup_enhanced_logging():
+    """Set up comprehensive logging to file and console for better debugging."""
+    try:
+        # Create logs directory
+        logs_dir = os.path.join(os.path.expanduser("~"), "Documents", "TrackPro_Logs")
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir)
+        
+        # Create log file with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(logs_dir, f"trackpro_startup_{timestamp}.log")
+        
+        # Configure logging with both file and console handlers
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+        logger = logging.getLogger("TrackPro_Run")
+        logger.info(f"Enhanced logging initialized. Log file: {log_file}")
+        return logger, log_file
+    except Exception as e:
+        # Fallback to console only if file logging fails
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        logger = logging.getLogger("TrackPro_Run")
+        logger.warning(f"Could not set up file logging: {e}")
+        return logger, None
 
-logger = logging.getLogger("TrackPro_Run")
+def check_system_dependencies():
+    """Check if all required system dependencies are available."""
+    logger = logging.getLogger("TrackPro_Run")
+    missing_deps = []
+    
+    try:
+        # Check Python version
+        python_version = sys.version_info
+        logger.info(f"Python version: {python_version.major}.{python_version.minor}.{python_version.micro}")
+        if python_version < (3, 8):
+            missing_deps.append(f"Python 3.8+ required, found {python_version.major}.{python_version.minor}.{python_version.micro}")
+        
+        # Check for required Python modules
+        required_modules = [
+            'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtWebEngineWidgets',
+            'numpy', 'requests', 'psutil', 'supabase', 'matplotlib'
+        ]
+        
+        for module in required_modules:
+            try:
+                __import__(module)
+                logger.debug(f"✓ Module {module} available")
+            except ImportError as e:
+                missing_deps.append(f"Missing Python module: {module} ({e})")
+                logger.error(f"✗ Module {module} missing: {e}")
+        
+        # Check for Windows-specific dependencies
+        if sys.platform == 'win32':
+            try:
+                import win32api
+                import win32serviceutil
+                logger.debug("✓ Windows API modules available")
+            except ImportError as e:
+                missing_deps.append(f"Missing Windows module: {e}")
+                logger.error(f"✗ Windows modules missing: {e}")
+        
+        # Check for vJoy DLL
+        vjoy_paths = [
+            r"C:\Program Files\vJoy\x64\vJoyInterface.dll",
+            r"C:\Program Files (x86)\vJoy\x64\vJoyInterface.dll"
+        ]
+        
+        vjoy_found = False
+        for path in vjoy_paths:
+            if os.path.exists(path):
+                vjoy_found = True
+                logger.info(f"✓ vJoy DLL found at: {path}")
+                break
+        
+        if not vjoy_found:
+            logger.warning("⚠ vJoy DLL not found - pedal functionality may be limited")
+        
+        # Check system resources
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            logger.info(f"System Memory: {memory.total // (1024**3)}GB total, {memory.available // (1024**3)}GB available")
+            logger.info(f"Disk Space: {disk.total // (1024**3)}GB total, {disk.free // (1024**3)}GB free")
+            
+            if memory.available < 512 * 1024 * 1024:  # Less than 512MB
+                missing_deps.append("Insufficient memory (less than 512MB available)")
+            
+            if disk.free < 100 * 1024 * 1024:  # Less than 100MB
+                missing_deps.append("Insufficient disk space (less than 100MB free)")
+                
+        except ImportError:
+            logger.warning("Could not check system resources - psutil not available")
+        
+        if missing_deps:
+            logger.error("System dependency check failed:")
+            for dep in missing_deps:
+                logger.error(f"  - {dep}")
+            return False, missing_deps
+        else:
+            logger.info("✓ All system dependencies check passed")
+            return True, []
+            
+    except Exception as e:
+        logger.error(f"Error during dependency check: {e}")
+        logger.error(traceback.format_exc())
+        return False, [f"Dependency check error: {e}"]
+
+# Set up logging
+logger, log_file = setup_enhanced_logging()
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -91,16 +204,35 @@ def run_as_admin(args=None):
     
     return 1  # Already admin
 
-def write_error_to_desktop(error_msg):
+def write_error_to_desktop(error_msg, log_file_path=None):
     """Write error message to desktop so user can see it"""
     try:
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         error_file = os.path.join(desktop, "TrackPro_Error.txt")
         
         with open(error_file, 'w') as f:
-            f.write(f"TrackPro Error: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"TrackPro Error Report\n")
+            f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Python Version: {sys.version}\n")
+            f.write(f"Platform: {sys.platform}\n")
+            f.write(f"Executable: {sys.executable}\n")
+            f.write(f"Working Directory: {os.getcwd()}\n")
+            f.write(f"Admin Rights: {is_admin()}\n")
+            if log_file_path:
+                f.write(f"Detailed Log File: {log_file_path}\n")
+            f.write("\n" + "="*50 + "\n")
+            f.write("ERROR DETAILS:\n")
+            f.write("="*50 + "\n")
             f.write(error_msg)
-            f.write("\n\nPlease report this error to the TrackPro support team.")
+            f.write("\n\n" + "="*50 + "\n")
+            f.write("TROUBLESHOOTING STEPS:\n")
+            f.write("="*50 + "\n")
+            f.write("1. Try running as Administrator\n")
+            f.write("2. Check if all dependencies are installed\n")
+            f.write("3. Verify system requirements (Windows 10+, 4GB RAM)\n")
+            f.write("4. Check antivirus software isn't blocking TrackPro\n")
+            f.write("5. Try reinstalling TrackPro\n")
+            f.write("6. Contact support with this error report\n")
         
         logger.info(f"Error details written to {error_file}")
     except Exception as e:
@@ -108,7 +240,9 @@ def write_error_to_desktop(error_msg):
 
 def check_environment():
     """Check environment for potential issues"""
-    logger.info("Checking environment...")
+    logger.info("="*50)
+    logger.info("ENVIRONMENT CHECK")
+    logger.info("="*50)
     
     # Check Python version
     logger.info(f"Python version: {sys.version}")
@@ -116,27 +250,49 @@ def check_environment():
     # Check working directory
     logger.info(f"Current working directory: {os.getcwd()}")
     
-    # Check if trackpro module directory exists
-    trackpro_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trackpro")
-    if os.path.exists(trackpro_dir):
-        logger.info(f"TrackPro module directory exists: {trackpro_dir}")
-    else:
-        logger.error(f"TrackPro module directory missing: {trackpro_dir}")
-    
-    # Check if vJoy DLL exists
-    vjoy_dll = r"C:\Program Files\vJoy\x64\vJoyInterface.dll"
-    if os.path.exists(vjoy_dll):
-        logger.info(f"vJoy DLL found: {vjoy_dll}")
-    else:
-        logger.error(f"vJoy DLL not found: {vjoy_dll}")
-    
     # Check if running from PyInstaller bundle
     is_frozen = getattr(sys, 'frozen', False)
     logger.info(f"Running from frozen application: {is_frozen}")
     
     if is_frozen:
         logger.info(f"Executable path: {sys.executable}")
+        logger.info(f"Executable directory: {os.path.dirname(sys.executable)}")
+    
+    # Check if trackpro module directory exists
+    trackpro_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trackpro")
+    if os.path.exists(trackpro_dir):
+        logger.info(f"✓ TrackPro module directory exists: {trackpro_dir}")
         
+        # List key files in trackpro directory
+        try:
+            key_files = ['__init__.py', 'main.py', 'ui.py']
+            for file in key_files:
+                file_path = os.path.join(trackpro_dir, file)
+                if os.path.exists(file_path):
+                    logger.info(f"  ✓ {file} found")
+                else:
+                    logger.error(f"  ✗ {file} missing")
+        except Exception as e:
+            logger.error(f"Error checking trackpro files: {e}")
+    else:
+        logger.error(f"✗ TrackPro module directory missing: {trackpro_dir}")
+    
+    # Check if vJoy DLL exists
+    vjoy_dll = r"C:\Program Files\vJoy\x64\vJoyInterface.dll"
+    if os.path.exists(vjoy_dll):
+        logger.info(f"✓ vJoy DLL found: {vjoy_dll}")
+    else:
+        logger.warning(f"⚠ vJoy DLL not found: {vjoy_dll}")
+    
+    # Check system dependencies
+    deps_ok, missing_deps = check_system_dependencies()
+    if not deps_ok:
+        logger.error("System dependency check failed!")
+        for dep in missing_deps:
+            logger.error(f"  - {dep}")
+        return False
+    
+    logger.info("✓ Environment check completed successfully")
     return True
 
 def check_single_instance():
@@ -609,8 +765,23 @@ if __name__ == "__main__":
     # If we get here, we have admin rights or we're skipping the check
     logger.info("Running the application")
     
-    # Verify the environment
-    check_environment()
+    # Verify the environment - exit early if critical issues found
+    if not check_environment():
+        error_msg = "Critical system dependencies missing. TrackPro cannot start."
+        logger.error(error_msg)
+        write_error_to_desktop(error_msg, log_file)
+        
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText("TrackPro cannot start")
+            msg.setInformativeText("Critical system dependencies are missing.\n\nPlease check the error report on your desktop for details.")
+            msg.setWindowTitle("TrackPro System Check Failed")
+            msg.exec_()
+        except Exception:
+            pass
+        sys.exit(1)
     
     # Set attribute BEFORE potentially creating QApplication in main()
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
@@ -660,13 +831,38 @@ if __name__ == "__main__":
             early_splash.close()
         error_msg = f"Failed to import TrackPro modules: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        write_error_to_desktop(error_msg)
+        write_error_to_desktop(error_msg, log_file)
+        
+        # Show error dialog for import errors
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText("TrackPro failed to start")
+            msg.setInformativeText(f"Missing required modules or dependencies.\n\nError: {str(e)}\n\nPlease check the error report on your desktop for details.")
+            msg.setWindowTitle("TrackPro Startup Error")
+            msg.exec_()
+        except Exception:
+            pass
+            
     except Exception as e:
         if early_splash:
             early_splash.close()
         error_msg = f"Unhandled exception: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        write_error_to_desktop(error_msg)
+        write_error_to_desktop(error_msg, log_file)
+        
+        # Show error dialog for other exceptions
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText("TrackPro encountered an error")
+            msg.setInformativeText(f"An unexpected error occurred during startup.\n\nError: {str(e)}\n\nPlease check the error report on your desktop for details.")
+            msg.setWindowTitle("TrackPro Error")
+            msg.exec_()
+        except Exception:
+            pass
     
     logger.info("TrackPro run script exiting")
     # Keep the window open if we're in a console

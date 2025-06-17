@@ -97,8 +97,11 @@ class SteeringGraphWidget(GraphBase):
         self.setLayout(layout)
         
         # Initialize plot items with modern colors matching the new design
-        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Your Steering", autoDownsample=False, clipToView=False)
-        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Super Lap Steering", autoDownsample=False, clipToView=False)
+        # Default labels (can be overridden in update methods)
+        self.label_a = "Lap A"
+        self.label_b = "Lap B"
+        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name=f"{self.label_a} Steering", autoDownsample=False, clipToView=False)
+        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name=f"{self.label_b} Steering", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curve
         self.steering_curve_b.hide()
@@ -201,7 +204,7 @@ class SteeringGraphWidget(GraphBase):
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span><br>
                                 <span style='color: #00AAFF;'>Your: {direction_a} {abs(steering_value_a):.0f}%</span><br>
-                                <span style='color: #88CCFF;'>Super Lap: {direction_b} {abs(steering_value_b):.0f}%</span>
+                                <span style='color: #88CCFF;'>{self.label_b}: {direction_b} {abs(steering_value_b):.0f}%</span>
                             </div>
                         """
                     
@@ -428,9 +431,21 @@ class SteeringGraphWidget(GraphBase):
             self.display_message("Graph Update Error")
             self.reset_view()
 
-    def update_graph_comparison(self, lap_a_data, lap_b_data, track_length, track_context=None):
+    def set_labels(self, label_a="Lap A", label_b="Lap B"):
+        """Set custom labels for the two laps being compared."""
+        self.label_a = label_a
+        self.label_b = label_b
+        # Update curve names immediately
+        self.steering_curve.opts['name'] = f"{self.label_a} Steering"
+        self.steering_curve_b.opts['name'] = f"{self.label_b} Steering"
+
+    def update_graph_comparison(self, lap_a_data, lap_b_data, track_length, track_context=None, label_a=None, label_b=None):
         """Update the graph to display a comparison of two laps."""
         logger.info(f"Updating steering graph with comparison data for A:{len(lap_a_data['points']) if lap_a_data else 'None'} and B:{len(lap_b_data['points']) if lap_b_data else 'None'} points")
+        
+        # Set custom labels if provided
+        if label_a and label_b:
+            self.set_labels(label_a, label_b)
         
         # Validate lap data (both A and B) before processing
         is_valid_a, lap_a_data, debug_info_a = self.validate_telemetry_data(lap_a_data, 'steering')
@@ -521,9 +536,9 @@ class SteeringGraphWidget(GraphBase):
         if self.legend:
             self.legend.clear()  # Make sure to clear the legend again before adding items
             if is_valid_a:
-                 self.legend.addItem(self.steering_curve, "Your Steering")
+                 self.legend.addItem(self.steering_curve, f"{self.label_a} Steering")
             if is_valid_b:
-                 self.legend.addItem(self.steering_curve_b, "Super Lap Steering")
+                 self.legend.addItem(self.steering_curve_b, f"{self.label_b} Steering")
 
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()

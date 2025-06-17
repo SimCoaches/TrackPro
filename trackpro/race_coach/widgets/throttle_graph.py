@@ -104,8 +104,11 @@ class ThrottleGraphWidget(GraphBase):
         self.setLayout(layout)
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        self.throttle_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name="Your Throttle", autoDownsample=False, clipToView=False)
-        self.throttle_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name="Super Lap Throttle", autoDownsample=False, clipToView=False)
+        # Default labels (can be overridden in update methods)
+        self.label_a = "Lap A"
+        self.label_b = "Lap B" 
+        self.throttle_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name=f"{self.label_a} Throttle", autoDownsample=False, clipToView=False)
+        self.throttle_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name=f"{self.label_b} Throttle", autoDownsample=False, clipToView=False)
         
         # Initially hide comparison curves
         self.throttle_curve_b.hide()
@@ -188,7 +191,7 @@ class ThrottleGraphWidget(GraphBase):
                         tooltip = f"""
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span> &nbsp;
-                                <span style='color: #00FF00;'>Your Throttle: {throttle_value_a:.0f}%</span>
+                                <span style='color: #00FF00;'>{self.label_a} Throttle: {throttle_value_a:.0f}%</span>
                             </div>
                         """
                     else:
@@ -196,8 +199,8 @@ class ThrottleGraphWidget(GraphBase):
                         tooltip = f"""
                             <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
                                 <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                                <span style='color: #00FF00;'>Your Throttle: {throttle_value_a:.0f}%</span> &nbsp;
-                                <span style='color: #88FF88;'>Super Lap Throttle: {throttle_value_b:.0f}%</span>
+                                <span style='color: #00FF00;'>{self.label_a} Throttle: {throttle_value_a:.0f}%</span> &nbsp;
+                                <span style='color: #88FF88;'>{self.label_b} Throttle: {throttle_value_b:.0f}%</span>
                             </div>
                         """
                     
@@ -546,9 +549,21 @@ class ThrottleGraphWidget(GraphBase):
             self.display_message("Graph Update Error")
             self.reset_view()
 
-    def update_graph_comparison(self, lap_a_data, lap_b_data, track_length, track_context=None):
+    def set_labels(self, label_a="Lap A", label_b="Lap B"):
+        """Set custom labels for the two laps being compared."""
+        self.label_a = label_a
+        self.label_b = label_b
+        # Update curve names immediately
+        self.throttle_curve.opts['name'] = f"{self.label_a} Throttle"
+        self.throttle_curve_b.opts['name'] = f"{self.label_b} Throttle"
+
+    def update_graph_comparison(self, lap_a_data, lap_b_data, track_length, track_context=None, label_a=None, label_b=None):
         """Update the graph to display a comparison of two laps."""
         logger.info(f"Updating throttle graph with comparison data for A:{len(lap_a_data['points']) if lap_a_data else 'None'} and B:{len(lap_b_data['points']) if lap_b_data else 'None'} points")
+        
+        # Set custom labels if provided
+        if label_a and label_b:
+            self.set_labels(label_a, label_b)
         
         # Validate lap data (both A and B) before processing
         is_valid_a, lap_a_data, debug_info_a = self.validate_telemetry_data(lap_a_data, 'throttle')
@@ -655,9 +670,9 @@ class ThrottleGraphWidget(GraphBase):
         if self.legend:
             self.legend.clear()  # Make sure to clear the legend again before adding items
             if is_valid_a:
-                 self.legend.addItem(self.throttle_curve, "Your Throttle")
+                                   self.legend.addItem(self.throttle_curve, f"{self.label_a} Throttle")
             if is_valid_b:
-                 self.legend.addItem(self.throttle_curve_b, "Super Lap Throttle")
+                 self.legend.addItem(self.throttle_curve_b, f"{self.label_b} Throttle")
 
         # Temporarily enable auto-range to allow programmatic updates
         self.plot_widget.plotItem.vb.enableAutoRange()

@@ -56,10 +56,8 @@ class SaveLapWorker(threading.Thread):
         
         logger.info(f"[SaveLapWorker] IMMEDIATELY BEFORE while loop. self.running = {self.running}")
         while self.running:
-            logger.debug("[SaveLapWorker] Entered while self.running loop.")
             lap_data = None
             try:
-                logger.debug("[SaveLapWorker] Top of try block in while loop. Attempting to get lap from queue...")
                 lap_data = self.lap_queue.get(timeout=1.0)
                 
                 # Update activity time
@@ -458,6 +456,11 @@ class IRacingLapSaver:
             frame_count = len(lap_data.get("telemetry_frames", []))
             was_reset = lap_data.get("was_reset_to_pits", False)
             
+            # DIAGNOSTIC: Always log lap detection
+            print(f"🏁 [LAP DETECTED] Lap {lap_number} completed! State: {lap_state}, Time: {lap_time:.3f}s, Frames: {frame_count}")
+            if was_reset:
+                print(f"⚠️ [LAP DETECTED] Lap {lap_number} was interrupted by reset to pits")
+            
             if was_reset:
                 logger.warning(f"⚡ IMMEDIATE SAVE (RESET): Lap {lap_number} ({lap_state}) - {lap_time:.3f}s, {frame_count} frames - INTERRUPTED BY RESET")
             else:
@@ -465,14 +468,21 @@ class IRacingLapSaver:
             
             # Validate that we have essential data
             if lap_number < 0:
+                print(f"❌ [LAP DETECTED] Invalid lap number {lap_number} - skipping")
                 logger.error(f"❌ IMMEDIATE SAVE SKIPPED: Invalid lap number {lap_number}")
                 return False
                 
             if frame_count == 0:
+                print(f"⚠️ [LAP DETECTED] Lap {lap_number} has no telemetry frames!")
                 logger.warning(f"⚠️  IMMEDIATE SAVE WARNING: Lap {lap_number} has no telemetry frames")
+            
+            # DIAGNOSTIC: Check session state
+            print(f"🔧 [LAP DETECTED] Session check - Current session ID: {self._current_session_id}")
+            print(f"🔧 [LAP DETECTED] Session check - Track ID: {self._current_track_id}, Car ID: {self._current_car_id}")
             
             # Ensure session is set up
             if not self._current_session_id:
+                print(f"❌ [LAP DETECTED] No active session for lap {lap_number} - will queue for later")
                 logger.warning(f"⚠️  IMMEDIATE SAVE QUEUED: No active session for lap {lap_number} - will save when session is created")
                 # Store for later processing when session becomes available
                 if not hasattr(self, '_queued_immediate_laps'):
@@ -480,6 +490,9 @@ class IRacingLapSaver:
                 self._queued_immediate_laps.append(lap_data)
                 return False  # Return False since we couldn't save now
                 
+            # DIAGNOSTIC: Confirm we're about to save
+            print(f"✅ [LAP DETECTED] About to save lap {lap_number} to session {self._current_session_id}")
+            
             # Use existing validation and save logic
             if was_reset:
                 logger.warning(f"💾 IMMEDIATE SAVE PROCESSING (RESET): Lap {lap_number} with session {self._current_session_id}")
@@ -745,7 +758,7 @@ class IRacingLapSaver:
                 if sector_times:
                     frame_copy["sector_times"] = sector_times
                     frame_copy["sector_total_time"] = sum(sector_times)
-                    logger.debug(f"🔧 [SECTOR FIX] Added sector data to frame: {sector_times}")
+                    # Removed individual frame logging to reduce spam
                 
                 updated_frames.append(frame_copy)
             
@@ -1038,12 +1051,26 @@ class IRacingLapSaver:
         # Increment debug counter
         self._telemetry_debug_counter += 1
         
+        # DIAGNOSTIC: Log telemetry reception every 18000 frames (5 minutes at 60Hz)
+        if self._telemetry_debug_counter % 18000 == 0:
+            lap_number = telemetry_data.get('Lap', 0)
+            lap_dist_pct = telemetry_data.get('LapDistPct', -1)
+            speed = telemetry_data.get('Speed', 0)
+            print(f"🔧 [TELEMETRY DIAGNOSTIC] Frame {self._telemetry_debug_counter}: Lap={lap_number}, LapDistPct={lap_dist_pct:.3f}, Speed={speed:.1f}")
+            print(f"🔧 [TELEMETRY DIAGNOSTIC] Session ID: {self._current_session_id}")
+            print(f"🔧 [TELEMETRY DIAGNOSTIC] Track ID: {self._current_track_id}, Car ID: {self._current_car_id}")
+        
         # Ensure we have a session ID from the monitor
         if not self._current_session_id:
             # Log periodically if no session is active
-            if self._telemetry_debug_counter % 300 == 0:
-                logger.debug("Cannot process telemetry: No active session set by monitor.")
+            if self._telemetry_debug_counter % 18000 == 0:
+                print(f"❌ [TELEMETRY DIAGNOSTIC] Cannot process telemetry: No active session set by monitor.")
+                print(f"❌ [TELEMETRY DIAGNOSTIC] Session state: session_id={self._current_session_id}, track_id={self._current_track_id}, car_id={self._current_car_id}")
             return telemetry_data
+
+        # DIAGNOSTIC: Confirm telemetry processing is active
+        if self._telemetry_debug_counter % 36000 == 0:  # Every 10 minutes
+            print(f"✅ [TELEMETRY DIAGNOSTIC] Processing telemetry with valid session {self._current_session_id}")
 
         # --- Enhanced Lap Detection Logic ---
         try:
@@ -1060,12 +1087,14 @@ class IRacingLapSaver:
                 
                 # Get current lap from LapIndexer (authoritative source)
                 lap_indexer_current = getattr(self.lap_indexer, '_active_lap_number_internal', 'N/A')
-                logger.info(f"🔧 LAP SYNC (2min): LapDistPct={lap_dist_pct:.3f}, " +
+                print(f"🔧 LAP SYNC (2min): LapDistPct={lap_dist_pct:.3f}, " +
                            f"iRacing Current={iracing_current_lap}, iRacing Completed={iracing_completed_lap}, " + 
                            f"LapIndexer Current={lap_indexer_current}, SessionTime={session_time:.3f}")
 
         except Exception as e:
-            logger.error(f"Error processing telemetry: {e}", exc_info=True)
+            print(f"❌ [TELEMETRY DIAGNOSTIC] Error processing telemetry: {e}")
+            import traceback
+            traceback.print_exc()
 
         return telemetry_data
         
@@ -1507,6 +1536,8 @@ class IRacingLapSaver:
         
         # Make the save attempt
         try:
+            print(f"💾 [LAP SAVE] Attempting to save lap {lap_number} to database...")
+            print(f"💾 [LAP SAVE] Lap details: Time={lap_time:.3f}s, Type={lap_type}, Session={self._current_session_id}")
             logger.info(f"Saving Lap {lap_number} ({lap_time:.3f}s, Type: {lap_type}) for session {self._current_session_id} with UUID {lap_uuid}")
             
             # Try to insert the lap data
@@ -1514,10 +1545,12 @@ class IRacingLapSaver:
                 
             if response.data and len(response.data) > 0:
                 saved_lap_uuid = response.data[0].get('id', lap_uuid)
+                print(f"✅ [LAP SAVE] Lap {lap_number} record saved successfully! UUID: {saved_lap_uuid}")
                 logger.info(f"Successfully saved lap {lap_number} (UUID: {saved_lap_uuid}, Type: {lap_type}, Valid for Leaderboard: {is_valid_for_leaderboard})")
                     
                 # Save associated telemetry points
                 if lap_frames_from_indexer:
+                    print(f"💾 [LAP SAVE] Now saving telemetry points for lap {lap_number}...")
                     self._save_telemetry_points(saved_lap_uuid, lap_frames_from_indexer)
                 
                 # Save sector times if available in the lap frames (only if not already included in lap record)
@@ -1527,8 +1560,10 @@ class IRacingLapSaver:
                     logger.info(f"✅ [SECTOR INTEGRATION] Sector times already included in lap record, skipping separate sector save")
 
                 self._total_laps_saved += 1
+                print(f"✅ [LAP SAVE] Lap {lap_number} completely saved! Total laps saved: {self._total_laps_saved}")
                 return saved_lap_uuid
             else:
+                print(f"❌ [LAP SAVE] Failed to save lap {lap_number} - no data returned from database")
                 logger.error(f"Failed to save lap {lap_number}. Response: {response}")
                 return None
                 
@@ -1549,9 +1584,11 @@ class IRacingLapSaver:
 
     def _save_telemetry_points(self, lap_uuid, telemetry_points_from_indexer):
         if not self._supabase_client or not lap_uuid or not telemetry_points_from_indexer:
+            print(f"❌ [TELEMETRY SAVE] Cannot save telemetry: supabase={bool(self._supabase_client)}, lap_uuid={bool(lap_uuid)}, points={len(telemetry_points_from_indexer) if telemetry_points_from_indexer else 0}")
             logger.warning("Cannot save telemetry: Missing Supabase client, lap ID, or telemetry data.")
             return False
     
+        print(f"💾 [TELEMETRY SAVE] Starting save of {len(telemetry_points_from_indexer)} telemetry points for lap {lap_uuid}")
         logger.info(f"Saving {len(telemetry_points_from_indexer)} telemetry points for lap {lap_uuid}")
         batch_size = 100  # Reduced from 500 to allow faster processing of smaller batches
         saved_count = 0
@@ -1570,6 +1607,8 @@ class IRacingLapSaver:
             return point.get('LapDistPct', 0) # Fallback to LapDistPct from raw ir_data
 
         sorted_points = sorted(telemetry_points_from_indexer, key=get_sort_key)
+        
+        print(f"💾 [TELEMETRY SAVE] Sorted telemetry points, processing in batches of {batch_size}")
         
         # Then process in batches
         for i in range(0, len(sorted_points), batch_size):
@@ -1603,6 +1642,8 @@ class IRacingLapSaver:
                 
                 telemetry_data_to_insert.append(telemetry_point)
                 
+            print(f"💾 [TELEMETRY SAVE] Processing batch {i // batch_size + 1}/{(len(sorted_points) + batch_size - 1) // batch_size} ({len(batch)} points)")
+                
             # Retry logic for batch saving
             max_retries = 3
             for retry in range(max_retries):
@@ -1610,19 +1651,23 @@ class IRacingLapSaver:
                     response = self._supabase_client.table("telemetry_points").insert(telemetry_data_to_insert).execute()
                     if response.data:
                         saved_count += len(response.data)
+                        print(f"✅ [TELEMETRY SAVE] Batch {i // batch_size + 1} saved successfully ({len(response.data)} points)")
                         break  # Success
                     else:
+                        print(f"⚠️ [TELEMETRY SAVE] Batch {i // batch_size + 1} save attempt {retry+1} returned no data")
                         logger.warning(f"Batch {i // batch_size} save attempt {retry+1} returned no data")
                         if retry == max_retries - 1:
                             failed_count += len(telemetry_data_to_insert)
                             failed_batch_indices.append(i // batch_size)
                 except Exception as e:
+                    print(f"❌ [TELEMETRY SAVE] Batch {i // batch_size + 1} save attempt {retry+1} failed: {e}")
                     logger.error(f"Error saving batch {i // batch_size}, attempt {retry+1}: {e}")
                     if retry == max_retries - 1:
                         failed_count += len(telemetry_data_to_insert)
                         failed_batch_indices.append(i // batch_size)
         
         success = failed_count == 0
+        print(f"📊 [TELEMETRY SAVE] Complete! Saved: {saved_count}, Failed: {failed_count}, Success: {success}")
         logger.info(f"Telemetry saving complete: Saved: {saved_count}, Failed: {failed_count}, Success: {success}")
         
         # If some batches failed, update the lap record to mark it as potentially incomplete

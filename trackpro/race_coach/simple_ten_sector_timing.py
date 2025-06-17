@@ -133,15 +133,6 @@ class SimpleTenSectorTiming:
             if track_position is None:
                 return None
             
-            # Debug: Log position extraction (every 100 frames to reduce spam)
-            if hasattr(self, 'debug_frame_count'):
-                self.debug_frame_count += 1
-            else:
-                self.debug_frame_count = 1
-                
-            if self.debug_frame_count % 100 == 0:
-                logger.info(f"🔍 [POSITION DEBUG] Raw position: {track_position:.6f}, Expected sector: {self.get_sector_for_position(track_position) + 1}")
-            
             # Initialize timing on first telemetry
             if self.first_telemetry:
                 self.sector_start_time = now

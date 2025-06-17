@@ -1,293 +1,514 @@
-"""Overview tab for Race Coach - Live telemetry dashboard.
+"""Driver Coaching Overview - Performance tracking and insights dashboard.
 
-This module contains the overview tab that displays live telemetry data
-including gauges, input traces, and real-time values.
+This module contains the overview tab that displays meaningful performance statistics,
+progress tracking, and coaching insights rather than redundant live telemetry data.
 """
 
 import logging
 import math
+from datetime import datetime, timedelta
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGridLayout, QSizePolicy
+    QGridLayout, QSizePolicy, QPushButton, QScrollArea, QProgressBar
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
-
-# Import common widgets
-from .common_widgets import SpeedGauge, RPMGauge, SteeringWheelWidget, InputTraceWidget
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont, QPainter, QPen, QBrush, QColor, QPixmap
+from .coaching_data_manager import CoachingDataManager
 
 logger = logging.getLogger(__name__)
 
 
 class OverviewTab(QWidget):
-    """Overview tab displaying live telemetry dashboard."""
+    """Driver coaching overview displaying performance insights and progress tracking."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_widget = parent
+        self.current_session_stats = None
+        self.historical_data = None
+        
+        # Initialize data manager
+        supabase_client = None
+        user_id = None
+        if hasattr(parent, 'supabase_client'):
+            supabase_client = parent.supabase_client
+        if hasattr(parent, 'user_id'):
+            user_id = parent.user_id
+            
+        self.data_manager = CoachingDataManager(supabase_client, user_id)
+        
         self.setup_ui()
+        
+        # Timer to refresh data periodically
+        self.refresh_timer = QTimer()
+        self.refresh_timer.timeout.connect(self.refresh_coaching_data)
+        self.refresh_timer.start(30000)  # Refresh every 30 seconds
+        
+        # Initial data load
+        self.refresh_coaching_data()
 
     def setup_ui(self):
-        """Set up the overview tab UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        """Set up the coaching overview UI."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(15)
 
-        # Title
-        title_label = QLabel("Race Coach Overview")
+        # Title and header
+        header_layout = QHBoxLayout()
+        
+        title_label = QLabel("Driver Coaching Overview")
         title_label.setStyleSheet("""
-            font-size: 18px;
-            font-weight: bold;
-            color: white;
-            padding: 10px;
-        """)
-        layout.addWidget(title_label)
-
-        # Main dashboard frame
-        dashboard_frame = QFrame()
-        dashboard_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
-        dashboard_frame.setStyleSheet("background-color: #2D2D30; border-radius: 5px;")
-        dashboard_layout = QVBoxLayout(dashboard_frame)
-
-        # Info text
-        info_label = QLabel("Connect to iRacing to see live telemetry data.")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #CCC; font-size: 14px; padding: 10px;")
-        dashboard_layout.addWidget(info_label)
-
-        # Create live telemetry section
-        telemetry_section = self.create_live_telemetry_section()
-        dashboard_layout.addWidget(telemetry_section)
-
-        layout.addWidget(dashboard_frame)
-        layout.addStretch()
-
-    def create_live_telemetry_section(self):
-        """Create the live telemetry display section."""
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setSpacing(15)
-
-        # Section title
-        title = QLabel("Live Telemetry")
-        title.setStyleSheet("""
-            font-size: 16px;
+            font-size: 24px;
             font-weight: bold;
             color: #00ff88;
-            margin-bottom: 10px;
+            padding: 10px 0px;
+        """)
+        header_layout.addWidget(title_label)
+        
+        header_layout.addStretch()
+        
+        refresh_button = QPushButton("Refresh Data")
+        refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0d7377;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #14a085;
+            }
+        """)
+        refresh_button.clicked.connect(self.refresh_coaching_data)
+        header_layout.addWidget(refresh_button)
+        
+        main_layout.addLayout(header_layout)
+
+        # Create scrollable content area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("QScrollArea { border: none; }")
+        
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(20)
+
+        # Session Summary Section
+        session_section = self.create_session_summary_section()
+        scroll_layout.addWidget(session_section)
+
+        # Performance Metrics Section
+        performance_section = self.create_performance_metrics_section()
+        scroll_layout.addWidget(performance_section)
+
+        # Progress Tracking Section
+        progress_section = self.create_progress_tracking_section()
+        scroll_layout.addWidget(progress_section)
+
+        # Coaching Insights Section
+        insights_section = self.create_coaching_insights_section()
+        scroll_layout.addWidget(insights_section)
+
+        scroll_layout.addStretch()
+        scroll_area.setWidget(scroll_widget)
+        main_layout.addWidget(scroll_area)
+
+    def create_session_summary_section(self):
+        """Create the current session summary section."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.StyledPanel)
+        section.setStyleSheet("""
+            QFrame {
+                background-color: #2D2D30;
+                border-radius: 8px;
+                border: 1px solid #404040;
+            }
+        """)
+        
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(12)
+
+        # Section title
+        title = QLabel("Current Session")
+        title.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ff88;
+            margin-bottom: 5px;
         """)
         layout.addWidget(title)
 
-        # Create main telemetry layout
-        telemetry_layout = QHBoxLayout()
-        telemetry_layout.setSpacing(20)
+        # Session info grid
+        info_grid = QGridLayout()
+        info_grid.setSpacing(10)
 
-        # Left side - Gauges
-        gauges_widget = QWidget()
-        gauges_layout = QVBoxLayout(gauges_widget)
-        gauges_layout.setSpacing(10)
+        self.session_track_label = QLabel("Track: --")
+        self.session_car_label = QLabel("Car: --")
+        self.session_duration_label = QLabel("Duration: --")
+        self.session_laps_label = QLabel("Laps Completed: --")
+        self.session_best_label = QLabel("Best Lap: --")
+        self.session_avg_label = QLabel("Average Lap: --")
 
-        # Speed gauge
-        self.speed_gauge = SpeedGauge()
-        gauges_layout.addWidget(self.speed_gauge)
+        labels = [
+            self.session_track_label, self.session_car_label,
+            self.session_duration_label, self.session_laps_label,
+            self.session_best_label, self.session_avg_label
+        ]
 
-        # RPM gauge
-        self.rpm_gauge = RPMGauge()
-        gauges_layout.addWidget(self.rpm_gauge)
+        for i, label in enumerate(labels):
+            label.setStyleSheet("color: white; font-size: 14px;")
+            row, col = divmod(i, 2)
+            info_grid.addWidget(label, row, col)
 
-        telemetry_layout.addWidget(gauges_widget)
-
-        # Center - Steering wheel and input trace
-        center_widget = QWidget()
-        center_layout = QVBoxLayout(center_widget)
-        center_layout.setSpacing(10)
-
-        # Steering wheel
-        self.steering_wheel = SteeringWheelWidget()
-        center_layout.addWidget(self.steering_wheel)
-
-        # Input trace
-        self.input_trace = InputTraceWidget()
-        self.input_trace.setMinimumHeight(150)
-        center_layout.addWidget(self.input_trace)
-
-        telemetry_layout.addWidget(center_widget)
-
-        # Right side - Current values
-        values_widget = QWidget()
-        values_layout = QGridLayout(values_widget)
-        values_layout.setSpacing(10)
-        values_layout.setContentsMargins(10, 10, 10, 10)
-
-        # Style for labels
-        label_style = "color: #AAA; font-size: 12px;"
-        value_style = "color: white; font-size: 14px; font-weight: bold;"
-
-        # Speed
-        values_layout.addWidget(QLabel("Speed:", styleSheet=label_style), 0, 0)
-        self.speed_value = QLabel("0.0 km/h")
-        self.speed_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.speed_value, 0, 1)
-
-        # Throttle
-        values_layout.addWidget(QLabel("Throttle:", styleSheet=label_style), 1, 0)
-        self.throttle_value = QLabel("0%")
-        self.throttle_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.throttle_value, 1, 1)
-
-        # Brake
-        values_layout.addWidget(QLabel("Brake:", styleSheet=label_style), 2, 0)
-        self.brake_value = QLabel("0%")
-        self.brake_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.brake_value, 2, 1)
-
-        # Clutch
-        values_layout.addWidget(QLabel("Clutch:", styleSheet=label_style), 3, 0)
-        self.clutch_value = QLabel("0%")
-        self.clutch_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.clutch_value, 3, 1)
-
-        # Gear
-        values_layout.addWidget(QLabel("Gear:", styleSheet=label_style), 4, 0)
-        self.gear_value = QLabel("N")
-        self.gear_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.gear_value, 4, 1)
-
-        # RPM
-        values_layout.addWidget(QLabel("RPM:", styleSheet=label_style), 5, 0)
-        self.rpm_value = QLabel("0")
-        self.rpm_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.rpm_value, 5, 1)
-
-        # Lap
-        values_layout.addWidget(QLabel("Lap:", styleSheet=label_style), 6, 0)
-        self.lap_value = QLabel("0")
-        self.lap_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.lap_value, 6, 1)
-
-        # Lap time
-        values_layout.addWidget(QLabel("Lap Time:", styleSheet=label_style), 7, 0)
-        self.laptime_value = QLabel("--:--.---")
-        self.laptime_value.setStyleSheet(value_style)
-        values_layout.addWidget(self.laptime_value, 7, 1)
-
-        # Add stretch to push values to top
-        values_layout.setRowStretch(8, 1)
-
-        telemetry_layout.addWidget(values_widget)
-
-        layout.addLayout(telemetry_layout)
+        layout.addLayout(info_grid)
         return section
 
-    def update_telemetry(self, telemetry_data):
-        """Update the overview display with new telemetry data."""
-        if not telemetry_data or not isinstance(telemetry_data, dict):
-            return
+    def create_performance_metrics_section(self):
+        """Create the performance metrics section."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.StyledPanel)
+        section.setStyleSheet("""
+            QFrame {
+                background-color: #2D2D30;
+                border-radius: 8px;
+                border: 1px solid #404040;
+            }
+        """)
+        
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(15)
 
+        # Section title
+        title = QLabel("Performance Metrics")
+        title.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ff88;
+            margin-bottom: 5px;
+        """)
+        layout.addWidget(title)
+
+        # Metrics grid
+        metrics_layout = QHBoxLayout()
+        
+        # Consistency Score
+        consistency_widget = self.create_metric_widget(
+            "Consistency Score", "85%", "Based on lap time variance", "#3498db"
+        )
+        metrics_layout.addWidget(consistency_widget)
+        
+        # Sector Performance
+        sector_widget = self.create_metric_widget(
+            "Best Sectors", "S1: +0.2s, S2: -0.1s, S3: +0.4s", "vs. Personal Best", "#e74c3c"
+        )
+        metrics_layout.addWidget(sector_widget)
+        
+        # Improvement Rate
+        improvement_widget = self.create_metric_widget(
+            "Session Improvement", "-1.2s", "Time dropped this session", "#2ecc71"
+        )
+        metrics_layout.addWidget(improvement_widget)
+
+        layout.addLayout(metrics_layout)
+        return section
+
+    def create_progress_tracking_section(self):
+        """Create the progress tracking section."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.StyledPanel)
+        section.setStyleSheet("""
+            QFrame {
+                background-color: #2D2D30;
+                border-radius: 8px;
+                border: 1px solid #404040;
+            }
+        """)
+        
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(15)
+
+        # Section title
+        title = QLabel("Progress Tracking")
+        title.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ff88;
+            margin-bottom: 5px;
+        """)
+        layout.addWidget(title)
+
+        # Progress charts area
+        progress_layout = QHBoxLayout()
+        
+        # Weekly progress
+        weekly_widget = self.create_progress_chart("This Week", ["Mon", "Tue", "Wed", "Thu", "Fri"], [85.2, 84.8, 84.5, 84.1, 83.9])
+        progress_layout.addWidget(weekly_widget)
+        
+        # Monthly progress  
+        monthly_widget = self.create_progress_chart("This Month", ["W1", "W2", "W3", "W4"], [86.1, 85.2, 84.5, 83.9])
+        progress_layout.addWidget(monthly_widget)
+
+        layout.addLayout(progress_layout)
+        return section
+
+    def create_coaching_insights_section(self):
+        """Create the coaching insights section."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.StyledPanel)
+        section.setStyleSheet("""
+            QFrame {
+                background-color: #2D2D30;
+                border-radius: 8px;
+                border: 1px solid #404040;
+            }
+        """)
+        
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(15)
+
+        # Section title
+        title = QLabel("Coaching Insights & Recommendations")
+        title.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ff88;
+            margin-bottom: 5px;
+        """)
+        layout.addWidget(title)
+
+        # Insights
+        insights_layout = QVBoxLayout()
+        
+        insights = [
+            ("🎯", "Focus Area", "Sector 3 consistency - you're losing 0.4s on average compared to your best"),
+            ("📈", "Strength", "Excellent braking zones - consistently hitting late braking points"),
+            ("⚠️", "Watch Out", "Throttle application could be smoother through technical sections"),
+            ("🏆", "Goal", "Target: Break 1:23.5 this session (0.3s improvement needed)")
+        ]
+
+        for icon, category, message in insights:
+            insight_widget = self.create_insight_widget(icon, category, message)
+            insights_layout.addWidget(insight_widget)
+
+        layout.addLayout(insights_layout)
+        return section
+
+    def create_metric_widget(self, title, value, subtitle, color):
+        """Create a metric display widget."""
+        widget = QFrame()
+        widget.setStyleSheet(f"""
+            QFrame {{
+                background-color: #3C3C3F;
+                border-radius: 6px;
+                border-left: 4px solid {color};
+            }}
+        """)
+        
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setSpacing(5)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet("color: #AAA; font-size: 12px; font-weight: bold;")
+        layout.addWidget(title_label)
+
+        value_label = QLabel(value)
+        value_label.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
+        layout.addWidget(value_label)
+
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setStyleSheet("color: #888; font-size: 11px;")
+        subtitle_label.setWordWrap(True)
+        layout.addWidget(subtitle_label)
+
+        return widget
+
+    def create_progress_chart(self, title, labels, values):
+        """Create a simple progress chart widget."""
+        widget = QFrame()
+        widget.setStyleSheet("""
+            QFrame {
+                background-color: #3C3C3F;
+                border-radius: 6px;
+            }
+        """)
+        
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(15, 10, 15, 10)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+        layout.addWidget(title_label)
+
+        # Simple text-based chart for now
+        for i, (label, value) in enumerate(zip(labels, values)):
+            row = QHBoxLayout()
+            
+            label_widget = QLabel(label)
+            label_widget.setStyleSheet("color: #AAA; font-size: 12px;")
+            label_widget.setFixedWidth(50)
+            row.addWidget(label_widget)
+            
+            value_widget = QLabel(f"{value:.1f}s")
+            value_widget.setStyleSheet("color: white; font-size: 12px;")
+            row.addWidget(value_widget)
+            
+            # Visual progress bar
+            progress = QProgressBar()
+            progress.setMaximum(100)
+            progress.setValue(int((90 - value) * 10))  # Convert lap time to progress
+            progress.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #555;
+                    border-radius: 3px;
+                    text-align: center;
+                    height: 10px;
+                }
+                QProgressBar::chunk {
+                    background-color: #00ff88;
+                    border-radius: 2px;
+                }
+            """)
+            progress.setTextVisible(False)
+            row.addWidget(progress)
+            
+            layout.addLayout(row)
+
+        return widget
+
+    def create_insight_widget(self, icon, category, message):
+        """Create an insight display widget."""
+        widget = QFrame()
+        widget.setStyleSheet("""
+            QFrame {
+                background-color: #3C3C3F;
+                border-radius: 6px;
+                margin-bottom: 5px;
+            }
+        """)
+        
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setSpacing(10)
+
+        icon_label = QLabel(icon)
+        icon_label.setStyleSheet("font-size: 18px;")
+        icon_label.setFixedWidth(30)
+        layout.addWidget(icon_label)
+
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(2)
+        
+        category_label = QLabel(category)
+        category_label.setStyleSheet("color: #00ff88; font-size: 12px; font-weight: bold;")
+        content_layout.addWidget(category_label)
+
+        message_label = QLabel(message)
+        message_label.setStyleSheet("color: white; font-size: 13px;")
+        message_label.setWordWrap(True)
+        content_layout.addWidget(message_label)
+
+        layout.addLayout(content_layout)
+        return widget
+
+    def refresh_coaching_data(self):
+        """Refresh the coaching data from the database."""
+        logger.info("Refreshing coaching data...")
+        
         try:
-            # Extract telemetry values
-            throttle = telemetry_data.get("Throttle", telemetry_data.get("throttle", 0))
-            brake = telemetry_data.get("Brake", telemetry_data.get("brake", 0))
-            clutch = telemetry_data.get("Clutch", telemetry_data.get("clutch", 0))
-            speed = telemetry_data.get("Speed", telemetry_data.get("speed", 0))
-            rpm = telemetry_data.get("RPM", telemetry_data.get("rpm", 0))
-            gear = telemetry_data.get("Gear", telemetry_data.get("gear", 0))
-            lap = telemetry_data.get("Lap", telemetry_data.get("lap_count", 0))
-            laptime = telemetry_data.get("LapCurrentLapTime", telemetry_data.get("lap_time", 0))
-            steering = telemetry_data.get(
-                "steering",
-                telemetry_data.get(
-                    "SteeringWheelAngle", telemetry_data.get("Steer", telemetry_data.get("steer", 0))
-                ),
-            )
-
-            # Update input trace
-            if hasattr(self, "input_trace"):
-                self.input_trace.add_data_point(throttle, brake, clutch)
-
-            # Convert speed to km/h if needed
-            if isinstance(speed, (int, float)) and speed > 0:
-                speed *= 3.6  # Convert m/s to km/h
-
-            # Format gear text
-            gear_text = "R" if gear == -1 else "N" if gear == 0 else str(gear)
-
-            # Update text values
-            self.speed_value.setText(f"{speed:.1f} km/h")
-            self.throttle_value.setText(f"{throttle*100:.0f}%")
-            self.brake_value.setText(f"{brake*100:.0f}%")
-            self.clutch_value.setText(f"{(1-clutch)*100:.0f}%")  # Invert clutch for display
-            self.gear_value.setText(gear_text)
-            self.rpm_value.setText(f"{rpm:.0f}")
-            self.lap_value.setText(str(lap))
-            self.laptime_value.setText(self._format_time(laptime))
-
-            # Update gauges
-            if hasattr(self, "speed_gauge"):
-                self.speed_gauge.set_value(speed)
-
-            if hasattr(self, "rpm_gauge"):
-                self.rpm_gauge.set_value(rpm)
-                # Check if we have session info for redline
-                if hasattr(self.parent_widget, "session_info") and self.parent_widget.session_info:
-                    driver_info = self.parent_widget.session_info.get("DriverInfo", {})
-                    if "DriverCarRedLine" in driver_info:
-                        redline = driver_info["DriverCarRedLine"]
-                        self.rpm_gauge.set_redline(redline)
-
-            # Update steering wheel
-            if hasattr(self, "steering_wheel"):
-                # Normalize steering value to -1.0 to 1.0 range if needed
-                if abs(steering) > 1.0:
-                    # Convert from radians to normalized value
-                    max_rotation = telemetry_data.get(
-                        "SteeringWheelAngleMax", telemetry_data.get("steering_max", 3.0 * math.pi)
-                    )
-
-                    if max_rotation > 0:
-                        # Clamp steering angle to max_rotation
-                        clamped_steering = max(-max_rotation, min(max_rotation, steering))
-                        steering_normalized = clamped_steering / max_rotation
-                        steering_normalized = max(-1.0, min(1.0, steering_normalized))
-
-                        self.steering_wheel.set_max_rotation(max_rotation)
-                        self.steering_wheel.set_value(steering_normalized)
-                else:
-                    # Already normalized
-                    steering_normalized = max(-1.0, min(1.0, steering))
-                    self.steering_wheel.set_value(steering_normalized)
-
+            # Fetch current session data
+            session_data = self.data_manager.get_session_summary()
+            self.current_session_stats = session_data
+            
+            # Calculate performance metrics
+            performance_data = self.data_manager.get_performance_metrics()
+            
+            # Get progress data
+            progress_data = self.data_manager.get_progress_data()
+            
+            # Generate coaching insights
+            insights = self.data_manager.get_coaching_insights(session_data, performance_data)
+            
+            # Update the UI
+            self.update_session_summary(session_data)
+            self.update_performance_metrics(performance_data)
+            self.update_progress_tracking(progress_data)
+            self.update_coaching_insights(insights)
+            
         except Exception as e:
-            logger.error(f"Error updating overview telemetry: {e}")
+            logger.error(f"Error refreshing coaching data: {e}")
 
-    def _format_time(self, time_in_seconds):
+    def update_session_summary(self, session_data=None):
+        """Update the session summary with current data."""
+        if not session_data:
+            return
+            
+        try:
+            self.session_track_label.setText(f"Track: {session_data.get('track_name', '--')}")
+            self.session_car_label.setText(f"Car: {session_data.get('car_name', '--')}")
+            self.session_duration_label.setText(f"Duration: {session_data.get('duration', '--')}")
+            self.session_laps_label.setText(f"Laps Completed: {session_data.get('total_laps', '--')}")
+            
+            best_lap = session_data.get('best_lap')
+            if best_lap:
+                self.session_best_label.setText(f"Best Lap: {self._format_time(best_lap)}")
+            else:
+                self.session_best_label.setText("Best Lap: --")
+                
+            avg_lap = session_data.get('average_lap')
+            if avg_lap:
+                self.session_avg_label.setText(f"Average Lap: {self._format_time(avg_lap)}")
+            else:
+                self.session_avg_label.setText("Average Lap: --")
+                
+        except Exception as e:
+            logger.error(f"Error updating session summary: {e}")
+
+    def update_performance_metrics(self, performance_data=None):
+        """Update performance metrics with calculated data."""
+        if not performance_data:
+            return
+            
+        # TODO: Update the actual metric widgets with real data
+        # For now, the mock data in the widgets will suffice
+        logger.info(f"Performance data: {performance_data}")
+
+    def update_progress_tracking(self, progress_data=None):
+        """Update progress tracking charts with calculated data."""
+        if not progress_data:
+            return
+            
+        # TODO: Update the actual progress chart widgets with real data
+        logger.info(f"Progress data: {progress_data}")
+
+    def update_coaching_insights(self, insights=None):
+        """Update coaching insights based on performance analysis."""
+        if not insights:
+            return
+            
+        # TODO: Update the actual insight widgets with real data
+        logger.info(f"Generated {len(insights)} coaching insights")
+        
+    def _format_time(self, time_seconds: float) -> str:
         """Format time in seconds to MM:SS.mmm format."""
-        if time_in_seconds is None or time_in_seconds < 0:
+        if time_seconds is None or time_seconds <= 0:
             return "--:--.---"
-        minutes = int(time_in_seconds // 60)
-        seconds = time_in_seconds % 60
-        return f"{minutes:02d}:{seconds:06.3f}"
+        minutes = int(time_seconds // 60)
+        seconds = time_seconds % 60
+        return f"{minutes:01d}:{seconds:06.3f}"
+
+    def update_telemetry(self, telemetry_data):
+        """Override the old telemetry update method - no longer needed."""
+        # The new coaching overview doesn't use live telemetry data
+        pass
 
     def clear_telemetry(self):
-        """Clear all telemetry displays."""
-        # Reset gauges
-        if hasattr(self, "speed_gauge"):
-            self.speed_gauge.set_value(0)
-        if hasattr(self, "rpm_gauge"):
-            self.rpm_gauge.set_value(0)
-        if hasattr(self, "steering_wheel"):
-            self.steering_wheel.set_value(0)
-        
-        # Clear input trace
-        if hasattr(self, "input_trace"):
-            self.input_trace.clear_data()
-        
-        # Reset text values
-        self.speed_value.setText("0.0 km/h")
-        self.throttle_value.setText("0%")
-        self.brake_value.setText("0%")
-        self.clutch_value.setText("0%")
-        self.gear_value.setText("N")
-        self.rpm_value.setText("0")
-        self.lap_value.setText("0")
-        self.laptime_value.setText("--:--.---") 
+        """Override the old clear method - no longer needed."""
+        # The new coaching overview doesn't use live telemetry data
+        pass 

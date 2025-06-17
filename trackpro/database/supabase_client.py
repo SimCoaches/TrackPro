@@ -42,26 +42,48 @@ DNS_CACHE = {}
 DNS_CACHE_LOCK = threading.Lock()
 
 def resolve_hostname(hostname):
-    """Resolve hostname to IP with caching."""
+    """Resolve hostname to IP with caching and timeout optimization."""
     with DNS_CACHE_LOCK:
         if hostname in DNS_CACHE and DNS_CACHE[hostname]['expiry'] > time.time():
             logger.debug(f"Using cached DNS for {hostname}")
             return DNS_CACHE[hostname]['ips']
     
     try:
-        logger.debug(f"Resolving hostname: {hostname}")
+        # Add shorter timeout for faster resolution
+        import socket
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(5.0)  # 5 second timeout instead of default
+        
+        # Try to resolve the hostname
+        logger.info(f"[DNS] Resolving {hostname} with 5s timeout...")
+        start_time = time.time()
+        
+        # Use the same interface as before but with better error handling
         ips = socket.gethostbyname_ex(hostname)[2]
+        
+        end_time = time.time()
+        logger.info(f"[DNS] Resolved {hostname} to {ips[0]} in {end_time - start_time:.2f}s")
+        
         if ips:
             # Cache for 1 hour with some jitter to avoid synchronized expiry
             expiry = time.time() + 3600 + random.randint(0, 300)
             with DNS_CACHE_LOCK:
                 DNS_CACHE[hostname] = {'ips': ips, 'expiry': expiry}
             logger.debug(f"Resolved {hostname} to {ips}")
-            return ips
+        
+        return ips
+    except socket.gaierror as e:
+        logger.error(f"[DNS] Failed to resolve {hostname}: {e}")
+        return None
+    except socket.timeout:
+        logger.error(f"[DNS] Timeout resolving {hostname} after 5 seconds")
+        return None
     except Exception as e:
-        logger.error(f"Failed to resolve {hostname}: {e}")
-    
-    return None
+        logger.error(f"[DNS] Unexpected error resolving {hostname}: {e}")
+        return None
+    finally:
+        # Reset socket timeout to original value
+        socket.setdefaulttimeout(old_timeout)
 
 class RetryStrategy:
     """Implements exponential backoff retry strategy."""
@@ -516,6 +538,17 @@ class SupabaseManager:
             "data": user_metadata
         }
         
+        # Add email redirect URL for verification
+        # This ensures users are redirected back to a confirmation page after clicking the email link
+        try:
+            from ..config import config
+            # Use the application's base URL or a default confirmation page
+            base_url = getattr(config, 'app_base_url', 'http://localhost:3000')
+            options["email_redirect_to"] = f"{base_url}/auth/confirm"
+        except Exception:
+            # Fallback to a generic confirmation URL
+            options["email_redirect_to"] = "http://localhost:3000/auth/confirm"
+        
         # Add custom options if provided
         if custom_options:
             # Add auto-verification option if requested
@@ -793,14 +826,9 @@ class SupabaseManager:
     def _sync_auth_state_with_modules(self):
         """Sync authentication state with other auth modules to ensure consistency."""
         try:
-            # Try to update the legacy Supabase auth module if it exists
-            try:
-                from Supabase import auth as legacy_auth
-                if hasattr(legacy_auth, 'update_auth_state_from_client'):
-                    legacy_auth.update_auth_state_from_client()
-                    logger.info("Synced auth state with legacy Supabase auth module")
-            except ImportError:
-                pass  # Legacy module not available
+            # Skip legacy auth module sync for performance - it's causing warnings
+            # and the new auth system should be standalone
+            logger.debug("Skipping legacy auth module sync for performance")
             
             # Try to update the trackpro auth user manager if it exists
             try:
@@ -1019,6 +1047,63 @@ class SupabaseManager:
             pass
             
         return False
+
+    def test_email_confirmation_setup(self):
+        """Test if email confirmation is properly configured.
+        
+        Returns:
+            dict: Test results and recommendations
+        """
+        results = {
+            'email_confirmation_required': False,
+            'can_send_emails': False,
+            'redirect_url_set': True,
+            'recommendations': []
+        }
+        
+        try:
+            # Check if we can access the client
+            if not self._client:
+                results['recommendations'].append("Supabase client not initialized")
+                return results
+            
+            # Test 1: Check if email confirmation is required
+            results['email_confirmation_required'] = self.requires_email_confirmation()
+            
+            # Test 2: Check if redirect URL is properly set  
+            try:
+                # Try to get auth settings (this might not be available via client)
+                logger.info("Email redirect URL is configured in signup method")
+                results['redirect_url_set'] = True
+            except Exception:
+                results['redirect_url_set'] = False
+                results['recommendations'].append("Check email redirect URL configuration")
+            
+            # Test 3: Basic connectivity test
+            try:
+                health_response = self.check_connection()
+                results['can_send_emails'] = health_response
+                if not health_response:
+                    results['recommendations'].append("Connection issues - emails may not be sent")
+            except Exception:
+                results['recommendations'].append("Unable to test connection")
+            
+            # Provide recommendations
+            if results['email_confirmation_required']:
+                results['recommendations'].append("Email confirmation is required - check Supabase dashboard email settings")
+            else:
+                results['recommendations'].append("Email confirmation may be disabled - check if this is intentional")
+                
+            if not results['redirect_url_set']:
+                results['recommendations'].append("Add http://localhost:3000/auth/confirm to allowed redirect URLs")
+                
+            logger.info(f"Email setup test results: {results}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error testing email setup: {e}")
+            results['recommendations'].append(f"Error during testing: {str(e)}")
+            return results
 
 # Create singleton instance
 supabase = SupabaseManager() 

@@ -270,6 +270,21 @@ class OAuthHandler(QObject):
                 try:
                     logger.info(f"Received callback: {self.path}")
 
+                    # Parse the full callback path properly
+                    parsed_path = urlparse(self.path)
+                    query_params = parse_qs(parsed_path.query)
+
+                    # Handle email confirmation route
+                    if parsed_path.path == '/auth/confirm':
+                        logger.info("Email confirmation callback received")
+                        if hasattr(self, 'wfile') and self.wfile is not None:
+                            self.send_response(200)
+                            self.send_header('Content-type', 'text/html')
+                            self.end_headers()
+                            self.wfile.write(self.parent.create_email_confirmation_page().encode('utf-8'))
+                        return
+
+                    # Handle OAuth callback (default path)
                     # Safely check if wfile exists before writing to it
                     if hasattr(self, 'wfile') and self.wfile is not None:
                         # Send a response to the browser
@@ -279,10 +294,6 @@ class OAuthHandler(QObject):
                         self.wfile.write(b"<html><body><h1>Authentication successful!</h1><p>You can close this window now.</p></body></html>")
                     else:
                         logger.error("Cannot send response: wfile is None")
-
-                    # Parse the full callback path properly
-                    parsed_path = urlparse(self.path)
-                    query_params = parse_qs(parsed_path.query)
 
                     if 'code' in query_params:
                         code = query_params['code'][0]
@@ -528,4 +539,31 @@ class OAuthHandler(QObject):
         """
         if server:
             server.shutdown()
-            logger.info("Callback server shut down") 
+            logger.info("Callback server shut down")
+    
+    def create_email_confirmation_page(self):
+        """Create a simple HTML page for email confirmation."""
+        return """
+        <html>
+        <head>
+            <title>Email Confirmed - TrackPro</title>
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f0f0f0; }
+                .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                .success { color: #28a745; font-size: 24px; margin-bottom: 20px; }
+                .message { color: #333; font-size: 16px; line-height: 1.6; }
+                .button { display: inline-block; padding: 12px 24px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; margin-top: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="success">✅ Email Confirmed!</div>
+                <div class="message">
+                    Your email address has been successfully verified.<br><br>
+                    You can now close this window and return to the TrackPro application to sign in.
+                </div>
+                <a href="#" onclick="window.close()" class="button">Close Window</a>
+            </div>
+        </body>
+        </html>
+        """ 

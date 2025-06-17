@@ -40,13 +40,9 @@ class GraphBase(QWidget):
         
         points = lap_data.get('points', [])
         
-        # DEBUG: Log the first few points to see what data we're getting
+        # Log basic processing info
         if len(points) > 0:
-            logger.info(f"DEBUG: Processing {len(points)} telemetry points for channels: {channel_names}")
-            logger.info(f"DEBUG: First point keys: {list(points[0].keys())}")
-            logger.info(f"DEBUG: First point sample: {points[0]}")
-            if len(points) > 5:
-                logger.info(f"DEBUG: Middle point sample: {points[len(points)//2]}")
+            logger.debug(f"Processing {len(points)} telemetry points for channels: {channel_names}")
         
         # Extract raw data arrays
         raw_distances = []
@@ -95,10 +91,10 @@ class GraphBase(QWidget):
             
             if all_values_0_to_1:
                 is_normalized = True
-                logger.info(f"DEBUG: Detected NORMALIZED distance data (all values 0-1). Range: {min_sample_dist:.3f} to {max_sample_dist:.3f}")
+                logger.debug(f"Detected NORMALIZED distance data (all values 0-1). Range: {min_sample_dist:.3f} to {max_sample_dist:.3f}")
             else:
                 is_normalized = False
-                logger.info(f"DEBUG: Detected ACTUAL distance data (values outside 0-1). Range: {min_sample_dist:.1f}m to {max_sample_dist:.1f}m")
+                logger.debug(f"Detected ACTUAL distance data (values outside 0-1). Range: {min_sample_dist:.1f}m to {max_sample_dist:.1f}m")
         
         # Set appropriate track length
         if not track_length or track_length <= 0:
@@ -106,11 +102,11 @@ class GraphBase(QWidget):
                 # For normalized data, use a reasonable track length based on track type
                 # Most road courses are 2-6km, ovals are 1-4km
                 track_length = 3000  # Default 3km
-                logger.info(f"DEBUG: Using default track length for normalized data: {track_length}m")
+                logger.debug(f"Using default track length for normalized data: {track_length}m")
             else:
                 # For actual distance data, estimate from the data range
                 track_length = max(sample_distances) if sample_distances else 1000
-                logger.info(f"DEBUG: Estimated track length from actual distance data: {track_length}m")
+                logger.debug(f"Estimated track length from actual distance data: {track_length}m")
         
         for point in points:
             # Get distance value with improved logic
@@ -143,10 +139,10 @@ class GraphBase(QWidget):
             logger.warning("No valid distance values found in telemetry data")
             return None
         
-        # DEBUG: Log the distance range and data ranges for each channel
+        # Log distance range for debugging
         min_dist = min(raw_distances)
         max_dist = max(raw_distances)
-        logger.info(f"DEBUG: Final distance range: {min_dist:.1f}m to {max_dist:.1f}m (track_length: {track_length}m)")
+        logger.debug(f"Final distance range: {min_dist:.1f}m to {max_dist:.1f}m (track_length: {track_length}m)")
         
         for channel in channel_names:
             if raw_data[channel]:
@@ -155,11 +151,11 @@ class GraphBase(QWidget):
                     min_val = min(values)
                     max_val = max(values)
                     avg_val = sum(values) / len(values)
-                    logger.info(f"DEBUG: {channel} range: {min_val:.3f} to {max_val:.3f} (avg: {avg_val:.3f}) from {len(values)} valid points")
+                    logger.debug(f"{channel} range: {min_val:.3f} to {max_val:.3f} (avg: {avg_val:.3f}) from {len(values)} valid points")
                 else:
-                    logger.warning(f"DEBUG: {channel} has no valid values")
+                    logger.warning(f"{channel} has no valid values")
             else:
-                logger.warning(f"DEBUG: {channel} has no data points")
+                logger.warning(f"{channel} has no data points")
             
         # Create uniform distance grid with specified resolution
         # For proper interpolation, use the actual data range
@@ -181,7 +177,7 @@ class GraphBase(QWidget):
             
         x_m = np.linspace(grid_start, grid_end, num_points)
         
-        logger.info(f"DEBUG: Created distance grid: {len(x_m)} points from {grid_start:.1f}m to {grid_end:.1f}m (resolution: {effective_resolution:.2f}m)")
+        logger.debug(f"Created distance grid: {len(x_m)} points from {grid_start:.1f}m to {grid_end:.1f}m (resolution: {effective_resolution:.2f}m)")
         
         # Preprocess and resample each channel
         resampled_data = {'x_m': x_m}
@@ -239,12 +235,12 @@ class GraphBase(QWidget):
                     resampled_values = np.interp(x_m, x_valid, y_valid, left=y_valid[0], right=y_valid[-1])
                     resampled_data[channel] = resampled_values
                 
-                # DEBUG: Log resampled data ranges
+                # Log resampled data ranges for debugging
                 final_values = resampled_data[channel]
                 min_resampled = np.nanmin(final_values)
                 max_resampled = np.nanmax(final_values)
                 avg_resampled = np.nanmean(final_values)
-                logger.info(f"DEBUG: {channel} resampled range: {min_resampled:.3f} to {max_resampled:.3f} (avg: {avg_resampled:.3f})")
+                logger.debug(f"{channel} resampled range: {min_resampled:.3f} to {max_resampled:.3f} (avg: {avg_resampled:.3f})")
                 
                 logger.debug(f"Resampled {channel} data: {len(x_valid)} raw points to {len(x_m)} interpolated points")
             except Exception as e:

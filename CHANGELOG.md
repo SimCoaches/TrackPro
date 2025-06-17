@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.1 - 2024-05-30
+### Fixed
+- Cleared old, incomplete telemetry data from the database to improve SuperLap accuracy and system performance. Laps recorded before the full 10-sector timing implementation were removed.
+- Corrected an issue where invalid laps without full sector data were being considered for SuperLap calculations.
+
+### Changed
+- Updated application version to 1.5.1.
+
 ## 1.5.0 - 2025-01-15
 - **MAJOR FIX**: Resolved critical issue where previous versions weren't deleted during updates
 - Added automatic cleanup of old TrackPro versions during installation
@@ -8,6 +16,7 @@
 - Improved update process with better user feedback and progress indication
 - Added version cleanup test script for verification
 - Updated to version 1.5.0
+- **SuperLap Feature**: Your AI Race Coach now generates a "SuperLap" by combining your best performance across all sectors on a given track.
 
 ## 1.4.8 - 2025-05-17
 - Updated version to 1.4.8

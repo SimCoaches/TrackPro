@@ -786,27 +786,27 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                     # Boolean True means authenticated, but we need to get the actual user
                     print("🔍 Boolean True received, fetching actual user data...")
                     try:
-                        from trackpro.database.supabase_client import get_supabase_client
-                        client = get_supabase_client()
-                        if client and client.is_authenticated():
-                            user_response = client.get_user()
+                        from trackpro.database.supabase_client import supabase
+                        # Use the supabase manager instance, not the raw client
+                        if supabase and supabase.is_authenticated():
+                            user_response = supabase.get_user()
                             if user_response and hasattr(user_response, 'user') and user_response.user:
                                 is_authenticated = True
                                 user_id = user_response.user.id
-                                print(f"🔍 Retrieved user ID from client: {user_id}")
+                                print(f"🔍 Retrieved user ID from manager: {user_id}")
                             elif user_response and hasattr(user_response, 'id') and user_response.id:
                                 is_authenticated = True
                                 user_id = user_response.id
                                 print(f"🔍 Retrieved user ID directly: {user_id}")
                             else:
-                                print("⚠️ Client authenticated but couldn't get user details")
+                                print("⚠️ Manager authenticated but couldn't get user details")
                                 # Keep existing user if we have one
                                 if self.user_id:
                                     is_authenticated = True
                                     user_id = self.user_id
                                     print(f"🔍 Keeping existing user ID: {user_id}")
                         else:
-                            print("⚠️ Client not authenticated despite boolean True")
+                            print("⚠️ Manager not authenticated despite boolean True")
                     except Exception as e:
                         print(f"⚠️ Error fetching user from boolean signal: {e}")
                         # Fallback: if we have an existing user and boolean is True, keep them

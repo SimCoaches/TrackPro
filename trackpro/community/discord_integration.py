@@ -21,29 +21,33 @@ class DiscordWebView(QWebEngineView):
         self.setup_page()
     
     def setup_settings(self):
-        """Configure web engine settings for FAST Discord experience."""
+        """Configure web engine settings for MAXIMUM performance."""
         settings = self.settings()
         
-        # Essential settings only for performance
+        # Core settings only for performance
         settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
         
-        # DISABLE heavy features for better performance
-        settings.setAttribute(QWebEngineSettings.WebGLEnabled, False)  # Disable WebGL for speed
-        settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, False)  # Disable acceleration
-        settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, True)  # Disable auto-play
-        settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)  # Disable fullscreen
-        settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, False)  # Security
+        # DISABLE ALL heavy features for maximum performance
+        settings.setAttribute(QWebEngineSettings.WebGLEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, True)  
+        settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, False)  
+        settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.DnsPrefetchEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.TouchIconsEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.FocusOnNavigationEnabled, False)  
+        settings.setAttribute(QWebEngineSettings.ScrollAnimatorEnabled, False)  # Disable scroll animations
+        settings.setAttribute(QWebEngineSettings.ErrorPageEnabled, False)  # Disable error pages
+        settings.setAttribute(QWebEngineSettings.HyperlinkAuditingEnabled, False)  # Disable link auditing
+        settings.setAttribute(QWebEngineSettings.SpatialNavigationEnabled, False)  # Disable spatial navigation
         
-        # ADDITIONAL performance optimizations
-        settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)  # Disable plugins
-        settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)  # Keep images but optimize
-        settings.setAttribute(QWebEngineSettings.DnsPrefetchEnabled, False)  # Disable DNS prefetch
-        settings.setAttribute(QWebEngineSettings.TouchIconsEnabled, False)  # Disable touch icons
-        settings.setAttribute(QWebEngineSettings.FocusOnNavigationEnabled, False)  # Reduce focus changes
+        # Keep auto-loading for compatibility 
+        settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)  # Keep images enabled for Discord to work
         
-        # Optimize zoom for performance (smaller = faster rendering)
-        self.setZoomFactor(0.75)  # Even smaller for better performance
+        # Optimize zoom for maximum performance 
+        self.setZoomFactor(0.6)  # Smaller zoom = faster rendering
     
     def setup_page(self):
         """Setup custom page with CSS injection for better Discord layout."""
@@ -131,8 +135,18 @@ class DiscordWebView(QWebEngineView):
         </style>
         """
         
+        # PERFORMANCE: Use minimal CSS to reduce render lag
+        minimal_css = """
+        <style>
+        /* MINIMAL CSS for performance optimization */
+        [data-list-id="guildsnav"], .guilds-2JjMmN { display: none !important; }
+        .app-2CXKsg { margin-left: 0 !important; }
+        /* Disable animations and transitions for speed */
+        * { animation: none !important; transition: none !important; }
+        </style>"""
+        
         # This CSS will be injected after page loads
-        self.discord_css = css_fixes
+        self.discord_css = minimal_css
 
 class DiscordIntegrationWidget(QWidget):
     """Main Discord integration widget for TrackPro."""
@@ -474,7 +488,7 @@ class DiscordIntegrationWidget(QWidget):
         
         var trackproSeenBadges = new Set();
         var trackproInitialized = false;
-        var trackproInitDelay = 15000; // Reduced to 15 seconds
+        var trackproInitDelay = 30000; // 30 seconds for better performance
         
         // Lightweight initialization - mark existing badges as seen
         function initializeMonitoring() {
@@ -522,8 +536,8 @@ class DiscordIntegrationWidget(QWidget):
         // Delayed initialization
         setTimeout(initializeMonitoring, trackproInitDelay);
         
-        // Reduced frequency monitoring (every 30 seconds for performance)
-        setInterval(checkForNewNotifications, 30000);
+        // Very low frequency monitoring (every 2 minutes for maximum performance)
+        setInterval(checkForNewNotifications, 120000);
         
         // Lightweight DOM observer
         if (window.MutationObserver) {
@@ -770,7 +784,7 @@ class DiscordIntegrationWidget(QWidget):
             
         self.message_poll_timer = QTimer()
         self.message_poll_timer.timeout.connect(self.check_for_js_notifications)
-        self.message_poll_timer.start(20000)  # Check every 20 seconds for performance
+        self.message_poll_timer.start(60000)  # Check every 60 seconds for maximum performance
     
     def on_hidden_monitor_loaded(self, success):
         """Handle when the hidden monitor finishes loading."""
@@ -975,7 +989,7 @@ class DiscordIntegrationWidget(QWidget):
         
         # Resume monitoring if it was paused
         if hasattr(self, 'message_poll_timer') and not self.message_poll_timer.isActive():
-            self.message_poll_timer.start(30000)
+            self.message_poll_timer.start(60000)
     
     def hideEvent(self, event):
         """Handle widget being hidden - reduce resource usage."""

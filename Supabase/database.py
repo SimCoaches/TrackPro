@@ -210,24 +210,14 @@ def get_laps(limit: int = 50, user_only: bool = True, session_id: str = None):
                 for i, lap in enumerate(result_all.data[:3]):  # Log first 3 for debugging
                     logger.info(f"DB Lap {i}: id={lap.get('id')}, lap_number={lap.get('lap_number')}, lap_time={lap.get('lap_time')}, is_valid={lap.get('is_valid')}")
             
-            # Now get laps with less strict filtering - allow any lap_time and both valid/invalid laps for debugging
-            result = main_supabase.client.table("laps").select("*").eq("session_id", session_id).order("lap_number").limit(limit).execute()
+            # Now get laps filtering for valid laps only
+            result = main_supabase.client.table("laps").select("*").eq("session_id", session_id).eq("is_valid", True).order("lap_number").limit(limit).execute()
             
             if result.data:
-                # For debugging, let's be less strict and include all laps for now
-                filtered_laps = []
-                for lap in result.data:
-                    lap_time = lap.get('lap_time', 0)
-                    is_valid = lap.get('is_valid', False)
-                    # Much more lenient filtering for debugging - include any lap with a reasonable time
-                    if lap_time > 0 and lap_time < 600:  # Include laps under 10 minutes (very lenient)
-                        filtered_laps.append(lap)
-                        logger.debug(f"Included lap {lap.get('lap_number')} with time {lap_time}s, is_valid={is_valid}")
-                    else:
-                        logger.debug(f"Filtered out lap {lap.get('id')} with lap time {lap_time}s")
-                
-                logger.info(f"Found {len(filtered_laps)} laps for session {session_id} after lenient filtering (filtered {len(result.data) - len(filtered_laps)} extreme outliers)")
-                return filtered_laps, f"Found {len(filtered_laps)} laps"
+                # Filter out laps with invalid lap times (lap_time = -1)
+                valid_laps = [lap for lap in result.data if lap.get('lap_time', -1) > 0]
+                logger.info(f"Found {len(result.data)} database-valid laps for session {session_id}, {len(valid_laps)} have valid lap times")
+                return valid_laps, f"Found {len(valid_laps)} valid laps"
             else:
                 logger.warning(f"No laps found in database for session {session_id}")
                 return [], "No laps found for this session"
@@ -476,22 +466,77 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
             result_data = result.data or []
         
         if user_only and result_data:
-            # Get user directly from the main client
-            user = main_supabase.get_user()
+            # Get user directly from the main client with improved extraction logic
             user_id = None
-            if user:
-                 if hasattr(user, 'id'):
-                     user_id = user.id
-                 elif hasattr(user, 'user') and hasattr(user.user, 'id'):
-                     user_id = user.user.id
+            
+            # Try multiple methods to get the current user ID
+            try:
+                # Method 1: Try get_user() 
+                user = main_supabase.get_user()
+                if user:
+                    if hasattr(user, 'id'):
+                        user_id = user.id
+                        logger.info(f"DATABASE DEBUG: Got user_id from user.id: {user_id}")
+                    elif hasattr(user, 'user') and hasattr(user.user, 'id'):
+                        user_id = user.user.id
+                        logger.info(f"DATABASE DEBUG: Got user_id from user.user.id: {user_id}")
+                    elif isinstance(user, dict) and 'user' in user and user['user'] and user['user'].get('id'):
+                        user_id = user['user']['id']
+                        logger.info(f"DATABASE DEBUG: Got user_id from dict user['user']['id']: {user_id}")
+                    elif isinstance(user, dict) and user.get('id'):
+                        user_id = user['id']
+                        logger.info(f"DATABASE DEBUG: Got user_id from dict user['id']: {user_id}")
+                
+                # Method 2: Try get_session() as fallback
+                if not user_id:
+                    logger.info("DATABASE DEBUG: get_user() failed, trying get_session()")
+                    session = main_supabase.client.auth.get_session()
+                    if session and hasattr(session, 'user') and session.user:
+                        user_id = session.user.id
+                        logger.info(f"DATABASE DEBUG: Got user_id from session.user.id: {user_id}")
+                
+                # Method 3: Try alternative user extraction
+                if not user_id:
+                    logger.info("DATABASE DEBUG: session method failed, trying alternative extraction")
+                    try:
+                        user_response = main_supabase.client.auth.get_user()
+                        if hasattr(user_response, 'user') and user_response.user:
+                            user_id = user_response.user.id
+                            logger.info(f"DATABASE DEBUG: Got user_id from auth.get_user().user.id: {user_id}")
+                        elif hasattr(user_response, 'data') and hasattr(user_response.data, 'user') and user_response.data.user:
+                            user_id = user_response.data.user.id
+                            logger.info(f"DATABASE DEBUG: Got user_id from auth.get_user().data.user.id: {user_id}")
+                    except Exception as alt_e:
+                        logger.warning(f"DATABASE DEBUG: Alternative user extraction failed: {alt_e}")
+            except Exception as e:
+                logger.error(f"DATABASE DEBUG: Error during user extraction: {e}")
             
             if user_id:
                 # Filter by user_id
+                original_count = len(result_data)
+                original_sessions = result_data[:]  # Store original sessions before filtering
                 result_data = [session for session in result_data if session.get('user_id') == user_id]
                 logger.info(f"DATABASE DEBUG: Filtering sessions by user_id: {user_id}")
+                logger.info(f"DATABASE DEBUG: Filtered from {original_count} to {len(result_data)} sessions")
+                
+                # Debug: Show some session user_ids for comparison
+                if len(result_data) == 0 and original_count > 0:
+                    logger.warning("DATABASE DEBUG: No sessions matched user_id filter!")
+                    # Show what user_ids exist in the original sessions for debugging
+                    sample_user_ids = set(session.get('user_id') for session in original_sessions[:5])  # First 5 sessions
+                    logger.warning(f"DATABASE DEBUG: Sample session user_ids: {sample_user_ids}")
+                    logger.warning(f"DATABASE DEBUG: Current user_id: {user_id}")
+                    logger.warning("DATABASE DEBUG: This suggests either authentication issue or user_id mismatch")
             else:
-                logger.warning("get_sessions: user_only=True but could not get user ID from main client")
-                return [], "Could not determine user ID"
+                logger.error("get_sessions: user_only=True but could not get user ID from any method")
+                logger.error("DATABASE DEBUG: All user extraction methods failed:")
+                logger.error(f"DATABASE DEBUG: main_supabase.get_user() returned: {main_supabase.get_user()}")
+                try:
+                    session = main_supabase.client.auth.get_session()
+                    logger.error(f"DATABASE DEBUG: main_supabase.client.auth.get_session() returned: {session}")
+                except Exception as session_e:
+                    logger.error(f"DATABASE DEBUG: get_session() failed with: {session_e}")
+                return [], "Could not determine user ID - authentication may have expired"
         else:
             logger.info("DATABASE DEBUG: Not filtering by user - getting all sessions")
                 
@@ -502,8 +547,14 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
         if result_data:
             for session in result_data:
                 session_id = session.get('id')
-                logger.info(f"DATABASE DEBUG: Session {session_id} - {session.get('created_at')} - {session.get('cars', {}).get('name', 'Unknown')} at {session.get('tracks', {}).get('name', 'Unknown')}")
                 
+                # Keep the nested structure for UI components that expect it,
+                # but also provide flattened names for convenience.
+                if 'tracks' not in session:
+                    session['tracks'] = {}
+                if 'cars' not in session:
+                    session['cars'] = {}
+
                 session['track_name'] = session.get('tracks', {}).get('name', 'Unknown Track') if session.get('tracks') else 'Unknown Track'
                 session['car_name'] = session.get('cars', {}).get('name', 'Unknown Car') if session.get('cars') else 'Unknown Car'
                 
@@ -511,18 +562,12 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
                 track_length = session.get('tracks', {}).get('length_meters', None) if session.get('tracks') else None
                 if track_length:
                     session['track_length'] = track_length
-                    logger.info(f"DATABASE DEBUG: Session {session_id} track length: {track_length}m")
-                else:
-                    logger.warning(f"DATABASE DEBUG: No track length found for session {session_id}")
                 
-                # Remove nested structures if they exist
-                session.pop('tracks', None)
-                session.pop('cars', None)
                 processed_data.append(session)
 
         return processed_data, "Sessions retrieved successfully"
     except Exception as e:
-        logger.error(f"Error in get_sessions: {e}")
+        logger.error(f"Error in get_sessions: {e}", exc_info=True)
         return None, f"Failed to retrieve sessions: {e}"
 # --- End get_sessions function ---
 
@@ -798,7 +843,12 @@ def _execute_super_lap_telemetry_query(client, super_lap_id: str, columns: Optio
         
         # Handle array-based sector combination
         if isinstance(sector_combination, list) and len(sector_combination) > 0:
-            return _get_sector_telemetry_using_working_method(client, sector_combination, columns)
+            result, message = _get_sector_telemetry_using_working_method(client, sector_combination, columns)
+            if result is None:
+                # Sector reconstruction failed - try fallback
+                logger.warning(f"🚨 SUPERLAP DEBUG: Sector reconstruction failed ({message}), trying fallback method")
+                return _get_fallback_telemetry_for_superlap(client, super_lap, columns)
+            return result, message
         
         # Handle time-based format - use fallback
         elif isinstance(sector_combination, dict):
@@ -813,65 +863,174 @@ def _execute_super_lap_telemetry_query(client, super_lap_id: str, columns: Optio
 
 
 def _get_sector_telemetry_using_working_method(client, sector_combination, columns: Optional[list[str]] = None):
-    """Get telemetry for each sector using the EXACT same method as the working _execute_telemetry_query."""
-    all_points = []
-    page_size = 1000  # Same as working function
+    """Get telemetry for each sector and rebuild a continuous lap by recalculating time and distance."""
+    reconstructed_points = []
+    page_size = 1000
+    
+    # Keep track of the total time and distance of the reconstructed lap
+    total_lap_time = 0.0
+    total_lap_distance = 0.0
+    
+    # Store sector data for proper distance normalization
+    all_sector_data = []
     
     try:
         sel = "*" if columns is None else ",".join(columns)
         
-        print(f"Reconstructing telemetry from {len(sector_combination)} sectors")
+        # Debug: Log sector combination details
+        logger.info(f"🔍 SUPERLAP DEBUG: Processing sector combination with {len(sector_combination)} sectors")
+        for i, sector_ref in enumerate(sector_combination):
+            logger.info(f"  Sector {i+1}: lap_id={sector_ref.get('lap_id')}, sector_number={sector_ref.get('sector_number')}")
         
-        # Process each sector using the EXACT same pagination approach as working function
+        # First pass: Collect all sector data without modifying distances
         for i, sector_ref in enumerate(sector_combination):
             lap_id = sector_ref.get('lap_id')
             sector_number = sector_ref.get('sector_number')
             
             if not lap_id or not sector_number:
-                print(f"Warning: Invalid sector reference at index {i}: {sector_ref}")
+                logger.warning(f"🚨 SUPERLAP DEBUG: Skipping invalid sector {i+1} - missing lap_id or sector_number")
                 continue
             
-            # Use EXACT same pagination pattern as _execute_telemetry_query
+            logger.info(f"🔍 SUPERLAP DEBUG: Processing sector {sector_number} from lap {lap_id}")
+            
+            # First check if the lap exists
+            lap_check = client.table("laps").select("id").eq("id", lap_id).limit(1).execute()
+            if not lap_check.data:
+                logger.error(f"❌ SUPERLAP DEBUG: Lap {lap_id} does not exist in database - skipping sector {sector_number}")
+                continue
+            
+            # Fetch all telemetry points for the current source sector
             current_offset = 0
             sector_points = []
-            
             while True:
                 query = (
                     client.table("telemetry_points")
                     .select(sel)
                     .eq("lap_id", lap_id)
-                    .eq("current_sector", sector_number)  # Add sector filter
-                    .order("track_position")  # Same ordering as working function
-                    .range(current_offset, current_offset + page_size - 1)  # Same pagination
+                    .eq("current_sector", sector_number)
+                    .order("track_position")
+                    .range(current_offset, current_offset + page_size - 1)
                 )
-                
                 result = query.execute()
 
                 if result.data:
                     sector_points.extend(result.data)
                     if len(result.data) < page_size:
-                        # Last page fetched
                         break
                     current_offset += len(result.data)
                 else:
-                    # No more data
                     break
             
             if sector_points:
-                print(f"  Sector {sector_number}: {len(sector_points)} points")
-                all_points.extend(sector_points)
+                logger.info(f"✅ SUPERLAP DEBUG: Found {len(sector_points)} telemetry points for sector {sector_number}")
+                
+                # Store sector data with metadata for normalization
+                sector_data = {
+                    'sector_number': sector_number,
+                    'points': sector_points,
+                    'start_time': sector_points[0].get('current_time', 0.0),
+                    'end_time': sector_points[-1].get('current_time', 0.0),
+                    'start_distance': sector_points[0].get('track_position', 0.0),
+                    'end_distance': sector_points[-1].get('track_position', 0.0)
+                }
+                all_sector_data.append(sector_data)
+                
+                logger.info(f"📊 SUPERLAP DEBUG: Sector {sector_number} spans time {sector_data['start_time']:.3f}s to {sector_data['end_time']:.3f}s, distance {sector_data['start_distance']:.1f}m to {sector_data['end_distance']:.1f}m")
             else:
-                print(f"  Sector {sector_number}: No points found")
+                logger.error(f"❌ SUPERLAP DEBUG: No telemetry points found for sector {sector_number} from lap {lap_id}")
+
+        if not all_sector_data:
+            logger.warning("🚨 SUPERLAP DEBUG: No valid sector data found")
+            return None, "SuperLap telemetry reconstruction failed - no valid sector data"
         
-        if all_points:
-            # Sort by track position to ensure proper order across sectors
-            all_points.sort(key=lambda p: p.get('track_position', 0))
-            print(f"Successfully reconstructed {len(all_points)} telemetry points")
-            return all_points, f"Retrieved {len(all_points)} SuperLap telemetry points"
+        # Get track length for proper scaling
+        track_length = None
+        if all_sector_data:
+            # Try to get track length from one of the sector's session
+            first_sector = all_sector_data[0]
+            if first_sector['points']:
+                try:
+                    # Try to get the session to find track length
+                    sample_point = first_sector['points'][0]
+                    if 'lap_id' in sample_point:
+                        lap_query = client.table("laps").select("session_id").eq("id", sample_point['lap_id']).limit(1).execute()
+                        if lap_query.data:
+                            session_id = lap_query.data[0]['session_id']
+                            session_query = client.table("sessions").select("tracks(length_meters)").eq("id", session_id).limit(1).execute()
+                            if session_query.data and session_query.data[0].get('tracks'):
+                                track_length = session_query.data[0]['tracks'].get('length_meters')
+                                logger.info(f"🏁 SUPERLAP DEBUG: Retrieved track length: {track_length}m")
+                except Exception as e:
+                    logger.warning(f"Could not retrieve track length: {e}")
+        
+        # Calculate original distance span of all sectors
+        min_original_distance = min(sector['start_distance'] for sector in all_sector_data)
+        max_original_distance = max(sector['end_distance'] for sector in all_sector_data)
+        original_distance_span = max_original_distance - min_original_distance
+        
+        logger.info(f"🔍 SUPERLAP DEBUG: Original distance span: {min_original_distance:.1f}m to {max_original_distance:.1f}m (span: {original_distance_span:.1f}m)")
+        
+        # If we have track length, use it for scaling, otherwise use the original span
+        target_track_length = track_length if track_length and track_length > 0 else original_distance_span
+        
+        # Calculate scaling factor to ensure superlap spans full track length
+        if original_distance_span > 0:
+            distance_scale_factor = target_track_length / original_distance_span
         else:
-            return None, "No telemetry points could be reconstructed from any sector"
+            distance_scale_factor = 1.0
+            
+        logger.info(f"🔧 SUPERLAP DEBUG: Using track length {target_track_length}m with scale factor {distance_scale_factor:.3f}")
+        
+        # Second pass: Build the reconstructed lap with proper scaling
+        for i, sector_data in enumerate(all_sector_data):
+            sector_number = sector_data['sector_number']
+            sector_points = sector_data['points']
+            
+            # Calculate time offset for this sector
+            sector_start_time = sector_data['start_time']
+            sector_duration = sector_data['end_time'] - sector_start_time
+            
+            # Calculate distance offset and scaling for this sector
+            sector_start_distance = sector_data['start_distance']
+            
+            # Process each point with proper scaling
+            for point in sector_points:
+                # Time calculation (incremental as before)
+                time_in_sector = point.get('current_time', 0.0) - sector_start_time
+                new_time = total_lap_time + time_in_sector
+                
+                # Distance calculation with proper scaling
+                original_distance_in_sector = point.get('track_position', 0.0) - sector_start_distance
+                # Normalize to 0-based distance for this point relative to the whole superlap
+                normalized_distance_from_start = (point.get('track_position', 0.0) - min_original_distance) * distance_scale_factor
+                
+                # Create new point with scaled values
+                new_point = point.copy()
+                new_point['current_time'] = new_time
+                new_point['track_position'] = normalized_distance_from_start
+                reconstructed_points.append(new_point)
+            
+            # Update totals
+            total_lap_time += sector_duration
+            
+            logger.info(f"✅ SUPERLAP DEBUG: Sector {sector_number} processed. Duration: {sector_duration:.3f}s")
+        
+        # Calculate final distance span
+        if reconstructed_points:
+            final_min_distance = min(p['track_position'] for p in reconstructed_points)
+            final_max_distance = max(p['track_position'] for p in reconstructed_points)
+            final_distance_span = final_max_distance - final_min_distance
+            
+            logger.info(f"🏁 SUPERLAP DEBUG: Reconstruction complete. Total points: {len(reconstructed_points)}, Final time: {total_lap_time:.3f}s")
+            logger.info(f"🏁 SUPERLAP DEBUG: Final distance span: {final_min_distance:.1f}m to {final_max_distance:.1f}m (span: {final_distance_span:.1f}m)")
+            
+            return reconstructed_points, f"Retrieved {len(reconstructed_points)} SuperLap telemetry points spanning {final_distance_span:.1f}m"
+        else:
+            logger.warning("🚨 SUPERLAP DEBUG: No telemetry points could be reconstructed")
+            return None, "SuperLap telemetry reconstruction failed - no points generated"
             
     except Exception as e:
+        logger.error(f"Error reconstructing SuperLap telemetry: {e}", exc_info=True)
         return None, f"Failed to retrieve SuperLap telemetry due to an exception: {str(e)}"
 
 

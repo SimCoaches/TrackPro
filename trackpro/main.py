@@ -1463,13 +1463,23 @@ def main():
 
     # --- Exception Handling ---
     try:
-        # Set application details (optional but good practice)
+        # Set application details
         QApplication.setApplicationName("TrackPro")
-        # TODO: Read version from a central place (e.g., __init__.py or config file)
-        QApplication.setApplicationVersion("1.5.0")
+        QApplication.setApplicationVersion("1.5.1")
+        QApplication.setOrganizationName("Sim Coaches")
+        QApplication.setOrganizationDomain("simcoaches.com")
 
         # Initialize and run the application
         trackpro_app = TrackProApp(test_mode=test_mode, start_time=start_time)
+        
+        # Force an immediate curve refresh to replace "Loading..." placeholders
+        if hasattr(trackpro_app, 'window') and trackpro_app.window:
+            try:
+                trackpro_app.window.refresh_curve_lists()
+                logger.info("Forced immediate curve list refresh after initialization")
+            except Exception as e:
+                logger.warning(f"Error during immediate curve refresh: {e}")
+        
         trackpro_app.run()
 
     except Exception as e:

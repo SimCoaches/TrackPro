@@ -257,11 +257,6 @@ Section "Prerequisites"
         ; Extract main executable using relative path
         File "installer_temp\dist\TrackPro_v{version}.exe"
         
-        ; Extract diagnostic tool if available
-        ${{If}} ${{FileExists}} "diagnose_trackpro.py"
-            File "diagnose_trackpro.py"
-        ${{EndIf}}
-        
         ; Verify the file was extracted correctly
         ${{IfNot}} ${{FileExists}} "$TEMP\TrackPro\app\TrackPro_v{version}.exe"
             MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v{version}.exe to temporary directory!"
@@ -298,11 +293,6 @@ Section "Prerequisites"
         ClearErrors
         CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v{version}.exe" "$PROGRAMFILES64\TrackPro"
         
-        ; Copy diagnostic tool if available
-        ${{If}} ${{FileExists}} "$TEMP\TrackPro\app\diagnose_trackpro.py"
-            CopyFiles /SILENT "$TEMP\TrackPro\app\diagnose_trackpro.py" "$PROGRAMFILES64\TrackPro"
-        ${{EndIf}}
-        
         ; Check for copy errors
         ${{If}} ${{Errors}}
             MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v{version}.exe to installation directory! Please ensure you have administrator privileges and try again."
@@ -320,11 +310,6 @@ Section "Prerequisites"
         CreateDirectory "$SMPROGRAMS\TrackPro"
         CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
         CreateShortCut "$DESKTOP\TrackPro v{version}.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
-        
-        ; Create diagnostic tool shortcut if available
-        ${{If}} ${{FileExists}} "$PROGRAMFILES64\TrackPro\diagnose_trackpro.py"
-            CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro Diagnostic Tool.lnk" "$WINDIR\system32\cmd.exe" '/c cd /d "$PROGRAMFILES64\TrackPro" && python diagnose_trackpro.py && pause' "$WINDIR\system32\cmd.exe"
-        ${{EndIf}}
         
         DetailPrint "TrackPro installation complete"
 
@@ -1088,12 +1073,6 @@ SectionEnd
                     print("✓ Created minimal race_coach.db as fallback")
                 except Exception as e2:
                     print(f"✗ Failed to create minimal race_coach.db: {e2}")
-        
-        # Check if diagnostic tool exists
-        if os.path.exists("diagnose_trackpro.py"):
-            print("✓ Diagnostic tool found")
-        else:
-            print("⚠ Warning: diagnose_trackpro.py not found - users won't have diagnostic capability")
         
         # Now check the prerequisites directory
         print("\nChecking prerequisites directory...")

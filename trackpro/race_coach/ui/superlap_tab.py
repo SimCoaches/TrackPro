@@ -15,6 +15,14 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 from PyQt5.QtGui import QFont, QColor, QPixmap
 import os
 
+# Import the new function
+from Supabase.database import get_sessions
+
+# Import for AI coaching type hints
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ..utils.telemetry_worker import TelemetryMonitorWorker
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,24 +41,23 @@ class SuperLapSessionWorker(QObject):
     def run(self):
         """Load sessions with ML data available."""
         try:
+            # We will use get_sessions instead of a direct call
             from trackpro.database.supabase_client import supabase as main_supabase
             
             if not main_supabase or not main_supabase.is_authenticated():
                 self.error.emit("Authentication required")
                 self.finished.emit()
                 return
+
+            # Use the get_sessions function to fetch only the user's sessions
+            user_sessions, msg = get_sessions(limit=100, user_only=True)
+
+            if user_sessions is None:
+                self.error.emit(msg or "Failed to load sessions.")
+                self.finished.emit()
+                return
             
-            # Get user sessions with car/track info
-            # CRITICAL FIX: Include track length_meters in the query
-            sessions_result = (
-                main_supabase.client.table("sessions")
-                .select("id,car_id,track_id,created_at,cars(name),tracks(name, length_meters)")
-                .order("created_at", desc=True)
-                .limit(100)
-                .execute()
-            )
-            
-            if not sessions_result.data:
+            if not user_sessions:
                 self.sessions_loaded.emit([])
                 self.finished.emit()
                 return
@@ -58,7 +65,7 @@ class SuperLapSessionWorker(QObject):
             # Filter sessions that have matching ML data available
             valid_sessions = []
             
-            for session in sessions_result.data:
+            for session in user_sessions:
                 if self.is_cancelled:
                     return
                     
@@ -80,9 +87,8 @@ class SuperLapSessionWorker(QObject):
                         if super_lap_check.data:  # SuperLap data exists for this car/track
                             valid_sessions.append(session)
                     except Exception as super_lap_error:
-                        print(f"Error checking SuperLap data for session {session.get('id')}: {super_lap_error}")
-                        # Include session anyway for now during development
-                        valid_sessions.append(session)
+                        # In case of error, we can log it but shouldn't add the session
+                        logger.error(f"Error checking SuperLap data for session {session.get('id')}: {super_lap_error}")
                         continue
             
             # Sort sessions by date (newest first) and limit
@@ -419,6 +425,7 @@ class SuperLapWidget(QWidget):
         self.current_user_lap = None
         self.current_ml_lap = None
         self.current_session_info = None
+        self.telemetry_monitor: TelemetryMonitorWorker = None
         
         # Track active threads for cleanup
         self.active_threads = []
@@ -446,29 +453,17 @@ class SuperLapWidget(QWidget):
         header_layout.setSpacing(0)
         header_layout.setContentsMargins(3, 3, 3, 3)
         
-        # Logo
-        logo_label = QLabel()
-        logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'resources', 'images', 'superlap_logo.png')
-        
-        if os.path.exists(logo_path):
-            pixmap = QPixmap(logo_path)
-            # Scale to banner-friendly size that maintains aspect ratio
-            scaled_pixmap = pixmap.scaled(800, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_label.setPixmap(scaled_pixmap)
-        else:
-            # Fallback to text if logo file not found
-            logo_label.setText("SUPERLAP ANALYSIS")
-            logo_label.setStyleSheet("""
-                color: #FF4500;
-                background-color: transparent;
-                font-size: 24px;
-                font-weight: bold;
-                margin-bottom: 2px;
-            """)
-        
-        logo_label.setAlignment(Qt.AlignCenter)
-        logo_label.setStyleSheet("background-color: transparent; margin: 0px; padding: 0px;")
-        header_layout.addWidget(logo_label)
+        # Header title (logo now in tab title)
+        title_label = QLabel("AI-POWERED LAP ANALYSIS")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("""
+            color: #FF4500;
+            background-color: transparent;
+            font-size: 18px;
+            font-weight: bold;
+            margin: 5px;
+        """)
+        header_layout.addWidget(title_label)
         
         # Remove session context to save space - info is already in the session dropdown
         
@@ -513,7 +508,7 @@ class SuperLapWidget(QWidget):
                 border-top: 5px solid #aaa;
             }
         """)
-        self.session_combo.currentTextChanged.connect(self.on_session_changed)
+        self.session_combo.currentIndexChanged.connect(self.on_session_changed)
         session_row.addWidget(self.session_combo, 1)
         
         # Refresh button
@@ -541,6 +536,14 @@ class SuperLapWidget(QWidget):
         self.reset_connection_button.setStyleSheet("padding: 5px 10px; background-color: #444; color: #FFA500;")
         self.reset_connection_button.clicked.connect(self._reset_iracing_connection)
         session_row.addWidget(self.reset_connection_button)
+        
+        # Add AI Coaching button
+        self.coach_button = QPushButton("🎙️ Start AI Coach")
+        self.coach_button.setToolTip("Start real-time AI coaching for the selected SuperLap")
+        self.coach_button.setStyleSheet("padding: 5px 10px; background-color: #0055A4; color: white; font-weight: bold;")
+        self.coach_button.setCheckable(True)
+        self.coach_button.clicked.connect(self.toggle_ai_coaching)
+        session_row.addWidget(self.coach_button)
         
         # Add SuperLap diagnostic button
         self.diagnostic_button = QPushButton("🔍 Diagnose")
@@ -1196,6 +1199,11 @@ class SuperLapWidget(QWidget):
                     self.session_combo.addItem("No sessions found", None)
                 
                 self.session_combo.blockSignals(False)
+                
+                # BUGFIX: Manually trigger session change after auto-selecting first session
+                # This ensures laps are loaded for the auto-selected session
+                if sessions and self.session_combo.count() > 0:
+                    self.on_session_changed()
                     
             logger.info(f"Loaded {len(sessions) if sessions else 0} sessions")
             
@@ -1630,14 +1638,19 @@ class SuperLapWidget(QWidget):
                     
                     # Critical mapping: Convert database field names to graph widget expectations
                     if 'track_position' in mapped_point:
-                        # Convert track_position to actual distance in meters
                         track_pos = mapped_point['track_position']
-                        if 0 <= track_pos <= 1:
-                            # Normalized position, convert to actual distance
+                        
+                        # SUPERLAP FIX: After the database fix, superlap data is now always in actual meters
+                        # Check if this looks like normalized data (0-1 range) vs actual distance
+                        # For superlap data, we expect it to be in meters after the fix
+                        if track_pos <= 1.0 and all(p.get('track_position', 0) <= 1.0 for p in super_lap_data['points'][:10]):
+                            # This appears to be normalized data (0-1), convert to actual distance
                             mapped_point['LapDist'] = track_pos * track_length
+                            logger.debug("SuperLap: Converting normalized position to meters")
                         else:
-                            # Already in meters
+                            # This is already in meters (expected after the database fix)
                             mapped_point['LapDist'] = track_pos
+                            logger.debug("SuperLap: Using position data already in meters")
                     
                     # Ensure all required fields exist with defaults and correct capitalization
                     mapped_point.setdefault('LapDist', 0)
@@ -1671,24 +1684,31 @@ class SuperLapWidget(QWidget):
                 
                 super_lap_data_mapped = {'points': mapped_points}
                 logger.info(f"Mapped {len(mapped_points)} points for super lap")
+                
+                # Log distance range for verification
+                if mapped_points:
+                    distances = [p.get('LapDist', 0) for p in mapped_points]
+                    min_dist = min(distances)
+                    max_dist = max(distances)
+                    logger.info(f"SuperLap distance range: {min_dist:.1f}m to {max_dist:.1f}m (span: {max_dist - min_dist:.1f}m)")
             
-            # Update graphs with properly mapped data
+            # Update graphs with properly mapped data and SuperLap-specific labels
             if user_lap_data and super_lap_data_mapped:
                 # Update speed graph
                 if hasattr(self, 'speed_graph'):
-                    self.speed_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                    self.speed_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length, label_a="Your Lap", label_b="SuperLap")
                 
                 # Update throttle graph
                 if hasattr(self, 'throttle_graph'):
-                    self.throttle_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                    self.throttle_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length, label_a="Your Lap", label_b="SuperLap")
                 
                 # Update brake graph
                 if hasattr(self, 'brake_graph'):
-                    self.brake_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                    self.brake_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length, label_a="Your Lap", label_b="SuperLap")
                 
                 # Update steering graph
                 if hasattr(self, 'steering_graph'):
-                    self.steering_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length)
+                    self.steering_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length, label_a="Your Lap", label_b="SuperLap")
                 
         except Exception as e:
             logger.error(f"Error updating graphs with comparison data: {e}")
@@ -2018,3 +2038,45 @@ class SuperLapWidget(QWidget):
                 thread.wait(1000)  # Wait up to 1 second
         
         self.active_threads.clear() 
+
+    def set_telemetry_monitor(self, monitor: 'TelemetryMonitorWorker'):
+        """Sets the telemetry monitor instance for the widget."""
+        self.telemetry_monitor = monitor
+        logger.info("Telemetry monitor instance set in SuperLapWidget.")
+
+    def toggle_ai_coaching(self, checked):
+        """Starts or stops the AI coaching session."""
+        if not self.telemetry_monitor:
+            logger.error("Cannot start coaching: Telemetry monitor is not available.")
+            self.coach_button.setChecked(False)
+            return
+
+        if checked:
+            if not self.current_ml_lap:
+                logger.warning("No SuperLap selected. Cannot start coaching.")
+                QMessageBox.warning(self, "No SuperLap", "Please select a SuperLap before starting the AI coach.")
+                self.coach_button.setChecked(False)
+                return
+
+            superlap_id = self.current_ml_lap.get('id')
+            if not superlap_id:
+                logger.error("Selected SuperLap has no ID. Cannot start coaching.")
+                self.coach_button.setChecked(False)
+                return
+            
+            logger.info(f"Starting AI coaching with superlap_id: {superlap_id}")
+            try:
+                self.telemetry_monitor.ai_coach = AICoach(superlap_id=superlap_id)
+                self.telemetry_monitor.start_monitoring()
+                self.coach_button.setText("🛑 Stop AI Coach")
+                self.coach_button.setStyleSheet("padding: 5px 10px; background-color: #D22B2B; color: white; font-weight: bold;")
+            except Exception as e:
+                logger.error(f"Failed to start AI Coach: {e}", exc_info=True)
+                QMessageBox.critical(self, "Error", f"Failed to start AI Coach: {e}")
+                self.coach_button.setChecked(False)
+        else:
+            logger.info("Stopping AI coaching.")
+            self.telemetry_monitor.stop_monitoring()
+            self.telemetry_monitor.ai_coach = None
+            self.coach_button.setText("🎙️ Start AI Coach")
+            self.coach_button.setStyleSheet("padding: 5px 10px; background-color: #0055A4; color: white; font-weight: bold;")
