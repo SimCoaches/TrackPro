@@ -19,7 +19,7 @@ MANIFEST
 
 # PyInstaller
 *.manifest
-*.spec
+# *.spec  # Commented out - trackpro.spec needed for builds
 
 # Installer logs
 pip-log.txt
@@ -67,7 +67,8 @@ installer_temp/
 TrackPro_Setup_v*.exe
 TrackPro_v*.exe
 installer.nsi
-trackpro.manifest "dist/" 
+# trackpro.manifest already excluded above
+"dist/" 
 
 # Environment variables and secrets
 .env
