@@ -595,6 +595,10 @@ SectionEnd
             print("✗ Failed to verify or download prerequisites")
             sys.exit(1)
         
+        # Create manifest file
+        print("\nCreating manifest file...")
+        self.create_manifest()
+        
         # Build main executable
         print("\nBuilding main application...")
         self.build_exe()
