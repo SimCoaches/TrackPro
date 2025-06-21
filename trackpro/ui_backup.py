@@ -9,7 +9,7 @@ import math
 from typing import Optional, Any
 
 # Version information - hardcoded to avoid cyclic imports
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
@@ -807,7 +807,7 @@ class MainWindow(QMainWindow):
         # Main window setup with menu bar buttons - increased minimum size to prevent overlapping
         self.window_width = 1200
         self.window_height = 800
-        self.setWindowTitle("TrackPro Configuration v1.5.1")
+        self.setWindowTitle("TrackPro Configuration v1.5.2")
         self.setMinimumSize(1200, 850)  # Increased from 1000x700 to prevent overlapping
         self.setWindowIcon(QIcon(":/icons/trackpro_tray.ico"))
 
@@ -4315,7 +4315,7 @@ class MainWindow(QMainWindow):
         from PyQt5.QtCore import QCoreApplication
         
         about_text = f"""
-        <h2>TrackPro v1.5.1</h2>
+                        <h2>TrackPro v1.5.2</h2>
         <p><i>Your ultimate iRacing companion for real-time race coaching, 
         pedal calibration, and community features.</i></p>
         <p>Advanced racing telemetry and pedal calibration system</p>

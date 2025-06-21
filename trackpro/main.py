@@ -660,8 +660,19 @@ class TrackProApp:
         points = self.window.get_calibration_points(pedal)
         curve_type = self.window.get_curve_type(pedal)
         
-        # Convert QPointF objects to tuples of percentages (0-100 scale)
-        point_tuples = [(p.x(), p.y()) for p in points]
+        # Convert points to tuples of percentages (0-100 scale)
+        # Handle both QPointF objects and tuples for compatibility
+        point_tuples = []
+        for p in points:
+            if hasattr(p, 'x') and hasattr(p, 'y'):
+                # QPointF object
+                point_tuples.append((p.x(), p.y()))
+            elif isinstance(p, (tuple, list)) and len(p) >= 2:
+                # Already a tuple/list
+                point_tuples.append((float(p[0]), float(p[1])))
+            else:
+                logger.warning(f"Unknown point format: {type(p)} - {p}")
+                # Skip invalid points
         
         # Update hardware calibration
         self.hardware.calibration[pedal] = {
@@ -1465,7 +1476,7 @@ def main():
     try:
         # Set application details
         QApplication.setApplicationName("TrackPro")
-        QApplication.setApplicationVersion("1.5.1")
+        QApplication.setApplicationVersion("1.5.2")
         QApplication.setOrganizationName("Sim Coaches")
         QApplication.setOrganizationDomain("simcoaches.com")
 

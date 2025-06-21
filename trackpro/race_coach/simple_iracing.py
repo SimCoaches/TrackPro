@@ -5,7 +5,8 @@ import math
 import threading
 from pathlib import Path
 from .telemetry_saver import TelemetrySaver
-from .integrate_simple_timing import SimpleSectorTimingIntegration
+# from .integrate_simple_timing import SimpleSectorTimingIntegration  # REMOVED: Use main sector timing instead
+from .sector_timing import SectorTimingCollector
 from PyQt5.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
@@ -45,17 +46,9 @@ class SimpleIRacingAPI(QObject):
         # Add lap saver reference
         self.lap_saver = None
         
-        # Initialize simple sector timing integration
-        self.sector_timing = SimpleSectorTimingIntegration()
-        
-        # Initialize sector timing from data.txt
-        try:
-            if self.sector_timing.initialize_from_data_txt("data.txt"):
-                logger.info("✅ Simple sector timing initialized from data.txt")
-            else:
-                logger.warning("⚠️ Failed to initialize simple sector timing from data.txt")
-        except Exception as e:
-            logger.error(f"❌ Error initializing simple sector timing: {e}")
+        # Initialize main sector timing (replaces deleted simple integration)
+        self.sector_timing = SectorTimingCollector()
+        logger.info("✅ Main sector timing initialized")
         
         # Telemetry rate tracking
         self._telemetry_count = 0

@@ -1,6 +1,6 @@
 """TrackPro - Advanced Pedal Input Mapping Software"""
 
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 __author__ = "Sim Coaches"
 __license__ = "Proprietary"
 __copyright__ = "Copyright 2025 Sim Coaches"
@@ -21,20 +21,8 @@ logging.basicConfig(
 )
 
 # Import main components
-# Import MainWindow directly from ui.py file to avoid conflict with ui/ directory
-import sys
-import os
-import importlib.util
-
-# Get the path to the ui.py file and import it directly
-ui_file_path = os.path.join(os.path.dirname(__file__), 'ui.py')
-spec = importlib.util.spec_from_file_location("trackpro.ui", ui_file_path)
-ui_module = importlib.util.module_from_spec(spec)
-
-# Add the trackpro package to sys.modules so relative imports work
-sys.modules['trackpro.ui'] = ui_module
-spec.loader.exec_module(ui_module)
-MainWindow = ui_module.MainWindow
+# Import MainWindow from the new ui module structure
+from .ui import MainWindow
 from .pedals.hardware_input import HardwareInput
 from .pedals.output import VirtualJoystick
 # Import race_coach module for the Race Coach feature

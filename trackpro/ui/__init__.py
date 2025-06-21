@@ -1,27 +1,51 @@
-"""
-TrackPro UI Package
-Contains all user interface components for the TrackPro application.
-"""
+"""UI module for TrackPro - reorganized into separate components."""
 
-# Import main UI components
-# Don't import MainWindow here to avoid conflicts
-# Let the main trackpro/__init__.py handle the import directly
-MainWindow = None
+# Import the main window class
+from .main_window import MainWindow
+
+# Import chart widgets
+from .chart_widgets import DraggableChartView, IntegratedCalibrationChart
+
+# Import auth dialogs
+from .auth_dialogs import PasswordDialog
+
+# Import shared constants - avoid community functions that may not exist
+from .shared_imports import __version__, DEFAULT_CURVE_TYPES
+
+# Try to import community functions if available
 try:
-    from .main_community_ui import (
-        CommunityIntegrationDialog,
-        CommunityMainInterface,
-        open_community_dialog,
-        open_social_features,
-        open_community_features,
-        open_content_management,
-        open_achievements,
-        open_account_settings
+    from .shared_imports import (
+        COMMUNITY_UI_AVAILABLE, open_community_dialog, create_community_menu_action,
+        open_social_features, open_community_features, 
+        open_content_management, open_achievements, open_account_settings
     )
 except ImportError:
-    # Graceful fallback if community UI is not available
-    pass
+    # Fallback if community functions are not available
+    COMMUNITY_UI_AVAILABLE = False
+    def open_community_dialog(*args, **kwargs):
+        pass
+    def create_community_menu_action(*args, **kwargs):
+        return None
+    def open_social_features(*args, **kwargs):
+        pass
+    def open_community_features(*args, **kwargs):
+        pass
+    def open_content_management(*args, **kwargs):
+        pass
+    def open_achievements(*args, **kwargs):
+        pass
+    def open_account_settings(*args, **kwargs):
+        pass
 
+# Import theme and utility functions
+from .theme import setup_dark_theme
+from .menu_bar import create_menu_bar, force_refresh_login_state  
+from .system_tray import (
+    setup_system_tray, tray_icon_activated, show_from_tray,
+    toggle_minimize_to_tray, exit_application
+)
+
+# Import community UI components if available
 try:
     from .community_ui import (
         CommunityMainWidget,
@@ -31,7 +55,12 @@ try:
         EventCard
     )
 except ImportError:
-    pass
+    # Graceful fallback if community UI is not available
+    CommunityMainWidget = None
+    CommunityTheme = None
+    TeamCard = None
+    ClubCard = None
+    EventCard = None
 
 try:
     from .content_management_ui import (
@@ -40,7 +69,9 @@ try:
         ContentBrowserWidget
     )
 except ImportError:
-    pass
+    ContentManagementMainWidget = None
+    ContentCard = None
+    ContentBrowserWidget = None
 
 try:
     from .social_ui import (
@@ -48,7 +79,8 @@ try:
         SocialTheme
     )
 except ImportError:
-    pass
+    SocialMainWidget = None
+    SocialTheme = None
 
 try:
     from .achievements_ui import (
@@ -56,7 +88,8 @@ try:
         AchievementCard
     )
 except ImportError:
-    pass
+    GamificationMainWidget = None
+    AchievementCard = None
 
 try:
     from .user_account_ui import (
@@ -64,14 +97,46 @@ try:
         ProfileEditDialog
     )
 except ImportError:
-    pass
+    UserAccountMainWidget = None
+    ProfileEditDialog = None
 
-# Threshold assist panel removed
-
+# Export all the public API
 __all__ = [
+    # Main window
     'MainWindow',
-    'CommunityIntegrationDialog',
-    'CommunityMainInterface',
+    
+    # Chart widgets
+    'DraggableChartView',
+    'IntegratedCalibrationChart', 
+    
+    # Auth dialogs
+    'PasswordDialog',
+    
+    # Constants
+    '__version__',
+    'DEFAULT_CURVE_TYPES',
+    'COMMUNITY_UI_AVAILABLE',
+    
+    # Community functions
+    'open_community_dialog',
+    'create_community_menu_action',
+    'open_social_features',
+    'open_community_features',
+    'open_content_management', 
+    'open_achievements',
+    'open_account_settings',
+    
+    # Utility functions
+    'setup_dark_theme',
+    'create_menu_bar',
+    'force_refresh_login_state',
+    'setup_system_tray',
+    'tray_icon_activated',
+    'show_from_tray',
+    'toggle_minimize_to_tray',
+    'exit_application',
+    
+    # Community UI components (may be None if not available)
     'CommunityMainWidget',
     'CommunityTheme',
     'TeamCard',
@@ -85,11 +150,5 @@ __all__ = [
     'GamificationMainWidget',
     'AchievementCard',
     'UserAccountMainWidget',
-    'ProfileEditDialog',
-    'open_community_dialog',
-    'open_social_features',
-    'open_community_features',
-    'open_content_management',
-    'open_achievements',
-    'open_account_settings'
+    'ProfileEditDialog'
 ] 
