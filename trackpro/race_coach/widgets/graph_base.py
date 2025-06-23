@@ -165,19 +165,30 @@ class GraphBase(QWidget):
         # Ensure we have a reasonable number of points for interpolation
         distance_span = grid_end - grid_start
         if distance_span > 0:
-            # Use resolution that gives us 500-1000 points for good detail
-            effective_resolution = max(1.0, distance_span / 800)  # Aim for ~800 points
-            num_points = max(100, int(distance_span / effective_resolution) + 1)  # At least 100 points
+            # IMPORTANT: Don't artificially limit the resolution!
+            # Use the original data density or higher for best quality
+            original_data_density = len(raw_distances) / distance_span if distance_span > 0 else 60
+            
+            # Use at least the original density, but cap at reasonable maximum
+            target_density = max(original_data_density, 60)  # At least 60 points per meter (very high res)
+            target_density = min(target_density, 200)  # Cap at 200 points per meter to avoid memory issues
+            
+            num_points = int(distance_span * target_density)
+            num_points = max(num_points, len(raw_distances))  # Never reduce below original data count
+            num_points = min(num_points, 10000)  # Reasonable upper limit for performance
+            
+            effective_resolution = distance_span / num_points
         else:
             # Fallback for edge case
             grid_start = 0
             grid_end = track_length
-            num_points = 1000
-            effective_resolution = track_length / 1000
+            num_points = max(3000, len(raw_distances))  # Use original data count or 3000, whichever is higher
+            effective_resolution = track_length / num_points
             
         x_m = np.linspace(grid_start, grid_end, num_points)
         
-        logger.debug(f"Created distance grid: {len(x_m)} points from {grid_start:.1f}m to {grid_end:.1f}m (resolution: {effective_resolution:.2f}m)")
+        logger.info(f"📊 [GRAPH QUALITY] Created distance grid: {len(x_m)} points from {grid_start:.1f}m to {grid_end:.1f}m (resolution: {effective_resolution:.2f}m)")
+        logger.info(f"📊 [GRAPH QUALITY] Original data: {len(raw_distances)} points, Target density: {target_density:.1f} pts/m")
         
         # Preprocess and resample each channel
         resampled_data = {'x_m': x_m}
@@ -193,7 +204,16 @@ class GraphBase(QWidget):
             y_raw = np.array(raw_data[channel])
             
             # Remove NaN values for interpolation
-            valid_indices = ~np.isnan(y_raw)
+            # Handle different data types (especially gear which is integer)
+            if channel == 'Gear':
+                # For gear data, treat 0 or negative values as invalid, not NaN
+                # Convert to float array first to handle mixed types
+                y_raw_float = np.array([float(x) if x is not None else np.nan for x in y_raw])
+                valid_indices = (y_raw_float > 0) & (y_raw_float < 10) & ~np.isnan(y_raw_float)  # Valid gears 1-9
+                y_raw = y_raw_float  # Use the float version for processing
+            else:
+                # For float data, filter out NaN values
+                valid_indices = ~np.isnan(y_raw)
             if not np.any(valid_indices):
                 logger.warning(f"No valid data points for channel {channel}")
                 resampled_data[channel] = np.full_like(x_m, np.nan)
@@ -233,6 +253,8 @@ class GraphBase(QWidget):
                     # Use numpy's interp function for linear interpolation
                     # Only interpolate within the data range, extrapolate with boundary values
                     resampled_values = np.interp(x_m, x_valid, y_valid, left=y_valid[0], right=y_valid[-1])
+                    
+                    # Store the resampled values directly (smoothing removed for now)
                     resampled_data[channel] = resampled_values
                 
                 # Log resampled data ranges for debugging

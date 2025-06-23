@@ -1,364 +1,348 @@
-"""Data manager for the driver coaching overview.
+"""Coaching Data Manager - Provides performance analysis for racing engineer debriefs.
 
-This module handles fetching, analyzing, and presenting performance data
-for the coaching dashboard.
+This module handles fetching session data and calculating performance metrics 
+for the racing engineer's debrief room functionality.
 """
 
 import logging
+import sqlite3
 import statistics
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-import json
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
 
 class CoachingDataManager:
-    """Manages data analysis and insights for the coaching overview."""
+    """Manages coaching data for racing engineer debriefs and analysis."""
     
     def __init__(self, supabase_client=None, user_id=None):
         """Initialize the coaching data manager.
         
         Args:
-            supabase_client: The Supabase client for database access
-            user_id: The current user's ID
+            supabase_client: Optional Supabase client for cloud data
+            user_id: User ID for personalized data
         """
         self.supabase_client = supabase_client
         self.user_id = user_id
-        self.cache = {}
-        self.cache_timestamp = None
-        self.cache_duration = 300  # 5 minutes
+        self._local_db_path = "race_coach.db"
         
-    def get_session_summary(self, session_id: str = None) -> Dict:
-        """Get summary data for the current or specified session.
+    def get_session_summary(self) -> Dict[str, Any]:
+        """Get the most recent session summary for racing engineer analysis.
         
-        Args:
-            session_id: Session ID (if None, gets the most recent session)
-            
         Returns:
-            Dictionary with session summary data
+            Dictionary containing session data or None if no data available
         """
         try:
-            if not self.supabase_client:
-                return self._get_mock_session_summary()
-                
-            # Get session info
-            if session_id:
-                session_query = self.supabase_client.table("sessions").select(
-                    "*, tracks(name, length_meters), cars(name)"
-                ).eq("id", session_id).single()
-            else:
-                session_query = self.supabase_client.table("sessions").select(
-                    "*, tracks(name, length_meters), cars(name)"
-                ).eq("user_id", self.user_id).order("created_at", desc=True).limit(1).single()
+            # Try cloud data first
+            if self.supabase_client and self.user_id:
+                return self._get_cloud_session_summary()
             
-            session_result = session_query.execute()
-            if not session_result.data:
-                return self._get_mock_session_summary()
-                
-            session = session_result.data
-            
-            # Get laps for this session
-            laps_result = self.supabase_client.table("laps").select("*").eq(
-                "session_id", session["id"]
-            ).eq("is_valid", True).order("lap_number").execute()
-            
-            laps = laps_result.data if laps_result.data else []
-            
-            # Calculate session statistics
-            lap_times = [lap["lap_time"] for lap in laps if lap["lap_time"] > 0]
-            
-            summary = {
-                "track_name": session.get("tracks", {}).get("name", "Unknown Track"),
-                "car_name": session.get("cars", {}).get("name", "Unknown Car"),
-                "session_date": session.get("session_date"),
-                "duration": self._calculate_session_duration(session),
-                "total_laps": len(laps),
-                "valid_laps": len(lap_times),
-                "best_lap": min(lap_times) if lap_times else None,
-                "average_lap": statistics.mean(lap_times) if lap_times else None,
-                "session_type": session.get("session_type", "Practice")
-            }
-            
-            return summary
+            # Fallback to local data
+            return self._get_local_session_summary()
             
         except Exception as e:
             logger.error(f"Error getting session summary: {e}")
-            return self._get_mock_session_summary()
+            return self._get_sample_session_data()
     
-    def get_performance_metrics(self, track_id: str = None, car_id: str = None) -> Dict:
-        """Get performance metrics for analysis.
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get detailed performance metrics for racing engineer analysis.
         
-        Args:
-            track_id: Track ID to filter by
-            car_id: Car ID to filter by
-            
         Returns:
-            Dictionary with performance metrics
+            Dictionary containing performance metrics
         """
         try:
-            if not self.supabase_client:
-                return self._get_mock_performance_metrics()
-                
-            # Get recent laps for analysis
-            query = self.supabase_client.table("laps").select(
-                "*, sessions!inner(track_id, car_id, session_date)"
-            ).eq("user_id", self.user_id).eq("is_valid", True)
+            # Try cloud data first
+            if self.supabase_client and self.user_id:
+                return self._get_cloud_performance_metrics()
             
-            if track_id:
-                query = query.eq("sessions.track_id", track_id)
-            if car_id:
-                query = query.eq("sessions.car_id", car_id)
-                
-            result = query.order("sessions.session_date", desc=True).limit(50).execute()
-            
-            if not result.data:
-                return self._get_mock_performance_metrics()
-                
-            laps = result.data
-            lap_times = [lap["lap_time"] for lap in laps if lap["lap_time"] > 0]
-            
-            # Calculate consistency score (based on standard deviation)
-            if len(lap_times) > 1:
-                std_dev = statistics.stdev(lap_times)
-                mean_time = statistics.mean(lap_times)
-                consistency_score = max(0, 100 - (std_dev / mean_time * 100 * 10))  # Scale it
-            else:
-                consistency_score = 0
-                
-            # Calculate improvement trend
-            if len(lap_times) >= 5:
-                recent_avg = statistics.mean(lap_times[:5])  # Most recent 5 laps
-                older_avg = statistics.mean(lap_times[-5:])   # Oldest 5 laps
-                improvement = older_avg - recent_avg
-            else:
-                improvement = 0
-                
-            # Get sector performance (mock for now)
-            sector_performance = self._calculate_sector_performance(laps)
-            
-            metrics = {
-                "consistency_score": round(consistency_score, 1),
-                "session_improvement": improvement,
-                "sector_performance": sector_performance,
-                "total_laps_analyzed": len(lap_times),
-                "best_lap": min(lap_times) if lap_times else None,
-                "average_lap": statistics.mean(lap_times) if lap_times else None
-            }
-            
-            return metrics
+            # Fallback to local data
+            return self._get_local_performance_metrics()
             
         except Exception as e:
             logger.error(f"Error getting performance metrics: {e}")
-            return self._get_mock_performance_metrics()
+            return self._get_sample_performance_metrics()
     
-    def get_progress_data(self, days: int = 7) -> Dict:
-        """Get progress data for the specified time period.
-        
-        Args:
-            days: Number of days to look back
-            
-        Returns:
-            Dictionary with progress data
-        """
+    def _get_cloud_session_summary(self) -> Optional[Dict[str, Any]]:
+        """Get session summary from Supabase cloud database."""
         try:
-            if not self.supabase_client:
-                return self._get_mock_progress_data()
-                
-            # Calculate date range
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            
-            # Get sessions in date range
+            # Get most recent session
             result = self.supabase_client.table("sessions").select(
                 "*, laps!inner(lap_time, is_valid)"
-            ).eq("user_id", self.user_id).gte(
-                "session_date", start_date.isoformat()
-            ).lte("session_date", end_date.isoformat()).execute()
+            ).eq("user_id", self.user_id).order(
+                "session_date", desc=True
+            ).limit(1).execute()
             
             if not result.data:
-                return self._get_mock_progress_data()
+                return None
                 
-            # Group by day and calculate best lap times
-            daily_data = {}
-            for session in result.data:
-                session_date = datetime.fromisoformat(session["session_date"].replace('Z', '+00:00'))
-                day_key = session_date.strftime('%Y-%m-%d')
-                
-                valid_laps = [lap["lap_time"] for lap in session.get("laps", []) 
-                             if lap["is_valid"] and lap["lap_time"] > 0]
-                
-                if valid_laps:
-                    best_lap = min(valid_laps)
-                    if day_key not in daily_data or best_lap < daily_data[day_key]:
-                        daily_data[day_key] = best_lap
+            session = result.data[0]
+            laps = session.get('laps', [])
             
-            # Convert to lists for charting
-            sorted_days = sorted(daily_data.keys())
-            labels = [datetime.fromisoformat(day).strftime('%a') for day in sorted_days[-7:]]
-            values = [daily_data[day] for day in sorted_days[-7:]]
+            # Calculate session metrics
+            valid_laps = [lap for lap in laps if lap.get('is_valid', False)]
+            lap_times = [lap['lap_time'] for lap in valid_laps if lap['lap_time'] > 0]
             
-            progress = {
-                "daily_labels": labels,
-                "daily_values": values,
-                "total_improvement": values[0] - values[-1] if len(values) >= 2 else 0,
-                "days_analyzed": len(values)
+            if not lap_times:
+                return None
+            
+            return {
+                'session_id': session.get('session_id'),
+                'session_date': session.get('session_date'),
+                'track_name': session.get('track_name', 'Unknown Track'),
+                'car_name': session.get('car_name', 'Unknown Car'),
+                'total_laps': len(laps),
+                'valid_laps': len(valid_laps),
+                'best_lap': min(lap_times),
+                'average_lap': statistics.mean(lap_times),
+                'duration': self._format_duration(session.get('duration', 0))
             }
             
-            return progress
+        except Exception as e:
+            logger.error(f"Error fetching cloud session data: {e}")
+            return None
+    
+    def _get_local_session_summary(self) -> Optional[Dict[str, Any]]:
+        """Get session summary from local SQLite database."""
+        try:
+            conn = sqlite3.connect(self._local_db_path)
+            cursor = conn.cursor()
+            
+            # Get most recent session with laps
+            cursor.execute("""
+                SELECT s.session_id, s.session_date, s.track_name, s.car_name, s.duration,
+                       COUNT(l.lap_id) as total_laps,
+                       COUNT(CASE WHEN l.is_valid = 1 THEN 1 END) as valid_laps,
+                       MIN(CASE WHEN l.is_valid = 1 THEN l.lap_time END) as best_lap,
+                       AVG(CASE WHEN l.is_valid = 1 THEN l.lap_time END) as avg_lap
+                FROM sessions s
+                LEFT JOIN laps l ON s.session_id = l.session_id
+                WHERE s.session_date IS NOT NULL
+                GROUP BY s.session_id
+                HAVING total_laps > 0
+                ORDER BY s.session_date DESC
+                LIMIT 1
+            """)
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if not row:
+                return None
+            
+            return {
+                'session_id': row[0],
+                'session_date': row[1],
+                'track_name': row[2] or 'Unknown Track',
+                'car_name': row[3] or 'Unknown Car',
+                'total_laps': row[5] or 0,
+                'valid_laps': row[6] or 0,
+                'best_lap': row[7],
+                'average_lap': row[8],
+                'duration': self._format_duration(row[4] or 0)
+            }
             
         except Exception as e:
-            logger.error(f"Error getting progress data: {e}")
-            return self._get_mock_progress_data()
+            logger.error(f"Error fetching local session data: {e}")
+            return None
     
-    def get_coaching_insights(self, session_data: Dict, performance_data: Dict) -> List[Dict]:
-        """Generate coaching insights based on performance data.
+    def _get_cloud_performance_metrics(self) -> Dict[str, Any]:
+        """Get performance metrics from cloud database."""
+        try:
+            # Get recent laps for analysis
+            result = self.supabase_client.table("laps").select(
+                "lap_time, is_valid, lap_number, sessions!inner(session_date)"
+            ).eq("user_id", self.user_id).eq("is_valid", True).order(
+                "sessions.session_date", desc=True
+            ).limit(50).execute()
+            
+            if not result.data:
+                return self._get_sample_performance_metrics()
+            
+            laps = result.data
+            lap_times = [lap['lap_time'] for lap in laps if lap['lap_time'] > 0]
+            
+            return self._calculate_performance_metrics(lap_times)
+            
+        except Exception as e:
+            logger.error(f"Error fetching cloud performance metrics: {e}")
+            return self._get_sample_performance_metrics()
+    
+    def _get_local_performance_metrics(self) -> Dict[str, Any]:
+        """Get performance metrics from local database."""
+        try:
+            conn = sqlite3.connect(self._local_db_path)
+            cursor = conn.cursor()
+            
+            # Get recent valid laps
+            cursor.execute("""
+                SELECT l.lap_time, l.lap_number
+                FROM laps l
+                JOIN sessions s ON l.session_id = s.session_id
+                WHERE l.is_valid = 1 AND l.lap_time > 0
+                ORDER BY s.session_date DESC, l.lap_number DESC
+                LIMIT 50
+            """)
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if not rows:
+                return self._get_sample_performance_metrics()
+            
+            lap_times = [row[0] for row in rows]
+            return self._calculate_performance_metrics(lap_times)
+            
+        except Exception as e:
+            logger.error(f"Error fetching local performance metrics: {e}")
+            return self._get_sample_performance_metrics()
+    
+    def _calculate_performance_metrics(self, lap_times: List[float]) -> Dict[str, Any]:
+        """Calculate detailed performance metrics from lap times."""
+        if not lap_times or len(lap_times) < 2:
+            return self._get_sample_performance_metrics()
+        
+        try:
+            # Basic statistics
+            best_lap = min(lap_times)
+            avg_lap = statistics.mean(lap_times)
+            std_dev = statistics.stdev(lap_times) if len(lap_times) > 1 else 0
+            
+            # Consistency score (inverted coefficient of variation)
+            consistency_score = max(0, 100 - (std_dev / avg_lap * 100 * 10))
+            
+            # Session improvement (comparing first and last few laps)
+            session_improvement = 0
+            if len(lap_times) >= 6:
+                early_laps = lap_times[-3:]  # First 3 laps (reversed order)
+                late_laps = lap_times[:3]    # Last 3 laps
+                early_avg = statistics.mean(early_laps)
+                late_avg = statistics.mean(late_laps)
+                session_improvement = early_avg - late_avg  # Positive = improved
+            
+            # Pace window analysis
+            pace_window = avg_lap - best_lap
+            
+            return {
+                'best_lap': best_lap,
+                'average_lap': avg_lap,
+                'consistency_score': consistency_score,
+                'session_improvement': session_improvement,
+                'pace_window': pace_window,
+                'std_deviation': std_dev,
+                'total_laps_analyzed': len(lap_times)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating performance metrics: {e}")
+            return self._get_sample_performance_metrics()
+    
+    def _get_sample_session_data(self) -> Dict[str, Any]:
+        """Get sample session data when no real data is available."""
+        return {
+            'session_id': 'sample',
+            'session_date': datetime.now().isoformat(),
+            'track_name': 'TrackPro Test Circuit',
+            'car_name': 'Practice Car',
+            'total_laps': 0,
+            'valid_laps': 0,
+            'best_lap': None,
+            'average_lap': None,
+            'duration': '00:00:00'
+        }
+    
+    def _get_sample_performance_metrics(self) -> Dict[str, Any]:
+        """Get sample performance metrics when no real data is available."""
+        return {
+            'best_lap': None,
+            'average_lap': None,
+            'consistency_score': 0,
+            'session_improvement': 0,
+            'pace_window': 0,
+            'std_deviation': 0,
+            'total_laps_analyzed': 0
+        }
+    
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in seconds to HH:MM:SS format."""
+        if not seconds or seconds <= 0:
+            return "00:00:00"
+        
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    
+    def get_coaching_insights(self, session_data: Dict[str, Any] = None) -> List[str]:
+        """Generate coaching insights based on session performance.
         
         Args:
-            session_data: Current session data
-            performance_data: Performance metrics
+            session_data: Session data to analyze
             
         Returns:
-            List of insight dictionaries
+            List of coaching insight strings
         """
         insights = []
         
-        try:
-            # Consistency analysis
-            consistency = performance_data.get("consistency_score", 0)
-            if consistency < 70:
-                insights.append({
-                    "icon": "🎯",
-                    "category": "Focus Area",
-                    "message": f"Work on consistency - your lap times vary quite a bit (Score: {consistency:.0f}%)"
-                })
-            elif consistency > 90:
-                insights.append({
-                    "icon": "🎯", 
-                    "category": "Strength",
-                    "message": f"Excellent consistency! Your lap times are very stable (Score: {consistency:.0f}%)"
-                })
-            
-            # Improvement analysis
-            improvement = performance_data.get("session_improvement", 0)
-            if improvement > 0.5:
-                insights.append({
-                    "icon": "📈",
-                    "category": "Strength", 
-                    "message": f"Great progress! You've improved by {improvement:.1f}s this session"
-                })
-            elif improvement < -0.3:
-                insights.append({
-                    "icon": "⚠️",
-                    "category": "Watch Out",
-                    "message": f"Times are getting slower - take a break or check your approach"
-                })
-            
-            # Lap count analysis
-            total_laps = session_data.get("total_laps", 0)
-            if total_laps > 20:
-                insights.append({
-                    "icon": "💪",
-                    "category": "Endurance",
-                    "message": f"Great practice session! {total_laps} laps completed"
-                })
-            elif total_laps < 5:
-                insights.append({
-                    "icon": "🏁",
-                    "category": "Suggestion",
-                    "message": "Try to complete more laps to get better data for analysis"
-                })
-            
-            # Goal setting
-            best_lap = performance_data.get("best_lap")
-            if best_lap:
-                target_time = best_lap - 0.5
-                insights.append({
-                    "icon": "🏆",
-                    "category": "Goal",
-                    "message": f"Target: Break {self._format_time(target_time)} (0.5s improvement)"
-                })
-                
-            # If no insights generated, add a default encouraging one
-            if not insights:
-                insights.append({
-                    "icon": "🚗",
-                    "category": "Keep Going",
-                    "message": "Keep practicing! More data will help generate better insights"
-                })
-                
-        except Exception as e:
-            logger.error(f"Error generating coaching insights: {e}")
-            insights = [{
-                "icon": "🚗",
-                "category": "Keep Going", 
-                "message": "Keep practicing to get personalized coaching insights!"
-            }]
+        if not session_data or session_data.get('total_laps', 0) == 0:
+            insights.append("Complete a racing session to unlock personalized coaching insights!")
+            return insights
+        
+        # Get performance metrics
+        performance = self.get_performance_metrics()
+        
+        # Consistency insights
+        consistency = performance.get('consistency_score', 0)
+        if consistency > 95:
+            insights.append("🎯 Outstanding consistency! Your lap times are remarkably stable.")
+        elif consistency > 85:
+            insights.append("✅ Strong consistency showing good racecraft fundamentals.")
+        elif consistency > 70:
+            insights.append("📈 Work on consistency for more predictable lap times.")
+        else:
+            insights.append("🔧 Focus on consistent driving before chasing ultimate pace.")
+        
+        # Pace insights
+        best_lap = performance.get('best_lap')
+        avg_lap = performance.get('average_lap')
+        if best_lap and avg_lap:
+            gap = avg_lap - best_lap
+            if gap < 0.3:
+                insights.append("🚀 Excellent pace control - very tight lap time window!")
+            elif gap < 0.8:
+                insights.append("📊 Good pace with opportunity to tighten your lap time window.")
+            else:
+                insights.append(f"🎯 Large pace window: {gap:.3f}s between best and average lap.")
+        
+        # Session length insights
+        total_laps = session_data.get('total_laps', 0)
+        if total_laps >= 30:
+            insights.append("💪 Excellent session length provides great data for analysis.")
+        elif total_laps >= 15:
+            insights.append("👍 Good session length for meaningful analysis.")
+        elif total_laps >= 5:
+            insights.append("📋 Moderate session - consider longer runs for better insights.")
+        
+        # Improvement insights
+        improvement = performance.get('session_improvement', 0)
+        if improvement > 0.2:
+            insights.append(f"📈 Great progress! Improved by {improvement:.3f}s during session.")
+        elif improvement < -0.2:
+            insights.append("🛑 Times got slower - consider taking breaks during long sessions.")
         
         return insights
     
-    def _calculate_session_duration(self, session: Dict) -> str:
-        """Calculate and format session duration."""
-        try:
-            start_time = datetime.fromisoformat(session["session_date"].replace('Z', '+00:00'))
-            # For now, estimate duration based on lap count (will be better with real end times)
-            estimated_minutes = session.get("total_laps", 0) * 2  # Assume 2 min per lap
-            return f"{estimated_minutes} min"
-        except:
-            return "Unknown"
+    # Legacy methods for backward compatibility
+    def get_recent_laps(self) -> List[Dict[str, Any]]:
+        """Get recent laps data (legacy method)."""
+        return []
     
-    def _calculate_sector_performance(self, laps: List[Dict]) -> Dict:
-        """Calculate sector performance comparison."""
-        # This is a mock implementation - real implementation would use sector_times table
-        return {
-            "sector_1_delta": "+0.2s",
-            "sector_2_delta": "-0.1s", 
-            "sector_3_delta": "+0.4s"
-        }
+    def get_session_stats(self) -> Dict[str, Any]:
+        """Get session statistics (legacy method)."""
+        return self.get_session_summary() or {}
     
-    def _format_time(self, time_seconds: float) -> str:
-        """Format time in seconds to MM:SS.mmm format."""
-        if time_seconds is None or time_seconds <= 0:
-            return "--:--.---"
-        minutes = int(time_seconds // 60)
-        seconds = time_seconds % 60
-        return f"{minutes:01d}:{seconds:06.3f}"
-    
-    # Mock data methods for when database is not available
-    def _get_mock_session_summary(self) -> Dict:
-        """Get mock session summary for testing."""
-        return {
-            "track_name": "Watkins Glen International",
-            "car_name": "Formula 3.5",
-            "session_date": datetime.now().isoformat(),
-            "duration": "45 min",
-            "total_laps": 23,
-            "valid_laps": 21,
-            "best_lap": 83.542,
-            "average_lap": 84.123,
-            "session_type": "Practice"
-        }
-    
-    def _get_mock_performance_metrics(self) -> Dict:
-        """Get mock performance metrics for testing."""
-        return {
-            "consistency_score": 87.3,
-            "session_improvement": 1.2,
-            "sector_performance": {
-                "sector_1_delta": "+0.2s",
-                "sector_2_delta": "-0.1s",
-                "sector_3_delta": "+0.4s"
-            },
-            "total_laps_analyzed": 45,
-            "best_lap": 83.542,
-            "average_lap": 84.256
-        }
-    
-    def _get_mock_progress_data(self) -> Dict:
-        """Get mock progress data for testing."""
-        return {
-            "daily_labels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-            "daily_values": [85.2, 84.8, 84.5, 84.1, 83.9],
-            "total_improvement": 1.3,
-            "days_analyzed": 5
-        } 
+    def get_insights(self) -> List[str]:
+        """Get performance insights (legacy method)."""
+        session_data = self.get_session_summary()
+        return self.get_coaching_insights(session_data) 

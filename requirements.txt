@@ -53,3 +53,7 @@ openai>=1.86.0
 elevenlabs>=0.2.27
 soundfile>=0.12.1
 pydub>=0.25.1
+
+# Eye tracking dependencies
+eyetrax>=0.3.0
+mediapipe==0.10.11

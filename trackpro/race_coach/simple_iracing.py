@@ -4,10 +4,12 @@ import logging
 import math
 import threading
 from pathlib import Path
+from collections import deque
 from .telemetry_saver import TelemetrySaver
 # from .integrate_simple_timing import SimpleSectorTimingIntegration  # REMOVED: Use main sector timing instead
 from .sector_timing import SectorTimingCollector
 from PyQt5.QtCore import QObject, pyqtSignal
+import queue
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,22 @@ class SimpleIRacingAPI(QObject):
         # Store current telemetry for external access (needed for ABS system)
         self.current_telemetry = {}
         
-        logger.info("SimpleIRacingAPI initialized")
+        # TASK 1.1: OPTIMIZED circular buffer for actual telemetry rate
+        # Since actual rate may be lower than 60Hz, dynamically size buffer
+        self.telemetry_buffer_seconds = 60
+        self.telemetry_buffer_size = 360  # Start with smaller buffer, will auto-adjust
+        self.telemetry_buffer = deque(maxlen=self.telemetry_buffer_size)
+        self._buffer_lock = threading.Lock()
+        self._last_buffer_resize = time.time()
+        
+        # PERFORMANCE FIX: Producer-Consumer Architecture
+        # Fast producer thread only collects telemetry
+        # Slow consumer threads handle processing
+        self._telemetry_queue = queue.Queue(maxsize=1000)  # Buffer for worker threads
+        self._processing_workers = []
+        self._start_processing_workers()
+        
+        logger.info("SimpleIRacingAPI initialized with producer-consumer architecture")
     
     def __del__(self):
         """Clean up resources when this object is garbage collected."""
@@ -138,13 +155,13 @@ class SimpleIRacingAPI(QObject):
                             self.process_telemetry()
                             processing_time = time.time() - start_time
                             
-                            # Log processing time much less frequently - every 2 minutes instead of 10 seconds
+                                                        # Log processing time much less frequently - every 2 minutes instead of 10 seconds
                             if loop_count % 7200 == 0:  # Every ~2 minutes
                                 logger.info(f"Telemetry processing time: {processing_time*1000:.2f}ms")
                             
-                            # Dynamic sleep to maintain 60Hz more precisely
-                            target_frame_time = 1/60
-                            sleep_time = max(0.001, target_frame_time - processing_time)  # Ensure at least a minimal sleep
+                            # OPTIMIZED: Fixed 60Hz timing with minimal processing overhead
+                            target_frame_time = 1/60  # 16.67ms per frame
+                            sleep_time = max(0.005, target_frame_time - processing_time)  # Minimum 5ms sleep
                             self._stop_event.wait(sleep_time)
                         else:
                             # Sleep longer if not connected
@@ -247,491 +264,99 @@ class SimpleIRacingAPI(QObject):
                  logger.warning("sessionInfoUpdated signal does not exist on API instance")
     
     def process_telemetry(self):
-        """Process telemetry data from iRacing."""
+        """FAST PRODUCER: Collect telemetry data and queue for worker threads.
+        
+        This method is optimized for 60Hz collection rate by doing minimal work:
+        1. Get essential telemetry fields from iRacing
+        2. Store in circular buffer  
+        3. Queue for worker threads
+        
+        All heavy processing (file I/O, database, callbacks) happens in worker threads.
+        """
         # Check if we're connected first
         if not self._is_connected:
             return
 
-        # Initialize telemetry rate tracking if not already done
+        # FAST: Initialize telemetry rate tracking 
         if self._telemetry_start_time is None:
             self._telemetry_start_time = time.time()
             self._last_rate_check_time = self._telemetry_start_time
             self._telemetry_count = 0
             
-        # Increment the telemetry counter and check rate periodically
+        # FAST: Increment counter and occasional rate reporting
         self._telemetry_count += 1
         now = time.time()
-        if now - self._last_rate_check_time >= 30.0:  # Check every 30 seconds instead of 5
+        if now - self._last_rate_check_time >= 30.0:
             duration = now - self._telemetry_start_time
             rate = self._telemetry_count / duration if duration > 0 else 0
-            logger.info(f"Telemetry collection rate: {rate:.2f} Hz (collected {self._telemetry_count} points over {duration:.2f}s)")
+            logger.info(f"PRODUCER: Telemetry collection rate: {rate:.2f} Hz (collected {self._telemetry_count} points)")
             self._last_rate_check_time = now
+            self._adjust_buffer_size_for_rate()
 
-        # Debug: Check if IR object exists at all
-        if not self.ir:
-            logger.warning("IR object is None")
-            return
-        
-        # Check if we are connected to iracing properly
-        if not hasattr(self.ir, 'is_connected') or not self.ir.is_connected:
-            if not hasattr(self, '_conn_error_counter'):
-                self._conn_error_counter = 0
-            self._conn_error_counter += 1
-            if self._conn_error_counter % 1800 == 0:  # Every 30 seconds instead of 5
-                logger.warning("IRSDK not connected")
+        # FAST: Basic connection check
+        if not self.ir or not hasattr(self.ir, 'is_connected') or not self.ir.is_connected:
             return
 
         try:
-            # Freeze buffer to get consistent data as shown in example
+            # FAST: Freeze buffer and extract essential fields only
             self.ir.freeze_var_buffer_latest()
             
-            # Debug: Log all available variables occasionally
-            if not hasattr(self, '_debug_counter'):
-                self._debug_counter = 0
-            self._debug_counter += 1
+            # FAST: Create minimal telemetry dictionary with only essential fields
+            telemetry = {'timestamp': time.time()}
             
-            # Every ~5 minutes call the debug function instead of 10 seconds
-            if self._debug_counter % 18000 == 0:
-                logger.info("Running iRacing variable debug function...")
-                self.debug_ir_vars()
+            # FAST: Extract fields with minimal overhead (no 'in' checks)
+            essential_fields = [
+                'SessionTime', 'LapDistPct', 'Lap', 'LapCompleted', 'Speed', 'RPM', 'Gear',
+                'Throttle', 'Brake', 'Clutch', 'SteeringWheelAngle', 'LongAccel', 'LatAccel', 'YawRate',
+                'VelocityX', 'VelocityY'  # Added for real track shape calculation
+            ]
             
-                            # ABS debug functionality removed
-            
-            # Create telemetry dictionary with DIRECT dictionary access
-            # based on the example code pattern
-            telemetry = {}
-            
-            # Session time is a good test variable
-            session_time = None
-            try:
-                session_time = self.ir['SessionTime']
-                if session_time is not None:
-                    # Debug timing every 5 seconds instead of every frame
-                    if hasattr(self, '_timing_debug_counter'):
-                        self._timing_debug_counter += 1
-                    else:
-                        self._timing_debug_counter = 1
-                    
-                    # Only log session time every 300 frames (5 seconds at 60Hz)
-                    if self._timing_debug_counter % 1800 == 0:  # Every 30 seconds instead of 5
-                        logger.debug(f"Session time retrieved: {session_time}")
-                    telemetry['SessionTimeSecs'] = session_time
-            except Exception as e:
-                if self._debug_counter % 1800 == 0:  # Every 30 seconds instead of 5
-                    logger.warning(f"Failed to get SessionTime: {e}")
-                    
-            # Try to get LapDistPct - critical for lap detection
-            try:
-                lap_dist_pct = self.ir['LapDistPct']
-                telemetry['LapDistPct'] = lap_dist_pct
-                # Log this less frequently 
-                if self._debug_counter % 3600 == 0:  # Every ~60 seconds instead of 2
-                    logger.debug(f"LapDistPct: {lap_dist_pct}")
-            except Exception as e:
-                if self._debug_counter % 1800 == 0:  # Every 30 seconds instead of 5
-                    logger.warning(f"Failed to get LapDistPct: {e}")
-            
-            # Try to get lap info - critical for lap tracking
-            try:
-                current_lap = self.ir['Lap']
-                lap_completed = self.ir['LapCompleted']
-                lap_current_time = self.ir['LapCurrentLapTime']
-                lap_last_time = self.ir['LapLastLapTime']
-                
-                # EXACT TIMING: Get CarIdxLastLapTime array for precise lap timing
-                car_idx_last_lap_times = self.ir['CarIdxLastLapTime']
-                player_car_idx = self.ir['PlayerCarIdx']
-                
-                telemetry['Lap'] = current_lap
-                telemetry['LapCompleted'] = lap_completed
-                telemetry['LapCurrentLapTime'] = lap_current_time
-                telemetry['LapLastLapTime'] = lap_last_time
-                telemetry['CarIdxLastLapTime'] = car_idx_last_lap_times  # For exact timing
-                telemetry['PlayerCarIdx'] = player_car_idx  # For indexing into car arrays
-                
-                # Log lap info much less frequently
-                if self._debug_counter % 3600 == 0:  # Every 60 seconds instead of 1 second
-                    logger.debug(f"Lap info: Current={current_lap}, Completed={lap_completed}, CurrentTime={lap_current_time}, LastTime={lap_last_time}")
-                    if isinstance(car_idx_last_lap_times, (list, tuple)) and len(car_idx_last_lap_times) > player_car_idx:
-                        our_exact_time = car_idx_last_lap_times[player_car_idx]
-                        logger.debug(f"Exact timing: CarIdxLastLapTime[{player_car_idx}] = {our_exact_time:.3f}s")
-            except Exception as e:
-                if self._debug_counter % 1800 == 0:  # Every 30 seconds instead of 5
-                    logger.warning(f"Failed to get lap information: {e}")
-            
-            # Now do the same for all other variables, with direct dictionary access
-            try: telemetry['Speed'] = self.ir['Speed']
-            except: telemetry['Speed'] = 0.0
-            
-            try: telemetry['RPM'] = self.ir['RPM']
-            except: telemetry['RPM'] = 0.0
-            
-            try: telemetry['Gear'] = self.ir['Gear'] 
-            except: telemetry['Gear'] = 0
-            
-            try: telemetry['LapBestLapTime'] = self.ir['LapBestLapTime']
-            except: telemetry['LapBestLapTime'] = None
-            
-            try: telemetry['Throttle'] = self.ir['Throttle']
-            except: telemetry['Throttle'] = None
-            
-            # Ensure brake data is captured with proper case handling
-            try:
-                brake_value = float(self.ir['Brake'])  # Get raw brake value
-                telemetry['Brake'] = brake_value  # Store with capital B for consistency
-                telemetry['brake'] = brake_value  # Also store lowercase for compatibility
-            except Exception as e:
-                logger.warning(f"Failed to get brake value: {e}")
-                telemetry['Brake'] = 0.0
-                telemetry['brake'] = 0.0
-            
-            try: telemetry['Clutch'] = self.ir['Clutch']
-            except: telemetry['Clutch'] = None
-            
-            try: telemetry['SteeringWheelAngle'] = self.ir['SteeringWheelAngle']
-            except: telemetry['SteeringWheelAngle'] = None
-            
-            try: telemetry['SteeringWheelAngleMax'] = self.ir['SteeringWheelAngleMax']
-            except: telemetry['SteeringWheelAngleMax'] = None
-
-            # --- WHEEL RPM DATA FOR TELEMETRY --- #
-                            # Wheel RPM data for telemetry
-            wheel_rpm_fields = ['WheelLFRPM', 'WheelRFRPM', 'WheelLRRPM', 'WheelRRRPM']
-            wheel_rpms_found = []
-            
-            for wheel_field in wheel_rpm_fields:
+            for field in essential_fields:
                 try:
-                    wheel_rpm = self.ir[wheel_field]
-                    telemetry[wheel_field] = float(wheel_rpm)
-                    wheel_rpms_found.append(wheel_field)
+                    telemetry[field] = self.ir[field]
                 except:
-                    # Try alternative field names
-                    alt_field = wheel_field.replace('RPM', 'Rpm').replace('WheelLF', 'WheelLF').replace('WheelRF', 'WheelRF').replace('WheelLR', 'WheelLR').replace('WheelRR', 'WheelRR')
-                    try:
-                        wheel_rpm = self.ir[alt_field]
-                        telemetry[wheel_field] = float(wheel_rpm)
-                        wheel_rpms_found.append(f"{wheel_field} (as {alt_field})")
-                    except:
-                        telemetry[wheel_field] = 0.0
+                    telemetry[field] = 0
             
-            # Log wheel RPM status occasionally
-            if self._debug_counter % 10800 == 0 and wheel_rpms_found:  # Every 3 minutes instead of 5 seconds
-                logger.info(f"✅ Found wheel RPMs: {wheel_rpms_found}")
-            elif self._debug_counter % 21600 == 0 and len(wheel_rpms_found) < 4:  # Every 6 minutes instead of 10 seconds
-                logger.warning(f"⚠️ Missing wheel RPMs: {[f for f in wheel_rpm_fields if f not in [w.split(' ')[0] for w in wheel_rpms_found]]}")
+            # FAST: Extract Task 1.1 fields
+            task_fields = [
+                'LFshockDefl', 'RFshockDefl', 'LRshockDefl', 'RRshockDefl',
+                'WheelLFRPM', 'WheelRFRPM', 'WheelLRRPM', 'WheelRRRPM',
+                'LFtempCM', 'RFtempCM', 'LRtempCM', 'RRtempCM'
+            ]
+            
+            for field in task_fields:
+                try:
+                    telemetry[field] = self.ir[field]
+                except:
+                    telemetry[field] = 0
+            
+            # FAST: Add derived fields and field name mapping
+            track_position = telemetry.get('LapDistPct', 0.0)
+            telemetry['sector_number'] = 1 if track_position < 0.333 else (2 if track_position < 0.667 else 3)
+            
+            # FAST: Add field aliases for worker compatibility
+            telemetry['SessionTimeSecs'] = telemetry.get('SessionTime', 0)
+            telemetry['speed'] = telemetry.get('Speed', 0)  # m/s for internal use
+            
+            # FAST: Store in circular buffer (minimal lock time)
+            with self._buffer_lock:
+                self.telemetry_buffer.append(telemetry.copy())
 
-            # ABS field detection removed - no longer needed for lockup detection
-            
-            # Try multiple possible field names for longitudinal acceleration
-            accel_found = False
-            for accel_field in ['LongAccel', 'AccelLongitudinal', 'AccelLong', 'LongitudalAccel']:
-                try: 
-                    long_accel = self.ir[accel_field]
-                    telemetry['LongAccel'] = float(long_accel)
-                    accel_found = True
-                    if self._debug_counter % 21600 == 0:  # Log success every 6 minutes instead of 10 seconds
-                        logger.info(f"✅ Found acceleration field: {accel_field} = {long_accel}")
-                    break
-                except: 
-                    continue
-            
-            if not accel_found:
-                if self._debug_counter % 10800 == 0:  # Every 3 minutes instead of 5 seconds
-                    logger.warning(f"❌ No acceleration field found - tried: LongAccel, AccelLongitudinal, AccelLong, LongitudalAccel")
-                telemetry['LongAccel'] = 0.0
-            
-            try: 
-                lat_accel = self.ir['LatAccel']
-                telemetry['LatAccel'] = float(lat_accel)
-            except Exception as e: 
-                telemetry['LatAccel'] = 0.0
-            
-            try: 
-                vert_accel = self.ir['VelocityZ']  # Alternative for vertical velocity
-                telemetry['VelocityZ'] = float(vert_accel)
-            except Exception as e: 
-                telemetry['VelocityZ'] = 0.0
-
-            # --- Handle OnPitRoad (Critical for Lap Classification) --- #
+            # FAST: Queue for worker threads (non-blocking)
             try:
-                # Try multiple possible key variations for pit road status
-                # First try the standard name with exact case
-                pit_status = self.ir['OnPitRoad']
-                telemetry['OnPitRoad'] = bool(pit_status)
-                if self._debug_counter % 300 == 0:
-                    logger.info(f"Got OnPitRoad status: {pit_status}")
-            except Exception as e1:
-                try:
-                    # Try lowercase variation
-                    pit_status = self.ir['onpitroad']
-                    telemetry['OnPitRoad'] = bool(pit_status)
-                    if self._debug_counter % 300 == 0:
-                        logger.info(f"Got onpitroad status (lowercase): {pit_status}")
-                except Exception as e2:
-                    try:
-                        # Try alternative keys that might contain pit status
-                        pit_status = self.ir['CarIdxOnPitRoad']
-                        # If it's an array for multiple cars, get the player's status
-                        if isinstance(pit_status, (list, tuple)) and len(pit_status) > 0:
-                            # Get the player's car index
-                            player_idx = self._get_player_car_idx()
-                            if player_idx < len(pit_status):
-                                telemetry['OnPitRoad'] = bool(pit_status[player_idx])
-                                if self._debug_counter % 300 == 0:
-                                    logger.info(f"Got CarIdxOnPitRoad status for player idx {player_idx}: {pit_status[player_idx]}")
-                            else:
-                                # Fallback to index 0 if player index is out of range
-                                telemetry['OnPitRoad'] = bool(pit_status[0])
-                                if self._debug_counter % 300 == 0:
-                                    logger.info(f"Player idx {player_idx} out of range, using CarIdxOnPitRoad[0]: {pit_status[0]}")
-                        else:
-                            telemetry['OnPitRoad'] = bool(pit_status)
-                    except Exception as e3:
-                        try:
-                            # Try checking if we're off track as a last resort
-                            off_track = self.ir['IsOnTrack']
-                            # If we're not on track, assume we might be in pits
-                            telemetry['OnPitRoad'] = not bool(off_track)
-                            if self._debug_counter % 300 == 0:
-                                logger.info(f"Used IsOnTrack ({off_track}) as fallback for pit status")
-                        except Exception as e4:
-                            # Try to get pit status from session info as a last resort
-                            pit_from_session = self._try_get_pit_status_from_session_info()
-                            if pit_from_session is not None:
-                                telemetry['OnPitRoad'] = pit_from_session
-                                if self._debug_counter % 300 == 0:
-                                    logger.info(f"Used session info for pit status: {pit_from_session}")
-                            else:
-                                # All attempts failed, log warning and use default
-                                if self._debug_counter % 300 == 0:
-                                    logger.warning(f"Failed to get pit road status through all methods")
-                                # Keep as None or False
-                                telemetry['OnPitRoad'] = False
-
-            # --- Handle LapInvalidated (Also Critical) --- #
-            try:
-                lap_invalidated = self.ir['LapInvalidated']
-                telemetry['LapInvalidated'] = bool(lap_invalidated)
-            except Exception as e:
-                try:
-                    # Try lowercase variation
-                    lap_invalidated = self.ir['lapinvalidated']
-                    telemetry['LapInvalidated'] = bool(lap_invalidated)
-                except Exception as e2:
-                    # All attempts failed, log warning and use default
-                    if self._debug_counter % 300 == 0:
-                        logger.warning(f"Failed to get lap invalidated status: {e}, {e2}")
-                    # Keep as None or False
-                    telemetry['LapInvalidated'] = False
-
-            # --- Handle Speed Type (Sequence vs Number) --- #
-            speed = telemetry['Speed'] # Use the retrieved value
-            if isinstance(speed, (list, tuple)):
-                speed = speed[0] if len(speed)>0 and isinstance(speed[0], (int, float)) else 0.0
-            elif not isinstance(speed, (int, float)): speed = 0.0
-            # Update the speed value after potential type correction
-            telemetry['speed'] = speed # Keep in m/s
+                self._telemetry_queue.put_nowait(telemetry)
+            except queue.Full:
+                # Queue is full - workers are behind, but don't block the producer
+                if self._telemetry_count % 600 == 0:  # Log occasionally
+                    logger.warning("Telemetry queue full - workers falling behind")
             
-            # Add current track/car from internal state
-            telemetry['track_name'] = self._session_info.get('current_track')
-            telemetry['car_name'] = self._session_info.get('current_car')
+            # FAST: Store current telemetry for immediate access
+            self.current_telemetry = telemetry
 
-            # EXACT TIMING HELPER: Calculate our car's exact lap time for UI consistency
-            # This matches the approach used in lap_indexer.py
-            def get_our_exact_lap_time():
-                """Get our car's exact lap time using CarIdxLastLapTime approach."""
-                try:
-                    car_idx_times = telemetry.get('CarIdxLastLapTime', [])
-                    player_idx = telemetry.get('PlayerCarIdx', 0)
-                    
-                    if isinstance(car_idx_times, (list, tuple)) and len(car_idx_times) > player_idx:
-                        return float(car_idx_times[player_idx])
-                    else:
-                        # Fallback to regular LapLastLapTime if CarIdx data not available
-                        return telemetry.get('LapLastLapTime', 0.0)
-                except Exception:
-                    return telemetry.get('LapLastLapTime', 0.0)
-            
-            # CRITICAL FIX: Only log telemetry data occasionally, not every frame
-            current_time = time.time()
-            should_log_telemetry = not hasattr(self, '_last_telemetry_log_time') or (current_time - (getattr(self, '_last_telemetry_log_time', None) or 0) > 30.0)
-            
-            if should_log_telemetry:
-                logger.info(f"Telemetry sample: Lap {telemetry.get('Lap', 'N/A')}, LapCompleted {telemetry.get('LapCompleted', 'N/A')}, Speed {telemetry.get('Speed', 'N/A')}")
-                self._last_telemetry_log_time = current_time
-            
-            # --- Pass to TelemetrySaver, LapSaver, and SectorTiming --- #
-            # Ensure essential data exists before passing
-            if telemetry.get('LapDistPct') is not None and telemetry.get('SessionTimeSecs') is not None:
-                
-                # NOTE: Removed frame-based future sector data application
-                # Sector data is now stored by lap number and retrieved by the lap saver
-                
-                lap_info_to_pass_to_ui = None
-                
-                # Process sector timing
-                if hasattr(self, 'sector_timing') and self.sector_timing and self.sector_timing.is_enabled:
-                    # Add debug logging about sector timing
-                    if not hasattr(self, '_sector_debug_counter'):
-                        self._sector_debug_counter = 0
-                    self._sector_debug_counter += 1
-                    
-                    # Only log sector timing debug every 5 minutes instead of every frame
-                    if self._sector_debug_counter % 18000 == 0:  # 60Hz * 60s * 5min = 18000
-                        logger.debug(f"🔧 [SIMPLE SECTOR] About to call sector_timing.process_telemetry() - enabled: {self.sector_timing.is_enabled}")
-                        logger.debug(f"🔧 [SIMPLE SECTOR] Telemetry data keys: {list(telemetry.keys())}")
-                        logger.debug(f"🔧 [SIMPLE SECTOR] LapDistPct: {telemetry.get('LapDistPct')}, Lap: {telemetry.get('Lap')}")
-                    
-                    sector_result = self.sector_timing.process_telemetry(telemetry)
-                    
-                    # Only log sector result every 5 minutes instead of every frame
-                    if self._sector_debug_counter % 18000 == 0:
-                        logger.debug(f"🔧 [SIMPLE SECTOR] sector_timing.process_telemetry() returned: {sector_result}")
-                    
-                    if sector_result:
-                        # Add current sector progress to telemetry
-                        telemetry['current_sector'] = sector_result.get('current_sector', 1)
-                        telemetry['current_sector_time'] = sector_result.get('current_sector_time', 0.0)
-                        telemetry['best_sector_times'] = sector_result.get('best_sector_times', [])
-                        telemetry['current_lap_splits'] = sector_result.get('current_lap_splits', [])
-                        telemetry['completed_sectors_count'] = sector_result.get('completed_sectors', 0)
-                        telemetry['sector_timing_initialized'] = True
-                        telemetry['total_sectors'] = sector_result.get('total_sectors', 0)
-                        
-                        # CRITICAL FIX: Add current lap sector timing data that lap saver expects
-                        telemetry['current_lap_sector_times'] = sector_result.get('current_lap_splits', [])
-                        telemetry['sector_timing_method'] = sector_result.get('timing_method', '10_equal_sectors')
-                        
-                        # Check if a lap was completed
-                        completed_lap = sector_result.get('completed_lap')
-                        if completed_lap:
-                            logger.info(f"🏁 SIMPLE sector timing completed lap {completed_lap['lap_number']}: {completed_lap['total_time']:.3f}s")
-                            
-                            # CRITICAL FIX: Create complete sector data package for this and recent frames
-                            sector_data_package = {
-                                'sector_times': completed_lap['sector_times'],
-                                'sector_total_time': completed_lap['total_time'],
-                                'sector_lap_completed': True,
-                                'sector_completion_frame_id': self._telemetry_count
-                            }
-                            
-                            # Add individual sector fields that lap saver expects
-                            for i, sector_time in enumerate(completed_lap['sector_times']):
-                                sector_data_package[f'sector{i+1}_time'] = sector_time
-                            
-                            # Also copy any other sector-related fields from the result
-                            for key, value in sector_result.items():
-                                if key.startswith('sector') and key.endswith('_time'):
-                                    sector_data_package[key] = value
-                            
-                            # Add to current telemetry frame
-                            telemetry.update(sector_data_package)
-                            
-                            # CRITICAL: Store completed sector data with lap-specific identification
-                            if not hasattr(self, '_lap_sector_data'):
-                                self._lap_sector_data = {}
-                            
-                            lap_number = completed_lap['lap_number']
-                            
-                            # Store sector data with lap number as key (not frame-based)
-                            self._lap_sector_data[lap_number] = {
-                                'sector_times': completed_lap['sector_times'],
-                                'sector_total_time': completed_lap['total_time'],
-                                'timestamp': time.time(),
-                                'frame_id': self._telemetry_count
-                            }
-                            
-                            # Clean up old lap data (keep only last 5 laps)
-                            if len(self._lap_sector_data) > 5:
-                                old_laps = sorted(self._lap_sector_data.keys())[:-5]
-                                for old_lap in old_laps:
-                                    del self._lap_sector_data[old_lap]
-                            
-                            logger.info(f"🔧 [LAP SECTOR STORAGE] Stored complete sector data for lap {lap_number}: {completed_lap['sector_times']}")
-                            logger.info(f"🔧 [SIMPLE SECTOR] Added completed sector data to frame: {completed_lap['sector_times']}")
-                            logger.debug(f"✅ [SECTOR FIX] Added individual sector fields: sector1_time through sector{len(completed_lap['sector_times'])}_time")
-                        else:
-                            # Mark that no lap was completed this frame
-                            telemetry['sector_lap_completed'] = False
-                        
-                        # Log sector progress occasionally
-                        if not hasattr(self, '_last_sector_log_time') or (current_time - self._last_sector_log_time > 10):
-                            logger.info(f"🏁 SIMPLE Current sector: {sector_result.get('current_sector', 'N/A')}/{sector_result.get('total_sectors', 'N/A')}, Time: {sector_result.get('current_sector_time', 0):.2f}s")
-                            logger.debug(f"🔧 [SIMPLE SECTOR] Adding to frame: current_lap_splits={sector_result.get('current_lap_splits', [])}, completed_sectors={sector_result.get('completed_sectors', 0)}")
-                            self._last_sector_log_time = current_time
-                    else:
-                        # Don't add sector data if not initialized
-                        telemetry['current_sector'] = None
-                        telemetry['current_sector_time'] = None
-                        telemetry['best_sector_times'] = None
-                        telemetry['sector_timing_initialized'] = False
-                
-                if self.telemetry_saver: 
-                    lap_info_to_pass_to_ui = self.telemetry_saver.process_telemetry(telemetry)
-                if self.lap_saver:
-                    try:
-                         # Process telemetry through the improved LapIndexer (which now has conservative reset detection)
-                         # The LapIndexer.on_frame() method handles all reset detection and lap boundary detection internally
-                         lap_result_supabase = self.lap_saver.process_telemetry(telemetry)
-                         if lap_result_supabase: lap_info_to_pass_to_ui = lap_result_supabase
-                    except Exception as e:
-                        logger.error(f"Error processing telemetry with Supabase lap saver: {e}")
-
-                # --- Notify Callbacks --- #
-                if telemetry:
-                    # Always trigger callbacks for real-time telemetry (AI coach needs this!)
-                    display_telemetry = telemetry.copy()
-                    display_telemetry['speed'] = speed * 3.6  # Convert for UI
-                    
-                    # Store current telemetry for external access
-                    self.current_telemetry = telemetry.copy()
-                    
-                    # Always trigger telemetry callbacks for real-time data (regardless of lap processing)
-                    # Only log callback debug info every 10 seconds to reduce spam
-                    if self._telemetry_count % 600 == 0:  # Every 10 seconds at ~60Hz
-                        logger.debug(f"🎙️ [TELEMETRY CALLBACKS] Triggering {len(self._telemetry_callbacks)} callbacks with telemetry data")
-                    for callback in self._telemetry_callbacks:
-                        try: 
-                            callback(display_telemetry)
-                        except Exception as e: 
-                            logger.error(f"Error in telemetry callback: {e}")
-                    
-                    # Process lap information for UI display if available
-                    if lap_info_to_pass_to_ui:
-                        # Properly handle different formats of lap_info_to_pass_to_ui
-                        if isinstance(lap_info_to_pass_to_ui, (list, tuple)) and len(lap_info_to_pass_to_ui) > 0:
-                            # Handle the expected list/tuple format
-                            telemetry['is_new_lap'] = lap_info_to_pass_to_ui[0]
-                            if len(lap_info_to_pass_to_ui) > 1:
-                                telemetry['completed_lap_number'] = lap_info_to_pass_to_ui[1]
-                            if len(lap_info_to_pass_to_ui) > 2:
-                                telemetry['completed_lap_time'] = lap_info_to_pass_to_ui[2]
-                        elif isinstance(lap_info_to_pass_to_ui, dict):
-                            # Handle when it's a dictionary (directly from telemetry)
-                            # Use EXACT timing approach consistent with lap_indexer
-                            telemetry['is_new_lap'] = lap_info_to_pass_to_ui.get('is_new_lap', False)
-                            telemetry['completed_lap_number'] = lap_info_to_pass_to_ui.get('LapCompleted', telemetry.get('LapCompleted', 0))
-                            telemetry['completed_lap_time'] = get_our_exact_lap_time()  # Use exact timing
-                            # Only log once per ~10 seconds to reduce spam
-                            if self._telemetry_count % 600 == 0:
-                                logger.debug(f"Handled dictionary format for lap_info: {telemetry['is_new_lap']}, {telemetry['completed_lap_number']}, {telemetry['completed_lap_time']}")
-                        else:
-                            # Set default values if lap_info_to_pass_to_ui is not in the expected format
-                            # Use EXACT timing approach consistent with lap_indexer
-                            telemetry['is_new_lap'] = False
-                            telemetry['completed_lap_number'] = telemetry.get('LapCompleted', 0)
-                            telemetry['completed_lap_time'] = get_our_exact_lap_time()  # Use exact timing
-                            # Only log once per ~10 seconds to reduce spam
-                            if self._telemetry_count % 600 == 0:
-                                logger.warning(f"lap_info_to_pass_to_ui in unexpected format: {type(lap_info_to_pass_to_ui)}")
-                        
-                        # Lap information processed successfully - no additional callback processing needed
-                        # (callbacks were already triggered above regardless of lap processing)
-            elif self._telemetry_count % 60 == 0:
-                logger.warning(f"Missing essential telemetry: LapDistPct={telemetry.get('LapDistPct')}, SessionTimeSecs={telemetry.get('SessionTimeSecs')}")
-                        
         except Exception as e:
-            logger.error(f"Error in process_telemetry: {e}", exc_info=True)
+            logger.error(f"Error in FAST telemetry producer: {e}")
+            
+        # Total time should be <5ms for 60Hz capability
     
     def register_on_connection_changed(self, callback):
         if callback not in self._connection_callbacks: self._connection_callbacks.append(callback)
@@ -1189,3 +814,248 @@ class SimpleIRacingAPI(QObject):
             except Exception as e:
                 logger.error(f"❌ Failed to start basic monitoring: {e}")
                 return False
+    
+    # TASK 1.1: Methods for accessing telemetry data and circular buffer
+    
+    def get_telemetry_buffer(self):
+        """
+        Get a copy of the current telemetry buffer.
+        
+        Returns:
+            list: Copy of telemetry buffer data
+        """
+        with self._buffer_lock:
+            return list(self.telemetry_buffer)
+    
+    def get_latest_telemetry(self):
+        """
+        Get the most recent telemetry point with all Task 1.1 fields.
+        
+        Returns:
+            dict: Latest telemetry data or None if no data available
+        """
+        with self._buffer_lock:
+            if self.telemetry_buffer:
+                latest = self.telemetry_buffer[-1].copy()
+                return self._format_task_1_1_telemetry(latest)
+            return None
+    
+    def get_telemetry_stats(self):
+        """
+        Get statistics about telemetry collection for Task 1.1.
+        
+        Returns:
+            dict: Statistics including collection rate, buffer status, etc.
+        """
+        # Calculate actual collection rate
+        actual_hz = 0.0
+        if self._telemetry_start_time and self._telemetry_count > 0:
+            duration = time.time() - self._telemetry_start_time
+            if duration > 0:
+                actual_hz = self._telemetry_count / duration
+        
+        # Calculate actual seconds of data in buffer
+        buffer_seconds = 0.0
+        if actual_hz > 0:
+            buffer_seconds = len(self.telemetry_buffer) / actual_hz
+        
+        stats = {
+            'buffer_size': len(self.telemetry_buffer),
+            'buffer_capacity': self.telemetry_buffer_size,
+            'buffer_seconds_target': self.telemetry_buffer_seconds,
+            'buffer_seconds_actual': buffer_seconds,
+            'is_connected': self._is_connected,
+            'total_frames': self._telemetry_count,
+            'actual_hz': actual_hz,
+            'target_hz': 60.0,
+            'performance_ratio': actual_hz / 60.0 if actual_hz > 0 else 0.0
+        }
+            
+        return stats
+    
+    def _format_task_1_1_telemetry(self, telemetry_data):
+        """
+        Format telemetry data to include all 23 required Task 1.1 fields with consistent naming.
+        
+        Args:
+            telemetry_data: Raw telemetry dictionary
+            
+        Returns:
+            dict: Formatted telemetry with Task 1.1 field names
+        """
+        if not telemetry_data:
+            return None
+            
+        formatted = {
+            # Core driving data
+            'speed': telemetry_data.get('Speed', 0.0),  # m/s
+            'throttle': telemetry_data.get('Throttle', 0.0),  # 0-1
+            'brake': telemetry_data.get('Brake', 0.0),  # 0-1
+            'gear': telemetry_data.get('Gear', 0),  # gear number
+            'steering_angle': telemetry_data.get('SteeringWheelAngle', 0.0),  # radians
+            
+            # G-forces and motion
+            'lateral_g': telemetry_data.get('LatAccel', 0.0),  # m/s²
+            'longitudinal_g': telemetry_data.get('LongAccel', 0.0),  # m/s²
+            'yaw_rate': telemetry_data.get('YawRate', 0.0),  # rad/s
+            
+            # Position and lap data
+            'track_position': telemetry_data.get('LapDistPct', 0.0),  # 0-1
+            'lap_number': telemetry_data.get('Lap', 0),
+            'sector_number': telemetry_data.get('sector_number', 1),
+            
+            # Suspension travel (all 4 corners) - meters
+            'suspension_lf': telemetry_data.get('LFshockDefl', 0.0),
+            'suspension_rf': telemetry_data.get('RFshockDefl', 0.0),
+            'suspension_lr': telemetry_data.get('LRshockDefl', 0.0),
+            'suspension_rr': telemetry_data.get('RRshockDefl', 0.0),
+            
+            # Wheel speeds (all 4 wheels) - RPM
+            'wheel_speed_lf': telemetry_data.get('WheelLFRPM', 0.0),
+            'wheel_speed_rf': telemetry_data.get('WheelRFRPM', 0.0),
+            'wheel_speed_lr': telemetry_data.get('WheelLRRPM', 0.0),
+            'wheel_speed_rr': telemetry_data.get('WheelRRRPM', 0.0),
+            
+            # Tire temperatures (all 4 tires) - Celsius
+            'tire_temp_lf': telemetry_data.get('LFtempCM', 0.0),
+            'tire_temp_rf': telemetry_data.get('RFtempCM', 0.0),
+            'tire_temp_lr': telemetry_data.get('LRtempCM', 0.0),
+            'tire_temp_rr': telemetry_data.get('RRtempCM', 0.0),
+            
+            # Additional useful data
+            'timestamp': telemetry_data.get('timestamp', time.time()),
+            'session_time': telemetry_data.get('SessionTimeSecs', 0.0),
+            'rpm': telemetry_data.get('RPM', 0.0)
+        }
+        
+        return formatted
+
+    def _adjust_buffer_size_for_rate(self):
+        """Dynamically adjust buffer size based on actual telemetry rate to maintain 60 seconds."""
+        current_time = time.time()
+        
+        # Only adjust every 30 seconds to allow rate to stabilize
+        if current_time - self._last_buffer_resize < 30.0:
+            return
+            
+        # Calculate actual rate
+        if self._telemetry_start_time and self._telemetry_count > 0:
+            duration = current_time - self._telemetry_start_time
+            if duration > 10.0:  # Only adjust after 10 seconds of data
+                actual_rate = self._telemetry_count / duration
+                
+                # Calculate optimal buffer size for 60 seconds at actual rate
+                optimal_size = int(actual_rate * self.telemetry_buffer_seconds)
+                optimal_size = max(60, min(3600, optimal_size))  # Clamp between 60 and 3600
+                
+                # Only resize if difference is significant (>20%)
+                if abs(optimal_size - self.telemetry_buffer_size) > (self.telemetry_buffer_size * 0.2):
+                    logger.info(f"Adjusting buffer size: {self.telemetry_buffer_size} -> {optimal_size} (rate: {actual_rate:.1f}Hz)")
+                    
+                    # Create new buffer with adjusted size
+                    old_data = list(self.telemetry_buffer)
+                    self.telemetry_buffer_size = optimal_size
+                    self.telemetry_buffer = deque(old_data[-optimal_size:], maxlen=optimal_size)
+                    
+                self._last_buffer_resize = current_time
+
+    def _start_processing_workers(self):
+        """Start processing workers for heavy telemetry operations."""
+        # Start database/file I/O worker
+        db_worker = threading.Thread(target=self._database_worker, daemon=True)
+        db_worker.start()
+        self._processing_workers.append(db_worker)
+        
+        # Start callback worker for UI updates and AI coach
+        callback_worker = threading.Thread(target=self._callback_worker, daemon=True) 
+        callback_worker.start()
+        self._processing_workers.append(callback_worker)
+        
+        logger.info("Started 2 telemetry processing workers (database + callbacks)")
+
+    def _database_worker(self):
+        """Worker thread for database and file I/O operations."""
+        logger.info("🧵 Database worker thread started")
+        
+        while not self._stop_event.is_set():
+            try:
+                # Get telemetry data from queue (blocking with timeout)
+                telemetry_data = self._telemetry_queue.get(timeout=1.0)
+                
+                # Only process if we have valid telemetry data
+                if telemetry_data and telemetry_data.get('LapDistPct') is not None:
+                    # Process lap saving and file I/O in this dedicated thread
+                    if hasattr(self, 'lap_saver') and self.lap_saver:
+                        try:
+                            self.lap_saver.process_telemetry(telemetry_data)
+                        except Exception as e:
+                            logger.error(f"Error in lap saver: {e}")
+                    
+                    if hasattr(self, 'telemetry_saver') and self.telemetry_saver:
+                        try:
+                            self.telemetry_saver.process_telemetry(telemetry_data)
+                        except Exception as e:
+                            logger.error(f"Error in telemetry saver: {e}")
+                
+                self._telemetry_queue.task_done()
+                
+            except queue.Empty:
+                continue  # Timeout, check stop event
+            except Exception as e:
+                logger.error(f"Error in database worker: {e}")
+        
+        logger.info("🧵 Database worker thread stopped")
+
+    def _callback_worker(self):
+        """Worker thread for UI callbacks and AI coach."""
+        logger.info("🧵 Callback worker thread started")
+        telemetry_buffer = []  # Local buffer for this worker
+        
+        while not self._stop_event.is_set():
+            try:
+                # Process multiple items from queue in batches for efficiency
+                batch_size = 10
+                batch = []
+                
+                # Get first item (blocking)
+                try:
+                    first_item = self._telemetry_queue.get(timeout=1.0)
+                    batch.append(first_item)
+                except queue.Empty:
+                    continue
+                
+                # Get additional items non-blocking
+                for _ in range(batch_size - 1):
+                    try:
+                        item = self._telemetry_queue.get_nowait()
+                        batch.append(item)
+                    except queue.Empty:
+                        break
+                
+                # Process the batch - only use the latest telemetry for callbacks
+                if batch:
+                    latest_telemetry = batch[-1]  # Use most recent data
+                    
+                    # Update UI with latest data only (don't spam with old data)
+                    if latest_telemetry:
+                        display_telemetry = latest_telemetry.copy()
+                        speed = display_telemetry.get('Speed', 0.0)
+                        if isinstance(speed, (list, tuple)):
+                            speed = speed[0] if len(speed) > 0 else 0.0
+                        display_telemetry['speed'] = speed * 3.6  # Convert to km/h for UI
+                        
+                        # Trigger callbacks with latest data
+                        for callback in self._telemetry_callbacks:
+                            try:
+                                callback(display_telemetry)
+                            except Exception as e:
+                                logger.error(f"Error in telemetry callback: {e}")
+                    
+                    # Mark all items as done
+                    for _ in batch:
+                        self._telemetry_queue.task_done()
+                
+            except Exception as e:
+                logger.error(f"Error in callback worker: {e}")
+        
+        logger.info("🧵 Callback worker thread stopped")

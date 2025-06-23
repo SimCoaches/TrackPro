@@ -968,6 +968,7 @@ class SuperLapWidget(QWidget):
         from trackpro.race_coach.widgets.brake_graph import BrakeGraphWidget
         from trackpro.race_coach.widgets.steering_graph import SteeringGraphWidget
         from trackpro.race_coach.widgets.speed_graph import SpeedGraphWidget
+        from trackpro.race_coach.widgets.gear_graph import GearGraphWidget
         from PyQt5.QtWidgets import QScrollArea
         
         widget = QWidget()
@@ -1078,11 +1079,16 @@ class SuperLapWidget(QWidget):
         brake_container = self._create_graph_container(self.brake_graph, "Brake Comparison")
         content_layout.addWidget(brake_container)
         
-        # Steering graph
+                # Steering graph
         self.steering_graph = SteeringGraphWidget()
         steering_container = self._create_graph_container(self.steering_graph, "Steering Comparison")
         content_layout.addWidget(steering_container)
-        
+
+        # Gear graph
+        self.gear_graph = GearGraphWidget()
+        gear_container = self._create_graph_container(self.gear_graph, "Gear Comparison")
+        content_layout.addWidget(gear_container)
+
         # Message/status label
         self.telemetry_status_label = QLabel("Select laps above and click 'Analyze Performance' to compare telemetry")
         self.telemetry_status_label.setStyleSheet("""
@@ -1616,14 +1622,19 @@ class SuperLapWidget(QWidget):
                             mapped_point['Steering'] = 0.0
                     if 'speed' in mapped_point:
                         mapped_point['Speed'] = mapped_point['speed']
+                    if 'gear' in mapped_point:
+                        mapped_point['Gear'] = mapped_point['gear']
+                    if 'rpm' in mapped_point:
+                        mapped_point['RPM'] = mapped_point['rpm']
                     
                     # Set defaults for titlecase fields
                     mapped_point.setdefault('Throttle', 0)
-                    mapped_point.setdefault('Brake', 0) 
+                    mapped_point.setdefault('Brake', 0)
                     mapped_point.setdefault('Steering', 0)
                     mapped_point.setdefault('Speed', 0)
                     mapped_point.setdefault('timestamp', 0)
                     mapped_point.setdefault('rpm', 0)
+                    mapped_point.setdefault('Gear', 0)
                     
                     mapped_points.append(mapped_point)
                 
@@ -1671,6 +1682,10 @@ class SuperLapWidget(QWidget):
                             mapped_point['Steering'] = 0.0
                     if 'speed' in mapped_point:
                         mapped_point['Speed'] = mapped_point['speed']
+                    if 'gear' in mapped_point:
+                        mapped_point['Gear'] = mapped_point['gear']
+                    if 'rpm' in mapped_point:
+                        mapped_point['RPM'] = mapped_point['rpm']
                     
                     # Set defaults for titlecase fields
                     mapped_point.setdefault('Throttle', 0)
@@ -1679,6 +1694,7 @@ class SuperLapWidget(QWidget):
                     mapped_point.setdefault('Speed', 0)
                     mapped_point.setdefault('timestamp', 0)
                     mapped_point.setdefault('rpm', 0)
+                    mapped_point.setdefault('Gear', 0)
                     
                     mapped_points.append(mapped_point)
                 
@@ -1709,6 +1725,10 @@ class SuperLapWidget(QWidget):
                 # Update steering graph
                 if hasattr(self, 'steering_graph'):
                     self.steering_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length, label_a="Your Lap", label_b="SuperLap")
+                
+                # Update gear graph
+                if hasattr(self, 'gear_graph'):
+                    self.gear_graph.update_graph_comparison(user_lap_data, super_lap_data_mapped, track_length, label_a="Your Lap", label_b="SuperLap")
                 
         except Exception as e:
             logger.error(f"Error updating graphs with comparison data: {e}")
@@ -1754,6 +1774,10 @@ class SuperLapWidget(QWidget):
                             mapped_point['Steering'] = 0.0
                     if 'speed' in mapped_point:
                         mapped_point['Speed'] = mapped_point['speed']
+                    if 'gear' in mapped_point:
+                        mapped_point['Gear'] = mapped_point['gear']
+                    if 'rpm' in mapped_point:
+                        mapped_point['RPM'] = mapped_point['rpm']
                     
                     # Set defaults for titlecase fields
                     mapped_point.setdefault('Throttle', 0)
@@ -1762,6 +1786,7 @@ class SuperLapWidget(QWidget):
                     mapped_point.setdefault('Speed', 0)
                     mapped_point.setdefault('timestamp', 0)
                     mapped_point.setdefault('rpm', 0)
+                    mapped_point.setdefault('Gear', 0)
                     
                     mapped_points.append(mapped_point)
                 
@@ -1785,6 +1810,10 @@ class SuperLapWidget(QWidget):
                 # Update steering graph
                 if hasattr(self, 'steering_graph'):
                     self.steering_graph.update_graph(mapped_lap_data, track_length)
+                
+                # Update gear graph
+                if hasattr(self, 'gear_graph'):
+                    self.gear_graph.update_graph(mapped_lap_data, track_length)
                 
         except Exception as e:
             logger.error(f"Error updating graphs with single data: {e}")

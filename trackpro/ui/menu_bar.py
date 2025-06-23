@@ -74,6 +74,16 @@ def create_menu_bar(main_window):
     main_window.file_minimize_to_tray_action.triggered.connect(lambda checked: toggle_minimize_to_tray_from_menu(main_window, checked))
     settings_menu.addAction(main_window.file_minimize_to_tray_action)
     
+    # Eye tracking settings
+    eye_tracking_settings_action = QAction("Eye Tracking Settings...", main_window)
+    eye_tracking_settings_action.triggered.connect(main_window.show_eye_tracking_settings)
+    settings_menu.addAction(eye_tracking_settings_action)
+    
+    # Track map overlay settings
+    track_map_overlay_action = QAction("Track Map Overlay...", main_window)
+    track_map_overlay_action.triggered.connect(main_window.show_track_map_overlay_settings)
+    settings_menu.addAction(track_map_overlay_action)
+    
     # Add Check for Updates option
     update_action = QAction("Check for Updates", main_window)
     update_action.triggered.connect(main_window.check_for_updates)

@@ -2,6 +2,7 @@
 .venv/
 venv/
 ENV/
+trackpro_eyetracking/
 
 # Python bytecode files
 __pycache__/

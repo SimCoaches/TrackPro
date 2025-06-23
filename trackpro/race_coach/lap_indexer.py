@@ -63,6 +63,10 @@ class LapIndexer:
         # TIMING FIX: Pending lap completion to delay timing read
         self._pending_lap_completion: Dict[str, Any] | None = None
         
+        # LAP BOUNDARY FIX: Buffer recent frames to capture exact start/finish line crossings
+        self._frame_buffer: List[Dict[str, Any]] = []
+        self._frame_buffer_size: int = 120  # 2 seconds at 60Hz to capture S/F line crossings
+        
         # Rate limiting for warnings
         self._last_sdk_data_warning_time: float = 0.0
         self._last_sdk_data_warning_message: str = ""
@@ -199,6 +203,63 @@ class LapIndexer:
             logger.warning(message)
             self._last_sdk_data_warning_time = current_time
             self._last_sdk_data_warning_message = message
+    
+    def _find_optimal_lap_start(self, current_frame: Dict[str, Any]) -> tuple[List[Dict[str, Any]], float]:
+        """Find the optimal lap start point by looking backwards for the S/F line crossing.
+        
+        Args:
+            current_frame: The frame where lap completion was detected
+            
+        Returns:
+            tuple: (frames_from_start, optimal_start_tick)
+        """
+        if not self._frame_buffer:
+            # No buffer available, use current frame
+            logger.info("[LAP BOUNDARY] No frame buffer - using current frame as lap start")
+            return [current_frame], current_frame.get("SessionTimeSecs", 0.0)
+        
+        # Look for the frame closest to LapDistPct = 0.0 in recent history
+        best_frame_idx = len(self._frame_buffer) - 1  # Default to most recent
+        best_distance_from_zero = float('inf')
+        
+        # Search backwards through recent frames (up to 1 second / 60 frames)
+        search_frames = min(60, len(self._frame_buffer))
+        
+        for i in range(len(self._frame_buffer) - search_frames, len(self._frame_buffer)):
+            frame = self._frame_buffer[i]
+            lap_dist_pct = frame.get("LapDistPct", 1.0)
+            
+            # Handle wrap-around case: if we see high values followed by low values
+            if i > 0:
+                prev_frame = self._frame_buffer[i-1]
+                prev_lap_dist = prev_frame.get("LapDistPct", 1.0)
+                
+                # Detect S/F line crossing: high value (>0.9) to low value (<0.1)
+                if prev_lap_dist > 0.9 and lap_dist_pct < 0.1:
+                    logger.info(f"[LAP BOUNDARY] 🎯 S/F crossing detected: {prev_lap_dist:.3f} → {lap_dist_pct:.3f}")
+                    best_frame_idx = i
+                    break
+            
+            # Also track frame closest to 0.0 as fallback
+            distance_from_zero = abs(lap_dist_pct)
+            if distance_from_zero < best_distance_from_zero:
+                best_distance_from_zero = distance_from_zero
+                best_frame_idx = i
+        
+        # Extract frames from the optimal start point to current
+        optimal_start_frame = self._frame_buffer[best_frame_idx]
+        optimal_start_tick = optimal_start_frame.get("SessionTimeSecs", current_frame.get("SessionTimeSecs", 0.0))
+        
+        # Get all frames from the optimal start to now
+        frames_from_start = self._frame_buffer[best_frame_idx:] + [current_frame]
+        
+        start_lap_dist = optimal_start_frame.get("LapDistPct", 0.0)
+        current_lap_dist = current_frame.get("LapDistPct", 0.0)
+        
+        logger.info(f"[LAP BOUNDARY] ✅ Optimal lap start found: LapDistPct={start_lap_dist:.3f} → {current_lap_dist:.3f}")
+        logger.info(f"[LAP BOUNDARY] 📊 Recovered {len(frames_from_start)} frames starting from optimal boundary")
+        
+        return frames_from_start, optimal_start_tick
 
     def on_frame(self, ir_data: Dict[str, Any]) -> None:
         """Process a single telemetry frame to detect laps and boundaries.
@@ -273,6 +334,11 @@ class LapIndexer:
 
         frame_copy = dict(ir_data) # Guard against external mutation
         
+        # LAP BOUNDARY FIX: Maintain frame buffer for optimal lap start detection
+        self._frame_buffer.append(frame_copy)
+        if len(self._frame_buffer) > self._frame_buffer_size:
+            self._frame_buffer.pop(0)  # Remove oldest frame
+        
         # Add lap metadata to this frame for analysis
         if self._active_lap_number_internal is not None:
             frame_copy["lap_internal_number"] = self._active_lap_number_internal
@@ -298,9 +364,21 @@ class LapIndexer:
             logger.info(f"[LapIndexer] 🎯 TRACKING STRATEGY: Track lap {lap_to_track} (will complete next)")
             logger.info(f"[LapIndexer] 📊 LOGIC: Collect telemetry for lap {lap_to_track}, save as lap {lap_to_track}")
             
+            # LAP BOUNDARY FIX: For initialization, check if we can find better start point
+            if is_mid_session_join and current_lap_dist_pct_initial > 0.1:
+                # We're joining mid-lap, use current position as start
+                logger.info(f"[LAP BOUNDARY] Mid-session join at {current_lap_dist_pct_initial:.3f} - using current position")
+                optimal_start_tick = now_tick
+                optimal_frames = [frame_copy]
+            else:
+                # Try to find optimal start point even for initialization
+                optimal_frames, optimal_start_tick = self._find_optimal_lap_start(frame_copy)
+                if len(optimal_frames) == 1:  # No better start found
+                    optimal_start_tick = now_tick
+            
             self._start_new_lap(
                 lap_number_internal=lap_to_track, # Track the lap that will complete next
-                start_tick=now_tick,
+                start_tick=optimal_start_tick,  # Use optimal start time
                 on_pit_start=on_pit_road_now,
                 # LapInvalidated refers to ir["Lap"], which is current_lap_driving_sdk here.
                 # So, this flag is for the lap we are *just starting*.
@@ -309,12 +387,15 @@ class LapIndexer:
                 initial_lap_dist_pct=current_lap_dist_pct_initial,
                 is_mid_session_join=is_mid_session_join
             )
-            # Add metadata to the initialization frame
-            init_frame = dict(frame_copy)
-            init_frame["_assigned_to_lap"] = lap_to_track
-            init_frame["_frame_type"] = "initialization"
-            init_frame["_is_mid_session_join"] = is_mid_session_join
-            self._active_lap_frames.append(init_frame)
+            
+            # Add optimal frames to the new lap
+            for frame in optimal_frames:
+                # Add metadata to the initialization frame
+                init_frame = dict(frame)
+                init_frame["_assigned_to_lap"] = lap_to_track
+                init_frame["_frame_type"] = "initialization"
+                init_frame["_is_mid_session_join"] = is_mid_session_join
+                self._active_lap_frames.append(init_frame)
             self._last_lap_completed_sdk = current_lap_completed_sdk
             self._previous_frame_ir_data = frame_copy
             
@@ -444,13 +525,19 @@ class LapIndexer:
                 
                 logger.info(f"[TIMING FIX] 📝 PENDING: Lap {lap_that_just_finished} data stored for 3-second delayed timing")
                 
-                # IMMEDIATELY start tracking the new lap to avoid sync issues
+                # LAP BOUNDARY FIX: Find optimal start point for new lap using frame buffer
+                optimal_frames, optimal_start_tick = self._find_optimal_lap_start(frame_copy)
+                
+                # IMMEDIATELY start tracking the new lap with optimal boundary detection
                 self._start_new_lap(
                     lap_number_internal=next_lap_to_collect,
-                    start_tick=now_tick,
+                    start_tick=optimal_start_tick,  # Use optimal start time
                     on_pit_start=on_pit_road_now,
                     invalid_sdk_flag_for_this_lap=lap_invalidated_flag_now
                 )
+                
+                # Add the optimal frames to the new lap (they represent the true lap start)
+                self._active_lap_frames.extend(optimal_frames)
                 
                 logger.info(f"[TIMING FIX] 🚀 IMMEDIATE: Started tracking lap {next_lap_to_collect} (no sync delay)")
                 

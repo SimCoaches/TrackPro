@@ -11,11 +11,14 @@ class ThrottleGraphWidget(GraphBase):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Create the plot widget
+        # Create the plot widget with anti-aliasing enabled
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
         self.plot_widget.setTitle("Throttle vs Distance")
         self.plot_widget.setLabel('bottom', "Distance (m)")
+        
+        # Enable anti-aliasing for smoother lines
+        self.plot_widget.setAntialiasing(True)
         
         # Configure Y-Axis for throttle (0-100%) with better styling
         left_axis = self.plot_widget.getAxis('left')
@@ -107,8 +110,12 @@ class ThrottleGraphWidget(GraphBase):
         # Default labels (can be overridden in update methods)
         self.label_a = "Lap A"
         self.label_b = "Lap B" 
-        self.throttle_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name=f"{self.label_a} Throttle", autoDownsample=False, clipToView=False)
-        self.throttle_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name=f"{self.label_b} Throttle", autoDownsample=False, clipToView=False)
+        # Use improved pen settings for smoother, higher-quality lines
+        smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
+        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine, cosmetic=True)
+        
+        self.throttle_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Throttle", autoDownsample=False, clipToView=False, antialias=True)
+        self.throttle_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Throttle", autoDownsample=False, clipToView=False, antialias=True)
         
         # Initially hide comparison curves
         self.throttle_curve_b.hide()

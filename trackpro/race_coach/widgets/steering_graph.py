@@ -12,11 +12,14 @@ class SteeringGraphWidget(GraphBase):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Create the plot widget
+        # Create the plot widget with anti-aliasing enabled
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
         self.plot_widget.setTitle("Steering vs Distance")
         self.plot_widget.setLabel('bottom', "Distance (m)")
+        
+        # Enable anti-aliasing for smoother lines
+        self.plot_widget.setAntialiasing(True)
         
         # Configure Y-Axis for steering (-100% to 100%) with better styling
         left_axis = self.plot_widget.getAxis('left')
@@ -100,8 +103,12 @@ class SteeringGraphWidget(GraphBase):
         # Default labels (can be overridden in update methods)
         self.label_a = "Lap A"
         self.label_b = "Lap B"
-        self.steering_curve = self.plot_widget.plot(pen=pg.mkPen('#ff6b6b', width=2.5), name=f"{self.label_a} Steering", autoDownsample=False, clipToView=False)
-        self.steering_curve_b = self.plot_widget.plot(pen=pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine), name=f"{self.label_b} Steering", autoDownsample=False, clipToView=False)
+        # Use improved pen settings for smoother, higher-quality lines
+        smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
+        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine, cosmetic=True)
+        
+        self.steering_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Steering", autoDownsample=False, clipToView=False, antialias=True)
+        self.steering_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Steering", autoDownsample=False, clipToView=False, antialias=True)
         
         # Initially hide comparison curve
         self.steering_curve_b.hide()

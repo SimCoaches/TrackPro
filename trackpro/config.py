@@ -16,6 +16,16 @@ DEFAULT_CONFIG = {
     },
     'ui': {
         'minimize_to_tray': False  # Whether to minimize to system tray instead of closing
+    },
+    'eye_tracking': {
+        'enabled': False,  # Eye tracking disabled by default
+        'auto_start_with_session': True,  # Automatically start recording when racing session begins
+        'auto_calibrate_on_startup': False,  # Prompt for calibration when TrackPro starts
+        'camera_index': 0,  # Which camera to use (0 = default)
+        'recording_fps': 30,  # Eye tracking recording frame rate
+        'require_calibration': True,  # Require calibration before recording
+        'show_gaze_overlay': False,  # Show real-time gaze overlay during racing (performance impact)
+        'save_raw_video': False  # Save raw camera video alongside gaze data (large files)
     }
 }
 
@@ -54,6 +64,9 @@ class Config:
                     # Ensure ui config exists
                     if 'ui' not in config:
                         config['ui'] = DEFAULT_CONFIG['ui']
+                    # Ensure eye_tracking config exists
+                    if 'eye_tracking' not in config:
+                        config['eye_tracking'] = DEFAULT_CONFIG['eye_tracking']
                     return config
             
             # Create default config
@@ -150,6 +163,47 @@ class Config:
     def minimize_to_tray(self) -> bool:
         """Check if minimize to tray is enabled."""
         return self.get('ui.minimize_to_tray', False)
+
+    # Eye tracking configuration properties
+    @property
+    def eye_tracking_enabled(self) -> bool:
+        """Check if eye tracking is enabled."""
+        return self.get('eye_tracking.enabled', False)
+    
+    @property
+    def eye_tracking_auto_start(self) -> bool:
+        """Check if eye tracking should auto-start with racing sessions."""
+        return self.get('eye_tracking.auto_start_with_session', True)
+    
+    @property
+    def eye_tracking_auto_calibrate(self) -> bool:
+        """Check if eye tracking should auto-calibrate on startup."""
+        return self.get('eye_tracking.auto_calibrate_on_startup', False)
+    
+    @property
+    def eye_tracking_camera_index(self) -> int:
+        """Get the camera index for eye tracking."""
+        return self.get('eye_tracking.camera_index', 0)
+    
+    @property
+    def eye_tracking_fps(self) -> int:
+        """Get the eye tracking recording frame rate."""
+        return self.get('eye_tracking.recording_fps', 30)
+    
+    @property
+    def eye_tracking_require_calibration(self) -> bool:
+        """Check if calibration is required before recording."""
+        return self.get('eye_tracking.require_calibration', True)
+    
+    @property
+    def eye_tracking_show_overlay(self) -> bool:
+        """Check if real-time gaze overlay should be shown."""
+        return self.get('eye_tracking.show_gaze_overlay', False)
+    
+    @property
+    def eye_tracking_save_video(self) -> bool:
+        """Check if raw camera video should be saved."""
+        return self.get('eye_tracking.save_raw_video', False)
 
 # Create global config instance
 config = Config() 

@@ -37,9 +37,10 @@ import math
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTabWidget, QFrame, QSizePolicy, QMessageBox, QDialog,
-    QTextEdit, QDialogButtonBox, QInputDialog
+    QTextEdit, QDialogButtonBox, QInputDialog, QProgressBar
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication
 
 # Import the individual tab modules
 from .overview_tab import OverviewTab
@@ -93,286 +94,274 @@ class RaceCoachWidget(QWidget):
         self._initialization_complete = False
         self._initial_connection_attempted = False
 
-        # Initialize UI
-        logger.info("🔍 Calling setup_ui()...")
-        self.setup_ui()
-        logger.info("✅ setup_ui() completed")
+        # Initialize MINIMAL UI first for instant display
+        logger.info("🔍 Creating minimal UI for instant display...")
+        self.setup_minimal_ui()
+        logger.info("✅ Minimal UI created - Race Coach visible instantly")
 
-        # Initialize the central telemetry monitor worker for AI coaching
-        try:
-            logger.debug("🎙️ [INIT] Importing TelemetryMonitorWorker...")
-            from ..utils.telemetry_worker import TelemetryMonitorWorker
-            logger.debug("🎙️ [INIT] Creating TelemetryMonitorWorker instance...")
-            # Initialize without superlap_id first - will be set later when user selects one
-            self.telemetry_monitor_worker = TelemetryMonitorWorker()
-            logger.info("✅ TelemetryMonitorWorker initialized for AI coaching")
-            logger.debug(f"🎙️ [INIT] TelemetryMonitorWorker object: {self.telemetry_monitor_worker}")
-        except Exception as telemetry_error:
-            logger.error(f"❌ Error initializing TelemetryMonitorWorker: {telemetry_error}")
-            self.telemetry_monitor_worker = None
+        # ⚡ PERFORMANCE: Defer ALL heavy initialization to background
+        # This ensures the UI appears instantly when clicked
+        self.telemetry_monitor_worker = None  # Will be created later
+        self.data_manager = None
+        self.telemetry_saver = None
+        self.iracing_lap_saver = None
+        
+        # Initialize tab references for lazy loading
+        self.overview_tab = None
+        self.telemetry_tab = None
+        self.superlap_tab = None
+        self.videos_tab = None
+        
+        # Track which tabs are being created to prevent duplicates
+        self._tabs_being_created = set()
+        self._tabs_created = set()
 
         # Mark basic initialization as complete
         self._initialization_complete = True
-        logger.info("✅ Basic initialization complete")
+        logger.info("✅ Basic initialization complete - heavy work deferred")
 
-        # Only connect to iRacing API if we have one (non-lazy mode)
-        if self.iracing_api is not None:
-            logger.info("🔍 Non-lazy mode: setting up iRacing API connections...")
-            self._setup_iracing_api_connections()
-        else:
-            logger.info("🔍 RaceCoachWidget created in lazy initialization mode")
-            # Start lazy initialization immediately
-            logger.info("🔍 Starting lazy initialization work...")
-            self._do_lazy_initialization_work()
+        # Start background initialization immediately but non-blocking
+        QTimer.singleShot(50, self._start_background_initialization)
 
-    def showEvent(self, event):
-        """Handle the widget being shown - start deferred monitoring if needed."""
-        logger.info("🔍 RaceCoachWidget.showEvent() called - widget is being shown")
-        super().showEvent(event)
+    def setup_minimal_ui(self):
+        """Create minimal UI that appears instantly - defer heavy components."""
+        main_layout = QVBoxLayout(self)
+
+        # Simple loading indicator
+        self.loading_frame = QFrame()
+        self.loading_frame.setStyleSheet("""
+            background-color: #1a1a1a;
+            border: 2px solid #FF4500;
+            border-radius: 10px;
+            padding: 20px;
+        """)
+        loading_layout = QVBoxLayout(self.loading_frame)
         
-        # Start deferred monitoring if we have an iRacing API and haven't started monitoring yet
-        if (hasattr(self, 'iracing_api') and self.iracing_api and 
-            hasattr(self.iracing_api, 'start_deferred_monitoring') and
-            not hasattr(self, '_monitoring_started')):
-            
-            logger.info("🚀 Race Coach widget shown - starting deferred iRacing monitoring...")
-            try:
-                success = self.iracing_api.start_deferred_monitoring()
-                if success:
-                    logger.info("✅ Deferred iRacing monitoring started successfully")
-                    self._monitoring_started = True
-                else:
-                    logger.warning("⚠️ Failed to start deferred iRacing monitoring")
-            except Exception as e:
-                logger.error(f"❌ Error starting deferred monitoring: {e}")
-        elif hasattr(self, '_monitoring_started') and self._monitoring_started:
-            logger.info("✅ Deferred iRacing monitoring already started")
-        elif not hasattr(self, 'iracing_api') or not self.iracing_api:
-            logger.info("⚠️ No iRacing API available for deferred monitoring")
-        elif not hasattr(self.iracing_api, 'start_deferred_monitoring'):
-            logger.info("⚠️ iRacing API doesn't support deferred monitoring")
+        loading_title = QLabel("🏁 TrackPro Race Coach")
+        loading_title.setAlignment(Qt.AlignCenter)
+        loading_title.setStyleSheet("color: #FF4500; font-size: 24px; font-weight: bold;")
+        loading_layout.addWidget(loading_title)
+        
+        self.loading_label = QLabel("Initializing advanced coaching systems...")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("color: #CCCCCC; font-size: 14px; margin: 20px;")
+        loading_layout.addWidget(self.loading_label)
+        
+        # Progress indicator
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(10)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #444;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #222;
+            }
+            QProgressBar::chunk {
+                background-color: #FF4500;
+                border-radius: 3px;
+            }
+        """)
+        loading_layout.addWidget(self.progress_bar)
+        
+        main_layout.addWidget(self.loading_frame)
+        
+        # The actual UI will be created in background and swapped in when ready
+        self.actual_ui_widget = None
 
-    def _setup_iracing_api_connections(self):
-        """Set up connections to the iRacing API."""
+    def _start_background_initialization(self):
+        """Start all heavy initialization in background thread."""
+        if self._lazy_init_in_progress:
+                return
+                
+        self._lazy_init_in_progress = True
+        logger.info("🔄 Starting background initialization...")
+        
+        # Update progress
+        self.loading_label.setText("Loading AI coaching systems...")
+        self.progress_bar.setValue(20)
+        
+        # Start the initialization chain
+        QTimer.singleShot(100, self._step_1_init_telemetry)
+    
+    def _step_1_init_telemetry(self):
+        """Step 1: Initialize telemetry worker."""
         try:
-            # Try SimpleIRacingAPI method names first
-            if hasattr(self.iracing_api, "register_on_connection_changed"):
-                logger.info("Using SimpleIRacingAPI callback methods")
-                self.iracing_api.register_on_connection_changed(self.on_iracing_connected)
-                
-                # 🔧 BUGFIX: Create a unified telemetry callback that handles both UI and AI coaching
-                # This prevents conflicts from multiple registrations
-                def unified_telemetry_callback(telemetry_data):
-                    """Unified telemetry callback that handles both UI updates and AI coaching."""
-                    try:
-                        # Always update UI with telemetry data
-                        self.on_telemetry_data(telemetry_data)
-                        
-                        # Debug AI coaching conditions  
-                        if not hasattr(unified_telemetry_callback, '_debug_count'):
-                            unified_telemetry_callback._debug_count = 0
-                        unified_telemetry_callback._debug_count += 1
-                        
-                        # ALWAYS try to forward to AI coach if worker exists - let the worker decide
-                        if hasattr(self, 'telemetry_monitor_worker') and self.telemetry_monitor_worker is not None:
-                            try:
-                                self.telemetry_monitor_worker.add_telemetry_point(telemetry_data)
-                                
-                                # Log success frequently to verify it's working
-                                if unified_telemetry_callback._debug_count % 60 == 0:  # Every second
-                                    ai_active = (hasattr(self.telemetry_monitor_worker, 'ai_coach') and 
-                                               self.telemetry_monitor_worker.ai_coach is not None and
-                                               hasattr(self.telemetry_monitor_worker, 'is_monitoring') and
-                                               self.telemetry_monitor_worker.is_monitoring)
-                                    logger.info(f"✅ [TELEMETRY FLOW] Forwarding to AI worker - AI active: {ai_active}")
-                                    print(f"🎯 [TELEMETRY] Forwarding to AI worker - AI active: {ai_active}")
-                            except Exception as worker_error:
-                                logger.error(f"❌ [AI TELEMETRY] Error forwarding to AI worker: {worker_error}")
-                        else:
-                            # Only log missing worker occasionally
-                            if unified_telemetry_callback._debug_count % 1200 == 0:  # Every 20 seconds
-                                logger.debug(f"🔍 [AI DEBUG] No telemetry worker available for AI coaching")
-                            
-                    except Exception as e:
-                        logger.error(f"❌ [UNIFIED TELEMETRY] Error in unified telemetry callback: {e}")
-                
-                # Register the unified callback ONCE
-                self.iracing_api.register_on_telemetry_data(unified_telemetry_callback)
-                logger.info("✅ [UNIFIED TELEMETRY] Single unified telemetry callback registered for UI + AI coaching")
-
-                # Connect the new signal
-                if hasattr(self.iracing_api, "sessionInfoUpdated"):
-                    logger.info("Connecting sessionInfoUpdated signal to UI update slot.")
-                    self.iracing_api.sessionInfoUpdated.connect(self._update_connection_status)
-                else:
-                    logger.warning("iRacing API instance does not have sessionInfoUpdated signal.")
-
-                logger.info("Deferring iRacing connection until Race Coach tab is shown")
-
-            # Fall back to IRacingAPI method names
-            elif hasattr(self.iracing_api, "register_connection_callback"):
-                logger.warning("Legacy IRacingAPI callback registration attempted - this might not work as expected.")
-            else:
-                logger.warning("Unable to register callbacks with iRacing API - incompatible implementation")
+            self._update_progress(30, "Initializing telemetry systems...")
+            logger.debug("🎙️ [BACKGROUND] Creating TelemetryMonitorWorker...")
+            from ..utils.telemetry_worker import TelemetryMonitorWorker
+            self.telemetry_monitor_worker = TelemetryMonitorWorker()
+            logger.info("✅ TelemetryMonitorWorker initialized in background")
         except Exception as e:
-            logger.error(f"Error setting up callbacks for iRacing API: {e}")
+            logger.error(f"❌ Error initializing TelemetryMonitorWorker: {e}")
+            self.telemetry_monitor_worker = None
+        
+        # Move to next step
+        QTimer.singleShot(100, self._step_2_init_data)
 
-    def _do_lazy_initialization_work(self):
-        """Do the actual heavy initialization work in the background."""
-        logger.info("🔍 Starting _do_lazy_initialization_work()")
+    def _step_2_init_data(self):
+        """Step 2: Initialize data components."""
         try:
-            # Create data manager
-            try:
-                logger.info("🔍 Creating DataManager...")
-                from ..data_manager import DataManager
-                self.data_manager = DataManager()
-                logger.info("✅ DataManager initialized successfully")
-            except Exception as data_error:
-                logger.error(f"❌ Error initializing DataManager: {data_error}")
-                self.data_manager = None
+            self._update_progress(50, "Setting up database connections...")
+            logger.debug("🗄️ [BACKGROUND] Creating DataManager...")
+            from ..data_manager import DataManager
+            self.data_manager = DataManager()
 
-            # Create TelemetrySaver for local saving
-            try:
-                logger.info("🔍 Creating TelemetrySaver...")
-                from ..telemetry_saver import TelemetrySaver
-                self.telemetry_saver = TelemetrySaver(data_manager=self.data_manager)
-                logger.info("✅ TelemetrySaver initialized successfully")
-            except Exception as telemetry_error:
-                logger.error(f"❌ Error initializing TelemetrySaver: {telemetry_error}")
-                self.telemetry_saver = None
-                
-            # Create a Supabase client for lap saving
-            try:
-                from ...database.supabase_client import get_supabase_client
-                supabase_client = get_supabase_client()
-                if supabase_client:
-                    logger.info("Created Supabase client for lap saving")
-                else:
-                    logger.warning("Failed to create Supabase client")
-                    
-                from ..iracing_lap_saver import IRacingLapSaver
-                self.iracing_lap_saver = IRacingLapSaver()
-                if supabase_client:
-                    self.iracing_lap_saver.set_supabase_client(supabase_client)
-                    logger.info("Successfully passed Supabase client to IRacingLapSaver")
-                else:
-                    logger.warning("Could not pass Supabase client to IRacingLapSaver")
-                logger.info("IRacingLapSaver initialized successfully")
-                
-                logger.info("🎯 IMMEDIATE SAVING AUTOMATICALLY ACTIVATED - Zero lag lap saving enabled!")
-            except Exception as e:
-                logger.error(f"Failed to initialize IRacingLapSaver: {e}")
-                self.iracing_lap_saver = None
+            logger.debug("💾 [BACKGROUND] Creating TelemetrySaver...")
+            from ..telemetry_saver import TelemetrySaver
+            self.telemetry_saver = TelemetrySaver()
             
-            # Create IRacingAPI
-            try:
-                logger.info("🔍 Attempting to initialize SimpleIRacingAPI...")
-                from ..simple_iracing import SimpleIRacingAPI
-                self.iracing_api = SimpleIRacingAPI()
-                
-                logger.info("✅ SimpleIRacingAPI initialized successfully")
-                logger.info(f"🔍 SimpleIRacingAPI object: {self.iracing_api}")
-                
-                # Connect the data manager to the API for telemetry saving
-                if self.data_manager is not None:
-                    try:
-                        self.iracing_api.set_data_manager(self.data_manager)
-                        logger.info("Connected data manager to SimpleIRacingAPI for telemetry saving")
-                    except Exception as connect_error:
-                        logger.error(f"Error connecting data manager to SimpleIRacingAPI: {connect_error}")
-                
-                # Connect the telemetry saver to the API
-                if self.telemetry_saver is not None:
-                    try:
-                        self.iracing_api.set_telemetry_saver(self.telemetry_saver)
-                        logger.info("Connected telemetry saver to SimpleIRacingAPI")
-                    except Exception as ts_error:
-                        logger.error(f"Error connecting telemetry saver to SimpleIRacingAPI: {ts_error}")
-                
-                # Connect the Supabase lap saver to the API
-                if self.iracing_lap_saver is not None:
-                    try:
-                        from ...auth.user_manager import get_current_user
-                        user = get_current_user()
-                        if user and hasattr(user, 'id') and user.is_authenticated:
-                            user_id = user.id
-                            self.iracing_lap_saver.set_user_id(user_id)
-                            logger.info(f"Set user ID for lap saver: {user_id}")
+            logger.debug("🏁 [BACKGROUND] Creating IRacingLapSaver...")
+            from ..iracing_lap_saver import IRacingLapSaver
+            self.iracing_lap_saver = IRacingLapSaver()
+            logger.info("✅ Data components initialized in background")
+        except Exception as e:
+            logger.error(f"❌ Error initializing data components: {e}")
+            self.data_manager = None
+            self.telemetry_saver = None
+            self.iracing_lap_saver = None
+        
+        # Move to next step
+        QTimer.singleShot(100, self._step_3_create_ui)
 
-                            # Store the parameters needed to start monitoring later
-                            self.iracing_api._deferred_monitor_params = {
-                                'supabase_client': supabase_client,
-                                'user_id': user_id,
-                                'lap_saver': self.iracing_lap_saver
-                            }
-                            logger.info("✅ Deferred iRacing session monitor thread start until needed")
+    def _step_3_create_ui(self):
+        """Step 3: Create the actual UI."""
+        try:
+            self._update_progress(70, "Building user interface...")
+            logger.debug("🎨 [BACKGROUND] Creating actual UI...")
+            self._create_actual_ui()
+            logger.info("✅ Actual UI created in background")
+        except Exception as e:
+            logger.error(f"❌ Error creating actual UI: {e}")
+        
+        # Move to next step
+        QTimer.singleShot(100, self._step_4_setup_connections)
 
-                            if hasattr(self.iracing_api, '_session_info'):
-                                self.iracing_api._session_info['user_id'] = user_id
-                                logger.debug(f"Added user_id to session_info: {user_id}")
-                        else:
-                            logger.warning("No authenticated user available from auth module")
-                            # BUGFIX: Start basic iRacing connection even without authentication
-                            # The app should still be able to monitor iRacing for telemetry
-                            logger.info("Starting basic iRacing connection without cloud features")
-                            self.iracing_api._deferred_monitor_params = {
-                                'supabase_client': None,  # No cloud saving
-                                'user_id': 'anonymous',
-                                'lap_saver': None  # No lap saving
-                            }
-                            logger.info("✅ Deferred basic iRacing monitoring setup for offline use")
-                    except Exception as user_error:
-                        logger.error(f"Error getting current user for lap saver: {user_error}")
-                    
-                    try:
-                        if hasattr(self.iracing_api, 'set_lap_saver'):
-                            result = self.iracing_api.set_lap_saver(self.iracing_lap_saver)
-                            if result:
-                                logger.info("Successfully connected Supabase lap saver to SimpleIRacingAPI")
-                            else:
-                                logger.error("Failed to connect lap saver to SimpleIRacingAPI")
-                    except Exception as ls_error:
-                        logger.error(f"Error connecting Supabase lap saver to SimpleIRacingAPI: {ls_error}")
-                
-                # ADDITIONAL BUGFIX: If no deferred monitor params were set above, create basic ones
-                if not hasattr(self.iracing_api, '_deferred_monitor_params') or not self.iracing_api._deferred_monitor_params:
-                    logger.info("No deferred monitor params set - creating basic offline monitoring setup")
-                    self.iracing_api._deferred_monitor_params = {
-                        'supabase_client': None,  # No cloud saving
-                        'user_id': 'anonymous',
-                        'lap_saver': None  # No lap saving
-                    }
-                    logger.info("✅ Basic offline iRacing monitoring setup complete")
-                
-                # Set up API connections
-                self._setup_iracing_api_connections()
-                
-            except Exception as simple_api_error:
-                logger.error(f"Error initializing SimpleIRacingAPI: {simple_api_error}")
-                # Fall back to original IRacingAPI if SimpleIRacingAPI fails
-                try:
-                    logger.info("Falling back to IRacingAPI...")
-                    from ..iracing_api import IRacingAPI
-                    self.iracing_api = IRacingAPI()
-                    logger.info("IRacingAPI initialized successfully")
-                    self._setup_iracing_api_connections()
-                except Exception as api_error:
-                    logger.error(f"Error initializing IRacingAPI: {api_error}")
-                    self.iracing_api = None
+    def _step_4_setup_connections(self):
+        """Step 4: Setup iRacing connections."""
+        try:
+            self._update_progress(90, "Connecting to iRacing...")
+            logger.debug("🏎️ [BACKGROUND] Setting up iRacing connections...")
+            self._setup_iracing_connections()
+            logger.info("✅ iRacing connections set up in background")
+        except Exception as e:
+            logger.error(f"❌ Error setting up iRacing connections: {e}")
+        
+        # Move to final step
+        QTimer.singleShot(100, self._step_5_complete)
+
+    def _step_5_complete(self):
+        """Step 5: Complete initialization."""
+        try:
+            self._update_progress(100, "Ready!")
+            logger.info("✅ Race Coach initialization complete!")
+            self._complete_initialization()
+        except Exception as e:
+            logger.error(f"❌ Error completing initialization: {e}")
+            # Show error state
+            self.loading_label.setText("Error during initialization")
+            self.progress_bar.setValue(0)
+
+    def _update_progress(self, value, message):
+        """Update progress bar and message on main thread."""
+        self.progress_bar.setValue(value)
+        self.loading_label.setText(message)
+
+    def _create_actual_ui(self):
+        """Create the actual Race Coach UI - moved to background."""
+        try:
+            logger.debug("🎨 [BACKGROUND] Creating actual UI widget...")
+            self.actual_ui_widget = QWidget()
+            self.setup_ui_on_widget(self.actual_ui_widget)
+            logger.info("✅ Actual UI widget created successfully")
+        except Exception as e:
+            logger.error(f"❌ Error creating actual UI: {e}")
+            self.actual_ui_widget = None
+
+    def _setup_iracing_connections(self):
+        """Setup iRacing connections - moved to background."""
+        try:
+            self._update_progress(90, "Connecting to iRacing...")
+            # Try to get shared API
+            from PyQt5.QtWidgets import QApplication
+            main_window = None
+            for widget in QApplication.topLevelWidgets():
+                if hasattr(widget, 'get_shared_iracing_api'):
+                    main_window = widget
+                    break
             
-            # Mark lazy initialization as complete
+            if main_window and hasattr(main_window, 'get_shared_iracing_api'):
+                shared_api = main_window.get_shared_iracing_api()
+                if shared_api:
+                    self.iracing_api = shared_api
+                logger.info("✅ Connected to global iRacing API")
+                
+                # Connect signals for connection status updates
+                if hasattr(self.iracing_api, 'connection_changed'):
+                    self.iracing_api.connection_changed.connect(self.on_iracing_connected)
+                
+                # Update initial connection status
+                if hasattr(self.iracing_api, 'is_connected') and self.iracing_api.is_connected():
+                    QTimer.singleShot(100, lambda: self.on_iracing_connected(True))
+                    logger.info("✅ iRacing already connected - updating UI")
+                else:
+                    QTimer.singleShot(100, lambda: self.on_iracing_connected(False))
+            else:
+                logger.warning("❌ Could not get shared iRacing API")
+                QTimer.singleShot(100, lambda: self.on_iracing_connected(False))
+            
+            logger.info("✅ iRacing connections set up in background")
+            
+        except Exception as e:
+            logger.error(f"❌ Error setting up iRacing connections: {e}")
+            QTimer.singleShot(100, lambda: self.on_iracing_connected(False))
+
+    def _complete_initialization(self):
+        """Complete initialization and show the actual UI."""
+        try:
+            self.progress_bar.setValue(100)
+            self.loading_label.setText("Ready!")
+            
+            # Replace loading UI with actual UI
+            if self.actual_ui_widget:
+                # Clear the layout
+                while self.layout().count():
+                    child = self.layout().takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+                
+                # Add the actual UI
+                self.layout().addWidget(self.actual_ui_widget)
+                
+                logger.info("✅ Race Coach initialization completed - UI swapped in")
+            else:
+                logger.error("❌ Actual UI widget not created")
+                
             self._lazy_init_completed = True
             self._lazy_init_in_progress = False
             
-            logger.info("Lazy initialization completed successfully")
+        except Exception as e:
+            logger.error(f"❌ Error completing initialization: {e}")
+            self._show_error_ui(str(e))
+
+    def _show_error_ui(self, error_message):
+        """Show error UI if initialization fails."""
+        try:
+            self.loading_label.setText(f"Initialization failed: {error_message}")
+            self.progress_bar.setVisible(False)
+            
+            error_label = QLabel("⚠️ Please try restarting TrackPro or check the logs for details.")
+            error_label.setStyleSheet("color: #FF6666; font-size: 12px; margin: 10px;")
+            error_label.setWordWrap(True)
+            self.loading_frame.layout().addWidget(error_label)
             
         except Exception as e:
-            logger.error(f"Error during lazy initialization: {e}")
-            self._lazy_init_in_progress = False
+            logger.error(f"❌ Error showing error UI: {e}")
 
-    def setup_ui(self):
-        """Set up the race coach UI components."""
-        main_layout = QVBoxLayout(self)
+    def setup_ui_on_widget(self, widget):
+        """Set up the race coach UI components on the given widget."""
+        main_layout = QVBoxLayout(widget)
 
         # Status bar at the top
         self.status_bar = QWidget()
@@ -418,6 +407,19 @@ class RaceCoachWidget(QWidget):
         self.lap_debug_button.clicked.connect(self.show_lap_debug_dialog)
         status_layout.addWidget(self.lap_debug_button)
         
+        # Add Corner Detection button
+        self.corner_detection_button = QPushButton("🏁 Corner Detection")
+        self.corner_detection_button.setStyleSheet("""
+            background-color: #ff9800;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+        """)
+        self.corner_detection_button.setToolTip("Analyze track to automatically detect corners (Task 2.2)")
+        self.corner_detection_button.clicked.connect(self.show_corner_detection_dialog)
+        status_layout.addWidget(self.corner_detection_button)
+
         # Add AI Coach control button
         self.ai_coach_button = QPushButton("🤖 AI Coach: OFF")
         self.ai_coach_button.setStyleSheet("""
@@ -430,19 +432,14 @@ class RaceCoachWidget(QWidget):
         self.ai_coach_button.clicked.connect(self.toggle_ai_coaching)
         status_layout.addWidget(self.ai_coach_button)
 
-        # Add AI Coach Volume Control
-        try:
-            from .ai_coach_volume_widget import AICoachVolumeWidget
-            self.ai_coach_volume_widget = AICoachVolumeWidget(self)
-            self.ai_coach_volume_widget.setMaximumWidth(300)  # Constrain width
-            status_layout.addWidget(self.ai_coach_volume_widget)
-            logger.info("✅ [VOLUME UI] AI Coach volume control added to status bar")
-        except Exception as e:
-            logger.error(f"❌ [VOLUME UI] Failed to add volume control: {e}")
-            # Add a simple label as fallback
-            volume_label = QLabel("🔊 Volume controls unavailable")
-            volume_label.setStyleSheet("color: #888; font-style: italic;")
-            status_layout.addWidget(volume_label)
+        # Add AI Coach Volume Control - DEFER TO BACKGROUND
+        self.ai_coach_volume_widget = None  # Will be created when needed
+        self._volume_widget_placeholder = QLabel("🔊 Volume: Loading...")
+        self._volume_widget_placeholder.setStyleSheet("color: #888; font-style: italic; padding: 5px;")
+        status_layout.addWidget(self._volume_widget_placeholder)
+        
+        # Create volume widget in background
+        QTimer.singleShot(100, self._create_volume_widget_deferred)
 
         main_layout.addWidget(self.status_bar)
 
@@ -468,33 +465,280 @@ class RaceCoachWidget(QWidget):
             }
         """)
 
-        # Create and add tabs
-        self.overview_tab = OverviewTab(self)
-        self.tab_widget.addTab(self.overview_tab, "Overview")
-
-        self.telemetry_tab = TelemetryTab(self)
-        self.tab_widget.addTab(self.telemetry_tab, "Telemetry")
-
-        # Create a placeholder for the SuperLap tab
-        self.superlap_placeholder = QWidget()
-        self.tab_widget.addTab(self.superlap_placeholder, "")
-        self._create_superlap_tab_title(self.tab_widget.count() - 1)
-
-        # Create the Videos Tab
-        videos_tab = VideosTab(self)
-        self.tab_widget.addTab(videos_tab, "RaceFlix")
+        # ⚡ TRUE LAZY LOADING: Create placeholder tabs that load only when accessed
+        # Tab references already initialized in __init__
+        
+        # Create lightweight placeholder widgets
+        self._create_tab_placeholder("Overview", "🏁 Loading racing analysis...")
+        self._create_tab_placeholder("Telemetry", "📊 Loading telemetry graphs...")
+        self._create_tab_placeholder("SuperLap", "⚡ Loading SuperLap system...")
+        self._create_tab_placeholder("RaceFlix", "🎬 Loading video analysis...")
 
         # Add tab widget to main layout
         main_layout.addWidget(self.tab_widget)
         
-        # Connect tab change signal
-        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        # Set Overview as the default tab
+        self.tab_widget.setCurrentIndex(0)
 
-        # Immediately try to create the SuperLap widget without an auth check
-        QTimer.singleShot(50, self._create_superlap_widget_deferred)
+        # Connect tab change signal for lazy loading
+        self.tab_widget.currentChanged.connect(self._on_tab_changed_lazy)
 
         # Save operation progress indicator
         self.save_progress_dialog = None
+        
+        logger.info("✅ Race Coach UI created instantly with lazy-loaded tabs")
+
+    def _create_tab_placeholder(self, tab_name, loading_message):
+        """Create a lightweight placeholder tab."""
+        placeholder = QWidget()
+        layout = QVBoxLayout(placeholder)
+        layout.addStretch()
+        
+        # Loading message
+        loading_label = QLabel(loading_message)
+        loading_label.setAlignment(Qt.AlignCenter)
+        loading_label.setStyleSheet("""
+            color: #888;
+            font-size: 16px;
+            font-style: italic;
+            padding: 20px;
+        """)
+        layout.addWidget(loading_label)
+        
+        # Spinner-like progress indicator
+        progress = QProgressBar()
+        progress.setRange(0, 0)  # Indeterminate progress
+        progress.setMaximumWidth(200)
+        progress.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #444;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #222;
+            }
+            QProgressBar::chunk {
+                background-color: #FF4500;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(progress, 0, Qt.AlignCenter)
+        
+        layout.addStretch()
+        
+        # Handle SuperLap tab special case with logo
+        if tab_name == "SuperLap":
+            self.tab_widget.addTab(placeholder, "")
+            self._create_superlap_tab_title(self.tab_widget.count() - 1)
+        else:
+            self.tab_widget.addTab(placeholder, tab_name)
+        
+        return placeholder
+
+    def _create_volume_widget_deferred(self):
+        """Create AI Coach Volume Widget in background to avoid blocking UI."""
+        try:
+            from .ai_coach_volume_widget import AICoachVolumeWidget
+            self.ai_coach_volume_widget = AICoachVolumeWidget(self)
+            self.ai_coach_volume_widget.setMaximumWidth(300)
+            
+            # Replace placeholder with actual widget
+            status_layout = self.status_bar.layout()
+            placeholder_index = -1
+            for i in range(status_layout.count()):
+                if status_layout.itemAt(i).widget() == self._volume_widget_placeholder:
+                    placeholder_index = i
+                    break
+            
+            if placeholder_index >= 0:
+                status_layout.removeWidget(self._volume_widget_placeholder)
+                self._volume_widget_placeholder.deleteLater()
+                status_layout.insertWidget(placeholder_index, self.ai_coach_volume_widget)
+                logger.info("✅ AI Coach volume control loaded in background")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create volume control: {e}")
+            # Keep placeholder with error message
+            self._volume_widget_placeholder.setText("🔊 Volume: Error")
+
+    def _on_tab_changed_lazy(self, index):
+        """Handle tab changes with true lazy loading."""
+        try:
+            current_widget = self.tab_widget.widget(index)
+            tab_text = self.tab_widget.tabText(index)
+            
+            # Check if this is a placeholder that needs to be replaced
+            if hasattr(current_widget, 'layout') and current_widget.layout():
+                # Check if it's a placeholder by looking for the progress bar
+                has_progress_bar = False
+                for i in range(current_widget.layout().count()):
+                    item = current_widget.layout().itemAt(i)
+                    if item and item.widget() and isinstance(item.widget(), QProgressBar):
+                        has_progress_bar = True
+                        break
+                
+                if has_progress_bar:
+                    # This is a placeholder - create the actual tab
+                    self._create_actual_tab(index, tab_text)
+            
+            # Handle existing tab logic for SuperLap data refresh
+            if hasattr(self, 'superlap_tab') and self.superlap_tab and current_widget is self.superlap_tab:
+                try:
+                    if hasattr(self.superlap_tab, 'session_combo') and self.superlap_tab.session_combo.count() <= 1:
+                        logger.info("SuperLap tab accessed with empty dropdown, refreshing data...")
+                        self.superlap_tab.refresh_data()
+                except Exception as refresh_error:
+                    logger.error(f"Error refreshing SuperLap data on tab change: {refresh_error}")
+                    
+        except Exception as e:
+            logger.error(f"Error in lazy tab loading: {e}")
+
+    def _create_actual_tab(self, index, tab_text):
+        """Create the actual tab widget to replace placeholder."""
+        try:
+            # Prevent duplicate creation
+            if index in self._tabs_being_created:
+                logger.debug(f"Tab at index {index} is already being created, skipping")
+                return
+            
+            if index in self._tabs_created:
+                logger.debug(f"Tab at index {index} is already created, skipping")
+                return
+            
+            # Mark as being created
+            self._tabs_being_created.add(index)
+            
+            # Check if tab is already loaded by checking for specific tab types
+            current_widget = self.tab_widget.widget(index)
+            if current_widget:
+                # Check if it's already a real tab (not a placeholder)
+                if (hasattr(current_widget, 'refresh_data') or  # SuperLap tab
+                    hasattr(current_widget, 'load_session_data') or  # Overview tab  
+                    hasattr(current_widget, 'get_laps') or  # Telemetry tab
+                    hasattr(current_widget, 'load_videos')):  # Videos tab
+                    logger.debug(f"Tab {tab_text} at index {index} is already loaded")
+                    self._tabs_being_created.discard(index)
+                    self._tabs_created.add(index)
+                    return
+            
+            logger.info(f"🔄 Creating actual tab: {tab_text} at index {index}")
+            
+            actual_widget = None
+            
+            # Determine tab type based on index (more reliable than text)
+            if index == 0:
+                # Overview tab
+                if self.overview_tab is None:
+                    from .overview_tab import OverviewTab
+                    actual_widget = OverviewTab(self)
+                    self.overview_tab = actual_widget
+                    tab_text = "Overview"
+                else:
+                    actual_widget = self.overview_tab
+                    tab_text = "Overview"
+                
+            elif index == 1:
+                # Telemetry tab
+                if self.telemetry_tab is None:
+                    from .telemetry_tab import TelemetryTab
+                    actual_widget = TelemetryTab(self)
+                    self.telemetry_tab = actual_widget
+                    tab_text = "Telemetry"
+                else:
+                    actual_widget = self.telemetry_tab
+                    tab_text = "Telemetry"
+                
+            elif index == 2:
+                # SuperLap tab
+                if self.superlap_tab is None:
+                    from .superlap_tab import SuperLapWidget
+                    actual_widget = SuperLapWidget(parent=self)
+                    self.superlap_tab = actual_widget
+                    tab_text = "SuperLap"
+                else:
+                    actual_widget = self.superlap_tab
+                    tab_text = "SuperLap"
+                
+            elif index == 3:
+                # RaceFlix tab
+                if self.videos_tab is None:
+                    from .videos_tab import VideosTab
+                    actual_widget = VideosTab(self)
+                    self.videos_tab = actual_widget
+                    tab_text = "RaceFlix"
+                else:
+                    actual_widget = self.videos_tab
+                    tab_text = "RaceFlix"
+            
+            if actual_widget:
+                # Replace placeholder with actual widget
+                old_widget = self.tab_widget.widget(index)
+                self.tab_widget.removeTab(index)
+                
+                # Insert the actual widget
+                if index == 2:  # SuperLap tab
+                    self.tab_widget.insertTab(index, actual_widget, "")
+                    self._create_superlap_tab_title(index)
+                    # Initialize SuperLap data
+                    try:
+                        logger.info("Loading SuperLap session data...")
+                        actual_widget.refresh_data()
+                        logger.info("SuperLap data refresh initiated successfully")
+                    except Exception as refresh_error:
+                        logger.error(f"Error refreshing SuperLap data: {refresh_error}")
+                else:
+                    self.tab_widget.insertTab(index, actual_widget, tab_text)
+                
+                # Set as current to show the newly created tab
+                self.tab_widget.setCurrentIndex(index)
+                
+                # Clean up old placeholder
+                if old_widget:
+                    old_widget.deleteLater()
+                
+                # Mark as successfully created
+                self._tabs_being_created.discard(index)
+                self._tabs_created.add(index)
+                
+                logger.info(f"✅ {tab_text} tab created and loaded successfully")
+            else:
+                logger.error(f"Failed to create tab widget for: {tab_text}")
+                
+        except Exception as e:
+            logger.error(f"Error creating actual tab {tab_text}: {e}", exc_info=True)
+            # Remove from being_created on error
+            self._tabs_being_created.discard(index)
+            # Show error in the tab
+            error_widget = QWidget()
+            error_layout = QVBoxLayout(error_widget)
+            error_layout.addStretch()
+            
+            error_label = QLabel(f"❌ Error loading {tab_text} tab:\n{str(e)}")
+            error_label.setAlignment(Qt.AlignCenter)
+            error_label.setStyleSheet("color: #FF6666; font-size: 14px; padding: 20px;")
+            error_label.setWordWrap(True)
+            error_layout.addWidget(error_label)
+            
+            retry_button = QPushButton("🔄 Retry")
+            retry_button.setStyleSheet("""
+                background-color: #FF4500;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            """)
+            retry_button.clicked.connect(lambda: self._create_actual_tab(index, tab_text))
+            error_layout.addWidget(retry_button, 0, Qt.AlignCenter)
+            
+            error_layout.addStretch()
+            
+            # Replace with error widget
+            old_widget = self.tab_widget.widget(index)
+            self.tab_widget.removeTab(index)
+            self.tab_widget.insertTab(index, error_widget, f"{tab_text} (Error)")
+            self.tab_widget.setCurrentIndex(index)
+            
+            if old_widget:
+                old_widget.deleteLater()
 
     def _create_superlap_tab_title(self, tab_index):
         """Create a custom title for the SuperLap tab with an icon."""
@@ -549,73 +793,6 @@ class RaceCoachWidget(QWidget):
             logger.error(f"Error creating SuperLap tab title with logo: {e}")
             # Keep the default text title if logo creation fails
 
-    def _on_tab_changed(self, index):
-        """Handle tab changes, especially for lazy loading."""
-        tab_text = self.tab_widget.tabText(index)
-        current_widget = self.tab_widget.widget(index)
-        
-        # Check if this is the SuperLap tab
-        if hasattr(self, 'superlap_tab') and current_widget is self.superlap_tab:
-            # SuperLap tab is active - check if it needs data refresh
-            try:
-                if hasattr(self.superlap_tab, 'session_combo') and self.superlap_tab.session_combo.count() <= 1:
-                    # Empty or just has "No sessions found" - refresh data
-                    logger.info("SuperLap tab accessed with empty dropdown, refreshing data...")
-                    self.superlap_tab.refresh_data()
-            except Exception as refresh_error:
-                logger.error(f"Error refreshing SuperLap data on tab change: {refresh_error}")
-        elif "SuperLap" in tab_text and self.superlap_placeholder is not None:
-            # If the placeholder is still there, try creating the real widget
-            logger.info("Switched to SuperLap tab, ensuring it is loaded.")
-            self._create_superlap_widget_deferred()
-            
-    def _create_superlap_widget_deferred(self):
-        """Create and embed the SuperLapWidget, replacing the placeholder."""
-        # If the real widget is already created, do nothing
-        if self.superlap_placeholder is None:
-            return
-
-        logger.info("Creating SuperLap widget...")
-        try:
-            # Replace the placeholder with the actual SuperLapWidget
-            self.superlap_tab = SuperLapWidget(parent=self)
-            
-            # Get the index of the placeholder
-            idx = self.tab_widget.indexOf(self.superlap_placeholder)
-            if idx != -1:
-                # Remove placeholder, insert real tab, and set it as current
-                self.tab_widget.removeTab(idx)
-                self.tab_widget.insertTab(idx, self.superlap_tab, "")
-                self._create_superlap_tab_title(idx)
-                self.tab_widget.setCurrentIndex(idx)
-                
-                # BUGFIX: Initialize the SuperLap data after creating the widget
-                # This was missing and causing the empty dropdown issue
-                try:
-                    logger.info("Loading SuperLap session data...")
-                    self.superlap_tab.refresh_data()
-                    logger.info("SuperLap data refresh initiated successfully")
-                except Exception as refresh_error:
-                    logger.error(f"Error refreshing SuperLap data: {refresh_error}")
-                
-                # Cleanup placeholder
-                self.superlap_placeholder.deleteLater()
-                self.superlap_placeholder = None
-                logger.info("SuperLap tab created and replaced placeholder.")
-            else:
-                logger.error("Could not find SuperLap placeholder tab.")
-
-        except Exception as e:
-            logger.error(f"Failed to create SuperLap widget: {e}", exc_info=True)
-            # Optionally show an error message in the UI
-            error_label = QLabel(f"Error loading SuperLap tab: {e}")
-            error_label.setAlignment(Qt.AlignCenter)
-            idx = self.tab_widget.indexOf(self.superlap_placeholder)
-            if idx != -1:
-                self.tab_widget.removeTab(idx)
-                self.tab_widget.insertTab(idx, error_label, "SuperLap")
-                self.tab_widget.setCurrentIndex(idx)
-
     def on_iracing_connected(self, is_connected, session_info=None):
         """Handle iRacing connection status changes."""
         self._update_connection_status()
@@ -628,7 +805,13 @@ class RaceCoachWidget(QWidget):
     def _update_connection_status(self, payload: dict = None):
         """Update UI based on connection status and session info signal payload."""
         if payload is None:
-            payload = {"is_connected": self.is_connected, "session_info": self.session_info}
+            # 🔧 BUGFIX: Check shared iRacing API connection status instead of local state
+            if hasattr(self, 'iracing_api') and self.iracing_api and hasattr(self.iracing_api, 'is_connected'):
+                shared_connected = self.iracing_api.is_connected()
+                shared_session_info = getattr(self.iracing_api, '_session_info', {})
+                payload = {"is_connected": shared_connected, "session_info": shared_session_info}
+            else:
+                payload = {"is_connected": self.is_connected, "session_info": self.session_info}
             
         # Only log essential info, not the entire massive payload with raw session info
         session_info = payload.get('session_info', {})
@@ -685,6 +868,10 @@ class RaceCoachWidget(QWidget):
         if not hasattr(self, '_ui_telemetry_count'):
             self._ui_telemetry_count = 0
         self._ui_telemetry_count += 1
+        
+        # Store current telemetry for overview tab access
+        if hasattr(self, 'iracing_api'):
+            self.iracing_api.current_telemetry = telemetry_data
         
         # Debug log every 10 seconds to verify normal telemetry flow is working
         if self._ui_telemetry_count % 600 == 0:  # Every 10 seconds at ~60Hz
@@ -780,6 +967,30 @@ class RaceCoachWidget(QWidget):
         layout.addWidget(button_box)
 
         dialog.exec_()
+
+    def show_corner_detection_dialog(self):
+        """Show the corner detection dialog for track analysis."""
+        try:
+            from .corner_detection_dialog import CornerDetectionDialog
+            
+            dialog = CornerDetectionDialog(self)
+            dialog.exec_()
+            
+        except ImportError as e:
+            logger.error(f"Failed to import corner detection dialog: {e}")
+            QMessageBox.warning(
+                self,
+                "Corner Detection Unavailable",
+                "Corner detection functionality is not available.\n"
+                "Please ensure all required modules are installed."
+            )
+        except Exception as e:
+            logger.error(f"Error showing corner detection dialog: {e}")
+            QMessageBox.critical(
+                self,
+                "Corner Detection Error",
+                f"An error occurred while opening corner detection:\n{str(e)}"
+            )
 
     def reset_iracing_connection(self):
         """Reset iRacing connection."""

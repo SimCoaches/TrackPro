@@ -19,6 +19,8 @@ from trackpro.race_coach.widgets.throttle_graph import ThrottleGraphWidget
 from trackpro.race_coach.widgets.brake_graph import BrakeGraphWidget
 from trackpro.race_coach.widgets.steering_graph import SteeringGraphWidget
 from trackpro.race_coach.widgets.speed_graph import SpeedGraphWidget
+from trackpro.race_coach.widgets.gear_graph import GearGraphWidget
+from trackpro.race_coach.widgets.gaze_graph import GazeGraphWidget
 
 logger = logging.getLogger(__name__)
 
@@ -663,6 +665,15 @@ class TelemetryTab(QWidget):
         speed_container = create_graph_container(self.speed_graph)
         graphs_layout.addWidget(speed_container)
 
+        self.gear_graph = GearGraphWidget(self)
+        gear_container = create_graph_container(self.gear_graph)
+        graphs_layout.addWidget(gear_container)
+
+        # Add eye tracking gaze graph
+        self.gaze_graph = GazeGraphWidget(self)
+        gaze_container = create_graph_container(self.gaze_graph)
+        graphs_layout.addWidget(gaze_container)
+
         # Minimal bottom padding
         graphs_layout.addStretch(0)
 
@@ -918,6 +929,10 @@ class TelemetryTab(QWidget):
                         mapped_point['Steering'] = 0.0
                 if 'speed' in mapped_point:
                     mapped_point['Speed'] = mapped_point['speed']
+                if 'gear' in mapped_point:
+                    mapped_point['Gear'] = mapped_point['gear']
+                if 'rpm' in mapped_point:
+                    mapped_point['RPM'] = mapped_point['rpm']
                 
                 # Set defaults for titlecase fields
                 mapped_point.setdefault('Throttle', 0)
@@ -926,6 +941,7 @@ class TelemetryTab(QWidget):
                 mapped_point.setdefault('Speed', 0)
                 mapped_point.setdefault('timestamp', 0)
                 mapped_point.setdefault('rpm', 0)
+                mapped_point.setdefault('Gear', 0)
                 
                 mapped_points.append(mapped_point)
             
@@ -969,6 +985,10 @@ class TelemetryTab(QWidget):
                         mapped_point['Steering'] = 0.0
                 if 'speed' in mapped_point:
                     mapped_point['Speed'] = mapped_point['speed']
+                if 'gear' in mapped_point:
+                    mapped_point['Gear'] = mapped_point['gear']
+                if 'rpm' in mapped_point:
+                    mapped_point['RPM'] = mapped_point['rpm']
                 
                 # Set defaults for titlecase fields
                 mapped_point.setdefault('Throttle', 0)
@@ -977,6 +997,7 @@ class TelemetryTab(QWidget):
                 mapped_point.setdefault('Speed', 0)
                 mapped_point.setdefault('timestamp', 0)
                 mapped_point.setdefault('rpm', 0)
+                mapped_point.setdefault('Gear', 0)
                 
                 mapped_points.append(mapped_point)
             
@@ -1004,6 +1025,9 @@ class TelemetryTab(QWidget):
             if hasattr(self, 'speed_graph'):
                 self.speed_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
                 
+            if hasattr(self, 'gear_graph'):
+                self.gear_graph.update_graph_comparison(left_lap_data, right_lap_data, track_length)
+                
         elif left_lap_data:
             # Single lap mode - just show left lap
             if hasattr(self, 'throttle_graph'):
@@ -1017,6 +1041,9 @@ class TelemetryTab(QWidget):
                 
             if hasattr(self, 'speed_graph'):
                 self.speed_graph.update_graph(left_lap_data, track_length)
+                
+            if hasattr(self, 'gear_graph'):
+                self.gear_graph.update_graph(left_lap_data, track_length)
         else:
             # No valid data - clear graphs
             logger.warning("No valid telemetry data to display")

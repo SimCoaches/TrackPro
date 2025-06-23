@@ -12,14 +12,16 @@ logger = logging.getLogger(__name__)
 class TelemetrySaver:
     """Manages saving telemetry data per lap for later review."""
     
-    def __init__(self, data_manager=None, save_dir=None):
+    def __init__(self, data_manager=None, save_dir=None, eye_tracking_manager=None):
         """Initialize the telemetry saver.
         
         Args:
             data_manager: The data manager instance (optional)
             save_dir: Directory to save telemetry data (optional, default is user's documents)
+            eye_tracking_manager: Eye tracking manager instance (optional)
         """
         self.data_manager = data_manager
+        self.eye_tracking_manager = eye_tracking_manager
         
         # Set up the save directory
         if save_dir is None:
@@ -88,6 +90,27 @@ class TelemetrySaver:
         self._current_session_folder.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"Started new telemetry recording session: {session_name}")
+        
+        # Start eye tracking if available
+        if self.eye_tracking_manager and self.eye_tracking_manager.is_available():
+            try:
+                # Set session info for eye tracking
+                self.eye_tracking_manager.set_session_info(session_id, "racing_session")
+                
+                # Only start recording if auto_start is disabled (manual control)
+                # If auto_start is enabled, it will start automatically when driving begins
+                if not self.eye_tracking_manager.auto_start:
+                    ready, message = self.eye_tracking_manager.is_ready_to_record()
+                    if ready:
+                        self.eye_tracking_manager.start_recording(session_id)
+                        logger.info("Eye tracking started for session (manual mode)")
+                    else:
+                        logger.info(f"Eye tracking not started: {message}")
+                else:
+                    logger.info("Eye tracking in auto-start mode - will start when driving begins")
+                
+            except Exception as e:
+                logger.warning(f"Failed to start eye tracking: {e}")
         
         return self._current_session_folder
     
@@ -207,6 +230,10 @@ class TelemetrySaver:
             if len(self._current_lap_data) > 0:
                 self._save_lap_data(self._current_lap_number - 1, lap_time)
                 
+            # Update eye tracking with new lap
+            if self.eye_tracking_manager and self.eye_tracking_manager.is_recording:
+                self.eye_tracking_manager.update_lap_id(self._current_lap_number)
+                
             # Reset for new lap
             self._current_lap_data = []
             self._lap_start_time = telemetry_point['timestamp']
@@ -220,6 +247,14 @@ class TelemetrySaver:
         
         # Add data point to current lap
         self._current_lap_data.append(telemetry_point)
+        
+        # Sync with eye tracking
+        if self.eye_tracking_manager and self.eye_tracking_manager.is_recording:
+            self.eye_tracking_manager.update_telemetry_sync(telemetry_point)
+        
+        # Update eye tracking session state (for auto-start/stop)
+        if self.eye_tracking_manager and self.eye_tracking_manager.enabled:
+            self.eye_tracking_manager.update_session_state(telemetry_point)
         
         # Update last track position
         self._last_track_position = current_position

@@ -56,6 +56,13 @@ class MainWindow(QMainWindow):
         self.race_coach_widget = None
         self.hardware = None
         
+        # Track Map Overlay Manager - make it persistent
+        self.track_map_overlay_manager = None
+        
+        # Initialize global iRacing connection manager
+        self.global_iracing_api = None
+        self.iracing_connection_active = False
+        
         # Initialize system tray using extracted function
         setup_system_tray(self)
         
@@ -174,6 +181,13 @@ class MainWindow(QMainWindow):
         version_label = QLabel(f"Version: {__version__}")
         self.statusBar.addWidget(version_label)
         
+        # Add iRacing connection status to status bar
+        self.iracing_status_label = QLabel("🏁 iRacing: Disconnected")
+        self.iracing_status_label.setStyleSheet("color: #ff6b6b; font-size: 10px; padding: 2px 8px; font-weight: bold;")
+        self.iracing_status_label.setToolTip("iRacing connection status - click to toggle")
+        self.iracing_status_label.mousePressEvent = lambda event: self.toggle_iracing_connection()
+        self.statusBar.addPermanentWidget(self.iracing_status_label)
+        
         # Add user info and cloud sync status to right side of status bar
         self.user_label = QLabel("Not logged in")
         self.user_label.setStyleSheet("color: #888; font-size: 10px; padding: 2px 8px;")
@@ -190,64 +204,38 @@ class MainWindow(QMainWindow):
         
         # Defer early notification system setup until after window is shown
         QTimer.singleShot(1000, self.setup_early_notification_system)
+        
+        # Start global iRacing connection if user is authenticated
+        QTimer.singleShot(2000, self.check_and_start_iracing_connection)
     
     # Keep all the MainWindow methods but remove the ones we extracted
     # setup_dark_theme, create_menu_bar, setup_system_tray methods are now in separate modules
     
     def closeEvent(self, event):
-        """Handle window close event to ensure proper application shutdown."""
-        logger.info("MainWindow closeEvent triggered")
-        
-        # Check if minimize to tray is enabled and system tray is available
-        if config.minimize_to_tray and hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
-            logger.info("Minimizing to system tray instead of closing")
-            self.hide()
-            
-            # Show a tray notification
-            self.tray_icon.showMessage(
-                "TrackPro", 
-                "TrackPro is still running in the background. Right-click the tray icon to exit.",
-                QSystemTrayIcon.Information,
-                3000
-            )
-            
-            event.ignore()  # Don't actually close the application
-            return
-        
-        logger.info("Proceeding with application shutdown")
-        
+        """Handle window close event."""
         try:
-            # Try to find the TrackProApp instance using the stored reference
-            app_instance = getattr(self, 'app_instance', None)
+            # Stop any running processes
+            self.stop_all_processes()
             
-            # If not found, try alternative methods
-            if not app_instance:
-                logger.warning("No app_instance found, trying alternative methods...")
-                # Look for the TrackProApp instance through QApplication
-                qapp = QApplication.instance()
-                if qapp:
-                    # Check if the QApplication has a reference to our TrackProApp
-                    for widget in qapp.topLevelWidgets():
-                        if hasattr(widget, 'parent') and widget.parent() is None:
-                            # This might be our main window, check for app reference
-                            if hasattr(widget, 'app') and hasattr(widget.app, 'cleanup'):
-                                app_instance = widget.app
-                                break
+            # Cleanup track map overlay
+            if hasattr(self, 'track_map_overlay_manager') and self.track_map_overlay_manager:
+                self.track_map_overlay_manager.cleanup()
+                logger.info("🗺️ Track map overlay manager cleaned up")
             
-            # Manually clean up before closing if we couldn't find the TrackProApp
-            if not app_instance:
-                logger.warning("Could not find TrackProApp instance, attempting manual cleanup")
-                self._manual_cleanup()
-            else:
-                logger.info("Found TrackProApp instance, calling its cleanup method")
-                app_instance.cleanup()
-                
+            # Save settings
+            self.save_settings()
+            
+            # Cleanup database connections
+            if hasattr(self, 'db_manager') and self.db_manager:
+                self.db_manager.cleanup()
+            
+            # Accept the close event
+            event.accept()
+            logger.info("Main window closed")
+            
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-            logger.error(traceback.format_exc())
-            # Continue with shutdown even if cleanup fails
-        
-        event.accept()
+            logger.error(f"Error during window close: {e}")
+            event.accept()  # Accept anyway to prevent hanging
     
     def _manual_cleanup(self):
         """Perform manual cleanup if the main app instance isn't available."""
@@ -256,6 +244,18 @@ class MainWindow(QMainWindow):
             
             # Clean up race coach threads if they exist
             self._cleanup_race_coach_threads()
+            
+            # Stop any active timers
+            try:
+                qapp = QApplication.instance()
+                if qapp:
+                    # Find and stop all QTimer objects
+                    for obj in qapp.findChildren(QTimer):
+                        if obj.isActive():
+                            obj.stop()
+                            logger.info(f"Stopped active timer: {obj.objectName()}")
+            except Exception as e:
+                logger.warning(f"Could not stop timers: {e}")
             
             # Close database connections if available
             try:
@@ -274,6 +274,23 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logger.warning(f"Could not stop hardware: {e}")
             
+            # Clean up OAuth handler if available
+            try:
+                if hasattr(self, 'oauth_handler') and self.oauth_handler:
+                    if hasattr(self.oauth_handler, 'shutdown_callback_server'):
+                        self.oauth_handler.shutdown_callback_server()
+                        logger.info("OAuth callback server shut down")
+            except Exception as e:
+                logger.warning(f"Could not shut down OAuth handler: {e}")
+            
+            # Clean up system tray
+            try:
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    self.tray_icon.hide()
+                    logger.info("System tray icon hidden")
+            except Exception as e:
+                logger.warning(f"Could not hide system tray: {e}")
+            
             logger.info("Manual cleanup completed")
             
         except Exception as e:
@@ -290,27 +307,75 @@ class MainWindow(QMainWindow):
                 # Try to find the race coach widget and call its cleanup methods
                 race_coach = self.race_coach_widget
                 
+                # First, try to call any cleanup methods on the race coach widget
+                if hasattr(race_coach, '_cleanup_all_threads'):
+                    try:
+                        logger.info("Calling race coach _cleanup_all_threads method...")
+                        race_coach._cleanup_all_threads()
+                    except Exception as e:
+                        logger.warning(f"Error calling _cleanup_all_threads: {e}")
+                
+                if hasattr(race_coach, 'shutdown'):
+                    try:
+                        logger.info("Calling race coach shutdown method...")
+                        race_coach.shutdown()
+                    except Exception as e:
+                        logger.warning(f"Error calling shutdown: {e}")
+                
                 # Look for common thread attributes that might need cleaning up
-                thread_attrs = ['session_monitor_thread', 'data_thread', 'timer_thread', 'monitor_thread']
+                thread_attrs = ['session_monitor_thread', 'data_thread', 'timer_thread', 'monitor_thread', 
+                               'iracing_api', 'lap_saver', 'initial_load_worker']
                 
                 for attr_name in thread_attrs:
                     if hasattr(race_coach, attr_name):
                         thread = getattr(race_coach, attr_name)
-                        if thread and hasattr(thread, 'stop'):
+                        if thread:
                             try:
-                                logger.info(f"Stopping {attr_name}...")
-                                thread.stop()
+                                logger.info(f"Cleaning up {attr_name}...")
+                                
+                                # For iRacing API
+                                if attr_name == 'iracing_api' and hasattr(thread, 'disconnect'):
+                                    thread.disconnect()
+                                    logger.info(f"Disconnected {attr_name}")
+                                
+                                # For lap saver
+                                elif attr_name == 'lap_saver' and hasattr(thread, 'shutdown'):
+                                    thread.shutdown()
+                                    logger.info(f"Shut down {attr_name}")
+                                
+                                # For workers
+                                elif attr_name == 'initial_load_worker' and hasattr(thread, 'cancel'):
+                                    thread.cancel()
+                                    logger.info(f"Cancelled {attr_name}")
+                                
+                                # For general threads
+                                elif hasattr(thread, 'stop'):
+                                    thread.stop()
+                                    logger.info(f"Stopped {attr_name}")
+                                
+                                # Wait for thread to finish
+                                if hasattr(thread, 'wait'):
+                                    thread.wait(1000)  # 1 second timeout
+                                    logger.info(f"Waited for {attr_name} to finish")
+                                    
                             except Exception as e:
-                                logger.warning(f"Could not stop {attr_name}: {e}")
-                        
-                        if thread and hasattr(thread, 'wait'):
-                            try:
-                                # Give it a short time to stop gracefully
-                                thread.wait(1000)  # 1 second timeout
-                            except Exception as e:
-                                logger.warning(f"Could not wait for {attr_name} to stop: {e}")
+                                logger.warning(f"Could not clean up {attr_name}: {e}")
                 
                 logger.info("Race coach thread cleanup completed")
+            
+            # Also check the stacked widget for any race coach widgets
+            if hasattr(self, 'stacked_widget'):
+                for i in range(self.stacked_widget.count()):
+                    widget = self.stacked_widget.widget(i)
+                    if widget and ('RaceCoach' in str(type(widget)) or hasattr(widget, 'iracing_api')):
+                        logger.info(f"Found race coach widget in stack at index {i}, cleaning up...")
+                        try:
+                            if hasattr(widget, '_cleanup_all_threads'):
+                                widget._cleanup_all_threads()
+                            if hasattr(widget, 'shutdown'):
+                                widget.shutdown()
+                        except Exception as e:
+                            logger.warning(f"Error cleaning up stacked race coach widget: {e}")
             
         except Exception as e:
             logger.error(f"Error during race coach thread cleanup: {e}")
@@ -1909,6 +1974,60 @@ class MainWindow(QMainWindow):
         """
         QMessageBox.about(self, "About TrackPro", about_text)
     
+    def show_eye_tracking_settings(self):
+        """Show eye tracking settings dialog."""
+        try:
+            from .eye_tracking_settings import EyeTrackingSettingsDialog
+            
+            # Get eye tracking manager from race coach if available
+            eye_tracking_manager = None
+            if hasattr(self, 'race_coach_widget') and self.race_coach_widget:
+                # Try to get the eye tracking manager from telemetry saver
+                if hasattr(self.race_coach_widget, 'telemetry_saver') and self.race_coach_widget.telemetry_saver:
+                    eye_tracking_manager = self.race_coach_widget.telemetry_saver.eye_tracking_manager
+            
+            # If no eye tracking manager exists (e.g., eye tracking is disabled), 
+            # create a temporary one for the settings dialog
+            if not eye_tracking_manager:
+                try:
+                    from trackpro.race_coach.eye_tracking_manager import EyeTrackingManager
+                    # Create a temporary eye tracking manager for settings access
+                    # This allows users to enable and configure eye tracking even when it's disabled
+                    eye_tracking_manager = EyeTrackingManager()
+                    logger.info("Created temporary eye tracking manager for settings dialog")
+                except Exception as e:
+                    logger.warning(f"Could not create temporary eye tracking manager: {e}")
+                    eye_tracking_manager = None
+            
+            dialog = EyeTrackingSettingsDialog(self, eye_tracking_manager)
+            dialog.exec_()
+            
+        except Exception as e:
+            logger.error(f"Error showing eye tracking settings: {e}")
+            QMessageBox.critical(self, "Error", f"Could not open eye tracking settings: {str(e)}")
+    
+    def show_track_map_overlay_settings(self):
+        """Show track map overlay settings dialog."""
+        try:
+            from ..race_coach.ui.track_map_overlay_settings import TrackMapOverlaySettingsDialog
+            from ..race_coach.track_map_overlay import TrackMapOverlayManager
+            
+            # Create persistent overlay manager if it doesn't exist
+            if not self.track_map_overlay_manager:
+                self.track_map_overlay_manager = TrackMapOverlayManager()
+                logger.info("🗺️ Created persistent track map overlay manager")
+            
+            # Create and show dialog, passing our persistent manager
+            dialog = TrackMapOverlaySettingsDialog(self)
+            # Replace the dialog's manager with our persistent one
+            dialog.overlay_manager = self.track_map_overlay_manager
+            dialog.exec_()
+            
+        except Exception as e:
+            logger.error(f"Error showing track map overlay settings: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error", f"Could not open track map overlay settings: {str(e)}")
+    
     def test_email_setup(self):
         """Test email configuration."""
         QMessageBox.information(self, "Email Test", "Email configuration test would run here")
@@ -1918,75 +2037,103 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Performance", "Performance optimization would run here")
     
     def update_auth_state(self):
-        """Update the authentication state in the UI."""
+        """Update UI elements based on authentication state."""
+        # Import here to avoid circular imports
+        from ..database import supabase
+        
         try:
-            from ..database import supabase
-            is_authenticated = supabase.is_authenticated()
+            # Check authentication status with proper error handling
+            try:
+                is_authenticated = supabase.is_authenticated()
+                if is_authenticated:
+                    user_response = supabase.get_user()
+                    # Extract the actual user object from the response
+                    if user_response and hasattr(user_response, 'user') and user_response.user:
+                        user = user_response.user
+                    elif user_response and hasattr(user_response, 'id'):
+                        # Some responses have the user data directly
+                        user = user_response
+                    else:
+                        user = None
+                else:
+                    user = None
+            except Exception as auth_error:
+                logger.warning(f"Error checking authentication state: {auth_error}")
+                is_authenticated = False
+                user = None
+                # Still continue with UI updates in offline mode
+        
+            logger.info(f"Updating auth state: authenticated={is_authenticated}")
             
-            # Update menu actions based on authentication state
-            if hasattr(self, 'login_action'):
-                self.login_action.setVisible(not is_authenticated)
-            if hasattr(self, 'signup_action'):
-                self.signup_action.setVisible(not is_authenticated)
-            if hasattr(self, 'logout_action'):
-                self.logout_action.setVisible(is_authenticated)
-            
-            # Update corner buttons based on authentication state
-            if hasattr(self, 'account_btn'):
-                self.account_btn.setVisible(is_authenticated)
+            # Update authentication buttons state
             if hasattr(self, 'login_btn'):
                 self.login_btn.setVisible(not is_authenticated)
             if hasattr(self, 'signup_btn'):
                 self.signup_btn.setVisible(not is_authenticated)
             if hasattr(self, 'logout_btn'):
                 self.logout_btn.setVisible(is_authenticated)
+            if hasattr(self, 'account_btn'):
+                self.account_btn.setVisible(is_authenticated)
             
-            # Update status bar
-            if is_authenticated:
+            # Update status bar user info
+            if is_authenticated and user:
                 try:
-                    user_response = supabase.get_user()
-                    if user_response and hasattr(user_response, 'user'):
-                        email = user_response.user.email if hasattr(user_response.user, 'email') else "Unknown"
-                        self.user_label.setText(f"Logged in as: {email}")
-                        self.cloud_sync_label.setText("☁️ Cloud sync enabled")
-                        
-                        # Update account button text with username or email prefix
-                        if email and '@' in email:
-                            username = email.split('@')[0].title()
-                            self.account_btn.setText(f"👤 {username}")
-                        else:
-                            self.account_btn.setText("👤 Account")
+                    user_email = user.email if hasattr(user, 'email') else "Authenticated User"
+                    if hasattr(user, 'user_metadata') and user.user_metadata:
+                        display_name = user.user_metadata.get('display_name') or user.user_metadata.get('name') or user_email
                     else:
-                        self.user_label.setText("Logged in")
-                        self.cloud_sync_label.setText("☁️ Cloud sync enabled")
-                        self.account_btn.setText("👤 Account")
-                except Exception as e:
-                    logger.error(f"Error getting user info: {e}")
-                    self.user_label.setText("Logged in")
+                        display_name = user_email
+                    
+                    # Limit display name length
+                    if len(display_name) > 30:
+                        display_name = display_name[:27] + "..."
+                        
+                    self.user_label.setText(f"👤 {display_name}")
+                    self.user_label.setStyleSheet("color: #4CAF50; font-size: 10px; padding: 2px 8px; font-weight: bold;")
+                    
+                    # Show cloud sync enabled
                     self.cloud_sync_label.setText("☁️ Cloud sync enabled")
-                    self.account_btn.setText("👤 Account")
+                    self.cloud_sync_label.setStyleSheet("color: #4CAF50; font-size: 10px; padding: 2px 8px;")
+                except Exception as user_info_error:
+                    logger.warning(f"Error updating user info display: {user_info_error}")
+                    self.user_label.setText("👤 Authenticated")
+                    self.user_label.setStyleSheet("color: #4CAF50; font-size: 10px; padding: 2px 8px; font-weight: bold;")
+                    self.cloud_sync_label.setText("☁️ Cloud sync enabled")
+                    
+                    # Create a minimal user representation for other components
+                    class MinimalUser:
+                        def __init__(self):
+                            self.is_authenticated = True
+                            self.id = "authenticated_user"
+                            self.email = "user@example.com"
+                    
+                    user = MinimalUser()
             else:
                 self.user_label.setText("Not logged in")
+                self.user_label.setStyleSheet("color: #888; font-size: 10px; padding: 2px 8px;")
                 self.cloud_sync_label.setText("☁️ Sign in to enable cloud sync")
+                self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer; font-size: 10px; padding: 2px 8px;")
+                user = None
             
-            # Update any widgets that depend on authentication state
-            self.update_protected_features(is_authenticated)
-            
-            # Update any existing community widgets in the stack
-            # Create a minimal user object for compatibility if authenticated
-            user = None
-            if is_authenticated:
-                class MinimalUser:
-                    def __init__(self):
-                        self.authenticated = True
-                user = MinimalUser()
-            self.update_existing_community_widgets(user)
-            
-            # Emit signal for other components
+            # Emit auth state changed signal for other components
             self.auth_state_changed.emit(is_authenticated)
             
+            # Update protected features availability
+            self.update_protected_features(is_authenticated)
+            
+            # Update existing community widgets if they exist
+            self.update_existing_community_widgets(user)
+            
+            # 🔧 NEW: Start global iRacing connection if authenticated and not already running
+            if is_authenticated and not self.iracing_connection_active:
+                logger.info("🚀 User authenticated - starting global iRacing connection for continuous telemetry saving...")
+                self.start_global_iracing_connection()
+            elif not is_authenticated and self.iracing_connection_active:
+                logger.info("🛑 User logged out - stopping global iRacing connection")
+                self.stop_global_iracing_connection()
+                
         except Exception as e:
-            logger.error(f"Error updating auth state: {e}")
+            logger.error(f"Error updating authentication state: {e}", exc_info=True)
     
     def setup_early_notification_system(self):
         """Set up early notification system."""
@@ -2261,5 +2408,171 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Error updating protected features: {e}")
     
+    def check_and_start_iracing_connection(self):
+        """Check if user is authenticated and start iRacing connection if needed."""
+        try:
+            from ..database import supabase
+            is_authenticated = supabase.is_authenticated()
+            
+            if is_authenticated and not self.iracing_connection_active:
+                logger.info("🏁 User is authenticated, starting global iRacing connection...")
+                self.start_global_iracing_connection()
+            elif not is_authenticated:
+                logger.info("🏁 User not authenticated, skipping iRacing connection")
+                self.update_iracing_status(False, "Login required")
+            
+        except Exception as e:
+            logger.error(f"Error checking authentication for iRacing connection: {e}")
+    
+    def start_global_iracing_connection(self):
+        """Start the global iRacing connection manager."""
+        try:
+            if self.global_iracing_api is None:
+                from ..race_coach.simple_iracing import SimpleIRacingAPI
+                self.global_iracing_api = SimpleIRacingAPI()
+                
+                # 🔧 SET UP TELEMETRY SAVING with the global connection
+                logger.info("🎯 Setting up telemetry saving for global iRacing connection...")
+                
+                # Get Supabase client for saving
+                try:
+                    from ..database.supabase_client import get_supabase_client
+                    supabase_client = get_supabase_client()
+                    if supabase_client:
+                        logger.info("✅ Got Supabase client for global telemetry saving")
+                        
+                        # Create lap saver for the global connection
+                        from ..race_coach.iracing_lap_saver import IRacingLapSaver
+                        global_lap_saver = IRacingLapSaver()
+                        global_lap_saver.set_supabase_client(supabase_client)
+                        
+                        # Set user ID if authenticated
+                        try:
+                            from ..auth.user_manager import get_current_user
+                            user = get_current_user()
+                            if user and hasattr(user, 'id') and user.is_authenticated:
+                                user_id = user.id
+                                global_lap_saver.set_user_id(user_id)
+                                logger.info(f"✅ Set user ID for global lap saver: {user_id}")
+                            else:
+                                logger.info("ℹ️ No authenticated user - running in offline mode")
+                        except Exception as user_error:
+                            logger.warning(f"Could not get user for global lap saver: {user_error}")
+                        
+                        # Connect lap saver to the API
+                        if hasattr(self.global_iracing_api, 'set_lap_saver'):
+                            self.global_iracing_api.set_lap_saver(global_lap_saver)
+                            logger.info("✅ Connected global lap saver to iRacing API")
+                        
+                        # Set up deferred monitoring params
+                        self.global_iracing_api._deferred_monitor_params = {
+                            'supabase_client': supabase_client,
+                            'user_id': user.id if user and hasattr(user, 'id') and user.is_authenticated else 'anonymous',
+                            'lap_saver': global_lap_saver
+                        }
+                        logger.info("✅ Global telemetry saving configured")
+                    else:
+                        logger.warning("⚠️ No Supabase client - telemetry will not save to cloud")
+                except Exception as save_error:
+                    logger.error(f"❌ Error setting up telemetry saving: {save_error}")
+                
+                # Register for connection status updates
+                self.global_iracing_api.register_on_connection_changed(self.on_global_iracing_connection_changed)
+                
+                # Start telemetry monitoring
+                self.global_iracing_api._start_telemetry_timer()
+                
+                # 🔧 CRITICAL FIX: Actually start the deferred monitoring
+                logger.info("🚀 Starting deferred iRacing session monitoring...")
+                monitoring_started = self.global_iracing_api.start_deferred_monitoring()
+                if monitoring_started:
+                    logger.info("✅ Deferred iRacing session monitoring started successfully")
+                else:
+                    logger.warning("⚠️ Failed to start deferred monitoring - running in basic mode only")
+                
+                self.iracing_connection_active = True
+                logger.info("🏁 Global iRacing connection started with telemetry saving")
+                
+                # Update track map overlay manager to use shared API
+                if not self.track_map_overlay_manager:
+                    from ..race_coach.track_map_overlay import TrackMapOverlayManager
+                    self.track_map_overlay_manager = TrackMapOverlayManager(self.global_iracing_api)
+                    logger.info("🗺️ Created track map overlay manager with shared iRacing API")
+                else:
+                    self.track_map_overlay_manager.shared_iracing_api = self.global_iracing_api
+                
+        except Exception as e:
+            logger.error(f"Failed to start global iRacing connection: {e}")
+            self.update_iracing_status(False, "Connection failed")
+    
+    def stop_global_iracing_connection(self):
+        """Stop the global iRacing connection manager."""
+        try:
+            if self.global_iracing_api:
+                self.global_iracing_api.disconnect()
+                self.global_iracing_api = None
+                
+            self.iracing_connection_active = False
+            self.update_iracing_status(False, "Disconnected")
+            logger.info("🏁 Global iRacing connection stopped")
+            
+        except Exception as e:
+            logger.error(f"Error stopping global iRacing connection: {e}")
+    
+    def toggle_iracing_connection(self):
+        """Toggle the iRacing connection on/off."""
+        try:
+            if self.iracing_connection_active:
+                self.stop_global_iracing_connection()
+            else:
+                from ..database import supabase
+                if supabase.is_authenticated():
+                    self.start_global_iracing_connection()
+                else:
+                    # Show login dialog
+                    QMessageBox.information(
+                        self, 
+                        "🏁 iRacing Connection", 
+                        "You need to be logged in to connect to iRacing.\n\n"
+                        "Telemetry data is automatically saved to the cloud when you're authenticated."
+                    )
+                    self.show_login_dialog()
+                    
+        except Exception as e:
+            logger.error(f"Error toggling iRacing connection: {e}")
+    
+    def on_global_iracing_connection_changed(self, is_connected, session_info=None):
+        """Handle global iRacing connection status changes."""
+        try:
+            self.update_iracing_status(is_connected)
+            
+            if is_connected:
+                logger.info("🏁 Global iRacing connection established")
+            else:
+                logger.info("🏁 Global iRacing connection lost")
+                
+        except Exception as e:
+            logger.error(f"Error handling global iRacing connection change: {e}")
+    
+    def update_iracing_status(self, is_connected, status_text=None):
+        """Update the iRacing connection status in the status bar."""
+        try:
+            if is_connected:
+                self.iracing_status_label.setText("🏁 iRacing: Connected")
+                self.iracing_status_label.setStyleSheet("color: #28a745; font-size: 10px; padding: 2px 8px; font-weight: bold;")
+                self.iracing_status_label.setToolTip("iRacing connected - telemetry data being saved")
+            else:
+                display_text = status_text or "Disconnected"
+                self.iracing_status_label.setText(f"🏁 iRacing: {display_text}")
+                self.iracing_status_label.setStyleSheet("color: #ff6b6b; font-size: 10px; padding: 2px 8px; font-weight: bold;")
+                self.iracing_status_label.setToolTip("iRacing disconnected - click to connect (requires login)")
+                
+        except Exception as e:
+            logger.error(f"Error updating iRacing status: {e}")
+    
+    def get_shared_iracing_api(self):
+        """Get the shared iRacing API instance for other components."""
+        return self.global_iracing_api
+    
     # NOTE: In the actual implementation, ALL remaining methods from the original MainWindow 
-    # would be copied here verbatim, except for the three methods we extracted. 
+    # would be copied here verbatim, except for the three methods we extracted.

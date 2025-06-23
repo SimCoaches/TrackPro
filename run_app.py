@@ -1,8 +1,9 @@
+#!/usr/bin/env python3.11
 import sys
 import os
+import subprocess
 import traceback
 import ctypes
-import subprocess
 import time
 import logging
 import argparse
@@ -10,6 +11,25 @@ from datetime import datetime
 from PyQt5 import QtWebEngineWidgets
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
+
+# Check if we're running with Python 3.11, if not restart with Python 3.11
+if sys.version_info[:2] != (3, 11):
+    print(f"TrackPro requires Python 3.11 for eye tracking support.")
+    print(f"Current version: Python {sys.version_info.major}.{sys.version_info.minor}")
+    print("Restarting with Python 3.11...")
+    
+    # Try to restart with Python 3.11
+    try:
+        # Use py -3.11 to explicitly run with Python 3.11
+        result = subprocess.run([
+            "py", "-3.11", __file__
+        ] + sys.argv[1:], check=True)
+        sys.exit(result.returncode)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"❌ Failed to start with Python 3.11: {e}")
+        print("Please install Python 3.11 or use the virtual environment:")
+        print("  trackpro_eyetracking\\Scripts\\activate && python run_app.py")
+        sys.exit(1)
 
 # Set higher logging level for noisy HTTP and Supabase libraries
 for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager', 'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 'supafunc']:

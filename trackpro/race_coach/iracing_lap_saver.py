@@ -1634,6 +1634,13 @@ class IRacingLapSaver:
                     "batch_index": i // batch_size  # Store batch index for debugging
                 }
                 
+                # Debug gear data for first point in each batch
+                if len(telemetry_data_to_insert) == 0:  # First point in batch
+                    gear_value = telemetry_point["gear"]
+                    original_gear = point.get('gear', 'MISSING')
+                    fallback_gear = point.get('Gear', 'MISSING')
+                    print(f"🔧 [TELEMETRY SAVE GEAR DEBUG] Batch {i // batch_size + 1}: gear={gear_value}, original_gear={original_gear}, fallback_Gear={fallback_gear}")
+                
                 # Add sector timing data if available
                 if 'current_sector' in point:
                     telemetry_point['current_sector'] = point['current_sector']
