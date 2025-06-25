@@ -16,17 +16,9 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import QTimer, pyqtSignal, QThread, pyqtSlot
 from PyQt5.QtGui import QFont
 
-# Import the track builder functionality
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-try:
-    from ultimate_track_builder import ThreeLapTrackBuilder, UltimateTrackBuilder
-    ULTIMATE_TRACK_BUILDER_AVAILABLE = True
-except ImportError:
-    print("Warning: ultimate_track_builder.py not found in project root")
-    ULTIMATE_TRACK_BUILDER_AVAILABLE = False
+# Track builder functionality is now integrated into the main TrackPro interface
+# This dialog redirects users to the integrated track builder
+ULTIMATE_TRACK_BUILDER_AVAILABLE = False  # Always redirect to integrated version
 
 # Import database functionality
 try:
@@ -53,19 +45,11 @@ class TrackBuilderWorker(QThread):
     def start_building(self):
         """Start the track building process"""
         if not ULTIMATE_TRACK_BUILDER_AVAILABLE:
-            self.error_occurred.emit("Ultimate track builder not available")
+            self.error_occurred.emit("Integrated track builder not available")
             return
             
-        try:
-            self.track_builder = UltimateTrackBuilder(enable_gui=False)
-            if self.track_builder.connect():
-                self.running = True
-                self.status_updated.emit("Connected to iRacing - Start driving!")
-                self.start()
-            else:
-                self.error_occurred.emit("Failed to connect to iRacing")
-        except Exception as e:
-            self.error_occurred.emit(f"Error starting track builder: {str(e)}")
+        # This should never be reached since ULTIMATE_TRACK_BUILDER_AVAILABLE is always False
+        pass
     
     def stop_building(self):
         """Stop the track building process"""
@@ -219,7 +203,13 @@ class IntegratedTrackBuilderDialog(QDialog):
     def start_building(self):
         """Start the track building process"""
         if not ULTIMATE_TRACK_BUILDER_AVAILABLE:
-            QMessageBox.warning(self, "Error", "Ultimate track builder not available. Please check that ultimate_track_builder.py exists in the project root.")
+            QMessageBox.information(self, "Use Integrated Track Builder", 
+                                  "The track building functionality is now integrated into TrackPro!\n\n"
+                                  "To build track maps:\n"
+                                  "1. Go to Race Coach → Track Map Overlay Settings\n"
+                                  "2. Use the 'Track Builder' tab\n"
+                                  "3. Click 'Start Track Builder'\n\n"
+                                  "This provides the same 3-lap centerline generation with enhanced features!")
             return
         
         self.start_button.setEnabled(False)

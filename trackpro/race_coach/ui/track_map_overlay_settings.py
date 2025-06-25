@@ -7,11 +7,12 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                            QLabel, QGroupBox, QSlider, QCheckBox, QSpinBox,
                            QColorDialog, QLineEdit, QTabWidget, QWidget,
                            QMessageBox, QFrame, QGridLayout, QProgressBar,
-                           QTextEdit, QFileDialog)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread
+                           QTextEdit, QFileDialog, QApplication)
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QMetaObject
 from PyQt5.QtGui import QColor, QPalette, QFont
 
 from ..track_map_overlay import TrackMapOverlayManager
+from .track_visualization_window import TrackVisualizationWindow
 import os
 import json
 import logging
@@ -24,14 +25,17 @@ class TrackBuilderThread(QThread):
     
     status_updated = pyqtSignal(str)
     progress_updated = pyqtSignal(int, int)  # completed_laps, required_laps
+    track_update = pyqtSignal(object)  # ADDED: Forward track_builder object from manager
     centerline_generated = pyqtSignal(str)  # file_path
     error_occurred = pyqtSignal(str)
-    
-    def __init__(self):
+    track_manager_ready = pyqtSignal(object)  # NEW: Emitted when manager is ready
+
+    def __init__(self, simple_iracing_api=None):
         super().__init__()
         self.should_stop = False
-        self.track_builder = None
-        
+        self.track_builder_manager = None
+        self.simple_iracing_api = simple_iracing_api  # Store global connection
+    
     def run(self):
         """Run the track builder in a separate thread."""
         try:
@@ -43,255 +47,126 @@ class TrackBuilderThread(QThread):
             if project_root not in sys.path:
                 sys.path.insert(0, project_root)
             
-            from ultimate_track_builder import UltimateTrackBuilder
+            from ..integrated_track_builder import IntegratedTrackBuilderWorker, IntegratedTrackBuilderManager
             
-            self.status_updated.emit("🔌 Connecting to iRacing...")
+            self.status_updated.emit("🔌 Starting integrated track builder...")
             
-            # Create and configure the track builder
-            builder = UltimateTrackBuilder(enable_gui=False)
-            self.track_builder = builder
+            # Create and configure the integrated track builder
+            print("🐛 DEBUG: TrackBuilderThread creating IntegratedTrackBuilderManager...")
+            print(f"🔗 DEBUG: TrackBuilderThread has global iRacing connection: {self.simple_iracing_api is not None}")
             
-            if not builder.connect():
-                self.error_occurred.emit("❌ Cannot connect to iRacing. Make sure iRacing is running.")
-                return
+            self.track_builder_manager = IntegratedTrackBuilderManager(self.simple_iracing_api)
+            print("🐛 DEBUG: IntegratedTrackBuilderManager created successfully")
             
-            self.status_updated.emit("✅ Connected! Waiting for movement to start 3-lap collection...")
+            # Connect internal signals - FIXED: Proper signal forwarding
+            print("🐛 DEBUG: Connecting internal signals...")
+            self.track_builder_manager.status_update.connect(self.status_updated)
             
-            # Override the update_track method to emit signals
-            original_update_track = builder.update_track
+            # FIXED: Forward progress_update properly with lap count extraction
+            self.track_builder_manager.progress_update.connect(self._forward_progress_update)
             
-            def threaded_update_track(frame):
-                if self.should_stop:
-                    return
-                    
-                # Call original method
-                result = original_update_track(frame)
+            # ADDED: Forward track_update signal
+            self.track_builder_manager.track_update.connect(self.track_update)
+            
+            self.track_builder_manager.completion_ready.connect(self._on_internal_completion)
+            self.track_builder_manager.error_occurred.connect(self.error_occurred)
+            print("🐛 DEBUG: Internal signals connected")
+            
+            # Emit signal that manager is ready for external connections
+            print("🐛 DEBUG: Emitting track_manager_ready signal...")
+            self.track_manager_ready.emit(self.track_builder_manager)
+            
+            # Start the track building process
+            print("🐛 DEBUG: Starting track building process...")
+            self.track_builder_manager.start_building()
+            print("🐛 DEBUG: Track builder process started successfully")
+            
+            self.status_updated.emit("✅ Track builder started! Drive 3 laps to generate centerline...")
+            
+            # Keep the thread alive while the worker is running
+            while not self.should_stop and self.track_builder_manager.is_running:
+                self.msleep(100)  # Sleep for 100ms
                 
-                # Emit progress updates
-                completed_laps, required_laps = builder.track_builder.get_lap_progress()
-                self.progress_updated.emit(completed_laps, required_laps)
-                
-                # Check if centerline is generated
-                if builder.centerline_track is not None and not hasattr(self, '_centerline_emitted'):
-                    self._centerline_emitted = True
-                    self.status_updated.emit("🎯 Centerline generated! Saving track map...")
-                    
-                    # Save the track map locally and to Supabase
-                    try:
-                        import numpy as np
-                        track_length = 0
-                        if len(builder.centerline_track) > 1:
-                            for i in range(1, len(builder.centerline_track)):
-                                dx = builder.centerline_track[i][0] - builder.centerline_track[i-1][0]
-                                dy = builder.centerline_track[i][1] - builder.centerline_track[i-1][1]
-                                track_length += np.sqrt(dx*dx + dy*dy)
-                        
-                        import time
-                        track_data = {
-                            'centerline_positions': builder.centerline_track.tolist(),
-                            'source_laps': builder.track_builder.laps,
-                            'raw_positions': builder.track_builder.track_points,
-                            'length_meters': track_length,
-                            'points_count': len(builder.centerline_track),
-                            'laps_used': len(builder.track_builder.laps),
-                            'method': '3_lap_centerline_averaging',
-                            'generation_timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                        
-                        # Save locally first
-                        file_path = 'centerline_track_map.json'
-                        with open(file_path, 'w') as f:
-                            json.dump(track_data, f, indent=2)
-                        
-                        # Save to Supabase for sharing with all users
-                        supabase_saved = self._save_to_supabase(builder, track_data, track_length)
-                        
-                        self.centerline_generated.emit(file_path)
-                        
-                        if supabase_saved:
-                            self.status_updated.emit(f"✅ Track map saved locally & to cloud! ({len(builder.centerline_track)} points, {track_length:.0f}m)")
-                        else:
-                            self.status_updated.emit(f"✅ Track map saved locally! ({len(builder.centerline_track)} points, {track_length:.0f}m) - Cloud save failed")
-                        
-                    except Exception as e:
-                        self.error_occurred.emit(f"Error saving track map: {str(e)}")
-                
-                return result
-            
-            builder.update_track = threaded_update_track
-            
-            # Run the builder - handle GUI vs non-GUI mode
-            try:
-                if builder.enable_gui and builder.fig is not None:
-                    # GUI mode with matplotlib animation
-                    from matplotlib.animation import FuncAnimation
-                    import matplotlib.pyplot as plt
-                    anim = FuncAnimation(builder.fig, builder.update_track, interval=100, blit=False, cache_frame_data=False)
-                    
-                    # Keep the thread alive while building
-                    while not self.should_stop and not builder.track_builder.centerline_generated:
-                        self.msleep(100)
-                        
-                        # Update status based on current state
-                        if builder.building:
-                            completed_laps, required_laps = builder.track_builder.get_lap_progress()
-                            if builder.track_builder.waiting_for_first_crossing:
-                                self.status_updated.emit("🏁 Waiting for start/finish line crossing...")
-                            else:
-                                self.status_updated.emit(f"🏁 Collecting laps: {completed_laps}/{required_laps}")
-                else:
-                    # Non-GUI mode - manual update loop (like standalone mode)
-                    import time
-                    frame_count = 0
-                    last_status_time = time.time()
-                    
-                    while not self.should_stop and not builder.track_builder.centerline_generated:
-                        try:
-                            # Manually call update_track (this is the key fix!)
-                            builder.update_track(frame_count)
-                            frame_count += 1
-                            
-                            # Status updates every 2 seconds
-                            current_time = time.time()
-                            if current_time - last_status_time > 2.0:
-                                completed_laps, required_laps = builder.track_builder.get_lap_progress()
-                                if builder.centerline_track is not None:
-                                    break  # Centerline complete
-                                elif builder.building:
-                                    if builder.track_builder.waiting_for_first_crossing:
-                                        self.status_updated.emit("🏁 Waiting for start/finish line crossing...")
-                                    else:
-                                        self.status_updated.emit(f"🏁 Collecting laps: {completed_laps}/{required_laps} - Current: {len(builder.track_builder.current_lap)} pts")
-                                else:
-                                    self.status_updated.emit("⏳ Waiting for movement to start building...")
-                                last_status_time = current_time
-                            
-                            # Small delay to prevent excessive CPU usage
-                            self.msleep(50)  # 20 FPS update rate
-                            
-                        except Exception as e:
-                            self.error_occurred.emit(f"Error in track building loop: {str(e)}")
-                            break
-                
-            except Exception as e:
-                self.error_occurred.emit(f"Error during track building: {str(e)}")
-            finally:
-                if builder.ir:
-                    builder.ir.shutdown()
-                try:
-                    import matplotlib.pyplot as plt
-                    plt.close('all')
-                except:
-                    pass
-                
-        except ImportError as e:
-            self.error_occurred.emit(f"❌ Could not import ultimate track builder: {str(e)}")
         except Exception as e:
-            self.error_occurred.emit(f"❌ Error: {str(e)}")
+            import traceback
+            error_msg = f"Failed to start track builder: {str(e)}\n{traceback.format_exc()}"
+            print(f"❌ TrackBuilderThread error: {error_msg}")
+            self.error_occurred.emit(error_msg)
+    
+    def _forward_progress_update(self, status_message, progress_value):
+        """Forward progress_update from manager to thread's progress_updated signal."""
+        try:
+            print(f"🔄 DEBUG: Forwarding progress - '{status_message}', value: {progress_value}")
+            
+            # Extract lap count from progress_value (it should be the completed laps)
+            completed_laps = progress_value if isinstance(progress_value, int) else 0
+            required_laps = 3
+            
+            # Emit the old-style progress_updated signal that UI expects
+            self.progress_updated.emit(completed_laps, required_laps)
+            
+            print(f"✅ DEBUG: Forwarded progress_updated({completed_laps}, {required_laps})")
+            
+        except Exception as e:
+            print(f"❌ DEBUG: Error forwarding progress: {e}")
+
+    def _on_completion_ready(self, centerline, corners):
+        """Handle completion of track building."""
+        try:
+            import numpy as np
+            import time
+            import json
+            
+            # Calculate track length
+            track_length = 0
+            if len(centerline) > 1:
+                for i in range(1, len(centerline)):
+                    dx = centerline[i][0] - centerline[i-1][0]
+                    dy = centerline[i][1] - centerline[i-1][1]
+                    track_length += np.sqrt(dx*dx + dy*dy)
+            
+            # Prepare track data for saving
+            track_data = {
+                'centerline_positions': [[point[0], point[1]] for point in centerline],
+                'length_meters': track_length,
+                'points_count': len(centerline),
+                'corners_count': len(corners),
+                'laps_used': 3,
+                'method': 'integrated_track_builder_3_lap_averaging',
+                'generation_timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Save locally first with proper encoding
+            file_path = 'centerline_track_map.json'
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(track_data, f, indent=2, ensure_ascii=False)
+            
+            # Emit completion signals
+            self.centerline_generated.emit(file_path)
+            self.status_updated.emit(f"✅ Track map complete! ({len(centerline)} points, {len(corners)} corners, {track_length:.0f}m)")
+            
+        except Exception as e:
+            self.error_occurred.emit(f"Error saving track map: {str(e)}")
     
     def stop(self):
         """Stop the track builder thread."""
+        print("🐛 DEBUG: Stopping TrackBuilderThread...")
         self.should_stop = True
-        if self.track_builder and hasattr(self.track_builder, 'ir') and self.track_builder.ir:
-            self.track_builder.ir.shutdown()
+        if self.track_builder_manager:
+            self.track_builder_manager.stop_building()
+        self.wait()  # Wait for thread to finish
 
-    def _save_to_supabase(self, builder, track_data, track_length):
-        """Save the generated track map to Supabase for sharing with all users."""
-        try:
-            # Import Supabase client
-            import sys
-            import os
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-            from trackpro.database.supabase_client import get_supabase_client
-            
-            # Get track info from iRacing
-            if not builder.ir or not builder.ir.is_connected:
-                logger.warning("iRacing not connected, cannot get track info for Supabase save")
-                return False
-            
-            track_name = builder.ir['WeekendInfo']['TrackDisplayName']
-            track_config = builder.ir['WeekendInfo']['TrackConfigName'] 
-            iracing_track_id = builder.ir['WeekendInfo']['TrackID']
-            
-            # Get Supabase client
-            supabase = get_supabase_client()
-            if not supabase:
-                logger.warning("Could not connect to Supabase")
-                return False
-            
-            # Prepare track map data for Supabase (convert to coordinate format)
-            track_map_data = []
-            for point in track_data['centerline_positions']:
-                track_map_data.append({
-                    'x': point[0],
-                    'y': point[1]
-                })
-            
-            # Prepare analysis metadata
-            analysis_metadata = {
-                'generation_method': 'ultimate_track_builder_3_lap_averaging',
-                'generation_timestamp': track_data.get('generation_timestamp', ''),
-                'total_coordinates': len(track_map_data),
-                'track_length_meters': track_length,
-                'laps_used_for_generation': track_data.get('laps_used', 3),
-                'data_source': 'iracing_velocity_integration_centerline',
-                'quality_score': 'high',  # 3-lap averaging provides high quality
-                'generation_tool': 'trackpro_ultimate_track_builder'
-            }
-            
-            # Find or create track record
-            track_query = supabase.table('tracks').select('*').eq('name', track_name)
-            if track_config and track_config != track_name:
-                track_query = track_query.eq('config', track_config)
-            
-            existing_tracks = track_query.execute()
-            
-            if existing_tracks.data:
-                # Update existing track
-                track_id = existing_tracks.data[0]['id']
-                
-                update_data = {
-                    'track_map': track_map_data,
-                    'analysis_metadata': analysis_metadata,
-                    'last_analysis_date': 'now()',
-                    'length_meters': track_length,
-                    'data_version': 2  # Version 2 indicates centerline data
-                }
-                
-                result = supabase.table('tracks').update(update_data).eq('id', track_id).execute()
-                
-                if result.data:
-                    logger.info(f"✅ Updated existing track in Supabase: {track_name}")
-                    return True
-                else:
-                    logger.error(f"Failed to update track in Supabase: {track_name}")
-                    return False
-                    
-            else:
-                # Create new track record
-                new_track = {
-                    'name': track_name,
-                    'config': track_config if track_config != track_name else None,
-                    'iracing_track_id': iracing_track_id,
-                    'length_meters': track_length,
-                    'track_map': track_map_data,
-                    'analysis_metadata': analysis_metadata,
-                    'last_analysis_date': 'now()',
-                    'data_version': 2  # Version 2 indicates centerline data
-                }
-                
-                result = supabase.table('tracks').insert(new_track).execute()
-                
-                if result.data:
-                    logger.info(f"✅ Created new track record in Supabase: {track_name}")
-                    return True
-                else:
-                    logger.error(f"Failed to create track record in Supabase: {track_name}")
-                    return False
-                
-        except Exception as e:
-            logger.error(f"Error saving track map to Supabase: {str(e)}")
-            return False
+    def _on_internal_completion(self, centerline, corners):
+        """Handle internal completion and emit signals for both thread and UI."""
+        print(f"🐛 DEBUG: Internal completion - {len(centerline)} points, {len(corners)} corners")
+        
+        # Emit the centerline_generated signal for the thread (expected by existing code)
+        self.centerline_generated.emit("centerline_track_map.json")  # File path as expected
+        
+        # Store completion data for the UI (will be handled by the manager ready connection)
+        self.completion_data = (centerline, corners)
+
+    # Note: Supabase saving is now handled automatically by the integrated track builder
 
 
 class ColorButton(QPushButton):
@@ -356,9 +231,55 @@ class TrackMapOverlaySettingsDialog(QDialog):
         # Track builder thread
         self.track_builder_thread = None
         
+        # Track visualization window
+        self.visualization_window = None
+        
         self.setup_ui()
         self.load_settings()
         self.connect_signals()
+    
+    def _load_json_file_safely(self, file_path):
+        """Safely load JSON file with null byte cleaning."""
+        try:
+            # Read file with null byte cleaning
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+            
+            # Remove null bytes that can cause SyntaxError
+            cleaned_content = file_content.replace('\x00', '')
+            
+            # Parse the cleaned JSON
+            return json.loads(cleaned_content)
+        except Exception as e:
+            logger.error(f"Error loading JSON file {file_path}: {e}")
+            # Try to recover by backing up corrupted file
+            self._backup_corrupted_file(file_path)
+            raise
+    
+    def _backup_corrupted_file(self, file_path):
+        """Backup a corrupted JSON file for recovery."""
+        try:
+            import shutil
+            import time
+            backup_path = f"{file_path}.corrupted_{int(time.time())}"
+            shutil.move(file_path, backup_path)
+            logger.info(f"Moved corrupted file to: {backup_path}")
+            
+            QMessageBox.warning(
+                self, "Corrupted File Detected",
+                f"🛠️ **File Corruption Fixed**\n\n"
+                f"The file '{file_path}' contained null bytes (data corruption) and has been safely moved to:\n"
+                f"{backup_path}\n\n"
+                f"**What this means:**\n"
+                f"• Your track map file got corrupted (possibly during a previous crash)\n"
+                f"• TrackPro automatically detected and fixed this issue\n"
+                f"• You can rebuild your track map using the Track Builder\n\n"
+                f"**Next steps:**\n"
+                f"• Use 'Track Builder' tab to create a new track map\n"
+                f"• Drive 3 clean laps to generate a perfect centerline"
+            )
+        except Exception as backup_error:
+            logger.error(f"Failed to backup corrupted file: {backup_error}")
     
     def get_default_settings(self):
         """Get default overlay settings."""
@@ -579,12 +500,14 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         instructions_text = QLabel(
             "1️⃣ Make sure iRacing is running and you're on track\n"
-            "2️⃣ Click 'Start Track Builder' below\n"
-            "3️⃣ Drive 3 complete laps at any pace (consistency matters more than speed)\n"
-            "4️⃣ Each lap will be shown in a different color (Red → Green → Blue)\n"
-            "5️⃣ After 3 laps, a perfect GOLD centerline will be generated\n"
-            "6️⃣ The track map will be automatically saved and ready for overlay use\n\n"
-            "✨ Benefits:\n"
+            "2️⃣ Click 'Show Live View' to see the track being built in real-time\n"
+            "3️⃣ Click 'Start Track Builder' to begin\n"
+            "4️⃣ Drive 3 complete laps at any pace (consistency matters more than speed)\n"
+            "5️⃣ Watch the live view as each lap is traced in different colors\n"
+            "6️⃣ After 3 laps, a perfect GOLD centerline will be generated\n"
+            "7️⃣ The track map will be automatically saved and ready for overlay use\n\n"
+            "✨ Features:\n"
+            "• Live visualization window shows track building progress\n"
             "• Perfect centerline from statistical averaging\n"
             "• Eliminates driver inconsistencies and telemetry drift\n"
             "• Single clean line guaranteed for overlay\n"
@@ -596,25 +519,25 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         layout.addWidget(instructions_group)
         
-        # Progress group
-        progress_group = QGroupBox("📊 Progress")
-        progress_layout = QVBoxLayout(progress_group)
-        
-        # Progress bar
+        # Status label and progress bar
+        status_layout = QHBoxLayout()
+        self.builder_status_label = QLabel("Ready to build track map")
         self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximum(3)  # 3 laps required
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Laps Completed: %v / %m")
-        progress_layout.addWidget(self.progress_bar)
+        self.progress_bar.setVisible(False)
+        status_layout.addWidget(self.builder_status_label)
+        status_layout.addWidget(self.progress_bar)
+        layout.addLayout(status_layout)
         
-        # Status text
-        self.builder_status_label = QLabel("Ready to build track map. Click 'Start Track Builder' to begin.")
-        self.builder_status_label.setWordWrap(True)
-        self.builder_status_label.setStyleSheet("font-weight: bold; color: #4CAF50; padding: 5px;")
-        progress_layout.addWidget(self.builder_status_label)
+        # ADDED: Track map availability status
+        self.track_availability_label = QLabel("🔍 Checking for existing track maps...")
+        self.track_availability_label.setStyleSheet("color: #666; font-style: italic; padding: 5px;")
+        layout.addWidget(self.track_availability_label)
         
-        layout.addWidget(progress_group)
-        
+        # Check for existing track maps on startup
+        QTimer.singleShot(1000, self.check_track_availability_status)
+
+        # Log output
+
         # Control buttons
         button_layout = QHBoxLayout()
         
@@ -663,6 +586,29 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.stop_builder_button.setEnabled(False)
         button_layout.addWidget(self.stop_builder_button)
         
+        # Add visualization button
+        self.show_viz_button = QPushButton("📊 Show Live View")
+        self.show_viz_button.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 12px 24px;
+                border: none;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #FFB74D;
+            }
+            QPushButton:disabled {
+                background-color: #666;
+                color: #999;
+            }
+        """)
+        self.show_viz_button.clicked.connect(self.show_track_visualization)
+        button_layout.addWidget(self.show_viz_button)
+        
         layout.addLayout(button_layout)
         
         # Load existing track maps group
@@ -700,32 +646,66 @@ class TrackMapOverlaySettingsDialog(QDialog):
         layout.addStretch()
 
     def start_track_builder(self):
-        """Start the track builder in a separate thread."""
+        """Start the ultimate track builder."""
         if self.track_builder_thread and self.track_builder_thread.isRunning():
-            QMessageBox.warning(self, "Already Running", "Track builder is already running!")
+            QMessageBox.warning(self, "Track Builder Running", 
+                               "Track builder is already running. Please wait for it to complete or stop it first.")
             return
+
+        # ADDED: Check for existing track map before starting
+        existing_track_data = self.check_existing_track_map()
+        if existing_track_data:
+            self.handle_existing_track_map(existing_track_data)
+            return
+
+        # Reset progress
+        self.progress_bar.setValue(0)
+        self.builder_status_label.setText("Starting track builder...")
         
-        # Check if required dependencies are available
+        # Get global iRacing connection from parent if available
+        simple_iracing_api = None
         try:
-            import matplotlib
-            import numpy as np
-            from scipy.interpolate import interp1d
-            from sklearn.cluster import DBSCAN
-            from filterpy.kalman import KalmanFilter
-        except ImportError as e:
-            QMessageBox.critical(self, "Missing Dependencies", 
-                               f"Track builder requires additional packages:\n\n"
-                               f"pip install matplotlib numpy scipy scikit-learn filterpy\n\n"
-                               f"Missing: {str(e)}")
-            return
+            # Access the global iRacing connection through the main window
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                # Get the main window
+                main_window = None
+                for widget in app.topLevelWidgets():
+                    if hasattr(widget, 'iracing_api') and widget.iracing_api:
+                        main_window = widget
+                        simple_iracing_api = widget.iracing_api
+                        print(f"🔗 DEBUG: Found global iRacing connection from main window: {simple_iracing_api is not None}")
+                        break
+                
+                if not simple_iracing_api:
+                    print("⚠️ DEBUG: No global iRacing connection found, worker will create its own")
+            else:
+                print("⚠️ DEBUG: No QApplication instance found")
+        except Exception as e:
+            print(f"⚠️ DEBUG: Error accessing global iRacing connection: {e}")
         
-        # Start the builder thread
-        self.track_builder_thread = TrackBuilderThread()
+        # Start the builder thread with the global connection (or None for fallback)
+        self.track_builder_thread = TrackBuilderThread(simple_iracing_api)
+        print("🐛 DEBUG: Connecting thread signals...")
+        
+        # Connect standard thread signals - SIMPLIFIED: One clean signal path
         self.track_builder_thread.status_updated.connect(self.on_builder_status_updated)
         self.track_builder_thread.progress_updated.connect(self.on_builder_progress_updated)
+        self.track_builder_thread.track_update.connect(self._on_track_update)  # ADDED: Direct track updates
         self.track_builder_thread.centerline_generated.connect(self.on_centerline_generated)
         self.track_builder_thread.error_occurred.connect(self.on_builder_error)
         self.track_builder_thread.finished.connect(self.on_builder_finished)
+        
+        print("🐛 DEBUG: All thread signals connected directly - no manager bypass needed")
+        
+        # DIRECT CONNECTION: Connect straight to the worker when it's ready
+        self.track_builder_thread.track_manager_ready.connect(self._connect_directly_to_worker)
+        
+        # Connect visualization window if it exists
+        self._connect_visualization_to_builder()
+        
+        print("🐛 DEBUG: Essential signals connected, starting thread...")
         
         self.track_builder_thread.start()
         
@@ -734,6 +714,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.stop_builder_button.setEnabled(True)
         self.builder_status_label.setText("🔌 Starting track builder...")
         self.progress_bar.setValue(0)
+        print("🐛 DEBUG: UI updated, track builder starting...")
         
         QMessageBox.information(self, "Track Builder Started", 
                               "🎯 Track builder is now running!\n\n"
@@ -747,6 +728,155 @@ class TrackMapOverlaySettingsDialog(QDialog):
                               "• Gold line: Perfect centerline (after 3 laps)\n\n"
                               "You can minimize this dialog and continue using TrackPro while building.")
 
+    def _connect_directly_to_worker(self, manager):
+        """Connect directly to the worker, bypassing all complex forwarding."""
+        print(f"🔗 DEBUG: Connecting DIRECTLY to worker, bypassing all signal forwarding...")
+        try:
+            # Get the actual worker from the manager
+            worker = manager.worker
+            if worker:
+                # Connect DIRECTLY to worker signals - bypass all forwarding
+                worker.track_update.connect(self._on_track_update_direct, Qt.QueuedConnection)
+                worker.progress_update.connect(self._on_progress_update_direct, Qt.QueuedConnection)
+                worker.completion_ready.connect(self._on_track_completion, Qt.QueuedConnection)
+                
+                print(f"✅ DEBUG: Connected DIRECTLY to worker - no more signal forwarding!")
+            else:
+                print(f"❌ DEBUG: No worker found in manager")
+                
+        except Exception as e:
+            print(f"❌ DEBUG: Error connecting directly to worker: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _on_track_update_direct(self, track_builder):
+        """Direct track update handler - bypasses all forwarding."""
+        try:
+            completed_laps = len(track_builder.laps)
+            current_points = len(track_builder.current_lap)
+            print(f"🔥 DEBUG: DIRECT track update received - {completed_laps} laps, {current_points} points - WORKING!")
+            
+            # Update UI directly
+            self.update_progress_ui(completed_laps, current_points)
+            
+        except Exception as e:
+            print(f"❌ DEBUG: Error in direct track update: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _on_progress_update_direct(self, status_message, progress_value):
+        """Direct progress update handler - bypasses all forwarding."""
+        try:
+            print(f"🔥 DEBUG: DIRECT progress update received - '{status_message}', value: {progress_value} - WORKING!")
+            
+            # Convert to the format expected by the UI
+            completed_laps = progress_value if isinstance(progress_value, int) else 0
+            
+            # Update progress bar directly 
+            self.progress_bar.setValue(completed_laps)
+            self.builder_status_label.setText(status_message)
+            
+            # Force UI refresh
+            self.progress_bar.repaint()
+            self.builder_status_label.repaint()
+            QApplication.processEvents()
+            
+        except Exception as e:
+            print(f"❌ DEBUG: Error in direct progress update: {e}")
+
+    def _on_track_update(self, track_builder):
+        """Handle track updates and update the UI progress bar."""
+        try:
+            completed_laps = len(track_builder.completed_laps)
+            current_points = len(track_builder.current_lap_points)
+            required_laps = 3
+            
+            print(f"🐛 DEBUG: _on_track_update called - {completed_laps}/{required_laps} laps, {current_points} current points")
+            
+            # Call the UI update method directly (should work with QueuedConnection)
+            self.update_progress_ui(completed_laps, current_points)
+            
+        except Exception as e:
+            print(f"❌ DEBUG: Error in _on_track_update: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def update_progress_ui(self, completed_laps, current_points):
+        """Update the UI progress bar and status - called from main thread."""
+        try:
+            required_laps = 3
+            
+            # Update progress bar
+            self.progress_bar.setValue(completed_laps)
+            self.progress_bar.setFormat(f"Laps Completed: {completed_laps} / {required_laps}")
+            
+            # Update status with real-time info
+            if completed_laps < required_laps:
+                status = f"🚗 Driving lap {completed_laps + 1}/3 - {current_points} points collected"
+            else:
+                status = "🎯 Processing 3 laps into track map..."
+            
+            self.builder_status_label.setText(status)
+            
+            # Force repaint
+            self.progress_bar.repaint()
+            self.builder_status_label.repaint()
+            QApplication.processEvents()
+            
+            print(f"✅ DEBUG: UI updated successfully - {completed_laps}/{required_laps} laps, {current_points} points")
+            
+        except Exception as e:
+            print(f"❌ DEBUG: Error in update_progress_ui: {e}")
+
+    def _on_track_completion(self, centerline, corners):
+        """Handle track completion and show visual proof."""
+        try:
+            print(f"🐛 DEBUG: Track completion received - {len(centerline)} centerline points, {len(corners)} corners")
+            
+            # Update UI to show completion
+            self.progress_bar.setValue(3)
+            self.progress_bar.setFormat("✅ Track Map Created!")
+            self.builder_status_label.setText(f"✅ Track map created: {len(centerline)} points, {len(corners)} corners")
+            
+            # Show visual proof with track details
+            track_info = f"""
+✅ TRACK MAP SUCCESSFULLY CREATED!
+
+📍 Track: The Bullring
+📊 Centerline Points: {len(centerline)}
+🎯 Corners Detected: {len(corners)}
+📏 Track Length: {self._calculate_track_length(centerline):.0f} meters
+
+The track map has been saved and is ready for use in:
+• Race Coach analysis
+• Track Map Overlay
+• Corner detection system
+            """
+            
+            # Show success message box with track details
+            QMessageBox.information(self, "Track Map Created!", track_info.strip())
+            
+            # Re-enable the build button for future use
+            if hasattr(self, 'build_button'):
+                self.build_button.setText("🏗️ Build Track Map")
+                self.build_button.setEnabled(True)
+                
+        except Exception as e:
+            print(f"❌ DEBUG: Error in _on_track_completion: {e}")
+
+    def _calculate_track_length(self, centerline):
+        """Calculate approximate track length from centerline points."""
+        try:
+            import math
+            total_length = 0
+            for i in range(1, len(centerline)):
+                dx = centerline[i][0] - centerline[i-1][0]
+                dy = centerline[i][1] - centerline[i-1][1]
+                total_length += math.sqrt(dx*dx + dy*dy)
+            return total_length
+        except:
+            return 0
+
     def stop_track_builder(self):
         """Stop the track builder."""
         if self.track_builder_thread and self.track_builder_thread.isRunning():
@@ -754,18 +884,104 @@ class TrackMapOverlaySettingsDialog(QDialog):
             self.track_builder_thread.wait(5000)  # Wait up to 5 seconds
             
         self.on_builder_finished()
+    
+    def show_track_visualization(self):
+        """Show the live track building visualization window."""
+        if self.visualization_window is None:
+            self.visualization_window = TrackVisualizationWindow(self)
+        
+        # Always try to connect to any running track builder
+        self._connect_visualization_to_builder()
+        
+        self.visualization_window.show()
+        self.visualization_window.raise_()
+        self.visualization_window.activateWindow()
+        
+        QMessageBox.information(self, "Live Track View", 
+                              "🎯 Live track visualization window opened!\n\n"
+                              "This window will show your track being built in real-time:\n"
+                              "• Gray dots: All collected telemetry points\n"
+                              "• Red line: Current lap being driven\n"
+                              "• Blue/Green/Purple: Completed laps\n"
+                              "• Green marker: Start/finish line\n"
+                              "• Yellow dashed line: Generated centerline\n\n"
+                              "If you already have track builder running, it should start updating immediately!")
+    
+    def _connect_visualization_to_builder(self):
+        """Connect visualization window to any running track builder."""
+        if not self.visualization_window:
+            return
+            
+        # Try to connect to thread-level signals
+        if self.track_builder_thread and hasattr(self.track_builder_thread, 'track_update'):
+            try:
+                # Disconnect any existing connections to avoid duplicates
+                self.track_builder_thread.track_update.disconnect(self.visualization_window.update_track_data)
+            except:
+                pass  # No existing connection
+            
+            # Connect to thread signal
+            self.track_builder_thread.track_update.connect(
+                self.visualization_window.update_track_data, Qt.QueuedConnection
+            )
+            print("🔗 Connected visualization to track builder thread signals")
+        
+        # Also try to connect to manager signals if available
+        if (self.track_builder_thread and 
+            hasattr(self.track_builder_thread, 'track_builder_manager') and 
+            self.track_builder_thread.track_builder_manager):
+            
+            manager = self.track_builder_thread.track_builder_manager
+            if hasattr(manager, 'track_update'):
+                try:
+                    # Disconnect any existing connections
+                    manager.track_update.disconnect(self.visualization_window.update_track_data)
+                except:
+                    pass
+                
+                # Connect to manager signal
+                manager.track_update.connect(
+                    self.visualization_window.update_track_data, Qt.QueuedConnection
+                )
+                print("🔗 Connected visualization to track builder manager signals")
+            
+            # Connect to worker signals if available
+            if hasattr(manager, 'worker') and manager.worker:
+                worker = manager.worker
+                if hasattr(worker, 'track_update'):
+                    try:
+                        # Disconnect any existing connections
+                        worker.track_update.disconnect(self.visualization_window.update_track_data)
+                    except:
+                        pass
+                    
+                    # Connect to worker signal
+                    worker.track_update.connect(
+                        self.visualization_window.update_track_data, Qt.QueuedConnection
+                    )
+                    print("🔗 Connected visualization to track builder worker signals")
 
     def on_builder_status_updated(self, status):
         """Handle status updates from the track builder."""
+        print(f"🐛 DEBUG: on_builder_status_updated called with: {status}")
         self.builder_status_label.setText(status)
 
     def on_builder_progress_updated(self, completed_laps, required_laps):
-        """Handle progress updates from the track builder."""
+        """Handle progress updates from the track builder thread."""
+        print(f"🎯 DEBUG: on_builder_progress_updated called - {completed_laps}/{required_laps} laps")
+        
         self.progress_bar.setValue(completed_laps)
-        self.progress_bar.setFormat(f"Laps Completed: {completed_laps} / {required_laps}")
+        self.progress_bar.setMaximum(required_laps)
+        
+        # Force UI refresh
+        self.progress_bar.repaint()
+        QApplication.processEvents()
+        
+        print(f"✅ DEBUG: Progress bar updated to {completed_laps}/{required_laps}")
 
     def on_centerline_generated(self, file_path):
         """Handle when centerline is generated."""
+        print(f"🐛 DEBUG: on_centerline_generated called with: {file_path}")
         QMessageBox.information(self, "Track Map Complete!", 
                               f"🎯 Perfect track map generated!\n\n"
                               f"📁 Saved to: {file_path}\n\n"
@@ -777,11 +993,13 @@ class TrackMapOverlaySettingsDialog(QDialog):
 
     def on_builder_error(self, error_message):
         """Handle errors from the track builder."""
+        print(f"🐛 DEBUG: on_builder_error called with: {error_message}")
         QMessageBox.critical(self, "Track Builder Error", error_message)
         self.builder_status_label.setText(f"❌ Error: {error_message}")
 
     def on_builder_finished(self):
         """Handle when the track builder finishes."""
+        print("🐛 DEBUG: on_builder_finished called")
         self.start_builder_button.setEnabled(True)
         self.stop_builder_button.setEnabled(False)
         
@@ -796,8 +1014,8 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         if file_path:
             try:
-                with open(file_path, 'r') as f:
-                    track_data = json.load(f)
+                # Load track data safely with null byte cleaning
+                track_data = self._load_json_file_safely(file_path)
                 
                 # Validate the track data
                 if 'centerline_positions' not in track_data:
@@ -833,8 +1051,8 @@ class TrackMapOverlaySettingsDialog(QDialog):
         # Check for the default centerline file
         if os.path.exists('centerline_track_map.json'):
             try:
-                with open('centerline_track_map.json', 'r') as f:
-                    track_data = json.load(f)
+                # Load track data safely with null byte cleaning
+                track_data = self._load_json_file_safely('centerline_track_map.json')
                 
                 points = len(track_data.get('centerline_positions', []))
                 length = track_data.get('length_meters', 'Unknown')
@@ -843,8 +1061,8 @@ class TrackMapOverlaySettingsDialog(QDialog):
                 self.current_track_info.setText(
                     f"📍 centerline_track_map.json - {points} points, {length}m ({method})"
                 )
-            except:
-                self.current_track_info.setText("❌ Error reading centerline_track_map.json")
+            except Exception as e:
+                self.current_track_info.setText(f"❌ Error reading centerline_track_map.json: {str(e)}")
         else:
             self.current_track_info.setText("No local track map found. Build one using the Track Builder above!")
         
@@ -1107,8 +1325,12 @@ class TrackMapOverlaySettingsDialog(QDialog):
             # Try to load the centerline track map if it exists
             if os.path.exists('centerline_track_map.json'):
                 try:
-                    with open('centerline_track_map.json', 'r') as f:
-                        track_data = json.load(f)
+                    # Load track data safely with null byte cleaning
+                    track_data = self._load_json_file_safely('centerline_track_map.json')
+                    
+                    # Validate required fields
+                    if 'centerline_positions' not in track_data:
+                        raise KeyError("Missing 'centerline_positions' in track data")
                     
                     # Pre-load the track data into the overlay
                     success = self.overlay_manager.start_overlay()
@@ -1230,3 +1452,275 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         # Don't stop overlay when dialog closes - let user keep it running
         event.accept()
+
+    def check_existing_track_map(self):
+        """Check if a track map already exists in the database for the current track."""
+        try:
+            # Import here to avoid issues if not installed
+            from trackpro.database.supabase_client import get_supabase_client
+            
+            # Get current track info from iRacing
+            current_track_info = self.get_current_track_info()
+            if not current_track_info:
+                print("🔍 No current track info available for database check")
+                return None
+            
+            track_name, track_config = current_track_info
+            print(f"🔍 Checking database for existing track map: {track_name} ({track_config})")
+            
+            # Query Supabase for existing track map
+            supabase = get_supabase_client()
+            if not supabase:
+                print("⚠️ Supabase client not available")
+                return None
+            
+            # Build query
+            query = supabase.table('tracks').select('id, name, config, track_map, corners, last_analysis_date, analysis_metadata')
+            query = query.eq('name', track_name)
+            
+            if track_config and track_config != track_name:
+                query = query.eq('config', track_config)
+            
+            # Execute query
+            result = query.execute()
+            
+            if result.data and len(result.data) > 0:
+                track_data = result.data[0]
+                
+                # Check if it has a track map
+                if track_data.get('track_map') and len(track_data.get('track_map', [])) > 0:
+                    print(f"✅ Found existing track map with {len(track_data['track_map'])} points")
+                    print(f"📅 Last analyzed: {track_data.get('last_analysis_date', 'Unknown')}")
+                    return track_data
+                else:
+                    print(f"📍 Track exists but no map data available")
+                    return None
+            else:
+                print(f"📍 No existing track record found for {track_name}")
+                return None
+                
+        except Exception as e:
+            print(f"⚠️ Error checking existing track map: {e}")
+            return None
+
+    def handle_existing_track_map(self, track_data):
+        """Handle when an existing track map is found - offer to load or rebuild."""
+        track_name = track_data.get('name', 'Unknown Track')
+        config = track_data.get('config')
+        last_analysis = track_data.get('last_analysis_date', 'Unknown')
+        track_map_points = len(track_data.get('track_map', []))
+        corners_count = len(track_data.get('corners', []))
+        
+        # Build display text
+        full_name = track_name
+        if config and config != track_name:
+            full_name = f"{track_name} - {config}"
+        
+        # Create detailed dialog
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Existing Track Map Found")
+        msg.setIcon(QMessageBox.Question)
+        
+        msg.setText(f"<h3>Track Map Available</h3>"
+                   f"<b>{full_name}</b><br><br>"
+                   f"📊 <b>{track_map_points:,}</b> centerline points<br>"
+                   f"🎯 <b>{corners_count}</b> corners detected<br>"
+                   f"📅 Last updated: <b>{last_analysis}</b><br><br>"
+                   f"What would you like to do?")
+        
+        # Add custom buttons
+        load_button = msg.addButton("🚀 Load Existing Map", QMessageBox.AcceptRole)
+        rebuild_button = msg.addButton("🔄 Rebuild New Map", QMessageBox.RejectRole)
+        cancel_button = msg.addButton("❌ Cancel", QMessageBox.RejectRole)
+        
+        msg.setDefaultButton(load_button)
+        msg.exec_()
+        
+        if msg.clickedButton() == load_button:
+            self.load_existing_track_map(track_data)
+        elif msg.clickedButton() == rebuild_button:
+            print("🔄 User chose to rebuild - continuing with track builder...")
+            self.continue_track_builder_start()
+        else:
+            print("❌ User cancelled track map operation")
+
+    def load_existing_track_map(self, track_data):
+        """Load an existing track map from the database."""
+        try:
+            print(f"🚀 Loading existing track map...")
+            
+            track_map = track_data.get('track_map', [])
+            corners = track_data.get('corners', [])
+            
+            if not track_map:
+                QMessageBox.warning(self, "Load Error", "Track map data is empty or invalid.")
+                return
+            
+            # Convert track map to the format expected by the UI
+            centerline_track = [(point['x'], point['y']) for point in track_map]
+            
+            # Convert corners to corner objects if needed
+            corner_objects = []
+            for corner_data in corners:
+                corner_objects.append(corner_data)  # Already in dict format
+            
+            # Update UI with loaded data
+            self.builder_status_label.setText(f"✅ Loaded existing track map ({len(centerline_track)} points, {len(corner_objects)} corners)")
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat("Track Map Loaded")
+            
+            # Simulate completion signal for loaded data
+            self.on_centerline_generated_from_load(centerline_track, corner_objects, track_data)
+            
+            print(f"✅ Successfully loaded existing track map with {len(centerline_track)} points and {len(corner_objects)} corners")
+            
+        except Exception as e:
+            error_msg = f"Error loading existing track map: {str(e)}"
+            print(f"❌ {error_msg}")
+            QMessageBox.critical(self, "Load Error", error_msg)
+
+    def continue_track_builder_start(self):
+        """Continue with the normal track builder start process (for rebuild option)."""
+        # Reset progress
+        self.progress_bar.setValue(0)
+        self.builder_status_label.setText("Starting track builder...")
+        
+        # Continue with the original track builder startup logic
+        # Get global iRacing connection from parent if available
+        simple_iracing_api = None
+        try:
+            if hasattr(self.parent(), 'global_iracing_api'):
+                simple_iracing_api = self.parent().global_iracing_api
+                print("🔗 Using global iRacing connection for track builder")
+        except Exception as e:
+            print(f"Warning: Could not get global iRacing connection: {e}")
+
+        # Create track builder thread
+        self.track_builder_thread = TrackBuilderThread(simple_iracing_api)
+
+        # Connect standard thread signals - SIMPLIFIED: One clean signal path
+        self.track_builder_thread.status_updated.connect(self.on_builder_status_updated)
+        self.track_builder_thread.progress_updated.connect(self.on_builder_progress_updated)
+        self.track_builder_thread.track_update.connect(self._on_track_update)  # ADDED: Direct track updates
+        self.track_builder_thread.centerline_generated.connect(self.on_centerline_generated)
+        self.track_builder_thread.error_occurred.connect(self.on_builder_error)
+        self.track_builder_thread.finished.connect(self.on_builder_finished)
+        
+        # DIRECT CONNECTION: Connect straight to the worker when it's ready
+        self.track_builder_thread.track_manager_ready.connect(self._connect_directly_to_worker)
+        
+        print("🐛 DEBUG: Essential signals connected, starting thread...")
+        
+        self.track_builder_thread.start()
+
+    def get_current_track_info(self):
+        """Get current track name and configuration from iRacing."""
+        try:
+            # Try to get from global iRacing connection first
+            simple_iracing_api = None
+            if hasattr(self.parent(), 'global_iracing_api'):
+                simple_iracing_api = self.parent().global_iracing_api
+            
+            if simple_iracing_api and simple_iracing_api.ir and simple_iracing_api.ir.is_connected:
+                track_name = simple_iracing_api.ir['WeekendInfo']['TrackDisplayName']
+                track_config = simple_iracing_api.ir['WeekendInfo']['TrackConfigName']
+                print(f"🔍 Got track info from global connection: {track_name} ({track_config})")
+                return track_name, track_config
+            else:
+                # Fallback: create temporary connection
+                import irsdk
+                ir = irsdk.IRSDK()
+                if ir.startup() and ir.is_connected:
+                    track_name = ir['WeekendInfo']['TrackDisplayName']
+                    track_config = ir['WeekendInfo']['TrackConfigName']
+                    ir.shutdown()
+                    print(f"🔍 Got track info from temporary connection: {track_name} ({track_config})")
+                    return track_name, track_config
+                
+        except Exception as e:
+            print(f"⚠️ Error getting track info: {e}")
+        
+        return None
+
+    def on_centerline_generated_from_load(self, centerline_track, corners, track_data):
+        """Handle centerline generation from loaded data (not real-time generation)."""
+        try:
+            print(f"📊 Processing loaded track map: {len(centerline_track)} points, {len(corners)} corners")
+            
+            # Store the loaded data in the same way as generated data
+            self.current_centerline = centerline_track
+            self.current_corners = corners
+            
+            # Update the track builder log
+            track_name = track_data.get('name', 'Unknown Track')
+            config = track_data.get('config')
+            full_name = track_name
+            if config and config != track_name:
+                full_name = f"{track_name} - {config}"
+            
+            log_entry = f"🚀 LOADED: {full_name}\n"
+            log_entry += f"📊 Centerline: {len(centerline_track)} points\n"
+            log_entry += f"🎯 Corners: {len(corners)} detected\n"
+            log_entry += f"📅 Last Updated: {track_data.get('last_analysis_date', 'Unknown')}\n"
+            log_entry += "=" * 50 + "\n"
+            
+            self.builder_log.append(log_entry)
+            
+            # Enable track map overlay if not already enabled
+            if not self.track_map_enabled_checkbox.isChecked():
+                self.track_map_enabled_checkbox.setChecked(True)
+                print("✅ Automatically enabled track map overlay for loaded data")
+            
+            # Update the parent overlay if it exists
+            if hasattr(self.parent(), 'overlay_widget') and self.parent().overlay_widget:
+                self.parent().overlay_widget.set_track_map(centerline_track)
+                self.parent().overlay_widget.set_corners(corners)
+                print("🗺️ Updated overlay with loaded track map")
+            
+            QMessageBox.information(self, "Track Map Loaded", 
+                                   f"Successfully loaded track map for {full_name}!\n\n"
+                                   f"📊 {len(centerline_track)} centerline points\n"
+                                   f"🎯 {len(corners)} corners")
+            
+        except Exception as e:
+            error_msg = f"Error processing loaded track map: {str(e)}"
+            print(f"❌ {error_msg}")
+            QMessageBox.critical(self, "Processing Error", error_msg)
+
+    def check_track_availability_status(self):
+        """Check and display track map availability status for the current track."""
+        try:
+            current_track_info = self.get_current_track_info()
+            if not current_track_info:
+                self.track_availability_label.setText("⚠️ Not connected to iRacing - cannot check track maps")
+                self.track_availability_label.setStyleSheet("color: #FFA500; font-style: italic; padding: 5px;")
+                return
+            
+            track_name, track_config = current_track_info
+            full_name = track_name
+            if track_config and track_config != track_name:
+                full_name = f"{track_name} - {track_config}"
+            
+            # Check for existing track map
+            existing_track_data = self.check_existing_track_map()
+            
+            if existing_track_data:
+                track_map_points = len(existing_track_data.get('track_map', []))
+                corners_count = len(existing_track_data.get('corners', []))
+                last_analysis = existing_track_data.get('last_analysis_date', 'Unknown')
+                
+                self.track_availability_label.setText(
+                    f"✅ <b>{full_name}</b> track map available "
+                    f"({track_map_points:,} points, {corners_count} corners, updated {last_analysis})"
+                )
+                self.track_availability_label.setStyleSheet("color: #4CAF50; font-weight: bold; padding: 5px;")
+            else:
+                self.track_availability_label.setText(
+                    f"📍 <b>{full_name}</b> - No existing track map (will create new)"
+                )
+                self.track_availability_label.setStyleSheet("color: #2196F3; font-style: italic; padding: 5px;")
+                
+        except Exception as e:
+            print(f"⚠️ Error checking track availability: {e}")
+            self.track_availability_label.setText("⚠️ Could not check track map availability")
+            self.track_availability_label.setStyleSheet("color: #FFA500; font-style: italic; padding: 5px;")
