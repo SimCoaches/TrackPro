@@ -1310,7 +1310,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                         
                         badges.forEach(function(badge) {
                             var text = badge.textContent ? badge.textContent.trim() : '';
-                            if (text && /^\d+$/.test(text)) {
+                            if (text && /^\\d+$/.test(text)) {
                                 totalNotifications += parseInt(text);
                             } else if (text) {
                                 totalNotifications += 1; // Non-numeric badges count as 1

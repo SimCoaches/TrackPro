@@ -1,9 +1,29 @@
 #!/usr/bin/env python3
-import PyInstaller.__main__
 import sys
 import os
-import shutil
 import subprocess
+
+# Ensure we're using Python 3.11 for building (critical for eye tracking support)
+if sys.version_info[:2] != (3, 11):
+    print(f"TrackPro build requires Python 3.11 for eye tracking support.")
+    print(f"Current version: Python {sys.version_info.major}.{sys.version_info.minor}")
+    print("Restarting build with Python 3.11...")
+    
+    try:
+        # Use py -3.11 to explicitly run with Python 3.11
+        result = subprocess.run([
+            "py", "-3.11", __file__
+        ] + sys.argv[1:], check=True)
+        sys.exit(result.returncode)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"❌ Failed to start build with Python 3.11: {e}")
+        print("Please install Python 3.11 or ensure it's available via 'py -3.11'")
+        sys.exit(1)
+
+print(f"✓ Building with Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+
+import PyInstaller.__main__
+import shutil
 import requests
 import winreg
 from urllib.parse import urlparse
@@ -257,10 +277,10 @@ Section "Prerequisites"
         ; Extract main executable using relative path
         File "installer_temp\dist\TrackPro_v{version}.exe"
         
-        ; Extract diagnostic tool if available
-        ${{If}} ${{FileExists}} "diagnose_trackpro.py"
-            File "diagnose_trackpro.py"
-        ${{EndIf}}
+        ; Diagnostic tool not available in this version
+        ; ${{If}} ${{FileExists}} "diagnose_trackpro.py"
+        ;     File "diagnose_trackpro.py"
+        ; ${{EndIf}}
         
         ; Verify the file was extracted correctly
         ${{IfNot}} ${{FileExists}} "$TEMP\TrackPro\app\TrackPro_v{version}.exe"
@@ -298,10 +318,10 @@ Section "Prerequisites"
         ClearErrors
         CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v{version}.exe" "$PROGRAMFILES64\TrackPro"
         
-        ; Copy diagnostic tool if available
-        ${{If}} ${{FileExists}} "$TEMP\TrackPro\app\diagnose_trackpro.py"
-            CopyFiles /SILENT "$TEMP\TrackPro\app\diagnose_trackpro.py" "$PROGRAMFILES64\TrackPro"
-        ${{EndIf}}
+        ; Copy diagnostic tool if available (not included in this version)
+        ; ${{If}} ${{FileExists}} "$TEMP\TrackPro\app\diagnose_trackpro.py"
+        ;     CopyFiles /SILENT "$TEMP\TrackPro\app\diagnose_trackpro.py" "$PROGRAMFILES64\TrackPro"
+        ; ${{EndIf}}
         
         ; Check for copy errors
         ${{If}} ${{Errors}}
@@ -321,10 +341,10 @@ Section "Prerequisites"
         CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
         CreateShortCut "$DESKTOP\TrackPro v{version}.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
         
-        ; Create diagnostic tool shortcut if available
-        ${{If}} ${{FileExists}} "$PROGRAMFILES64\TrackPro\diagnose_trackpro.py"
-            CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro Diagnostic Tool.lnk" "$WINDIR\system32\cmd.exe" '/c cd /d "$PROGRAMFILES64\TrackPro" && python diagnose_trackpro.py && pause' "$WINDIR\system32\cmd.exe"
-        ${{EndIf}}
+        ; Create diagnostic tool shortcut if available (not included in this version)
+        ; ${{If}} ${{FileExists}} "$PROGRAMFILES64\TrackPro\diagnose_trackpro.py"
+        ;     CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro Diagnostic Tool.lnk" "$WINDIR\system32\cmd.exe" '/c cd /d "$PROGRAMFILES64\TrackPro" && python diagnose_trackpro.py && pause' "$WINDIR\system32\cmd.exe"
+        ; ${{EndIf}}
         
         DetailPrint "TrackPro installation complete"
 

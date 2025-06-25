@@ -4,7 +4,9 @@ import sys
 import base64
 import hashlib
 import os
+import json
 import logging
+import threading
 import webbrowser
 import re
 from urllib.parse import urlparse, parse_qs
@@ -274,6 +276,11 @@ class OAuthHandler(QObject):
                     parsed_path = urlparse(self.path)
                     query_params = parse_qs(parsed_path.query)
 
+                    # Add detailed logging for debugging
+                    logger.info(f"Parsed path: {parsed_path.path}")
+                    logger.info(f"Query params: {query_params}")
+                    logger.info(f"Full URL: {self.path}")
+
                     # Handle email confirmation route
                     if parsed_path.path == '/auth/confirm':
                         logger.info("Email confirmation callback received")
@@ -284,20 +291,70 @@ class OAuthHandler(QObject):
                             self.wfile.write(self.parent.create_email_confirmation_page().encode('utf-8'))
                         return
 
-                    # Handle OAuth callback (default path)
-                    # Safely check if wfile exists before writing to it
+                    # Send HTML response that will extract tokens from URL fragment
                     if hasattr(self, 'wfile') and self.wfile is not None:
-                        # Send a response to the browser
                         self.send_response(200)
                         self.send_header('Content-type', 'text/html')
                         self.end_headers()
-                        self.wfile.write(b"<html><body><h1>Authentication successful!</h1><p>You can close this window now.</p></body></html>")
+                        
+                        # HTML page that extracts tokens from URL fragment and sends them to server
+                        html_response = """
+                        <html>
+                        <head><title>Authentication Processing...</title></head>
+                        <body>
+                            <h1>Processing authentication...</h1>
+                            <p>Please wait while we complete your authentication.</p>
+                            <script>
+                                // Extract tokens from URL fragment (for implicit flow)
+                                const fragment = window.location.hash.slice(1);
+                                const params = new URLSearchParams(fragment);
+                                
+                                console.log('URL fragment:', fragment);
+                                console.log('Fragment params:', params);
+                                
+                                if (params.has('access_token')) {
+                                    console.log('Found access token in fragment');
+                                    
+                                    // Send token data to our callback endpoint
+                                    fetch('/process_tokens', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                        },
+                                        body: JSON.stringify({
+                                            access_token: params.get('access_token'),
+                                            refresh_token: params.get('refresh_token'),
+                                            expires_in: params.get('expires_in'),
+                                            token_type: params.get('token_type'),
+                                            type: params.get('type')
+                                        })
+                                    }).then(response => {
+                                        console.log('Token processing response:', response.status);
+                                        if (response.ok) {
+                                            document.body.innerHTML = '<h1>Authentication successful!</h1><p>You can close this window now.</p>';
+                                            setTimeout(() => window.close(), 2000);
+                                        } else {
+                                            document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
+                                        }
+                                    }).catch(err => {
+                                        console.error('Error processing tokens:', err);
+                                        document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
+                                    });
+                                } else {
+                                    console.log('No access token found in fragment');
+                                    document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
+                                }
+                            </script>
+                        </body>
+                        </html>
+                        """
+                        self.wfile.write(html_response.encode('utf-8'))
                     else:
                         logger.error("Cannot send response: wfile is None")
 
                     if 'code' in query_params:
                         code = query_params['code'][0]
-                        logger.info(f"Extracted code from path: {code[:5]}...")
+                        logger.info(f"✓ SUCCESS: Extracted auth code: {code[:5]}...")
 
                         # No need to check for code verifier anymore since we're using simplified OAuth flow
                         
@@ -310,7 +367,11 @@ class OAuthHandler(QObject):
                         # Optionally trigger a user-facing error
                     else:
                         # Handle cases like /favicon.ico gracefully
-                        if self.path != '/favicon.ico':
+                        if self.path == '/favicon.ico':
+                            logger.debug("Ignoring favicon request")
+                        elif self.path == '/':
+                            logger.info("Received root path request - will handle token extraction via JavaScript")
+                        else:
                             logger.warning(f"Unexpected callback format or missing code: {self.path}")
                         # No further action needed for favicon or unexpected paths without errors/code
 
@@ -321,7 +382,117 @@ class OAuthHandler(QObject):
                             self.send_response(500)
                             self.end_headers()
                     except Exception as send_e:
-                         logger.error(f"Error sending 500 response: {send_e}") # Avoid crashing handler
+                        logger.error(f"Error sending 500 response: {send_e}")
+            
+            def do_POST(self):
+                try:
+                    # Handle token processing from JavaScript
+                    if self.path == '/process_tokens':
+                        content_length = int(self.headers['Content-Length'])
+                        post_data = self.rfile.read(content_length)
+                        token_data = json.loads(post_data.decode('utf-8'))
+                        
+                        logger.info("✓ SUCCESS: Received tokens from JavaScript")
+                        logger.info(f"Access token: {token_data.get('access_token', '')[:20]}...")
+                        
+                        # Send success response
+                        self.send_response(200)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(b'{"status": "success"}')
+                        
+                        # Process the tokens in a separate thread
+                        threading.Thread(target=self.process_tokens, args=(token_data,)).start()
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                except Exception as e:
+                    logger.error(f"Error in POST handler: {e}")
+                    try:
+                        self.send_response(500)
+                        self.end_headers()
+                    except:
+                        pass
+            
+            def process_tokens(self, token_data):
+                """Process tokens received from implicit flow."""
+                try:
+                    access_token = token_data.get('access_token')
+                    refresh_token = token_data.get('refresh_token')
+                    
+                    if not access_token:
+                        logger.error("No access token provided")
+                        self.parent.auth_completed.emit(False, None)
+                        return
+                    
+                    logger.info(f"Processing tokens for implicit flow")
+                    
+                    # Create a mock response object for compatibility
+                    class MockAuthResponse:
+                        def __init__(self, token_data):
+                            self.user = MockUser(token_data)
+                            self.session = MockSession(token_data)
+                    
+                    class MockUser:
+                        def __init__(self, token_data):
+                            # Decode the JWT token to get user info
+                            import base64
+                            import json
+                            try:
+                                # Parse JWT payload (middle part)
+                                payload = access_token.split('.')[1]
+                                # Add padding if needed
+                                payload += '=' * (-len(payload) % 4)
+                                decoded = base64.urlsafe_b64decode(payload)
+                                user_data = json.loads(decoded)
+                                
+                                self.id = user_data.get('sub')
+                                self.email = user_data.get('email')
+                                self.user_metadata = user_data.get('user_metadata', {})
+                                
+                                logger.info(f"Decoded user from JWT: {self.email}")
+                            except Exception as e:
+                                logger.error(f"Error decoding JWT: {e}")
+                                self.id = "unknown"
+                                self.email = "unknown@unknown.com"
+                                self.user_metadata = {}
+                    
+                    class MockSession:
+                        def __init__(self, token_data):
+                            self.access_token = token_data.get('access_token')
+                            self.refresh_token = token_data.get('refresh_token')
+                            self.expires_in = token_data.get('expires_in')
+                            self.token_type = token_data.get('token_type', 'bearer')
+                    
+                    mock_response = MockAuthResponse(token_data)
+                    
+                    # Set the session in the Supabase client
+                    from ..database.supabase_client import supabase
+                    if supabase and supabase.client:
+                        try:
+                            # Set the session directly in the client
+                            supabase.client.auth.set_session(access_token, refresh_token)
+                            logger.info("Successfully set session in Supabase client")
+                        except Exception as e:
+                            logger.error(f"Error setting session in client: {e}")
+                    
+                    # Save session and emit success
+                    if hasattr(self.parent, '_save_session'):
+                        self.parent._save_session(mock_response, remember_me=True)
+                    
+                    # Emit auth completed signal
+                    self.parent.auth_completed.emit(True, mock_response)
+                    
+                    # Show success message
+                    QTimer.singleShot(1000, lambda: QMessageBox.information(
+                        None, 
+                        "Authentication Successful", 
+                        f"You are now logged in as {mock_response.user.email}!"
+                    ))
+                    
+                except Exception as e:
+                    logger.error(f"Error processing tokens: {e}", exc_info=True)
+                    self.parent.auth_completed.emit(False, None)
 
             def process_callback(self, code):
                 try:
