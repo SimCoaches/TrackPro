@@ -932,25 +932,28 @@ class TrackMapOverlayManager(QObject):
                     logger.warning(f"Could not load track data for {track_name}")
             
             if not data_loaded:
-                # 3. Try local centerline file
-                if self.overlay.load_centerline_track_data():
-                    data_loaded = True
-                    data_source = "local centerline file"
-                    logger.info("🎯 Loaded local centerline track data")
-            
-            if not data_loaded:
-                # 4. Try to auto-detect current track from iRacing
+                # 3. Try to auto-detect current track from iRacing FIRST
                 current_track_info = self._get_current_iracing_track()
                 if current_track_info:
                     track_name, track_config = current_track_info
                     self.current_track_name = track_name
                     self.current_track_config = track_config
+                    
+                    # Try to load from Supabase for current track
                     if self.overlay.load_track_data(track_name, track_config):
                         data_loaded = True
                         data_source = f"auto-detected: {track_name}"
                         if track_config and track_config != track_name:
                             data_source += f" - {track_config}"
                         logger.info(f"🗺️ Auto-detected and loaded track: {data_source}")
+            
+            if not data_loaded:
+                # 4. Fall back to local centerline file (may be for different track)
+                if self.overlay.load_centerline_track_data():
+                    data_loaded = True
+                    data_source = "local centerline file (fallback)"
+                    logger.warning("🗺️ Using local centerline file as fallback - may not match current track")
+                    logger.info("🎯 Loaded local centerline track data")
             
             # Create and start worker thread with shared iRacing API
             self.worker = TrackMapOverlayWorker(self.shared_iracing_api)
@@ -1022,9 +1025,17 @@ class TrackMapOverlayManager(QObject):
     def _get_current_iracing_track(self):
         """Get current track info from iRacing."""
         try:
-            # Import here to avoid circular imports
-            from .pyirsdk import irsdk
+            # First try to use shared iRacing API if available
+            if self.shared_iracing_api and hasattr(self.shared_iracing_api, 'ir') and self.shared_iracing_api.ir:
+                ir = self.shared_iracing_api.ir
+                if ir and ir.is_connected:
+                    track_name = ir['WeekendInfo']['TrackDisplayName']
+                    track_config = ir['WeekendInfo']['TrackConfigName']
+                    logger.info(f"🔍 Current track from shared API: {track_name} ({track_config})")
+                    return track_name, track_config
             
+            # Fallback: create temporary connection
+            from .pyirsdk import irsdk
             ir = irsdk.IRSDK()
             if not ir.startup() or not ir.is_connected:
                 return None
@@ -1033,6 +1044,7 @@ class TrackMapOverlayManager(QObject):
             track_config = ir['WeekendInfo']['TrackConfigName']
             ir.shutdown()
             
+            logger.info(f"🔍 Current track from temp connection: {track_name} ({track_config})")
             return track_name, track_config
             
         except Exception as e:

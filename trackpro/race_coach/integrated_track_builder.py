@@ -471,6 +471,9 @@ class IntegratedTrackBuilderWorker(QThread):
                     'exit_lap_dist_pct': corner.exit_lap_dist_pct
                 })
             
+            # Save local centerline file first (for overlay use)
+            self._save_local_centerline_file(track_map_data, track_name, track_config)
+            
             # Save to Supabase
             supabase = get_supabase_client()
             if not supabase:
@@ -545,6 +548,41 @@ class IntegratedTrackBuilderWorker(QThread):
     def stop_building(self):
         """Stop the building process."""
         self.is_running = False
+    
+    def _save_local_centerline_file(self, track_map_data, track_name, track_config):
+        """Save centerline data to local file for overlay use."""
+        try:
+            import json
+            import os
+            
+            # Create the local centerline file format
+            centerline_data = {
+                'track_name': track_name,
+                'track_config': track_config,
+                'centerline_positions': track_map_data,
+                'generated_timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'total_points': len(track_map_data)
+            }
+            
+            # Save to the standard centerline file that overlay looks for
+            file_path = 'centerline_track_map.json'
+            
+            # Backup existing file if it exists
+            if os.path.exists(file_path):
+                backup_path = f'centerline_track_map_backup_{int(time.time())}.json'
+                os.rename(file_path, backup_path)
+                print(f"📁 Backed up existing centerline file to {backup_path}")
+            
+            # Write new file
+            with open(file_path, 'w') as f:
+                json.dump(centerline_data, f, indent=2)
+            
+            print(f"💾 Saved new centerline data to {file_path}")
+            print(f"🎯 Track: {track_name} ({track_config})")
+            print(f"📊 Points: {len(track_map_data)}")
+            
+        except Exception as e:
+            print(f"⚠️ Error saving local centerline file: {e}")
 
 
 class IntegratedTrackBuilderManager(QObject):

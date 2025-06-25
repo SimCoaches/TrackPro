@@ -1307,11 +1307,35 @@ The track map has been saved and is ready for use in:
         self.apply_settings()
         
         if not self.overlay_manager.is_active:
-            success = self.overlay_manager.start_overlay()
+            # Get current track info to pass to overlay manager
+            current_track_info = self.get_current_track_info()
+            if current_track_info:
+                track_name, track_config = current_track_info
+                logger.info(f"🔍 Starting test overlay with track: {track_name} ({track_config})")
+                success = self.overlay_manager.start_overlay(track_name, track_config)
+            else:
+                logger.warning("🔍 No current track info available, starting overlay without track data")
+                success = self.overlay_manager.start_overlay()
+                
             if success:
-                self.status_label.setText("Test overlay started. Press 'Q' on overlay to close, or use Stop button.")
+                self.status_label.setText("✅ Test overlay active! Press 'Q' on overlay to close, or use buttons below.")
                 self.start_button.setEnabled(False)
                 self.stop_button.setEnabled(True)
+                
+                # Mark that this is a test overlay so dialog doesn't ask about stopping it
+                self._is_test_overlay = True
+                
+                QMessageBox.information(
+                    self, "Test Overlay Active",
+                    "🗺️ Test overlay is now running!\n\n"
+                    "✅ Your new track map is loaded\n"
+                    "🎯 Green dot shows your position\n"
+                    "🔄 The overlay will stay active when you close this dialog\n\n"
+                    "To stop the overlay:\n"
+                    "• Click 'Stop Overlay' button below, OR\n"
+                    "• Press 'Q' key while overlay is focused\n\n"
+                    "You can now close this dialog and test the overlay!"
+                )
             else:
                 self.status_label.setText("Failed to start test overlay.")
         else:
@@ -1319,8 +1343,14 @@ The track map has been saved and is ready for use in:
 
     def start_overlay(self):
         """Start the overlay."""
+        # Clear test overlay flag when using regular start
+        self._is_test_overlay = False
+        
         if not self.overlay_manager.is_active:
             self.apply_settings()
+            
+            # Get current track info to pass to overlay manager
+            current_track_info = self.get_current_track_info()
             
             # Try to load the centerline track map if it exists
             if os.path.exists('centerline_track_map.json'):
@@ -1332,8 +1362,15 @@ The track map has been saved and is ready for use in:
                     if 'centerline_positions' not in track_data:
                         raise KeyError("Missing 'centerline_positions' in track data")
                     
-                    # Pre-load the track data into the overlay
-                    success = self.overlay_manager.start_overlay()
+                    # Start overlay with current track info (important for auto-detection)
+                    if current_track_info:
+                        track_name, track_config = current_track_info
+                        logger.info(f"🔍 Starting overlay with track: {track_name} ({track_config})")
+                        success = self.overlay_manager.start_overlay(track_name, track_config)
+                    else:
+                        logger.warning("🔍 No current track info available, starting overlay without track data")
+                        success = self.overlay_manager.start_overlay()
+                        
                     if success and self.overlay_manager.overlay:
                         self.overlay_manager.overlay.track_coordinates = [
                             (point[0], point[1]) for point in track_data['centerline_positions']
@@ -1367,8 +1404,15 @@ The track map has been saved and is ready for use in:
                         
                 except Exception as e:
                     logger.error(f"Error loading centerline data: {e}")
-                    # Fall back to normal overlay start
-                    success = self.overlay_manager.start_overlay()
+                    # Fall back to normal overlay start with track info
+                    if current_track_info:
+                        track_name, track_config = current_track_info
+                        logger.info(f"🔍 Fallback: Starting overlay with track: {track_name} ({track_config})")
+                        success = self.overlay_manager.start_overlay(track_name, track_config)
+                    else:
+                        logger.warning("🔍 Fallback: No current track info available")
+                        success = self.overlay_manager.start_overlay()
+                        
                     if success:
                         self.status_label.setText("Track map overlay started (no centerline data found).")
                         self.start_button.setEnabled(False)
@@ -1376,19 +1420,34 @@ The track map has been saved and is ready for use in:
                     else:
                         self.status_label.setText("Failed to start overlay. Check if iRacing is running.")
             else:
-                # No centerline data available
-                success = self.overlay_manager.start_overlay()
+                # No centerline data available - start with current track info from database
+                if current_track_info:
+                    track_name, track_config = current_track_info
+                    logger.info(f"🔍 No centerline file: Starting overlay with track: {track_name} ({track_config})")
+                    success = self.overlay_manager.start_overlay(track_name, track_config)
+                else:
+                    logger.warning("🔍 No centerline file and no current track info available")
+                    success = self.overlay_manager.start_overlay()
+                    
                 if success:
-                    self.status_label.setText("Track map overlay started (no track data - use Track Builder to create one!).")
+                    if current_track_info:
+                        track_name, track_config = current_track_info
+                        full_name = track_name
+                        if track_config and track_config != track_name:
+                            full_name = f"{track_name} - {track_config}"
+                        self.status_label.setText(f"Track map overlay started for {full_name}!")
+                    else:
+                        self.status_label.setText("Track map overlay started (no track data - use Track Builder to create one!).")
+                    
                     self.start_button.setEnabled(False)
                     self.stop_button.setEnabled(True)
                     
                     QMessageBox.information(
                         self, "Overlay Started",
                         "🗺️ Track map overlay is now active!\n\n"
-                        "ℹ️ No track map data found.\n"
+                        "ℹ️ Loading track map from database...\n"
                         "🎯 Use the 'Track Builder' tab to create a perfect track map\n"
-                        "   by driving 3 laps, then restart the overlay.\n\n"
+                        "   if no existing map is found.\n\n"
                         "Current overlay shows:\n"
                         "• Green dot for your current position\n"
                         "• Track outline (if available from database)\n\n"
@@ -1406,13 +1465,18 @@ The track map has been saved and is ready for use in:
             self.status_label.setText("Track map overlay stopped.")
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
+            
+            # Clear test overlay flag
+            self._is_test_overlay = False
         else:
             self.status_label.setText("Overlay is not running.")
 
     def accept(self):
         """Handle OK button click."""
         self.apply_settings()
-        if self.overlay_manager.is_active:
+        
+        # If it's a test overlay, don't ask - just keep it running
+        if self.overlay_manager.is_active and not getattr(self, '_is_test_overlay', False):
             reply = QMessageBox.question(
                 self, "Overlay Running",
                 "Track map overlay is currently running. Keep it running?",
@@ -1420,6 +1484,15 @@ The track map has been saved and is ready for use in:
             )
             if reply == QMessageBox.No:
                 self.stop_overlay()
+        elif getattr(self, '_is_test_overlay', False):
+            # For test overlays, show a helpful message
+            QMessageBox.information(
+                self, "Test Overlay Active",
+                "✅ Test overlay will continue running!\n\n"
+                "To stop it:\n"
+                "• Press 'Q' on the overlay, OR\n"
+                "• Reopen this dialog and click 'Stop Overlay'"
+            )
         
         # Stop track builder if running
         if self.track_builder_thread and self.track_builder_thread.isRunning():
@@ -1429,7 +1502,8 @@ The track map has been saved and is ready for use in:
 
     def reject(self):
         """Handle Cancel button click."""
-        if self.overlay_manager.is_active:
+        # If it's a test overlay, don't ask - just keep it running
+        if self.overlay_manager.is_active and not getattr(self, '_is_test_overlay', False):
             reply = QMessageBox.question(
                 self, "Overlay Running",
                 "Track map overlay is currently running. Stop it?",
@@ -1437,6 +1511,15 @@ The track map has been saved and is ready for use in:
             )
             if reply == QMessageBox.Yes:
                 self.stop_overlay()
+        elif getattr(self, '_is_test_overlay', False):
+            # For test overlays, show a helpful message
+            QMessageBox.information(
+                self, "Test Overlay Active",
+                "✅ Test overlay will continue running!\n\n"
+                "To stop it:\n"
+                "• Press 'Q' on the overlay, OR\n"
+                "• Reopen this dialog and click 'Stop Overlay'"
+            )
         
         # Stop track builder if running
         if self.track_builder_thread and self.track_builder_thread.isRunning():
