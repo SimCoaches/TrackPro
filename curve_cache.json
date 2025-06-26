@@ -1,0 +1,547 @@
+{
+  "throttle": {
+    "Aggressive": {
+      "metadata": {
+        "name": "Aggressive",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Aggressive.json",
+        "last_modified": 1743039262.2987275,
+        "file_size": 258,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Dirt Track": {
+      "metadata": {
+        "name": "Dirt Track",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Dirt Track.json",
+        "last_modified": 1744675863.8947554,
+        "file_size": 99,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Drift Control": {
+      "metadata": {
+        "name": "Drift Control",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Drift Control.json",
+        "last_modified": 1744675863.890753,
+        "file_size": 103,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Extreme Wet": {
+      "metadata": {
+        "name": "Extreme Wet",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Extreme Wet.json",
+        "last_modified": 1744751566.7876384,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "F1 Style": {
+      "metadata": {
+        "name": "F1 Style",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\F1 Style.json",
+        "last_modified": 1744675863.8917534,
+        "file_size": 106,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Light Rain": {
+      "metadata": {
+        "name": "Light Rain",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Light Rain.json",
+        "last_modified": 1744751566.5776377,
+        "file_size": 99,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Precision Control": {
+      "metadata": {
+        "name": "Precision Control",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Precision Control.json",
+        "last_modified": 1743039262.299734,
+        "file_size": 308,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Quick Response": {
+      "metadata": {
+        "name": "Quick Response",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Quick Response.json",
+        "last_modified": 1743039262.3007278,
+        "file_size": 267,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Racing": {
+      "metadata": {
+        "name": "Racing",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Racing.json",
+        "last_modified": 1743039262.3027306,
+        "file_size": 251,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Rain Mode": {
+      "metadata": {
+        "name": "Rain Mode",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Rain Mode.json",
+        "last_modified": 1743039262.3037295,
+        "file_size": 291,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Rally": {
+      "metadata": {
+        "name": "Rally",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Rally.json",
+        "last_modified": 1744675863.8927538,
+        "file_size": 95,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Smooth": {
+      "metadata": {
+        "name": "Smooth",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Smooth.json",
+        "last_modified": 1743039262.304728,
+        "file_size": 251,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Super Precise": {
+      "metadata": {
+        "name": "Super Precise",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Super Precise.json",
+        "last_modified": 1744675863.896755,
+        "file_size": 121,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Traction Limited": {
+      "metadata": {
+        "name": "Traction Limited",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Traction Limited.json",
+        "last_modified": 1743039262.3057275,
+        "file_size": 307,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    },
+    "Wet Weather Racing": {
+      "metadata": {
+        "name": "Wet Weather Racing",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\throttle\\Wet Weather Racing.json",
+        "last_modified": 1744751566.3546388,
+        "file_size": 126,
+        "checksum": null
+      },
+      "cached_time": 1750871667.0965712,
+      "is_valid": true
+    }
+  },
+  "brake": {
+    "ABS Competition": {
+      "metadata": {
+        "name": "ABS Competition",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\ABS Competition.json",
+        "last_modified": 1744751567.6946373,
+        "file_size": 114,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "ABS Racing": {
+      "metadata": {
+        "name": "ABS Racing",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\ABS Racing.json",
+        "last_modified": 1744751567.4276378,
+        "file_size": 99,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "ABS Simulation": {
+      "metadata": {
+        "name": "ABS Simulation",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\ABS Simulation.json",
+        "last_modified": 1743039262.3067267,
+        "file_size": 266,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Endurance": {
+      "metadata": {
+        "name": "Endurance",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Endurance.json",
+        "last_modified": 1744675863.903755,
+        "file_size": 98,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Extreme Wet Braking": {
+      "metadata": {
+        "name": "Extreme Wet Braking",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Extreme Wet Braking.json",
+        "last_modified": 1744751568.849639,
+        "file_size": 127,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "GT3 Racing": {
+      "metadata": {
+        "name": "GT3 Racing",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\GT3 Racing.json",
+        "last_modified": 1744675863.9007535,
+        "file_size": 109,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Hard Braking": {
+      "metadata": {
+        "name": "Hard Braking",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Hard Braking.json",
+        "last_modified": 1743039262.3077269,
+        "file_size": 263,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Initial Bite": {
+      "metadata": {
+        "name": "Initial Bite",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Initial Bite.json",
+        "last_modified": 1743039262.3087287,
+        "file_size": 299,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Oval Track": {
+      "metadata": {
+        "name": "Oval Track",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Oval Track.json",
+        "last_modified": 1744675863.907754,
+        "file_size": 100,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Precision Threshold": {
+      "metadata": {
+        "name": "Precision Threshold",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Precision Threshold.json",
+        "last_modified": 1744751567.919638,
+        "file_size": 128,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Progressive": {
+      "metadata": {
+        "name": "Progressive",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Progressive.json",
+        "last_modified": 1743039262.3097298,
+        "file_size": 261,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Race Threshold": {
+      "metadata": {
+        "name": "Race Threshold",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Race Threshold.json",
+        "last_modified": 1744751568.1436381,
+        "file_size": 123,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Street Car": {
+      "metadata": {
+        "name": "Street Car",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Street Car.json",
+        "last_modified": 1744675863.9087527,
+        "file_size": 90,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Technical Circuit": {
+      "metadata": {
+        "name": "Technical Circuit",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Technical Circuit.json",
+        "last_modified": 1744675863.9057543,
+        "file_size": 117,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Threshold Braking": {
+      "metadata": {
+        "name": "Threshold Braking",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Threshold Braking.json",
+        "last_modified": 1743039262.3117273,
+        "file_size": 345,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Trail Braking": {
+      "metadata": {
+        "name": "Trail Braking",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Trail Braking.json",
+        "last_modified": 1743039262.3127284,
+        "file_size": 336,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Wet Circuit": {
+      "metadata": {
+        "name": "Wet Circuit",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Wet Circuit.json",
+        "last_modified": 1744751568.6026375,
+        "file_size": 110,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Wet Racing": {
+      "metadata": {
+        "name": "Wet Racing",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Wet Racing.json",
+        "last_modified": 1744751568.3706381,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    },
+    "Wet Weather": {
+      "metadata": {
+        "name": "Wet Weather",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\brake\\Wet Weather.json",
+        "last_modified": 1743039262.3137271,
+        "file_size": 295,
+        "checksum": null
+      },
+      "cached_time": 1750871667.101572,
+      "is_valid": true
+    }
+  },
+  "clutch": {
+    "Bite Point Focus": {
+      "metadata": {
+        "name": "Bite Point Focus",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Bite Point Focus.json",
+        "last_modified": 1743039262.3147266,
+        "file_size": 343,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Drag Racing": {
+      "metadata": {
+        "name": "Drag Racing",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Drag Racing.json",
+        "last_modified": 1744675863.9157534,
+        "file_size": 111,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Drift Initiation": {
+      "metadata": {
+        "name": "Drift Initiation",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Drift Initiation.json",
+        "last_modified": 1743039262.3157263,
+        "file_size": 271,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Gradual": {
+      "metadata": {
+        "name": "Gradual",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Gradual.json",
+        "last_modified": 1743039262.3167267,
+        "file_size": 253,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Half Clutch Control": {
+      "metadata": {
+        "name": "Half Clutch Control",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Half Clutch Control.json",
+        "last_modified": 1744675863.9217544,
+        "file_size": 119,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Heel-Toe": {
+      "metadata": {
+        "name": "Heel-Toe",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Heel-Toe.json",
+        "last_modified": 1744675863.9167542,
+        "file_size": 97,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Performance Launch": {
+      "metadata": {
+        "name": "Performance Launch",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Performance Launch.json",
+        "last_modified": 1744675863.9147532,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Quick Engage": {
+      "metadata": {
+        "name": "Quick Engage",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Quick Engage.json",
+        "last_modified": 1743039262.3167267,
+        "file_size": 263,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Race Start": {
+      "metadata": {
+        "name": "Race Start",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Race Start.json",
+        "last_modified": 1743039262.3177276,
+        "file_size": 295,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Rally Start": {
+      "metadata": {
+        "name": "Rally Start",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Rally Start.json",
+        "last_modified": 1744675863.918754,
+        "file_size": 101,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Slip Control": {
+      "metadata": {
+        "name": "Slip Control",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Slip Control.json",
+        "last_modified": 1743039262.31873,
+        "file_size": 335,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Smooth Launch": {
+      "metadata": {
+        "name": "Smooth Launch",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Smooth Launch.json",
+        "last_modified": 1743039262.3197298,
+        "file_size": 336,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Wet Engagement": {
+      "metadata": {
+        "name": "Wet Engagement",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Wet Engagement.json",
+        "last_modified": 1744751569.8776462,
+        "file_size": 114,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Wet Track Control": {
+      "metadata": {
+        "name": "Wet Track Control",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Wet Track Control.json",
+        "last_modified": 1744751569.652639,
+        "file_size": 117,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    },
+    "Wet Weather Launch": {
+      "metadata": {
+        "name": "Wet Weather Launch",
+        "file_path": "C:\\Users\\lawre\\.trackpro\\curves\\clutch\\Wet Weather Launch.json",
+        "last_modified": 1744751569.3996391,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1750871667.1075711,
+      "is_valid": true
+    }
+  }
+}
