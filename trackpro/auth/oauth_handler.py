@@ -10,8 +10,8 @@ import threading
 import webbrowser
 import re
 from urllib.parse import urlparse, parse_qs
-from PyQt5.QtWidgets import QMessageBox
-from PyQt5.QtCore import QObject, QUrl, pyqtSignal, QTimer
+from PyQt6.QtWidgets import QMessageBox, QApplication
+from PyQt6.QtCore import QObject, QUrl, pyqtSignal, QTimer
 from ..database.supabase_client import supabase
 # Import User model and setter function
 from ..auth.user_manager import User, set_current_user 
@@ -484,7 +484,7 @@ class OAuthHandler(QObject):
                     self.parent.auth_completed.emit(True, mock_response)
                     
                     # Show success message
-                    QTimer.singleShot(1000, lambda: QMessageBox.information(
+                    QTimer.singleShot(100, lambda: QMessageBox.information(
                         None, 
                         "Authentication Successful", 
                         f"You are now logged in as {mock_response.user.email}!"
@@ -587,31 +587,31 @@ class OAuthHandler(QObject):
                                     logger.warning("Session verification failed - user not found after saving")
                             
                             # Show success message in separate thread to avoid blocking
-                            QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful", 
+                            QTimer.singleShot(100, lambda: QMessageBox.information(None, "Authentication Successful", 
                                                            "You have been successfully signed in!"))
                             
                             # Emit signal to parent
                             self.parent.auth_completed.emit(True, result)
 
                             # Force update the main window if it exists
-                            QTimer.singleShot(1000, lambda: self.update_main_window())
+                            QTimer.singleShot(100, lambda: self.update_main_window())
                         else:
                             logger.error("Failed to exchange code for session")
                             error_detail = getattr(result, 'error', 'Unknown error during code exchange')
                             # Show error message in separate thread to avoid blocking
-                            QTimer.singleShot(500, lambda: QMessageBox.warning(None, "Authentication Failed",
+                            QTimer.singleShot(100, lambda: QMessageBox.warning(None, "Authentication Failed",
                                                        f"Failed to complete authentication: {error_detail}. Please try again."))
                             self.parent.auth_completed.emit(False, None)
                     except Exception as e:
                         logger.error(f"Error exchanging code: {e}", exc_info=True)
-                        QTimer.singleShot(500, lambda: QMessageBox.critical(None, "Authentication Error", 
+                        QTimer.singleShot(100, lambda: QMessageBox.critical(None, "Authentication Error", 
                                                   f"Error exchanging code: {str(e)}"))
                         self.parent.auth_completed.emit(False, None)
                         
                 except Exception as e:
                     logger.error(f"Error processing callback: {e}", exc_info=True) # Log traceback
                     # Show error message for exceptions
-                    QTimer.singleShot(500, lambda: QMessageBox.critical(None, "Authentication Error", 
+                    QTimer.singleShot(100, lambda: QMessageBox.critical(None, "Authentication Error", 
                                                    f"Error during authentication: {str(e)}"))
                     self.parent.auth_completed.emit(False, None)
 
@@ -630,7 +630,7 @@ class OAuthHandler(QObject):
                         supabase._save_session(user_response, remember_me=True) # Always remember OAuth sessions
 
                         # Find the main window by looking through top-level widgets
-                        from PyQt5.QtWidgets import QApplication, QMessageBox
+                        from PyQt6.QtWidgets import QApplication, QMessageBox
                         from ..ui import MainWindow
                         
                         # Force reload of auth state to ensure cache is cleared
@@ -649,14 +649,14 @@ class OAuthHandler(QObject):
                         
                         if main_window:
                             # Force an explicit UI refresh with a message
-                            QTimer.singleShot(1000, lambda: QMessageBox.information(
+                            QTimer.singleShot(100, lambda: QMessageBox.information(
                                 main_window, 
                                 "Authentication Successful", 
                                 f"You are now logged in as {user_response.user.email}.\n\n"
                                 f"If the UI doesn't update, please use the 'Refresh Login State' option from the File menu or restart the application."
                             ))
                         else:
-                            QTimer.singleShot(1000, lambda: QMessageBox.information(
+                            QTimer.singleShot(100, lambda: QMessageBox.information(
                                 None, 
                                 "Authentication Successful", 
                                 f"You are now logged in as {user_response.user.email}.\n\n"
@@ -666,7 +666,7 @@ class OAuthHandler(QObject):
                         # More specific logging
                         error_info = getattr(user_response, 'error', 'No user object found in response') if user_response else "No response from get_user"
                         logger.warning(f"User authentication response exists but no valid user found. Details: {error_info}")
-                        QTimer.singleShot(1000, lambda: QMessageBox.warning(
+                        QTimer.singleShot(100, lambda: QMessageBox.warning(
                             None, 
                             "Authentication Issue", 
                             "You appear to be authenticated but we couldn't retrieve your user details.\n\n"
@@ -674,7 +674,7 @@ class OAuthHandler(QObject):
                         ))
                 except Exception as e:
                     logger.error(f"Error updating main window: {e}", exc_info=True) # Log traceback
-                    QTimer.singleShot(1000, lambda: QMessageBox.critical(
+                    QTimer.singleShot(100, lambda: QMessageBox.critical(
                         None, 
                         "Error", 
                         f"Error updating authentication state: {str(e)}\n\n"

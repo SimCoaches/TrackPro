@@ -1,11 +1,12 @@
 """Eye tracking settings dialog for TrackPro."""
 
 import logging
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
-    QCheckBox, QSpinBox, QComboBox, QGroupBox, QDialogButtonBox, QMessageBox
+    QCheckBox, QSpinBox, QComboBox, QGroupBox, QDialogButtonBox, QMessageBox,
+    QFrame
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from trackpro.config import config
 
@@ -144,7 +145,7 @@ class EyeTrackingSettingsDialog(QDialog):
     
     def on_enabled_changed(self, state):
         """Handle enable/disable state change."""
-        enabled = state == Qt.Checked
+        enabled = state == Qt.CheckState.Checked
         
         # Enable/disable other controls based on enabled state
         self.auto_start_checkbox.setEnabled(enabled)
@@ -231,10 +232,10 @@ class EyeTrackingSettingsDialog(QDialog):
             "Make sure you're seated comfortably and have good lighting.\n"
             "The calibration will take about 30 seconds.\n\n"
             "Continue?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             success = self.eye_tracking_manager.calibrate(self)
             if success:
                 QMessageBox.information(self, "Calibration", "Calibration started. Please follow the on-screen instructions.")
@@ -268,13 +269,13 @@ class EyeTrackingSettingsDialog(QDialog):
             "Look around your screen and watch the dot follow your gaze!\n"
             "Press 'q' anytime to stop early.\n\n"
             "Start test?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 # Show progress dialog during test
-                from PyQt5.QtCore import QTimer
+                from PyQt6.QtCore import QTimer
                 
                 # Start the test in a separate thread to avoid blocking UI
                 import threading

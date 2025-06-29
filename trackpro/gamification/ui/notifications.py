@@ -1,8 +1,8 @@
-from PyQt5.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout, 
+from PyQt6.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout,
                              QPushButton, QGraphicsOpacityEffect, QFrame)
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, pyqtSignal, QUrl, QRect, QParallelAnimationGroup, pyqtProperty
-from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QPainter, QLinearGradient, QPen, QBrush, QPixmap
-from PyQt5.QtMultimedia import QSoundEffect
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, pyqtSignal, QUrl, QRect, QParallelAnimationGroup, pyqtProperty
+from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QPainter, QLinearGradient, QPen, QBrush, QPixmap
+from PyQt6.QtMultimedia import QSoundEffect
 import os
 import logging
 import math
@@ -28,8 +28,8 @@ class NotificationWidget(QFrame):
             duration (int): Display duration in milliseconds
         """
         super().__init__(parent)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setObjectName("NotificationWidget")
         
         self.parent = parent
@@ -135,7 +135,7 @@ class NotificationWidget(QFrame):
             end_pos = QPoint(x, y)
         else:
             # If no parent, just center on screen
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             desktop = QApplication.desktop()
             screen_rect = desktop.screenGeometry()
             x = screen_rect.width() - self.width() - 20
@@ -147,7 +147,7 @@ class NotificationWidget(QFrame):
         self.show_animation = QPropertyAnimation(self, b"pos")
         self.show_animation.setDuration(500)
         self.show_animation.setEndValue(end_pos)
-        self.show_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.show_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         
         # Show the widget and start animation
         self.show()
@@ -170,14 +170,14 @@ class NotificationWidget(QFrame):
             end_pos = QPoint(current_pos.x(), self.parent.geometry().bottom() + 10)
         else:
             # Assuming screen
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             desktop = QApplication.desktop()
             end_pos = QPoint(current_pos.x(), desktop.screenGeometry().height() + 10)
         
         self.hide_animation = QPropertyAnimation(self, b"pos")
         self.hide_animation.setDuration(500)
         self.hide_animation.setEndValue(end_pos)
-        self.hide_animation.setEasingCurve(QEasingCurve.InCubic)
+        self.hide_animation.setEasingCurve(QEasingCurve.Type.InCubic)
         self.hide_animation.finished.connect(self.on_animation_finished)
         self.hide_animation.start()
     
@@ -332,7 +332,7 @@ class NotificationManager:
 # Example usage (for testing standalone)
 if __name__ == '__main__':
     import sys
-    from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton
+    from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton
     
     app = QApplication(sys.argv)
     
@@ -384,7 +384,7 @@ if __name__ == '__main__':
     main_window.setCentralWidget(central_widget)
     main_window.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 
 
 
 # --- Standalone Notification Functions ---
@@ -442,8 +442,8 @@ class XPGainNotification(QWidget):
         self._particle_progress = 0.0
         
         self.setFixedSize(350, 120)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         
         self._init_ui()
         self._init_particles()
@@ -466,28 +466,28 @@ class XPGainNotification(QWidget):
         
         # Quest title
         self.title_label = QLabel(self.quest_title)
-        self.title_label.setFont(QFont("Arial", 12, QFont.Bold))
+        self.title_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.title_label.setStyleSheet("color: white; background: transparent;")
-        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setWordWrap(True)
         layout.addWidget(self.title_label)
         
         # XP amount with animated counter
         self.xp_label = QLabel(f"+{self.xp_amount} XP")
-        self.xp_label.setFont(QFont("Arial", 18, QFont.Bold))
+        self.xp_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         self.xp_label.setStyleSheet("""
             color: #F1C40F;
             background: transparent;
             font-weight: bold;
         """)
-        self.xp_label.setAlignment(Qt.AlignCenter)
+        self.xp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.xp_label)
         
         # Completion message
         completion_label = QLabel("Quest Completed!")
-        completion_label.setFont(QFont("Arial", 10, QFont.Bold))
+        completion_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         completion_label.setStyleSheet("color: #2ECC71; background: transparent;")
-        completion_label.setAlignment(Qt.AlignCenter)
+        completion_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(completion_label)
         
     def _init_particles(self):
@@ -537,7 +537,7 @@ class XPGainNotification(QWidget):
         
         # Draw particles
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         for particle in self.particles:
             # Update particle position based on progress
@@ -550,7 +550,7 @@ class XPGainNotification(QWidget):
             color = QColor(241, 196, 15, alpha)  # Gold color
             
             painter.setBrush(QBrush(color))
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             
             size = particle['size'] * (1 + progress * 2)
             painter.drawEllipse(int(x - size/2), int(y - size/2), int(size), int(size))
@@ -572,20 +572,20 @@ class XPGainNotification(QWidget):
         self.opacity_anim.setDuration(500)
         self.opacity_anim.setStartValue(0.0)
         self.opacity_anim.setEndValue(1.0)
-        self.opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         
         self.scale_anim = QPropertyAnimation(self, b"scale")
         self.scale_anim.setDuration(500)
         self.scale_anim.setStartValue(0.5)
         self.scale_anim.setEndValue(1.0)
-        self.scale_anim.setEasingCurve(QEasingCurve.OutBack)
+        self.scale_anim.setEasingCurve(QEasingCurve.Type.OutBack)
         
         # Particle animation
         self.particle_anim = QPropertyAnimation(self, b"particleProgress")
         self.particle_anim.setDuration(2000)
         self.particle_anim.setStartValue(0.0)
         self.particle_anim.setEndValue(1.0)
-        self.particle_anim.setEasingCurve(QEasingCurve.OutQuad)
+        self.particle_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
         
         self.animation_group.addAnimation(self.opacity_anim)
         self.animation_group.addAnimation(self.scale_anim)
@@ -605,7 +605,7 @@ class XPGainNotification(QWidget):
         self.fade_out_anim.setDuration(500)
         self.fade_out_anim.setStartValue(1.0)
         self.fade_out_anim.setEndValue(0.0)
-        self.fade_out_anim.setEasingCurve(QEasingCurve.InCubic)
+        self.fade_out_anim.setEasingCurve(QEasingCurve.Type.InCubic)
         self.fade_out_anim.finished.connect(self.deleteLater)
         self.fade_out_anim.start()
 
@@ -625,8 +625,8 @@ class LevelUpNotification(QWidget):
         self._glow_intensity = 0.0
         
         self.setFixedSize(400, 200)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         
         self._init_ui()
         
@@ -649,36 +649,36 @@ class LevelUpNotification(QWidget):
         
         # Level up title
         title_label = QLabel("LEVEL UP!")
-        title_label.setFont(QFont("Arial", 24, QFont.Bold))
+        title_label.setFont(QFont("Arial", 24, QFont.Weight.Bold))
         title_label.setStyleSheet("""
             color: #F1C40F;
             background: transparent;
             font-weight: bold;
         """)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         # Level progression
         level_layout = QHBoxLayout()
         
         old_level_label = QLabel(str(self.old_level))
-        old_level_label.setFont(QFont("Arial", 20, QFont.Bold))
+        old_level_label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         old_level_label.setStyleSheet("color: #BDC3C7; background: transparent;")
-        old_level_label.setAlignment(Qt.AlignCenter)
+        old_level_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         arrow_label = QLabel("→")
-        arrow_label.setFont(QFont("Arial", 20, QFont.Bold))
+        arrow_label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         arrow_label.setStyleSheet("color: white; background: transparent;")
-        arrow_label.setAlignment(Qt.AlignCenter)
+        arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         new_level_label = QLabel(str(self.new_level))
-        new_level_label.setFont(QFont("Arial", 20, QFont.Bold))
+        new_level_label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         new_level_label.setStyleSheet("""
             color: #F1C40F;
             background: transparent;
             font-weight: bold;
         """)
-        new_level_label.setAlignment(Qt.AlignCenter)
+        new_level_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         level_layout.addWidget(old_level_label)
         level_layout.addWidget(arrow_label)
@@ -687,9 +687,9 @@ class LevelUpNotification(QWidget):
         
         # Congratulations message
         congrats_label = QLabel("Congratulations!")
-        congrats_label.setFont(QFont("Arial", 14, QFont.Bold))
+        congrats_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         congrats_label.setStyleSheet("color: #2ECC71; background: transparent;")
-        congrats_label.setAlignment(Qt.AlignCenter)
+        congrats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(congrats_label)
         
     @pyqtProperty(float)
@@ -734,7 +734,7 @@ class LevelUpNotification(QWidget):
         super().paintEvent(event)
         
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw burst rays
         if self._burst_progress > 0:
@@ -759,7 +759,7 @@ class LevelUpNotification(QWidget):
         if self._glow_intensity > 0:
             glow_color = QColor(155, 89, 182, int(100 * self._glow_intensity))
             painter.setBrush(QBrush(glow_color))
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             
             glow_size = 50 + self._glow_intensity * 30
             painter.drawEllipse(
@@ -789,27 +789,27 @@ class LevelUpNotification(QWidget):
         self.opacity_anim.setDuration(800)
         self.opacity_anim.setStartValue(0.0)
         self.opacity_anim.setEndValue(1.0)
-        self.opacity_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         
         self.scale_anim = QPropertyAnimation(self, b"scale")
         self.scale_anim.setDuration(800)
         self.scale_anim.setStartValue(0.3)
         self.scale_anim.setEndValue(1.0)
-        self.scale_anim.setEasingCurve(QEasingCurve.OutElastic)
+        self.scale_anim.setEasingCurve(QEasingCurve.Type.OutElastic)
         
         # Burst effect
         self.burst_anim = QPropertyAnimation(self, b"burstProgress")
         self.burst_anim.setDuration(1500)
         self.burst_anim.setStartValue(0.0)
         self.burst_anim.setEndValue(1.0)
-        self.burst_anim.setEasingCurve(QEasingCurve.OutQuad)
+        self.burst_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
         
         # Glow effect
         self.glow_anim = QPropertyAnimation(self, b"glowIntensity")
         self.glow_anim.setDuration(2000)
         self.glow_anim.setStartValue(0.0)
         self.glow_anim.setEndValue(1.0)
-        self.glow_anim.setEasingCurve(QEasingCurve.InOutSine)
+        self.glow_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
         
         self.animation_group.addAnimation(self.opacity_anim)
         self.animation_group.addAnimation(self.scale_anim)
@@ -830,7 +830,7 @@ class LevelUpNotification(QWidget):
         self.fade_out_anim.setDuration(800)
         self.fade_out_anim.setStartValue(1.0)
         self.fade_out_anim.setEndValue(0.0)
-        self.fade_out_anim.setEasingCurve(QEasingCurve.InCubic)
+        self.fade_out_anim.setEasingCurve(QEasingCurve.Type.InCubic)
         self.fade_out_anim.finished.connect(self.deleteLater)
         self.fade_out_anim.start()
 
@@ -847,8 +847,8 @@ class ToastNotification(QWidget):
         self._opacity = 0.0
         
         self.setFixedSize(300, 80)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         
         self._init_ui()
         
@@ -877,9 +877,9 @@ class ToastNotification(QWidget):
         layout.setContentsMargins(15, 10, 15, 10)
         
         message_label = QLabel(self.message)
-        message_label.setFont(QFont("Arial", 11, QFont.Bold))
+        message_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         message_label.setStyleSheet("color: white; background: transparent;")
-        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_label.setWordWrap(True)
         layout.addWidget(message_label)
         
@@ -916,7 +916,7 @@ class ToastNotification(QWidget):
         self.fade_in_anim.setDuration(300)
         self.fade_in_anim.setStartValue(0.0)
         self.fade_in_anim.setEndValue(1.0)
-        self.fade_in_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.fade_in_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.fade_in_anim.start()
         
         # Auto-hide
@@ -931,6 +931,6 @@ class ToastNotification(QWidget):
         self.fade_out_anim.setDuration(300)
         self.fade_out_anim.setStartValue(1.0)
         self.fade_out_anim.setEndValue(0.0)
-        self.fade_out_anim.setEasingCurve(QEasingCurve.InCubic)
+        self.fade_out_anim.setEasingCurve(QEasingCurve.Type.InCubic)
         self.fade_out_anim.finished.connect(self.deleteLater)
         self.fade_out_anim.start() 

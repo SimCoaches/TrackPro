@@ -2,11 +2,36 @@
 
 import logging
 from typing import Optional, Dict, Any
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QLabel, QFrame, QSplitter, QTabWidget, QMessageBox)
-from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QIcon
+
+# Handle PyQt6 WebEngine imports with fallback
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
+except ImportError:
+    try:
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
+        from PyQt6.QtWebEngineCore import QWebEnginePage
+    except ImportError:
+        # If WebEngine is not available, create stub classes
+        class QWebEngineView:
+            def __init__(self, parent=None):
+                pass
+        class QWebEnginePage:
+            def __init__(self, parent=None):
+                pass
+
+try:
+    from PyQt6.QtWebEngineCore import QWebEngineSettings
+except ImportError:
+    # Create a stub QWebEngineSettings if not available
+    class QWebEngineSettings:
+        @staticmethod
+        def setAttribute(*args):
+            pass
+
+from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal, QTimer, QEventLoop
+from PyQt6.QtGui import QFont, QIcon
 import json
 import os
 
@@ -25,26 +50,26 @@ class DiscordWebView(QWebEngineView):
         settings = self.settings()
         
         # Core settings only for performance
-        settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
-        settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
         
         # DISABLE ALL heavy features for maximum performance
-        settings.setAttribute(QWebEngineSettings.WebGLEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, True)  
-        settings.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, False)  
-        settings.setAttribute(QWebEngineSettings.PluginsEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.DnsPrefetchEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.TouchIconsEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.FocusOnNavigationEnabled, False)  
-        settings.setAttribute(QWebEngineSettings.ScrollAnimatorEnabled, False)  # Disable scroll animations
-        settings.setAttribute(QWebEngineSettings.ErrorPageEnabled, False)  # Disable error pages
-        settings.setAttribute(QWebEngineSettings.HyperlinkAuditingEnabled, False)  # Disable link auditing
-        settings.setAttribute(QWebEngineSettings.SpatialNavigationEnabled, False)  # Disable spatial navigation
+        settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.DnsPrefetchEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.TouchIconsEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.FocusOnNavigationEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False)  # Disable scroll animations
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, False)  # Disable error pages
+        settings.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)  # Disable link auditing
+        settings.setAttribute(QWebEngineSettings.WebAttribute.SpatialNavigationEnabled, False)  # Disable spatial navigation
         
         # Keep auto-loading for compatibility 
-        settings.setAttribute(QWebEngineSettings.AutoLoadImages, True)  # Keep images enabled for Discord to work
+        settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)  # Keep images enabled for Discord to work
         
         # Optimize zoom for maximum performance 
         self.setZoomFactor(0.6)  # Smaller zoom = faster rendering
@@ -237,7 +262,7 @@ class DiscordIntegrationWidget(QWidget):
         
         # Simple Discord logo/icon
         discord_label = QLabel("🎮 Sim Coaches Drivers Lounge")
-        discord_label.setFont(QFont("Arial", 12, QFont.Bold))
+        discord_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(discord_label)
         
         layout.addStretch()
@@ -268,7 +293,7 @@ class DiscordIntegrationWidget(QWidget):
         
         # Discord logo/icon
         discord_label = QLabel("🎮 Sim Coaches Drivers Lounge")
-        discord_label.setFont(QFont("Arial", 14, QFont.Bold))
+        discord_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         layout.addWidget(discord_label)
         
         layout.addStretch()
@@ -923,7 +948,7 @@ class DiscordIntegrationWidget(QWidget):
         from .discord_setup_dialog import DiscordSetupDialog
         
         dialog = DiscordSetupDialog(self)
-        if dialog.exec_() == dialog.Accepted:
+        if dialog.exec() == dialog.Accepted:
             self.discord_server_id = dialog.server_id
             self.discord_channel_id = dialog.channel_id
             use_widget_mode = getattr(dialog, 'use_widget_mode', True)

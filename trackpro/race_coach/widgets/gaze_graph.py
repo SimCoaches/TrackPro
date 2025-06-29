@@ -1,8 +1,8 @@
 # Eye tracking gaze visualization widget
 import logging
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QPainter, QPen, QBrush, QColor
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +21,12 @@ class GazeGraphWidget(QWidget):
         
         # Title
         title = QLabel("Gaze Analysis")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(title)
         
         # Placeholder for gaze visualization
         self.gaze_display = QLabel("Eye tracking data will be displayed here")
-        self.gaze_display.setAlignment(Qt.AlignCenter)
+        self.gaze_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.gaze_display.setMinimumHeight(200)
         self.gaze_display.setStyleSheet("border: 1px solid gray; background-color: #2a2a2a; color: white;")
         layout.addWidget(self.gaze_display)

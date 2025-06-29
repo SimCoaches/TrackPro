@@ -1,12 +1,12 @@
 """Signup dialog for creating a new user account."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QLineEdit, QLabel, QFormLayout, QMessageBox, QDateEdit, QCheckBox,
     QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QWidget,
     QSizePolicy
 )
-from PyQt5.QtCore import QDate, Qt, QSize
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import QDate, Qt, QSize
+from PyQt6.QtGui import QIcon, QPixmap
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 import logging
@@ -117,13 +117,13 @@ class SignupDialog(BaseAuthDialog):
         
         # Password field
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setStyleSheet(input_style)
         self.step1_form.addRow("Password: *", self.password_input)
         
         # Confirm password field
         self.confirm_password_input = QLineEdit()
-        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.confirm_password_input.setStyleSheet(input_style)
         self.step1_form.addRow("Confirm Password: *", self.confirm_password_input)
     
@@ -220,13 +220,13 @@ class SignupDialog(BaseAuthDialog):
 
         # Add Heading
         heading_label = QLabel("TrackPro")
-        heading_label.setAlignment(Qt.AlignCenter)
+        heading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         heading_label.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 5px;")
         left_column_layout.addWidget(heading_label)
 
         # Add Subheading
         subheading_label = QLabel("Making Drivers Faster One Lap At A Time")
-        subheading_label.setAlignment(Qt.AlignCenter)
+        subheading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subheading_label.setStyleSheet("font-size: 12px; color: #bbb; margin-bottom: 20px;")
         left_column_layout.addWidget(subheading_label)
 
@@ -252,7 +252,7 @@ class SignupDialog(BaseAuthDialog):
         
         # Add Sign Up With header
         header_label = QLabel("Sign Up With:")
-        header_label.setAlignment(Qt.AlignCenter)
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_label.setStyleSheet("font-weight: bold; margin-top: 10px; margin-bottom: 5px;")
         left_column_layout.addWidget(header_label)
         
@@ -315,15 +315,15 @@ class SignupDialog(BaseAuthDialog):
 
         # Placeholder for image
         image_label = QLabel("Signup Image Placeholder")
-        image_label.setAlignment(Qt.AlignCenter)
-        image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         image_label.setStyleSheet("color: #ccc; font-size: 16px;")
         
         # Optional: Load an actual image if available
         image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "images", "login_image.png")
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path)
-            image_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            image_label.setPixmap(pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
             image_label.setText("Image not found")
         
@@ -661,7 +661,7 @@ class SignupDialog(BaseAuthDialog):
                 
                 # Show verification message
                 msg_box = QMessageBox()
-                msg_box.setIcon(QMessageBox.Warning)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
                 msg_box.setWindowTitle("Account Created")
                 msg_box.setText("Your account has been created!")
                 msg_box.setInformativeText(
@@ -678,7 +678,7 @@ class SignupDialog(BaseAuthDialog):
                     "If you don't receive the email, you can try to sign in again and request a new verification email."
                 )
                 
-                msg_box.exec_()
+                msg_box.exec()
                 
                 # Close dialog
                 self.reject()

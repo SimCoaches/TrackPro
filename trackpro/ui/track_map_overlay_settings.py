@@ -5,12 +5,12 @@ Allows users to configure and control the transparent track map overlay.
 """
 
 import logging
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                           QLabel, QSlider, QSpinBox, QCheckBox, QGroupBox,
-                           QGridLayout, QMessageBox, QColorDialog, QComboBox,
-                           QFrame)
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QColor
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+                             QLabel, QSlider, QCheckBox, QFrame, QSizePolicy,
+                             QSpinBox, QComboBox, QGroupBox, QFormLayout,
+                             QTabWidget, QWidget, QColorDialog, QMessageBox)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QColor
 
 from ..race_coach.track_map_overlay import TrackMapOverlayManager
 
@@ -44,7 +44,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         # Description
@@ -101,17 +101,13 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         # Position and Size settings
         position_group = QGroupBox("Scale & Draggable Positioning")
-        position_layout = QGridLayout(position_group)
+        position_layout = QFormLayout(position_group)
         
         # Scale slider
-        position_layout.addWidget(QLabel("Overlay Scale:"), 0, 0)
-        self.scale_slider = QSlider(Qt.Horizontal)
-        self.scale_slider.setRange(10, 50)  # 10% to 50%
-        self.scale_slider.setValue(30)  # Default 30%
-        position_layout.addWidget(self.scale_slider, 0, 1)
+        position_layout.addRow(QLabel("Overlay Scale:"), self.scale_slider)
         
         self.scale_value_label = QLabel("30%")
-        position_layout.addWidget(self.scale_value_label, 0, 2)
+        position_layout.addRow(self.scale_value_label)
         
         # Dragging instructions
         drag_instructions = QLabel("""
@@ -130,74 +126,47 @@ class TrackMapOverlaySettingsDialog(QDialog):
                 color: #6c757d;
             }
         """)
-        position_layout.addWidget(drag_instructions, 1, 0, 1, 3)
+        position_layout.addRow(drag_instructions)
         
         layout.addWidget(position_group)
         
         # Visual settings
         visual_group = QGroupBox("Visual Settings")
-        visual_layout = QGridLayout(visual_group)
+        visual_layout = QFormLayout(visual_group)
         
         # Show corners checkbox
         self.show_corners_check = QCheckBox("Show Corner Numbers")
         self.show_corners_check.setChecked(True)
-        visual_layout.addWidget(self.show_corners_check, 0, 0, 1, 2)
+        visual_layout.addRow(self.show_corners_check)
         
         # Show position dot checkbox
         self.show_position_check = QCheckBox("Show Current Position")
         self.show_position_check.setChecked(True)
-        visual_layout.addWidget(self.show_position_check, 1, 0, 1, 2)
+        visual_layout.addRow(self.show_position_check)
         
         # Track line width
-        visual_layout.addWidget(QLabel("Track Line Width:"), 2, 0)
-        self.track_width_spin = QSpinBox()
-        self.track_width_spin.setRange(1, 10)
-        self.track_width_spin.setValue(3)
-        self.track_width_spin.setSuffix(" px")
-        visual_layout.addWidget(self.track_width_spin, 2, 1)
+        visual_layout.addRow(QLabel("Track Line Width:"), self.track_width_spin)
         
         # Position dot size
-        visual_layout.addWidget(QLabel("Position Dot Size:"), 3, 0)
-        self.dot_size_spin = QSpinBox()
-        self.dot_size_spin.setRange(4, 20)
-        self.dot_size_spin.setValue(8)
-        self.dot_size_spin.setSuffix(" px")
-        visual_layout.addWidget(self.dot_size_spin, 3, 1)
+        visual_layout.addRow(QLabel("Position Dot Size:"), self.dot_size_spin)
         
         # Corner font size
-        visual_layout.addWidget(QLabel("Corner Font Size:"), 4, 0)
-        self.corner_font_spin = QSpinBox()
-        self.corner_font_spin.setRange(8, 24)
-        self.corner_font_spin.setValue(12)
-        self.corner_font_spin.setSuffix(" pt")
-        visual_layout.addWidget(self.corner_font_spin, 4, 1)
+        visual_layout.addRow(QLabel("Corner Font Size:"), self.corner_font_spin)
         
         layout.addWidget(visual_group)
         
         # Color settings
         color_group = QGroupBox("Colors")
-        color_layout = QGridLayout(color_group)
+        color_layout = QFormLayout(color_group)
         
         # Track color
-        color_layout.addWidget(QLabel("Track Color:"), 0, 0)
-        self.track_color_button = QPushButton("■")
-        self.track_color_button.setMaximumWidth(50)
-        self.track_color_button.setStyleSheet("background-color: white; color: black;")
-        color_layout.addWidget(self.track_color_button, 0, 1)
+        color_layout.addRow(QLabel("Track Color:"), self.track_color_button)
         
         # Corner color
-        color_layout.addWidget(QLabel("Corner Color:"), 1, 0)
-        self.corner_color_button = QPushButton("■")
-        self.corner_color_button.setMaximumWidth(50)
-        self.corner_color_button.setStyleSheet("background-color: yellow; color: black;")
-        color_layout.addWidget(self.corner_color_button, 1, 1)
+        color_layout.addRow(QLabel("Corner Color:"), self.corner_color_button)
         
         # Position color
-        color_layout.addWidget(QLabel("Position Color:"), 2, 0)
-        self.position_color_button = QPushButton("■")
-        self.position_color_button.setMaximumWidth(50)
-        self.position_color_button.setStyleSheet("background-color: lime; color: black;")
-        color_layout.addWidget(self.position_color_button, 2, 1)
+        color_layout.addRow(QLabel("Position Color:"), self.position_color_button)
         
         layout.addWidget(color_group)
         

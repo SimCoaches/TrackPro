@@ -8,9 +8,9 @@ import time
 import logging
 import argparse
 from datetime import datetime
-from PyQt5 import QtWebEngineWidgets
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication
+from PyQt6 import QtWebEngineWidgets
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
 # Check if we're running with Python 3.11, but skip if running as exe
 is_frozen = getattr(sys, 'frozen', False)
@@ -116,7 +116,7 @@ def check_system_dependencies():
         
         # Check for required Python modules
         required_modules = [
-            'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtWebEngineWidgets',
+            'PyQt6', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtWebEngineWidgets',
             'numpy', 'requests', 'psutil', 'supabase', 'matplotlib'
         ]
         
@@ -398,10 +398,10 @@ def check_single_instance():
 def show_error_dialog(message):
     """Show an error dialog that works in windowed mode."""
     try:
-        from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QDialog, QPushButton, QHBoxLayout
+        from PyQt6.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QDialog, QPushButton, QHBoxLayout
         
         # Set attribute BEFORE creating QApplication implicitly or explicitly
-        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
         # Create QApplication instance if it doesn't exist
         app = QApplication.instance()
@@ -436,14 +436,14 @@ def show_error_dialog(message):
             button_layout.addWidget(close_btn)
             layout.addLayout(button_layout)
             
-            dialog.exec_()
+            dialog.exec()
         else:
             # Standard error dialog for other errors
             error_box = QMessageBox()
-            error_box.setIcon(QMessageBox.Critical)
+            error_box.setIcon(QMessageBox.Icon.Critical)
             error_box.setWindowTitle("TrackPro Error")
             error_box.setText(message)
-            error_box.exec_()
+            error_box.exec()
     except Exception:
         # Fallback to console if PyQt fails
         print(message)
@@ -594,9 +594,9 @@ def update_trackpro(update_path):
 def show_early_splash():
     """Show an early splash screen immediately to give user feedback."""
     try:
-        from PyQt5.QtWidgets import QSplashScreen, QLabel, QVBoxLayout, QWidget
-        from PyQt5.QtCore import Qt, QTimer
-        from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QBrush
+        from PyQt6.QtWidgets import QSplashScreen, QLabel, QVBoxLayout, QWidget
+        from PyQt6.QtCore import Qt, QTimer
+        from PyQt6.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QBrush
         import os
         
         # Try to load our custom logo first
@@ -608,14 +608,14 @@ def show_early_splash():
             splash_pixmap = QPixmap(logo_path)
             # Scale to appropriate size if needed
             if splash_pixmap.width() > 400 or splash_pixmap.height() > 200:
-                splash_pixmap = splash_pixmap.scaled(400, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                splash_pixmap = splash_pixmap.scaled(400, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         else:
             # Fallback: Create an enhanced splash screen programmatically
             splash_pixmap = QPixmap(500, 300)
             
             # Create gradient background
             painter = QPainter(splash_pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
             # Background gradient
             gradient = QLinearGradient(0, 0, 0, 300)
@@ -630,7 +630,7 @@ def show_early_splash():
                 painter.drawLine(i, 0, i - 300, 300)
             
             # Draw main title with shadow
-            title_font = QFont("Arial", 32, QFont.Bold)
+            title_font = QFont("Arial", 32, QFont.Weight.Bold)
             painter.setFont(title_font)
             
             # Shadow
@@ -695,7 +695,7 @@ def show_early_splash():
             painter.end()
         
         splash = QSplashScreen(splash_pixmap)
-        splash.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.SplashScreen)
+        splash.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.SplashScreen)
         
         # Add subtle pulsing effect (much less transparent)
         splash._opacity = 1.0
@@ -796,19 +796,19 @@ if __name__ == "__main__":
         write_error_to_desktop(error_msg, log_file)
         
         try:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             msg = QMessageBox()
-            msg.setIcon(QMessageBox.Critical)
+            msg.setIcon(QMessageBox.Icon.Critical)
             msg.setText("TrackPro cannot start")
             msg.setInformativeText("Critical system dependencies are missing.\n\nPlease check the error report on your desktop for details.")
             msg.setWindowTitle("TrackPro System Check Failed")
-            msg.exec_()
+            msg.exec()
         except Exception:
             pass
         sys.exit(1)
     
     # Set attribute BEFORE potentially creating QApplication in main()
-    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     
     # Create QApplication early for splash screen
     app = QApplication(sys.argv)
@@ -826,13 +826,13 @@ if __name__ == "__main__":
         if early_splash:
             early_splash.close()
         if "TrackPro_v" in sys.executable:  # Only show message if running from EXE
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             msg = QMessageBox()
-            msg.setIcon(QMessageBox.Warning)
+            msg.setIcon(QMessageBox.Icon.Warning)
             msg.setText("TrackPro is already running")
             msg.setInformativeText("Another instance of TrackPro is already running. Please close it first.")
             msg.setWindowTitle("TrackPro")
-            msg.exec_()
+            msg.exec()
         sys.exit(0)
     
     try:
@@ -859,13 +859,13 @@ if __name__ == "__main__":
         
         # Show error dialog for import errors
         try:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             msg = QMessageBox()
-            msg.setIcon(QMessageBox.Critical)
+            msg.setIcon(QMessageBox.Icon.Critical)
             msg.setText("TrackPro failed to start")
             msg.setInformativeText(f"Missing required modules or dependencies.\n\nError: {str(e)}\n\nPlease check the error report on your desktop for details.")
             msg.setWindowTitle("TrackPro Startup Error")
-            msg.exec_()
+            msg.exec()
         except Exception:
             pass
             
@@ -878,13 +878,13 @@ if __name__ == "__main__":
         
         # Show error dialog for other exceptions
         try:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             msg = QMessageBox()
-            msg.setIcon(QMessageBox.Critical)
+            msg.setIcon(QMessageBox.Icon.Critical)
             msg.setText("TrackPro encountered an error")
             msg.setInformativeText(f"An unexpected error occurred during startup.\n\nError: {str(e)}\n\nPlease check the error report on your desktop for details.")
             msg.setWindowTitle("TrackPro Error")
-            msg.exec_()
+            msg.exec()
         except Exception:
             pass
     

@@ -34,13 +34,13 @@ This architecture ensures that:
 
 import logging
 import math
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTabWidget, QFrame, QSizePolicy, QMessageBox, QDialog,
-    QTextEdit, QDialogButtonBox, QInputDialog, QProgressBar
+    QTabWidget, QTabBar, QFrame, QSizePolicy, QMessageBox, QDialog,
+    QTextEdit, QDialogButtonBox, QInputDialog, QProgressBar,
+    QApplication
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 # Import the individual tab modules
 from .overview_tab import OverviewTab
@@ -138,12 +138,12 @@ class RaceCoachWidget(QWidget):
         loading_layout = QVBoxLayout(self.loading_frame)
         
         loading_title = QLabel("🏁 TrackPro Race Coach")
-        loading_title.setAlignment(Qt.AlignCenter)
+        loading_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         loading_title.setStyleSheet("color: #FF4500; font-size: 24px; font-weight: bold;")
         loading_layout.addWidget(loading_title)
         
         self.loading_label = QLabel("Initializing advanced coaching systems...")
-        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loading_label.setStyleSheet("color: #CCCCCC; font-size: 14px; margin: 20px;")
         loading_layout.addWidget(self.loading_label)
         
@@ -269,22 +269,124 @@ class RaceCoachWidget(QWidget):
         self.loading_label.setText(message)
 
     def _create_actual_ui(self):
-        """Create the actual Race Coach UI - moved to background."""
+        """Create the actual Race Coach UI - on main thread."""
         try:
-            logger.debug("🎨 [BACKGROUND] Creating actual UI widget...")
-            self.actual_ui_widget = QWidget()
-            self.setup_ui_on_widget(self.actual_ui_widget)
-            logger.info("✅ Actual UI widget created successfully")
+            logger.debug("🎨 [MAIN THREAD] Scheduling UI widget creation on main thread...")
+            # Use QTimer to ensure this runs on the main thread
+            QTimer.singleShot(0, self._create_actual_ui_main_thread)
+            logger.info("✅ Actual UI widget creation scheduled on main thread")
         except Exception as e:
-            logger.error(f"❌ Error creating actual UI: {e}")
+            logger.error(f"❌ Error scheduling actual UI creation: {e}")
             self.actual_ui_widget = None
+
+    def _create_actual_ui_main_thread(self):
+        """Create the actual UI widget on the main thread - with immediate tab creation."""
+        try:
+            # Create the actual widget
+            widget = QWidget()
+            self.setup_ui_on_widget(widget)
+            
+            # PRE-CREATE ALL TABS IMMEDIATELY to eliminate lazy loading delays
+            self._pre_create_all_tabs()
+            
+            # Replace the loading widget with the actual widget
+            layout = self.layout()
+            if layout and layout.count() > 0:
+                old_widget = layout.itemAt(0).widget()
+                layout.removeWidget(old_widget)
+                old_widget.deleteLater()
+            
+            layout.addWidget(widget)
+            
+            logger.info("✅ Actual UI widget created successfully on main thread")
+            
+        except Exception as e:
+            logger.error(f"Error creating actual UI on main thread: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _pre_create_all_tabs(self):
+        """Pre-create all tab widgets to eliminate lazy loading delays."""
+        try:
+            logger.info("🚀 Pre-creating all tabs to eliminate lazy loading...")
+            
+            # Create all tabs immediately
+            if not hasattr(self, 'overview_tab') or self.overview_tab is None:
+                from .overview_tab import OverviewTab
+                self.overview_tab = OverviewTab(self)
+                logger.info("✅ Overview tab pre-created")
+            
+            if not hasattr(self, 'telemetry_tab') or self.telemetry_tab is None:
+                from .telemetry_tab import TelemetryTab
+                self.telemetry_tab = TelemetryTab(self)
+                logger.info("✅ Telemetry tab pre-created")
+            
+            if not hasattr(self, 'superlap_tab') or self.superlap_tab is None:
+                from .superlap_tab import SuperLapWidget
+                self.superlap_tab = SuperLapWidget(parent=self)
+                logger.info("✅ SuperLap tab pre-created")
+            
+            if not hasattr(self, 'videos_tab') or self.videos_tab is None:
+                from .videos_tab import VideosTab
+                self.videos_tab = VideosTab(self)
+                logger.info("✅ RaceFlix tab pre-created")
+            
+            # Now replace all placeholders with actual widgets immediately
+            self._replace_all_placeholders()
+            
+            logger.info("🎉 All tabs pre-created successfully!")
+            
+        except Exception as e:
+            logger.error(f"Error pre-creating tabs: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _replace_all_placeholders(self):
+        """Replace all placeholder tabs with actual widgets."""
+        try:
+            if hasattr(self, 'tab_widget') and self.tab_widget:
+                # Replace tab 0 (Overview)
+                if self.overview_tab:
+                    self.tab_widget.removeTab(0)
+                    self.tab_widget.insertTab(0, self.overview_tab, "Overview")
+                
+                # Replace tab 1 (Telemetry)  
+                if self.telemetry_tab:
+                    self.tab_widget.removeTab(1)
+                    self.tab_widget.insertTab(1, self.telemetry_tab, "Telemetry")
+                
+                # Replace tab 2 (SuperLap) with special logo
+                if self.superlap_tab:
+                    self.tab_widget.removeTab(2)
+                    self.tab_widget.insertTab(2, self.superlap_tab, "")
+                    self._create_superlap_tab_title(2)
+                    # Initialize SuperLap data
+                    try:
+                        self.superlap_tab.refresh_data()
+                    except Exception as e:
+                        logger.error(f"Error refreshing SuperLap data: {e}")
+                
+                # Replace tab 3 (RaceFlix)
+                if self.videos_tab:
+                    self.tab_widget.removeTab(3)
+                    self.tab_widget.insertTab(3, self.videos_tab, "RaceFlix")
+                
+                # Mark all tabs as created to prevent duplicate creation
+                self._tabs_created = {0, 1, 2, 3}
+                
+                logger.info("✅ All placeholder tabs replaced with actual widgets")
+            
+        except Exception as e:
+            logger.error(f"Error replacing placeholders: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _setup_iracing_connections(self):
         """Setup iRacing connections - moved to background."""
         try:
             self._update_progress(90, "Connecting to iRacing...")
             # Try to get shared API
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             main_window = None
             for widget in QApplication.topLevelWidgets():
                 if hasattr(widget, 'get_shared_iracing_api'):
@@ -496,7 +598,7 @@ class RaceCoachWidget(QWidget):
         
         # Loading message
         loading_label = QLabel(loading_message)
-        loading_label.setAlignment(Qt.AlignCenter)
+        loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         loading_label.setStyleSheet("""
             color: #888;
             font-size: 16px;
@@ -521,7 +623,7 @@ class RaceCoachWidget(QWidget):
                 border-radius: 3px;
             }
         """)
-        layout.addWidget(progress, 0, Qt.AlignCenter)
+        layout.addWidget(progress, 0, Qt.AlignmentFlag.AlignCenter)
         
         layout.addStretch()
         
@@ -561,26 +663,23 @@ class RaceCoachWidget(QWidget):
             self._volume_widget_placeholder.setText("🔊 Volume: Error")
 
     def _on_tab_changed_lazy(self, index):
-        """Handle tab changes with true lazy loading."""
+        """Handle tab changes with pre-created tabs (no more lazy loading)."""
         try:
+            # Get the current widget at this index
             current_widget = self.tab_widget.widget(index)
-            tab_text = self.tab_widget.tabText(index)
             
-            # Check if this is a placeholder that needs to be replaced
-            if hasattr(current_widget, 'layout') and current_widget.layout():
-                # Check if it's a placeholder by looking for the progress bar
-                has_progress_bar = False
-                for i in range(current_widget.layout().count()):
-                    item = current_widget.layout().itemAt(i)
-                    if item and item.widget() and isinstance(item.widget(), QProgressBar):
-                        has_progress_bar = True
-                        break
+            # Since all tabs are now pre-created, we just need to handle special cases
+            if current_widget:
+                # Check if this is a progress bar placeholder (shouldn't happen anymore)
+                has_progress_bar = any(isinstance(child, QProgressBar) for child in current_widget.findChildren(QProgressBar))
                 
                 if has_progress_bar:
-                    # This is a placeholder - create the actual tab
+                    logger.warning(f"Found unexpected placeholder at index {index} - this shouldn't happen with pre-creation")
+                    # Fallback to old creation method
+                    tab_text = self.tab_widget.tabText(index)
                     self._create_actual_tab(index, tab_text)
             
-            # Handle existing tab logic for SuperLap data refresh
+            # Handle SuperLap data refresh on tab access
             if hasattr(self, 'superlap_tab') and self.superlap_tab and current_widget is self.superlap_tab:
                 try:
                     if hasattr(self.superlap_tab, 'session_combo') and self.superlap_tab.session_combo.count() <= 1:
@@ -590,10 +689,12 @@ class RaceCoachWidget(QWidget):
                     logger.error(f"Error refreshing SuperLap data on tab change: {refresh_error}")
                     
         except Exception as e:
-            logger.error(f"Error in lazy tab loading: {e}")
+            logger.error(f"Error in tab change handling: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _create_actual_tab(self, index, tab_text):
-        """Create the actual tab widget to replace placeholder."""
+        """Create the actual tab widget to replace placeholder with smooth transition."""
         try:
             # Prevent duplicate creation
             if index in self._tabs_being_created:
@@ -670,13 +771,19 @@ class RaceCoachWidget(QWidget):
                     tab_text = "RaceFlix"
             
             if actual_widget:
-                # Replace placeholder with actual widget
-                old_widget = self.tab_widget.widget(index)
-                self.tab_widget.removeTab(index)
+                # Store the current tab for smooth switching
+                current_tab_index = self.tab_widget.currentIndex()
                 
-                # Insert the actual widget
-                if index == 2:  # SuperLap tab
-                    self.tab_widget.insertTab(index, actual_widget, "")
+                # Replace placeholder with actual widget SMOOTHLY
+                old_widget = self.tab_widget.widget(index)
+                
+                # IMPORTANT: Insert new tab BEFORE removing old one to prevent flashing
+                if index == 2:  # SuperLap tab with special logo
+                    # Insert at the next position first
+                    self.tab_widget.insertTab(index + 1, actual_widget, "")
+                    # Remove the old placeholder
+                    self.tab_widget.removeTab(index)
+                    # Create the special logo title
                     self._create_superlap_tab_title(index)
                     # Initialize SuperLap data
                     try:
@@ -686,10 +793,14 @@ class RaceCoachWidget(QWidget):
                     except Exception as refresh_error:
                         logger.error(f"Error refreshing SuperLap data: {refresh_error}")
                 else:
-                    self.tab_widget.insertTab(index, actual_widget, tab_text)
+                    # Insert at the next position first
+                    self.tab_widget.insertTab(index + 1, actual_widget, tab_text)
+                    # Remove the old placeholder
+                    self.tab_widget.removeTab(index)
                 
-                # Set as current to show the newly created tab
-                self.tab_widget.setCurrentIndex(index)
+                # Only switch to the new tab if user was viewing this tab
+                if current_tab_index == index:
+                    self.tab_widget.setCurrentIndex(index)
                 
                 # Clean up old placeholder
                 if old_widget:
@@ -713,7 +824,7 @@ class RaceCoachWidget(QWidget):
             error_layout.addStretch()
             
             error_label = QLabel(f"❌ Error loading {tab_text} tab:\n{str(e)}")
-            error_label.setAlignment(Qt.AlignCenter)
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             error_label.setStyleSheet("color: #FF6666; font-size: 14px; padding: 20px;")
             error_label.setWordWrap(True)
             error_layout.addWidget(error_label)
@@ -727,14 +838,14 @@ class RaceCoachWidget(QWidget):
                 font-weight: bold;
             """)
             retry_button.clicked.connect(lambda: self._create_actual_tab(index, tab_text))
-            error_layout.addWidget(retry_button, 0, Qt.AlignCenter)
+            error_layout.addWidget(retry_button, 0, Qt.AlignmentFlag.AlignCenter)
             
             error_layout.addStretch()
             
-            # Replace with error widget
+            # Replace with error widget using smooth insertion
             old_widget = self.tab_widget.widget(index)
+            self.tab_widget.insertTab(index + 1, error_widget, f"{tab_text} (Error)")
             self.tab_widget.removeTab(index)
-            self.tab_widget.insertTab(index, error_widget, f"{tab_text} (Error)")
             self.tab_widget.setCurrentIndex(index)
             
             if old_widget:
@@ -744,9 +855,9 @@ class RaceCoachWidget(QWidget):
         """Create a custom title for the SuperLap tab with an icon."""
         try:
             import os
-            from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel
-            from PyQt5.QtGui import QPixmap
-            from PyQt5.QtCore import Qt
+            from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
+            from PyQt6.QtGui import QPixmap
+            from PyQt6.QtCore import Qt
             
             # Create custom tab widget - SMALL container
             tab_title_widget = QWidget()
@@ -768,7 +879,7 @@ class RaceCoachWidget(QWidget):
             if os.path.exists(logo_path):
                 pixmap = QPixmap(logo_path)
                 # Make logo LARGE regardless of small container size
-                scaled_pixmap = pixmap.scaled(220, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                scaled_pixmap = pixmap.scaled(220, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 logo_label.setPixmap(scaled_pixmap)
             else:
                 # Fallback if logo file not found
@@ -777,17 +888,17 @@ class RaceCoachWidget(QWidget):
                 logo_label.setStyleSheet("color: #FF4500; font-size: 14px; background: transparent;")
             
             # Center the logo both horizontally and vertically
-            logo_label.setAlignment(Qt.AlignCenter)
+            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             # Add stretchers to center the logo in the layout
             tab_layout.addStretch()
-            tab_layout.addWidget(logo_label, 0, Qt.AlignCenter)
+            tab_layout.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignCenter)
             tab_layout.addStretch()
             
             # Replace the tab text with empty string to avoid duplication
             self.tab_widget.setTabText(tab_index, "")
             
-            # Set the custom widget as the tab content
-            self.tab_widget.tabBar().setTabButton(tab_index, self.tab_widget.tabBar().LeftSide, tab_title_widget)
+            # Set the custom widget as the tab button
+            self.tab_widget.tabBar().setTabButton(tab_index, QTabBar.ButtonPosition.LeftSide, tab_title_widget)
             
         except Exception as e:
             logger.error(f"Error creating SuperLap tab title with logo: {e}")
@@ -966,7 +1077,7 @@ class RaceCoachWidget(QWidget):
         button_box.accepted.connect(dialog.accept)
         layout.addWidget(button_box)
 
-        dialog.exec_()
+        dialog.exec()
 
     def show_corner_detection_dialog(self):
         """Show the corner detection dialog for track analysis."""
@@ -974,7 +1085,7 @@ class RaceCoachWidget(QWidget):
             from .corner_detection_dialog import CornerDetectionDialog
             
             dialog = CornerDetectionDialog(self)
-            dialog.exec_()
+            dialog.exec()
             
         except ImportError as e:
             logger.error(f"Failed to import corner detection dialog: {e}")

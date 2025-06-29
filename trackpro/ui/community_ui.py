@@ -4,9 +4,9 @@ Racing-themed community interface for teams, clubs, events, and content manageme
 """
 
 import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from datetime import datetime, timedelta
 import json
 from typing import Dict, List, Optional, Any
@@ -39,11 +39,11 @@ class CommunityTheme:
     
     # Typography
     FONTS = {
-        'heading': ('Segoe UI', 16, QFont.Bold),
-        'subheading': ('Segoe UI', 14, QFont.Bold),
-        'body': ('Segoe UI', 10, QFont.Normal),
-        'caption': ('Segoe UI', 9, QFont.Normal),
-        'button': ('Segoe UI', 10, QFont.Medium)
+        'heading': ('Segoe UI', 16, QFont.Weight.Bold),
+        'subheading': ('Segoe UI', 14, QFont.Weight.Bold),
+        'body': ('Segoe UI', 10, QFont.Weight.Normal),
+        'caption': ('Segoe UI', 9, QFont.Weight.Normal),
+        'button': ('Segoe UI', 10, QFont.Weight.Medium)
     }
     
     @staticmethod
@@ -254,7 +254,7 @@ class TeamCard(QWidget):
         """Setup the team card UI"""
         self.setFixedHeight(200)
         self.setObjectName("community-card")
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -275,7 +275,7 @@ class TeamCard(QWidget):
                 font-weight: bold;
             }}
         """)
-        logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Use first letter of team name as logo if no image
         team_name = self.team_data.get('name', 'Team')
@@ -340,7 +340,7 @@ class TeamCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.team_clicked.emit(self.team_data)
 
 class ClubCard(QWidget):
@@ -366,7 +366,7 @@ class ClubCard(QWidget):
         """Setup the club card UI"""
         self.setFixedHeight(180)
         self.setObjectName("community-card")
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -389,7 +389,7 @@ class ClubCard(QWidget):
         icon_label = QLabel(category_icons.get(category, '🏆'))
         icon_label.setFont(QFont('Segoe UI Emoji', 24))
         icon_label.setFixedSize(40, 40)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Club info
         info_layout = QVBoxLayout()
@@ -449,7 +449,7 @@ class ClubCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.club_clicked.emit(self.club_data)
 
 class EventCard(QWidget):
@@ -475,7 +475,7 @@ class EventCard(QWidget):
         """Setup the event card UI"""
         self.setFixedHeight(220)
         self.setObjectName("community-card")
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -497,7 +497,7 @@ class EventCard(QWidget):
         icon_label = QLabel(type_icons.get(event_type, '🏁'))
         icon_label.setFont(QFont('Segoe UI Emoji', 20))
         icon_label.setFixedSize(32, 32)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Event info
         info_layout = QVBoxLayout()
@@ -612,7 +612,7 @@ class EventCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.event_clicked.emit(self.event_data)
 
 class TeamsWidget(QWidget):
@@ -661,23 +661,23 @@ class TeamsWidget(QWidget):
         # All teams tab
         self.all_teams_scroll = QScrollArea()
         self.all_teams_scroll.setWidgetResizable(True)
-        self.all_teams_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.all_teams_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.all_teams_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.all_teams_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.all_teams_widget = QWidget()
         self.all_teams_layout = QVBoxLayout(self.all_teams_widget)
-        self.all_teams_layout.setAlignment(Qt.AlignTop)
+        self.all_teams_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.all_teams_scroll.setWidget(self.all_teams_widget)
         
         # My teams tab
         self.my_teams_scroll = QScrollArea()
         self.my_teams_scroll.setWidgetResizable(True)
-        self.my_teams_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.my_teams_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.my_teams_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.my_teams_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.my_teams_widget = QWidget()
         self.my_teams_layout = QVBoxLayout(self.my_teams_widget)
-        self.my_teams_layout.setAlignment(Qt.AlignTop)
+        self.my_teams_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.my_teams_scroll.setWidget(self.my_teams_widget)
         
         self.tab_widget.addTab(self.all_teams_scroll, "All Teams")
@@ -762,7 +762,7 @@ class TeamsWidget(QWidget):
     def show_create_team_dialog(self):
         """Show dialog to create a new team"""
         dialog = CreateTeamDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             team_data = dialog.get_team_data()
             self.create_team(team_data)
             
@@ -803,11 +803,11 @@ class TeamsWidget(QWidget):
         reply = QMessageBox.question(
             self, "Leave Team",
             "Are you sure you want to leave this team?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 result = self.community_manager.leave_team(team_id)
                 if result['success']:
@@ -822,7 +822,7 @@ class TeamsWidget(QWidget):
     def show_team_details(self, team_data: Dict[str, Any]):
         """Show detailed team information"""
         dialog = TeamDetailsDialog(team_data, self.community_manager, self.user_id, self)
-        dialog.exec_()
+        dialog.exec()
         
     def show_success(self, message: str):
         """Show success message"""
@@ -884,23 +884,23 @@ class ClubsWidget(QWidget):
         # All clubs tab
         self.all_clubs_scroll = QScrollArea()
         self.all_clubs_scroll.setWidgetResizable(True)
-        self.all_clubs_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.all_clubs_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.all_clubs_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.all_clubs_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.all_clubs_widget = QWidget()
         self.all_clubs_layout = QGridLayout(self.all_clubs_widget)
-        self.all_clubs_layout.setAlignment(Qt.AlignTop)
+        self.all_clubs_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.all_clubs_scroll.setWidget(self.all_clubs_widget)
         
         # My clubs tab
         self.my_clubs_scroll = QScrollArea()
         self.my_clubs_scroll.setWidgetResizable(True)
-        self.my_clubs_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.my_clubs_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.my_clubs_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.my_clubs_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.my_clubs_widget = QWidget()
         self.my_clubs_layout = QGridLayout(self.my_clubs_widget)
-        self.my_clubs_layout.setAlignment(Qt.AlignTop)
+        self.my_clubs_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.my_clubs_scroll.setWidget(self.my_clubs_widget)
         
         self.tab_widget.addTab(self.all_clubs_scroll, "All Clubs")
@@ -992,7 +992,7 @@ class ClubsWidget(QWidget):
     def show_create_club_dialog(self):
         """Show dialog to create a new club"""
         dialog = CreateClubDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             club_data = dialog.get_club_data()
             self.create_club(club_data)
             
@@ -1033,11 +1033,11 @@ class ClubsWidget(QWidget):
         reply = QMessageBox.question(
             self, "Leave Club",
             "Are you sure you want to leave this club?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 result = self.community_manager.leave_club(club_id)
                 if result['success']:
@@ -1052,7 +1052,7 @@ class ClubsWidget(QWidget):
     def show_club_details(self, club_data: Dict[str, Any]):
         """Show detailed club information"""
         dialog = ClubDetailsDialog(club_data, self.community_manager, self.user_id, self)
-        dialog.exec_()
+        dialog.exec()
         
     def show_success(self, message: str):
         """Show success message"""
@@ -1120,23 +1120,23 @@ class EventsWidget(QWidget):
         # All events tab
         self.all_events_scroll = QScrollArea()
         self.all_events_scroll.setWidgetResizable(True)
-        self.all_events_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.all_events_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.all_events_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.all_events_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.all_events_widget = QWidget()
         self.all_events_layout = QVBoxLayout(self.all_events_widget)
-        self.all_events_layout.setAlignment(Qt.AlignTop)
+        self.all_events_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.all_events_scroll.setWidget(self.all_events_widget)
         
         # My events tab
         self.my_events_scroll = QScrollArea()
         self.my_events_scroll.setWidgetResizable(True)
-        self.my_events_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.my_events_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.my_events_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.my_events_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.my_events_widget = QWidget()
         self.my_events_layout = QVBoxLayout(self.my_events_widget)
-        self.my_events_layout.setAlignment(Qt.AlignTop)
+        self.my_events_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.my_events_scroll.setWidget(self.my_events_widget)
         
         self.tab_widget.addTab(self.all_events_scroll, "All Events")
@@ -1231,7 +1231,7 @@ class EventsWidget(QWidget):
     def show_create_event_dialog(self):
         """Show dialog to create a new event"""
         dialog = CreateEventDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             event_data = dialog.get_event_data()
             self.create_event(event_data)
             
@@ -1278,11 +1278,11 @@ class EventsWidget(QWidget):
         reply = QMessageBox.question(
             self, "Unregister from Event",
             "Are you sure you want to unregister from this event?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 result = self.community_manager.unregister_from_event(event_id)
                 if result['success']:
@@ -1297,7 +1297,7 @@ class EventsWidget(QWidget):
     def show_event_details(self, event_data: Dict[str, Any]):
         """Show detailed event information"""
         dialog = EventDetailsDialog(event_data, self.community_manager, self.user_id, self)
-        dialog.exec_()
+        dialog.exec()
         
     def show_success(self, message: str):
         """Show success message"""
@@ -1365,12 +1365,12 @@ class CommunityMainWidget(QWidget):
             value_label = QLabel(stat_value)
             value_label.setFont(QFont(*CommunityTheme.FONTS['subheading']))
             value_label.setStyleSheet(f"color: {CommunityTheme.COLORS['primary']};")
-            value_label.setAlignment(Qt.AlignCenter)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             name_label = QLabel(stat_name)
             name_label.setFont(QFont(*CommunityTheme.FONTS['caption']))
             name_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']};")
-            name_label.setAlignment(Qt.AlignCenter)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             stat_layout.addWidget(value_label)
             stat_layout.addWidget(name_label)
@@ -1820,4 +1820,4 @@ if __name__ == "__main__":
     community_widget = CommunityMainWidget(mock_manager, 'test_user')
     community_widget.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

@@ -1,11 +1,13 @@
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QGroupBox, QButtonGroup, QRadioButton,
     QProgressBar, QMessageBox, QWidget, QWizard, QWizardPage,
-    QSizePolicy, QSpacerItem, QFrame
+    QSizePolicy, QSpacerItem, QFrame, QGridLayout, QComboBox,
+    QSpinBox, QCheckBox, QTabWidget, QDialogButtonBox, QScrollArea,
+    QFormLayout
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtGui import QFont, QPixmap
 import pygame
 import logging
 from ..database import supabase
@@ -30,7 +32,7 @@ class IntroPage(QWizardPage):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
         info_label = QLabel("""This wizard will guide you through calibrating your throttle, brake, and clutch pedals.
@@ -41,7 +43,7 @@ Follow the instructions on each page carefully.
 
 Click 'Next' to begin.""")
         info_label.setWordWrap(True)
-        info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         info_label.setStyleSheet("font-size: 11pt;")  # Color already set in wizard stylesheet
         layout.addWidget(info_label)
 

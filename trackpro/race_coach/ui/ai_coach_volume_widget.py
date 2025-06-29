@@ -5,10 +5,10 @@ Provides a clean volume slider for adjusting AI coach audio levels.
 """
 
 import logging
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
+from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
                             QSlider, QPushButton, QFrame, QSizePolicy)
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QFont
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QFont
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class AICoachVolumeWidget(QWidget):
     def setup_ui(self):
         """Setup the simplified volume control UI."""
         self.setMaximumHeight(50)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         
         # Main layout
         layout = QHBoxLayout(self)
@@ -40,7 +40,7 @@ class AICoachVolumeWidget(QWidget):
         layout.addWidget(self.volume_label)
         
         # Volume slider - larger and easier to use
-        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setMinimum(0)
         self.volume_slider.setMaximum(200)  # Allow up to 200% for racing environments
         self.volume_slider.setValue(80)  # 80% default
@@ -83,7 +83,7 @@ class AICoachVolumeWidget(QWidget):
         # Volume percentage display - larger and clearer
         self.volume_percent_label = QLabel("80%")
         self.volume_percent_label.setMinimumWidth(50)  # Wider for 3-digit percentages like 200%
-        self.volume_percent_label.setAlignment(Qt.AlignCenter)
+        self.volume_percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.volume_percent_label.setStyleSheet("""
             font-weight: bold; 
             font-size: 14px; 
@@ -228,7 +228,7 @@ class AICoachVolumeWidget(QWidget):
 if __name__ == "__main__":
     """Test the volume widget standalone."""
     import sys
-    from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
+    from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
     
     app = QApplication(sys.argv)
     
@@ -248,4 +248,4 @@ if __name__ == "__main__":
     window.setCentralWidget(central_widget)
     window.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

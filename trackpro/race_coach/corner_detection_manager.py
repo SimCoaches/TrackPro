@@ -9,8 +9,8 @@ import math
 import json
 import os
 from typing import List, Tuple, Dict, Optional
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import QThread, pyqtSignal, QObject
+from PyQt6.QtWidgets import QMessageBox
 import matplotlib.pyplot as plt
 
 from .pyirsdk import irsdk

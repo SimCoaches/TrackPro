@@ -11,28 +11,27 @@ from typing import Optional, Any
 # Version information - hardcoded to avoid cyclic imports
 __version__ = "1.5.2"
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QLabel, QPushButton, QVBoxLayout, 
     QHBoxLayout, QFrame, QSplitter, QWidget, QMessageBox, 
     QSlider, QComboBox, QSpinBox, QCheckBox, QProgressBar,
-    QDialog, QFileDialog, QFormLayout, QLineEdit, QAction,
+    QDialog, QFileDialog, QFormLayout, QLineEdit,
     QMenu, QApplication, QStyleFactory, QGridLayout, QTextEdit,
     QMenuBar, QMenu, QDialogButtonBox, QStackedWidget, QRadioButton, 
     QButtonGroup, QGroupBox, QStatusBar, QProgressDialog, QSizePolicy,
-    QSystemTrayIcon
+    QSystemTrayIcon, QGraphicsOpacityEffect
 )
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     Qt, QPointF, QTimer, pyqtSignal, QSettings, QThread, 
-    pyqtSlot, QSize, QRectF, QMargins, QObject
+    pyqtSlot, QSize, QRectF, QMargins, QObject,
+    QPropertyAnimation, QEasingCurve
 )
-from PyQt5.QtGui import (
+from PyQt6.QtGui import (
     QPalette, QColor, QIcon, QPen, QBrush, QPainterPath, QFont,
     QPainter, QLinearGradient, QMouseEvent, QHideEvent, QShowEvent,
-    QKeySequence, QDesktopServices, QPixmap
+    QKeySequence, QDesktopServices, QPixmap, QAction
 )
-from PyQt5.QtWidgets import QGraphicsOpacityEffect
-from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
-from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
+from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 
 # Import from parent module
 from ..config import config
@@ -108,12 +107,12 @@ except ImportError as e:
     # Fallback implementations only if import fails
     def open_community_dialog(parent, managers, user_id, tab="social"):
         """Fallback implementation."""
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
         QMessageBox.information(parent, "Community Features", "Community features are not available in this build.")
 
     def create_community_menu_action(parent, managers, user_id):
         """Fallback implementation."""
-        from PyQt5.QtWidgets import QAction
+        from PyQt6.QtGui import QAction
         action = QAction("🌐 Community", parent)
         action.setStatusTip("Community features not available")
         action.triggered.connect(lambda: open_community_dialog(parent, managers, user_id))

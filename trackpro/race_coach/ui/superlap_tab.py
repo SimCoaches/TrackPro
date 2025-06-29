@@ -6,13 +6,13 @@ exactly how to improve their lap times using AI-optimized racing lines.
 
 import logging
 from datetime import datetime
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QFrame, QGridLayout, QProgressBar, QTableWidget,
     QTableWidgetItem, QMessageBox, QDialog, QTextEdit, QTabWidget
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
-from PyQt5.QtGui import QFont, QColor, QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
+from PyQt6.QtGui import QFont, QColor, QPixmap
 import os
 
 # Import the new function
@@ -441,7 +441,7 @@ class SuperLapWidget(QWidget):
         
         # MINIMAL header section - maximum space for telemetry!
         header_frame = QFrame()
-        header_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        header_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         header_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 2px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -455,7 +455,7 @@ class SuperLapWidget(QWidget):
         
         # Header title (logo now in tab title)
         title_label = QLabel("AI-POWERED LAP ANALYSIS")
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("""
             color: #FF4500;
             background-color: transparent;
@@ -471,7 +471,7 @@ class SuperLapWidget(QWidget):
         
         # Minimal controls frame
         controls_frame = QFrame()
-        controls_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        controls_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         controls_frame.setStyleSheet("""
             background-color: #111;
             border: 1px solid #444;
@@ -662,7 +662,7 @@ class SuperLapWidget(QWidget):
         
         # Performance metrics grid
         metrics_frame = QFrame()
-        metrics_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        metrics_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         metrics_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -706,7 +706,7 @@ class SuperLapWidget(QWidget):
         
         # Key insights section
         insights_frame = QFrame()
-        insights_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        insights_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         insights_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -729,7 +729,7 @@ class SuperLapWidget(QWidget):
         
         # Performance breakdown
         breakdown_frame = QFrame()
-        breakdown_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        breakdown_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         breakdown_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -813,7 +813,7 @@ class SuperLapWidget(QWidget):
         
         # Sector comparison table
         table_frame = QFrame()
-        table_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        table_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         table_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -859,7 +859,7 @@ class SuperLapWidget(QWidget):
         
         # Sector insights
         insights_frame = QFrame()
-        insights_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        insights_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         insights_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -892,7 +892,7 @@ class SuperLapWidget(QWidget):
         
         # Brake points analysis
         brake_frame = QFrame()
-        brake_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        brake_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         brake_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -915,7 +915,7 @@ class SuperLapWidget(QWidget):
         
         # Throttle analysis
         throttle_frame = QFrame()
-        throttle_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        throttle_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         throttle_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -938,7 +938,7 @@ class SuperLapWidget(QWidget):
         
         # Racing line analysis
         line_frame = QFrame()
-        line_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        line_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         line_frame.setStyleSheet("""
             background-color: #1a1a1a;
             border: 1px solid #444;
@@ -969,7 +969,7 @@ class SuperLapWidget(QWidget):
         from trackpro.race_coach.widgets.steering_graph import SteeringGraphWidget
         from trackpro.race_coach.widgets.speed_graph import SpeedGraphWidget
         from trackpro.race_coach.widgets.gear_graph import GearGraphWidget
-        from PyQt5.QtWidgets import QScrollArea
+        from PyQt6.QtWidgets import QScrollArea
         
         widget = QWidget()
         main_layout = QVBoxLayout(widget)
@@ -978,7 +978,7 @@ class SuperLapWidget(QWidget):
         
         # Lap times comparison header
         times_frame = QFrame()
-        times_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        times_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         times_frame.setStyleSheet("""
             background-color: #2d2d30;
             border: 1px solid #3c3c3c;
@@ -1035,8 +1035,8 @@ class SuperLapWidget(QWidget):
         # Create scroll area for graphs
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_area.setStyleSheet("""
             QScrollArea {
                 background-color: #161b22;
@@ -1099,7 +1099,7 @@ class SuperLapWidget(QWidget):
             text-align: center;
             background-color: transparent;
         """)
-        self.telemetry_status_label.setAlignment(Qt.AlignCenter)
+        self.telemetry_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.addWidget(self.telemetry_status_label)
         
         content_layout.addStretch()
@@ -1112,7 +1112,7 @@ class SuperLapWidget(QWidget):
     def _create_graph_container(self, graph_widget, title):
         """Create a styled container for a graph widget."""
         container = QFrame()
-        container.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        container.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         container.setStyleSheet("""
             QFrame {
                 background-color: #2d2d30;
@@ -1876,7 +1876,7 @@ class SuperLapWidget(QWidget):
                 return
             
             # Create diagnostic dialog
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
             
             dialog = QDialog(self)
             dialog.setWindowTitle("SuperLap Telemetry Diagnostics")
@@ -2048,7 +2048,7 @@ class SuperLapWidget(QWidget):
             diagnostic_text.append("3. Ensure current_sector field is populated in telemetry points")
             diagnostic_text.append("4. Try selecting a different SuperLap if this one fails")
             
-            dialog.exec_()
+            dialog.exec()
             
         except Exception as e:
             logger.error(f"Error running SuperLap diagnostics: {e}", exc_info=True)

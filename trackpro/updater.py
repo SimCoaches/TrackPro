@@ -7,9 +7,8 @@ import requests
 import logging
 import ctypes
 import psutil
-from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QApplication
 import time
 from trackpro.config import Config
 
@@ -187,13 +186,13 @@ class Updater:
             f"You are currently running v{CURRENT_VERSION}.\n\n"
             "Would you like to download and install the update now?"
         )
-        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg.setDefaultButton(QMessageBox.Yes)
-        msg.setIcon(QMessageBox.Information)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+        msg.setIcon(QMessageBox.Icon.Information)
         
-        choice = msg.exec_()
+        choice = msg.exec()
         
-        if choice == QMessageBox.Yes:
+        if choice == QMessageBox.StandardButton.Yes:
             logger.info("User chose to update now")
             # Start the download and installation process
             self._download_and_install_update(self.download_url)
@@ -235,7 +234,7 @@ class Updater:
             # Create a progress dialog
             progress = QProgressDialog("Downloading update...", "Cancel", 0, 100, self.parent)
             progress.setWindowTitle("TrackPro Update")
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setMinimumDuration(0)
             progress.setValue(0)
             progress.show()
@@ -303,18 +302,18 @@ class Updater:
                 self.parent,
                 "Ready to Install Update",
                 msg,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
             )
             
-            if proceed == QMessageBox.No:
+            if proceed == QMessageBox.StandardButton.No:
                 logger.info("User chose to postpone the installation")
                 QMessageBox.information(
                     self.parent,
                     "Update Postponed",
                     f"The update has been downloaded but not installed.\n\n"
                     f"You can install it manually by running:\n{installer_path}",
-                    QMessageBox.Ok
+                    QMessageBox.StandardButton.Ok
                 )
                 return
             
@@ -545,7 +544,7 @@ if not "%FOUND_EXE%"=="" (
                 "The update process is running in a separate window.\n\n"
                 "TrackPro will close now. The update will guide you through the installation.\n\n"
                 "NOTE: If Windows Security blocks the installer, select 'More info' then 'Run anyway'.",
-                QMessageBox.Ok
+                QMessageBox.StandardButton.Ok
             )
             
             # Exit the application to allow the update to complete
@@ -559,7 +558,7 @@ if not "%FOUND_EXE%"=="" (
                 "Update Failed",
                 f"Failed to download and install the update:\n\n{str(e)}\n\n"
                 f"Please try updating manually or contact support.",
-                QMessageBox.Ok
+                QMessageBox.StandardButton.Ok
             )
 
     def _is_admin(self):

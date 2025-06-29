@@ -6,9 +6,9 @@ floating over any application (like iRacing) without interfering with gameplay.
 """
 
 import logging
-from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QPainter, QPen, QBrush, QColor
+from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +46,15 @@ class EyeTrackingGamingOverlay(QWidget):
         
         # Window flags for transparent, always-on-top, click-through overlay
         self.setWindowFlags(
-            Qt.FramelessWindowHint |           # No window frame
-            Qt.WindowStaysOnTopHint |          # Always on top
-            Qt.Tool |                          # Tool window (doesn't appear in taskbar)
+            Qt.WindowType.FramelessWindowHint |           # No window frame
+            Qt.WindowType.WindowStaysOnTopHint |          # Always on top
+            Qt.WindowType.Tool |                          # Tool window (doesn't appear in taskbar)
             Qt.X11BypassWindowManagerHint      # Bypass window manager (Linux compatibility)
         )
         
         # Make window transparent
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)  # Click-through
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)  # Click-through
         
         # Set window to cover entire screen
         self.setGeometry(screen_rect)
@@ -86,12 +86,12 @@ class EyeTrackingGamingOverlay(QWidget):
     def paintEvent(self, event):
         """Paint the gaze dot on the transparent overlay."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         
         # Clear the entire overlay first (make it transparent)
-        painter.setCompositionMode(QPainter.CompositionMode_Clear)
-        painter.fillRect(self.rect(), Qt.transparent)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         
         # Only draw if we're tracking
         if not self.is_tracking:
@@ -122,7 +122,7 @@ class EyeTrackingGamingOverlay(QWidget):
     
     def keyPressEvent(self, event):
         """Handle key presses (like 'q' to quit)."""
-        if event.key() == Qt.Key_Q:
+        if event.key() == Qt.Key.Key_Q:
             logger.info("🎮 Gaming overlay closed by user (pressed 'Q')")
             self.close()
         else:

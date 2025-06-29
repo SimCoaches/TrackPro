@@ -285,7 +285,7 @@ class CurveCache:
         """Get the application start time for startup optimizations."""
         try:
             # Try to get start time from the main app instance
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
             if app and hasattr(app, '_start_time'):
                 return app._start_time

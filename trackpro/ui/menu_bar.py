@@ -143,7 +143,7 @@ def create_menu_bar(main_window):
     auth_layout.addWidget(main_window.logout_btn)
     
     # Set the container as the corner widget (top right)
-    menu_bar.setCornerWidget(auth_container, Qt.TopRightCorner)
+    menu_bar.setCornerWidget(auth_container, Qt.Corner.TopRightCorner)
     
     # Style the menu bar for dark theme
     menu_bar.setStyleSheet("""
@@ -210,7 +210,7 @@ def force_refresh_login_state(main_window):
         supabase._restore_session()
         
     # Force processEvents to update the UI
-    from PyQt5.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication
     QApplication.processEvents()
     
     # Update the authentication state

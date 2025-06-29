@@ -9,9 +9,9 @@ class DraggableChartView(QChartView):
     
     def __init__(self, chart, parent=None):
         super().__init__(chart, parent)
-        self.setRenderHint(QPainter.Antialiasing)
-        self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setViewportUpdateMode(QChartView.MinimalViewportUpdate)  # Use minimal updates for better performance
+        self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self.setViewportUpdateMode(QChartView.ViewportUpdateMode.MinimalViewportUpdate)  # Use minimal updates for better performance
         self.setMouseTracking(True)
         self.dragging_point = None
         self.scatter_series = None
@@ -34,7 +34,7 @@ class DraggableChartView(QChartView):
     
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press to start dragging points."""
-        if event.button() == Qt.LeftButton and self.scatter_series:
+        if event.button() == Qt.MouseButton.LeftButton and self.scatter_series:
             # Find closest point within 20 pixels
             closest_point = None
             min_distance = float('inf')
@@ -42,7 +42,9 @@ class DraggableChartView(QChartView):
             for i in range(self.scatter_series.count()):
                 point = self.scatter_series.at(i)
                 screen_point = self.chart().mapToPosition(point)
-                distance = (screen_point - event.pos()).manhattanLength()
+                # Convert event.pos() to QPointF for PyQt6 compatibility
+                event_pos_f = QPointF(event.pos())
+                distance = (screen_point - event_pos_f).manhattanLength()
                 
                 if distance < 20 and distance < min_distance:
                     min_distance = distance
@@ -53,7 +55,8 @@ class DraggableChartView(QChartView):
                 self.dragging_active = True
                 # Store original points before drag starts
                 self.original_points = [self.scatter_series.at(i) for i in range(self.scatter_series.count())]
-                self.current_drag_pos = event.pos()
+                # Store position as QPointF for consistency
+                self.current_drag_pos = QPointF(event.pos())
                 event.accept()
                 return
                 
@@ -62,8 +65,8 @@ class DraggableChartView(QChartView):
     def mouseMoveEvent(self, event: QMouseEvent):
         """Handle point dragging."""
         if self.dragging_point is not None and self.scatter_series and self.dragging_active:
-            # Store current drag position
-            self.current_drag_pos = event.pos()
+            # Store current drag position as QPointF
+            self.current_drag_pos = QPointF(event.pos())
             
             # Add throttling to prevent excessive updates, but keep it responsive
             current_time = int(time.time() * 1000)
@@ -92,6 +95,10 @@ class DraggableChartView(QChartView):
         """Update the dragged point position with the given mouse position."""
         if self.dragging_point is None or not self.scatter_series or not self.dragging_active:
             return
+        
+        # Ensure pos is QPointF for PyQt6 compatibility
+        if not isinstance(pos, QPointF):
+            pos = QPointF(pos)
             
         value = self.chart().mapToValue(pos)
         
@@ -127,7 +134,7 @@ class DraggableChartView(QChartView):
     
     def mouseReleaseEvent(self, event: QMouseEvent):
         """Handle mouse release to end point dragging."""
-        if event.button() == Qt.LeftButton and self.dragging_point is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self.dragging_point is not None:
             self.dragging_active = False
             self.dragging_point = None
             self.current_drag_pos = None
@@ -162,7 +169,7 @@ class IntegratedCalibrationChart:
         self.chart.setPlotAreaBackgroundVisible(True)
         self.chart.setPlotAreaBackgroundBrush(QColor(35, 35, 35))
         self.chart.setTitleBrush(QColor(255, 255, 255))
-        self.chart.setAnimationOptions(QChart.NoAnimation)  # Disable animations for precise positioning
+        self.chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)  # Disable animations for precise positioning
         self.chart.legend().hide()
         
         # Adjust chart margins - reduce top and sides, increase bottom substantially
@@ -259,31 +266,35 @@ class IntegratedCalibrationChart:
         self.indicator_series.setUseOpenGL(False)  # Disable OpenGL for better performance
         self.chart.addSeries(self.indicator_series)
         
-        # Attach axes
-        self.chart.setAxisX(self.axis_x, self.curve_series)
-        self.chart.setAxisY(self.axis_y, self.curve_series)
-        self.chart.setAxisX(self.axis_x, self.control_points_series)
-        self.chart.setAxisY(self.axis_y, self.control_points_series)
-        self.chart.setAxisX(self.axis_x, self.indicator_series)
-        self.chart.setAxisY(self.axis_y, self.indicator_series)
+        # Add axes to chart (PyQt6 method)
+        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
+        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
+        
+        # Attach axes to series (PyQt6 method)
+        self.curve_series.attachAxis(self.axis_x)
+        self.curve_series.attachAxis(self.axis_y)
+        self.control_points_series.attachAxis(self.axis_x)
+        self.control_points_series.attachAxis(self.axis_y)
+        self.indicator_series.attachAxis(self.axis_x)
+        self.indicator_series.attachAxis(self.axis_y)
         
         # Attach axes to deadzone series
-        self.chart.setAxisX(self.axis_x, self.min_deadzone_series)
-        self.chart.setAxisY(self.axis_y, self.min_deadzone_series)
-        self.chart.setAxisX(self.axis_x, self.max_deadzone_series)
-        self.chart.setAxisY(self.axis_y, self.max_deadzone_series)
+        self.min_deadzone_series.attachAxis(self.axis_x)
+        self.min_deadzone_series.attachAxis(self.axis_y)
+        self.max_deadzone_series.attachAxis(self.axis_x)
+        self.max_deadzone_series.attachAxis(self.axis_y)
         
         # Create the chart view
         self.chart_view = DraggableChartView(self.chart)
-        self.chart_view.setRenderHint(QPainter.Antialiasing)
-        self.chart_view.setViewportUpdateMode(QChartView.MinimalViewportUpdate)
+        self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.chart_view.setViewportUpdateMode(QChartView.ViewportUpdateMode.MinimalViewportUpdate)
         self.chart_view.set_scatter_series(self.control_points_series, self.curve_series)
         self.chart_view.point_moved.connect(self.on_control_point_moved)
         
         # Set minimum height significantly larger to ensure space for axes
         self.chart_view.setMinimumHeight(320)  # Increased from 280 to 320 for larger chart
         # Set vertical size policy to ensure it takes the space
-        self.chart_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Let it expand/shrink
+        self.chart_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding) # Let it expand/shrink
         self.chart_view.setContentsMargins(5, 0, 5, 0)  # Minimize vertical margins
         
         # Add some bottom margin to the chart itself - REDUCED

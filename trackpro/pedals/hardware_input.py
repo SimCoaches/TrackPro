@@ -3,7 +3,7 @@ import logging
 import json
 import os
 from pathlib import Path
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 from datetime import datetime as dt
 import ctypes
 import time

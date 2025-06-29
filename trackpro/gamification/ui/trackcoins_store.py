@@ -1,9 +1,9 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QScrollArea, QFrame, QGridLayout, 
                              QProgressBar, QGroupBox, QTabWidget, QSplitter, QSizePolicy,
                              QMessageBox, QDialog, QLineEdit, QFormLayout, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot
-from PyQt5.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot
+from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 import json
 import logging
 
@@ -34,9 +34,9 @@ class TrackCoinsStoreWidget(QWidget):
         
         # Title
         title_label = QLabel("TrackCoins Store")
-        title_font = QFont("Arial", 18, QFont.Bold)
+        title_font = QFont("Arial", 18, QFont.Weight.Bold)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("color: #f39c12; margin-bottom: 10px;")
         main_layout.addWidget(title_label)
         
@@ -76,11 +76,11 @@ class TrackCoinsStoreWidget(QWidget):
         
         balance_layout = QVBoxLayout()
         balance_title = QLabel("Your TrackCoins")
-        balance_title.setFont(QFont("Arial", 12, QFont.Bold))
+        balance_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         balance_title.setStyleSheet("color: #f39c12;")
         
         self.balance_label = QLabel(f"{self.user_trackcoins:,}")
-        self.balance_label.setFont(QFont("Arial", 20, QFont.Bold))
+        self.balance_label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         self.balance_label.setStyleSheet("color: white;")
         
         balance_layout.addWidget(balance_title)
@@ -126,7 +126,7 @@ class TrackCoinsStoreWidget(QWidget):
         
         # Section title
         section_title = QLabel("TrackCoins Packages")
-        section_title.setFont(QFont("Arial", 14, QFont.Bold))
+        section_title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         section_title.setStyleSheet("color: #FFF; margin-bottom: 10px;")
         layout.addWidget(section_title)
         
@@ -182,7 +182,7 @@ class TrackCoinsStoreWidget(QWidget):
         # Popular badge
         if popular:
             popular_label = QLabel("MOST POPULAR")
-            popular_label.setAlignment(Qt.AlignCenter)
+            popular_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             popular_label.setStyleSheet("""
                 background-color: #f39c12;
                 color: white;
@@ -201,7 +201,7 @@ class TrackCoinsStoreWidget(QWidget):
         coin_layout.addWidget(coin_icon)
         
         coin_amount = QLabel(f"{coins:,}")
-        coin_amount.setFont(QFont("Arial", 16, QFont.Bold))
+        coin_amount.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         coin_amount.setStyleSheet("color: #f39c12;")
         coin_layout.addWidget(coin_amount)
         coin_layout.addStretch()
@@ -210,14 +210,14 @@ class TrackCoinsStoreWidget(QWidget):
         # Bonus text
         if bonus_text:
             bonus_label = QLabel(bonus_text)
-            bonus_label.setAlignment(Qt.AlignCenter)
+            bonus_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             bonus_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 10pt;")
             layout.addWidget(bonus_label)
         
         # Price
         price_label = QLabel(f"${price:.2f}")
-        price_label.setFont(QFont("Arial", 14, QFont.Bold))
-        price_label.setAlignment(Qt.AlignCenter)
+        price_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        price_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         price_label.setStyleSheet("color: white; margin: 5px 0;")
         layout.addWidget(price_label)
         
@@ -258,7 +258,7 @@ class TrackCoinsStoreWidget(QWidget):
         
         # Section title
         section_title = QLabel("About TrackCoins")
-        section_title.setFont(QFont("Arial", 14, QFont.Bold))
+        section_title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         section_title.setStyleSheet("color: #FFF; margin-bottom: 10px;")
         layout.addWidget(section_title)
         
@@ -366,7 +366,7 @@ class TrackCoinsBalanceWidget(QWidget):
         
         # Balance
         self.balance_label = QLabel("0")
-        self.balance_label.setFont(QFont("Arial", 12, QFont.Bold))
+        self.balance_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.balance_label.setStyleSheet("color: #f39c12;")
         layout.addWidget(self.balance_label)
         

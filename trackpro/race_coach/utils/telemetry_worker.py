@@ -2,7 +2,8 @@ import logging
 import threading
 import queue
 import time
-from PyQt5.QtCore import QObject, pyqtSignal, QThread
+from typing import Dict, Any, Optional
+from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
 from trackpro.race_coach.utils.telemetry_validation import validate_lap_telemetry
 from trackpro.database.supabase_client import get_supabase_client

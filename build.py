@@ -171,6 +171,8 @@ RequestExecutionLevel admin ; Explicitly request admin rights
 !insertmacro MUI_PAGE_LICENSE "LICENSE"  ; Add license page if LICENSE file exists
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_FINISHPAGE_RUN "$INSTDIR\TrackPro_v{version}.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Run TrackPro now"
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstaller pages
@@ -348,14 +350,57 @@ Section "Prerequisites"
         
         DetailPrint "TrackPro installation complete"
 
-        ; Run HidHide installer with wait
-        DetailPrint "Installing HidHide..."
-        ExecWait '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart' $1
-        DetailPrint "HidHide installation complete with exit code: $1"
-        ${{If}} $1 == 3010
+        ; Install HidHide with enhanced progress reporting
+        DetailPrint "==============================================="
+        DetailPrint "DRIVER INSTALLATION PHASE - HidHide"
+        DetailPrint "==============================================="
+        DetailPrint "Note: Driver installation may take 1-2 minutes"
+        DetailPrint "Please be patient, the installer is working..."
+        
+        ; Check if user wants to skip driver installations
+        MessageBox MB_YESNO|MB_ICONQUESTION "Install HidHide driver?$\r$\n$\r$\nThis is required for pedal functionality.$\r$\nInstallation may take 1-2 minutes.$\r$\n$\r$\nClick No to skip and install manually later." IDNO hidhide_skip
+        
+        ; Method 1: Try silent installation with progress indication
+        DetailPrint "Attempting HidHide installation - Method 1 (Silent)"
+        nsExec::ExecToLog '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" /S /norestart'
+        Pop $1
+        
+        ${{If}} $1 == 0
+            DetailPrint "HidHide installation successful"
+        ${{ElseIf}} $1 == 3010
+            DetailPrint "HidHide installation successful, restart required"
             StrCpy $NEEDS_RESTART "1"
-            DetailPrint "HidHide requires a system restart"
+        ${{Else}}
+            DetailPrint "HidHide installation failed with Method 1, trying alternative method..."
+            
+            ; Method 2: Try with different flags
+            DetailPrint "Attempting HidHide installation - Method 2 (Quiet)"
+            nsExec::ExecToLog '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart'
+            Pop $1
+            
+            ${{If}} $1 == 0
+                DetailPrint "HidHide installation successful with Method 2"
+            ${{ElseIf}} $1 == 3010
+                DetailPrint "HidHide installation successful with Method 2, restart required"
+                StrCpy $NEEDS_RESTART "1"
+            ${{Else}}
+                DetailPrint "HidHide installation failed with both methods, offering manual installation..."
+                MessageBox MB_YESNO|MB_ICONQUESTION "HidHide installation failed with automatic methods. Would you like to install it manually now? Click Yes to run the installer manually, or No to skip." IDNO hidhide_skip
+                
+                ; Method 3: Manual installation
+                DetailPrint "Starting HidHide manual installation..."
+                Exec '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe"'
+                MessageBox MB_OK|MB_ICONINFORMATION "Please complete the HidHide installation manually. TrackPro installation will continue when you click OK."
+            ${{EndIf}}
         ${{EndIf}}
+        Goto hidhide_done
+        
+        hidhide_skip:
+        DetailPrint "HidHide installation skipped by user"
+        MessageBox MB_OK|MB_ICONINFORMATION "HidHide was skipped. You can install it later from the TrackPro installation folder if needed for pedal functionality."
+        
+        hidhide_done:
+        DetailPrint "HidHide installation phase completed"
 
         ; Check if vJoy is already installed before attempting installation
         DetailPrint "Checking for existing vJoy installation..."
@@ -381,28 +426,37 @@ Section "Prerequisites"
             Goto vjoy_done
         ${{EndIf}}
 
-        ; Run vJoy installer with SAFER FLAGS and better error handling
-        DetailPrint "Installing vJoy with improved compatibility..."
+        ; Install vJoy with enhanced progress reporting
+        DetailPrint "==============================================="
+        DetailPrint "DRIVER INSTALLATION PHASE - vJoy"
+        DetailPrint "==============================================="
+        DetailPrint "Note: Driver installation may take 1-2 minutes"
+        DetailPrint "Please be patient, the installer is working..."
+        
+        ; Check if user wants to skip driver installations
+        MessageBox MB_YESNO|MB_ICONQUESTION "Install vJoy driver?$\r$\n$\r$\nThis is required for pedal output functionality.$\r$\nInstallation may take 1-2 minutes.$\r$\n$\r$\nClick No to skip and install manually later." IDNO vjoy_skip
         
         ; Save the installation path for resume
         WriteRegStr HKLM "${{RESUME_INSTALLATIONS_KEY}}" "${{RESUME_INSTALLATIONS_VALUE}}" "$EXEPATH"
         
-        ; Method 1: Try with safer silent flags (removed problematic /VERYSILENT and /TYPE=MINIMAL)
-        DetailPrint "Attempting vJoy installation - Method 1 (/SILENT)"
-        ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART' $0
+        ; Method 1: Try with basic silent installation (removed problematic /SUPPRESSMSGBOXES)
+        DetailPrint "Attempting vJoy installation - Method 1 (Silent)"
+        nsExec::ExecToLog '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /S /NORESTART'
+        Pop $0
         
         ; Check if installation was successful
         ${{If}} $0 == 0
-            DetailPrint "vJoy installation completed successfully (exit code: 0)"
+            DetailPrint "vJoy installation completed successfully"
         ${{ElseIf}} $0 == 3010
-            DetailPrint "vJoy installation completed, restart required (exit code: 3010)"
+            DetailPrint "vJoy installation completed, restart required"
             StrCpy $NEEDS_RESTART "1"
         ${{Else}}
-            DetailPrint "vJoy installation Method 1 failed with exit code: $0"
+            DetailPrint "vJoy installation Method 1 failed, trying alternative method..."
             
-            ; Method 2: Try with basic silent flag
-            DetailPrint "Attempting vJoy installation - Method 2 (/S)"
-            ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /S /NORESTART' $0
+            ; Method 2: Try with different flags
+            DetailPrint "Attempting vJoy installation - Method 2 (Alternative)"
+            nsExec::ExecToLog '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /SILENT /NORESTART'
+            Pop $0
             
             ${{If}} $0 == 0
                 DetailPrint "vJoy installation successful with Method 2"
@@ -410,18 +464,31 @@ Section "Prerequisites"
                 DetailPrint "vJoy installation successful with Method 2, restart required"
                 StrCpy $NEEDS_RESTART "1"
             ${{Else}}
-                ; Both methods failed - show warning but continue
-                DetailPrint "WARNING: vJoy installation failed with both methods"
-                DetailPrint "Method 1 exit code: $0"
-                DetailPrint "TrackPro will work in test mode without vJoy"
+                ; Both methods failed - offer manual installation
+                DetailPrint "vJoy installation failed with automatic methods, offering manual installation..."
+                MessageBox MB_YESNO|MB_ICONQUESTION "vJoy installation failed with automatic methods. Would you like to install it manually now? Click Yes to run the installer manually, or No to skip." IDNO vjoy_skip
                 
-                ; Show a non-blocking warning to the user
-                MessageBox MB_OK "vJoy installation failed. TrackPro will work in test mode."
+                ; Method 3: Manual installation
+                DetailPrint "Starting vJoy manual installation..."
+                Exec '"$TEMP\TrackPro\prerequisites\vJoySetup.exe"'
+                MessageBox MB_OK|MB_ICONINFORMATION "Please complete the vJoy installation manually. TrackPro installation will continue when you click OK."
             ${{EndIf}}
         ${{EndIf}}
+        Goto vjoy_done
+        
+        vjoy_skip:
+        DetailPrint "vJoy installation skipped by user"
+        MessageBox MB_OK|MB_ICONINFORMATION "vJoy was skipped. TrackPro will work in test mode. You can install vJoy later from the TrackPro installation folder if needed."
         
         vjoy_done:
         DetailPrint "vJoy installation phase completed"
+        
+        ; Copy prerequisite installers to TrackPro folder for later use
+        DetailPrint "Copying prerequisite installers for later use..."
+        CreateDirectory "$INSTDIR\Prerequisites"
+        CopyFiles /SILENT "$TEMP\TrackPro\prerequisites\vJoySetup.exe" "$INSTDIR\Prerequisites\"
+        CopyFiles /SILENT "$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" "$INSTDIR\Prerequisites\"
+        DetailPrint "Prerequisites available in: $INSTDIR\Prerequisites\"
 
         ; Clean up temp files AFTER all installations are complete
         DetailPrint "Cleaning up temporary files..."
@@ -445,8 +512,8 @@ Section "Prerequisites"
         IntFmt $0 "0x%08X" $0
         WriteRegDWORD ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "EstimatedSize" "$0"
 
-        ; Show installation paths at the end
-        MessageBox MB_OK|MB_ICONINFORMATION "TrackPro v{version} has been installed successfully. Shortcuts have been created on Desktop and Start Menu. Please verify the installation completed correctly."
+        ; Show installation summary with driver information
+        MessageBox MB_OK|MB_ICONINFORMATION "TrackPro v{version} has been installed successfully!$\r$\n$\r$\nShortcuts have been created on Desktop and Start Menu.$\r$\n$\r$\nDriver installers are available in:$\r$\n$INSTDIR\Prerequisites\$\r$\n$\r$\nIf you need to install drivers later, run them as Administrator."
             
         ; Check if we need to restart
         ${{If}} $NEEDS_RESTART == "1"
@@ -889,14 +956,60 @@ SectionEnd
         modules = []
         data_files = []
         
-        # Add Race Coach modules and submodules
-        race_coach_modules = [
+        # Add comprehensive TrackPro modules for deployment
+        trackpro_modules = [
+            # Core TrackPro modules
+            "trackpro",
+            "trackpro.main",
+            "trackpro.config",
+            "trackpro.updater",
+            # UI modules
+            "trackpro.ui",
+            "trackpro.ui.main_window",
+            "trackpro.ui.shared_imports",
+            "trackpro.ui.theme",
+            "trackpro.ui.menu_bar",
+            "trackpro.ui.system_tray",
+            # Authentication modules
+            "trackpro.auth",
+            "trackpro.auth.login_dialog",
+            "trackpro.auth.signup_dialog",
+            "trackpro.auth.oauth_handler",
+            "trackpro.auth.user_manager",
+            # Race Coach modules
             "trackpro.race_coach",
             "trackpro.race_coach.ui",
+            "trackpro.race_coach.ui.main_window",
+            "trackpro.race_coach.ui.telemetry_tab",
+            "trackpro.race_coach.ui.overview_tab",
+            "trackpro.race_coach.ui.superlap_tab",
+            "trackpro.race_coach.ui.videos_tab",
+            "trackpro.race_coach.widgets",
             "trackpro.race_coach.model",
             "trackpro.race_coach.data_manager",
             "trackpro.race_coach.iracing_api",
-        # Add Race Coach modules and submodules
+            "trackpro.race_coach.telemetry_saver",
+            "trackpro.race_coach.iracing_lap_saver",
+            # Pedal system modules
+            "trackpro.pedals",
+            "trackpro.pedals.calibration",
+            "trackpro.pedals.hardware_input",
+            "trackpro.pedals.output",
+            "trackpro.pedals.hidhide",
+            # Community modules
+            "trackpro.community",
+            "trackpro.social",
+            # Gamification modules
+            "trackpro.gamification",
+            "trackpro.gamification.ui",
+            # Database modules
+            "trackpro.database",
+            "trackpro.database.supabase_client",
+            # Supabase modules
+            "Supabase",
+            "Supabase.client",
+            "Supabase.auth",
+            "Supabase.database"
         ]
         
         # Add numpy and its submodules - expanded list to ensure all parts are included
@@ -915,53 +1028,150 @@ SectionEnd
             "numpy.ma"
         ]
         
-        # Add PyQtWebEngine modules
-        pyqt_web_modules = [
-            "PyQt5.QtWebEngineWidgets",
-            "PyQt5.QtWebEngine",
-            "PyQt5.QtWebEngineCore",
-            "PyQtWebEngine"
+        # Add PyQt6 modules (complete set for deployment)
+        pyqt6_modules = [
+            # Core PyQt6 modules
+            "PyQt6.QtCore",
+            "PyQt6.QtGui", 
+            "PyQt6.QtWidgets",
+            "PyQt6.QtCharts",
+            "PyQt6.QtMultimedia",
+            # WebEngine modules (critical for Discord integration)
+            "PyQt6.QtWebEngineWidgets",
+            "PyQt6.QtWebEngineCore",
+            "PyQt6.QtWebEngineQuick",
+            "PyQt6.QtWebChannel",  # Required for WebEngine
+            # Additional PyQt6 modules used by TrackPro
+            "PyQt6.QtNetwork",
+            "PyQt6.QtOpenGL",
+            "PyQt6.QtPrintSupport",
+            "PyQt6.QtSql",
+            "PyQt6.sip"
         ]
         
-        # Additional dependencies that might be required
+        # Windows and third-party dependencies critical for deployment
         additional_modules = [
+            # Database
             "sqlite3",
-            "matplotlib.backends.backend_qt5agg",
+            # Matplotlib with Qt backend (auto-detects PyQt6)
+            "matplotlib.backends.backend_qtagg",  # Correct Qt backend for matplotlib
             "matplotlib",
-            "matplotlib.pyplot"
+            "matplotlib.pyplot",
+            "matplotlib.figure",
+            "matplotlib.backends",
+            # Windows API modules
+            "win32serviceutil", 
+            "win32service",
+            "win32api",
+            "win32con",
+            "win32file",
+            "win32event",
+            "winerror",
+            "pywintypes",
+            "win32security",
+            "win32process",
+            "win32gui",
+            "winreg",
+            # Network and HTTP
+            "requests",
+            "urllib3",
+            "httpx",
+            "httpcore",
+            "h11",
+            "h2",
+            "websockets",
+            # Supabase and authentication  
+            "supabase",
+            "gotrue",
+            "postgrest",
+            "supafunc",
+            "realtime",
+            "storage3",
+            # Data processing
+            "json",
+            "csv",
+            "pickle",
+            "configparser",
+            # Cryptography and security
+            "cryptography",
+            "cryptography.fernet",
+            "cryptography.hazmat",
+            # Audio processing
+            "pygame.mixer",
+            "soundfile",
+            "pydub",
+            # Scientific computing extras
+            "scipy.stats",
+            "scipy.interpolate",
+            "scipy.signal",
+            # Image processing
+            "PIL",
+            "PIL.Image",
+            "PIL.ImageTk"
         ]
         
-        all_modules = race_coach_modules + numpy_modules + pyqt_web_modules + additional_modules
+        all_modules = trackpro_modules + numpy_modules + pyqt6_modules + additional_modules
         
         for module in all_modules:
             modules.append(f"--hidden-import={module}")
             
-        # Add numpy as a direct copy to ensure all necessary files are included
-        try:
-            import numpy
-            numpy_path = os.path.dirname(numpy.__file__)
-            print(f"Adding numpy from path: {numpy_path}")
-            data_files.append(f"--add-data={numpy_path};numpy")
-            
-            # Try to import matplotlib and add it if available
-            try:
-                import matplotlib
-                matplotlib_path = os.path.dirname(matplotlib.__file__)
-                print(f"Adding matplotlib from path: {matplotlib_path}")
-                data_files.append(f"--add-data={matplotlib_path};matplotlib")
-            except ImportError:
-                print("! Warning: matplotlib not available. Some Race Coach features may not work properly.")
-            
-        except ImportError:
-            print("! Warning: numpy not available during build. Race Coach may not work properly.")
-            print("! Please ensure numpy is installed with: pip install numpy")
+        # Add critical packages as direct copies to ensure all necessary files are included
+        critical_packages = {
+            'numpy': 'numpy',
+            'matplotlib': 'matplotlib', 
+            'PyQt6': 'PyQt6',
+            'scipy': 'scipy',
+            'supabase': 'supabase',
+            'cryptography': 'cryptography'
+        }
         
-        # Add race_coach.db explicitly
-        if os.path.exists("race_coach.db"):
-            print("Adding race_coach.db to the package")
-            data_files.append("--add-data=race_coach.db;.")
-        else:
-            print("! Warning: race_coach.db not found in workspace")
+        for package_name, data_name in critical_packages.items():
+            try:
+                package = importlib.import_module(package_name)
+                package_path = os.path.dirname(package.__file__)
+                print(f"Adding {package_name} from path: {package_path}")
+                data_files.append(f"--add-data={package_path};{data_name}")
+                
+                # Special handling for numpy verification
+                if package_name == 'numpy':
+                    import numpy as np
+                    test_array = np.array([1, 2, 3])
+                    test_result = np.sum(test_array)
+                    print(f"✓ Numpy verification successful: {test_result}")
+                    
+            except ImportError as e:
+                print(f"! Warning: {package_name} not available during build: {e}")
+                if package_name in ['numpy', 'PyQt6']:
+                    print(f"! CRITICAL: {package_name} is required for TrackPro to function properly")
+                    
+        # Add TrackPro resource directories
+        resource_dirs = [
+            ('trackpro/resources', 'trackpro/resources'),
+            ('Supabase', 'Supabase'),
+            ('docs', 'docs')  # Include documentation and images
+        ]
+        
+        for src_dir, dest_dir in resource_dirs:
+            if os.path.exists(src_dir):
+                data_files.append(f"--add-data={src_dir};{dest_dir}")
+                print(f"Adding resource directory: {src_dir} -> {dest_dir}")
+            else:
+                print(f"! Warning: Resource directory not found: {src_dir}")
+                
+        # Add configuration files
+        config_files = [
+            'config.ini',
+            'curve_cache.json',
+            'race_coach.db'
+        ]
+        
+        for config_file in config_files:
+            if os.path.exists(config_file):
+                data_files.append(f"--add-data={config_file};.")
+                print(f"Adding configuration file: {config_file}")
+            else:
+                print(f"! Warning: Configuration file not found: {config_file}")
+
         
         print(f"✓ Added {len(modules)} Race Coach related modules to PyInstaller imports")
         print(f"✓ Added {len(data_files)} data file specifications")
@@ -1007,14 +1217,23 @@ SectionEnd
         # First check Python package dependencies
         # Check for required Python packages
         required_packages = {
-            "PyQt5": "PyQt5>=5.15.0",
-            "PyQtWebEngine": "PyQtWebEngine>=5.15.0",
+            "PyQt6": "PyQt6>=6.5.0",
+            "PyQt6-WebEngine": "PyQt6-WebEngine>=6.5.0",
+            "PyQt6-Charts": "PyQt6-Charts>=6.5.0",  # Essential for telemetry graphs
             "pygame": "pygame>=2.0.0",
             "pywin32": "pywin32>=300",
+            "pywin32-ctypes": "pywin32-ctypes>=0.2.0",  # Required for Windows API
             "requests": "requests>=2.25.0",
             "PyInstaller": "PyInstaller>=6.0.0",
-            "numpy": "numpy>=1.19.0",  # This is essential for Race Coach
-            "psutil": "psutil>=5.9.0"
+            "numpy": "numpy>=1.19.0",  # Essential for Race Coach
+            "scipy": "scipy>=1.7.0",  # Required for telemetry analysis
+            "psutil": "psutil>=5.9.0",
+            "supabase": "supabase>=0.7.1",  # Database connectivity
+            "python-dotenv": "python-dotenv>=0.19.0",  # Environment variables
+            "matplotlib": "matplotlib>=3.5.0",  # Plotting and visualization
+            "pyqtgraph": "pyqtgraph>=0.13.0",  # Real-time plotting
+            "pillow": "pillow>=9.5.0",  # Image processing
+            "cryptography": "cryptography>=40.0.0"  # Security and encryption
         }
         
         # Try to add matplotlib if it's needed
@@ -1048,7 +1267,7 @@ SectionEnd
                 module = importlib.import_module(package)
                 print(f"✓ Found {package} {getattr(module, '__version__', 'unknown version')}")
                 
-                # Special check for numpy to ensure it's working correctly
+                # Special checks for critical packages
                 if package == "numpy":
                     try:
                         # Try a basic numpy operation to ensure it's functioning
@@ -1066,6 +1285,27 @@ SectionEnd
                         test_array = np.array([1, 2, 3])
                         test_result = np.sum(test_array)
                         print(f"✓ Numpy test successful after reinstall: {test_result}")
+                        
+                elif package == "PyQt6":
+                    try:
+                        # Comprehensive PyQt6 functionality test
+                        from PyQt6.QtWidgets import QApplication, QWidget
+                        from PyQt6.QtCore import Qt, QTimer
+                        from PyQt6.QtGui import QIcon
+                        print(f"✓ PyQt6 core modules test successful")
+                        
+                        # Test PyQt6 WebEngine
+                        from PyQt6.QtWebEngineWidgets import QWebEngineView
+                        print(f"✓ PyQt6 WebEngine test successful")
+                        
+                        # Test PyQt6 Charts
+                        from PyQt6.QtCharts import QChart, QChartView
+                        print(f"✓ PyQt6 Charts test successful")
+                        
+                    except Exception as e:
+                        print(f"✗ PyQt6 test failed: {e}")
+                        print("This could cause deployment issues!")
+                        return False
                 
             except ImportError:
                 print(f"✗ Missing {package} - installing...")

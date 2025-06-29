@@ -10,11 +10,11 @@ import time
 import numpy as np
 import json
 from datetime import datetime
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QProgressBar, QTextEdit, QFrame,
                              QGridLayout, QMessageBox, QGroupBox, QSpinBox)
-from PyQt5.QtCore import QTimer, pyqtSignal, QThread, pyqtSlot
-from PyQt5.QtGui import QFont
+from PyQt6.QtCore import QTimer, pyqtSignal, QThread, pyqtSlot
+from PyQt6.QtGui import QFont
 
 # Track builder functionality is now integrated into the main TrackPro interface
 # This dialog redirects users to the integrated track builder
@@ -311,9 +311,9 @@ class IntegratedTrackBuilderDialog(QDialog):
 
 
 if __name__ == "__main__":
-    from PyQt5.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication
     
     app = QApplication(sys.argv)
     dialog = IntegratedTrackBuilderDialog()
     dialog.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

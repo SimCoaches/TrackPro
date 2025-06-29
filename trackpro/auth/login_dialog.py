@@ -1,11 +1,11 @@
 """Login dialog for user authentication."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QLineEdit, QCheckBox, QFormLayout, QLabel, 
     QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QIcon, QPixmap
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 import logging
@@ -49,13 +49,13 @@ class LoginDialog(BaseAuthDialog):
         
         # Add Heading
         heading_label = QLabel("TrackPro")
-        heading_label.setAlignment(Qt.AlignCenter)
+        heading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         heading_label.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 5px;")
         left_column_layout.addWidget(heading_label)
         
         # Add Subheading
         subheading_label = QLabel("Making Drivers Faster One Lap At A Time")
-        subheading_label.setAlignment(Qt.AlignCenter)
+        subheading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subheading_label.setStyleSheet("font-size: 12px; color: #bbb; margin-bottom: 20px;")
         left_column_layout.addWidget(subheading_label)
         
@@ -78,7 +78,7 @@ class LoginDialog(BaseAuthDialog):
         
         # Add Sign In With header
         header_label = QLabel("Sign In With:")
-        header_label.setAlignment(Qt.AlignCenter)
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_label.setStyleSheet("font-weight: bold; margin-top: 10px; margin-bottom: 5px;")
         left_column_layout.addWidget(header_label)
         
@@ -142,15 +142,15 @@ class LoginDialog(BaseAuthDialog):
         
         # Placeholder for image
         image_label = QLabel("Login Image Placeholder")
-        image_label.setAlignment(Qt.AlignCenter)
-        image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         image_label.setStyleSheet("color: #ccc; font-size: 16px;")
         
         # Optional: Load an actual image if available
         image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "images", "login_image.png")
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path)
-            image_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            image_label.setPixmap(pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
             image_label.setText("Image not found")
         
@@ -191,7 +191,7 @@ class LoginDialog(BaseAuthDialog):
         
         # Password field
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setStyleSheet(input_style)
         form_layout.addRow("Password:", self.password_input)
         
@@ -244,7 +244,7 @@ class LoginDialog(BaseAuthDialog):
                 if not hasattr(self, '_google_auth_timer'):
                     self._google_auth_timer = QTimer()
                     self._google_auth_timer.timeout.connect(self.check_google_auth_status)
-                    self._google_auth_timer.setInterval(1000)  # Check every second
+                    self._google_auth_timer.setInterval(250)  # Check every 250ms for fast response
                 
                 # Start the timer
                 self._google_auth_timer.start()
@@ -286,7 +286,7 @@ class LoginDialog(BaseAuthDialog):
                 try:
                     parent = self.parent()
                     if parent:
-                        from PyQt5.QtWidgets import QApplication
+                        from PyQt6.QtWidgets import QApplication
                         logger.info("Forcing parent window to update authentication state after Google login")
                         QApplication.processEvents()
                         
@@ -427,7 +427,7 @@ class LoginDialog(BaseAuthDialog):
             try:
                 parent = self.parent()
                 if parent:
-                    from PyQt5.QtWidgets import QApplication
+                    from PyQt6.QtWidgets import QApplication
                     logger.info("Forcing parent window to update authentication state")
                     QApplication.processEvents()
                     
@@ -508,7 +508,7 @@ class LoginDialog(BaseAuthDialog):
                 try:
                     parent = self.parent()
                     if parent:
-                        from PyQt5.QtWidgets import QApplication
+                        from PyQt6.QtWidgets import QApplication
                         logger.info("Forcing parent window to update authentication state")
                         QApplication.processEvents()
                         

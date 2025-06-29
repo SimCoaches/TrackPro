@@ -3,9 +3,9 @@ Community Account Settings Components
 Contains all account settings, profile management, and user preferences for TrackPro Community.
 """
 
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from .community_theme import CommunityTheme
 
 
@@ -85,7 +85,7 @@ class CommunityAccountMixin:
                 font-weight: bold;
             }}
         """)
-        avatar_label.setAlignment(Qt.AlignCenter)
+        avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar_label.setText("U")  # Default to first letter of username
         
         avatar_buttons_layout = QVBoxLayout()
@@ -410,7 +410,7 @@ class CommunityAccountMixin:
         icon_label.setFont(QFont('Segoe UI Emoji', 18))
         
         title_label = QLabel(title)
-        title_label.setFont(QFont('Arial', 16, QFont.Bold))
+        title_label.setFont(QFont('Arial', 16, QFont.Weight.Bold))
         title_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_primary']}; font-weight: 600;")
         
         header_layout.addWidget(icon_label)
@@ -438,7 +438,7 @@ class CommunityAccountMixin:
         
         # Label
         label_widget = QLabel(label)
-        label_widget.setFont(QFont('Arial', 13, QFont.Medium))
+        label_widget.setFont(QFont('Arial', 13, QFont.Weight.Medium))
         label_widget.setStyleSheet(f"color: {CommunityTheme.COLORS['text_primary']}; font-weight: 500;")
         layout.addWidget(label_widget)
         
@@ -534,10 +534,10 @@ class CommunityAccountMixin:
             self, 
             "Remove Avatar", 
             "Are you sure you want to remove your avatar?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             QMessageBox.information(self, "Avatar Removed", "Your avatar has been removed.")
     
     def check_username_availability(self):

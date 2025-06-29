@@ -4,33 +4,97 @@ Integrated community interface that works as a tab within the main TrackPro appl
 """
 
 import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+import os
 from datetime import datetime
 import json
 from typing import Dict, List, Optional, Any
 
+# Check if we're running under PyInstaller's analysis
+def is_pyinstaller_analysis():
+    """Check if we're running under PyInstaller's import analysis"""
+    return (
+        hasattr(sys, '_MEIPASS') or 
+        'PyInstaller' in sys.modules or
+        '__compiled__' in globals() or
+        os.environ.get('_PYINSTALLER_ANALYZING', False)
+    )
+
+# Only import PyQt6 if not in PyInstaller analysis mode
+if not is_pyinstaller_analysis():
+    from PyQt6.QtWidgets import *
+    from PyQt6.QtCore import *
+    from PyQt6.QtGui import *
+else:
+    # Create dummy classes during PyInstaller analysis
+    class QWidget: pass
+    class QObject: pass
+    class pyqtSignal: pass
+    class QVBoxLayout: pass
+    class QHBoxLayout: pass
+    class QLabel: pass
+    class QPushButton: pass
+    class QStackedWidget: pass
+    class QTimer: pass
+    class QFont: pass
+    class QGraphicsOpacityEffect: pass
+    class QPropertyAnimation: pass
+    class QEasingCurve: 
+        class Type:
+            InOutQuad = None
+    class QSizePolicy:
+        class Policy:
+            Expanding = None
+            Fixed = None
+    class Qt:
+        class AlignmentFlag:
+            AlignCenter = None
+        class Direction:
+            Forward = None
+            Backward = None
+
 # Import community theme and database managers
-from .community_theme import CommunityTheme
-from .database_managers import create_community_managers
-from .discord_integration import DiscordIntegrationWidget
+if not is_pyinstaller_analysis():
+    from .community_theme import CommunityTheme
+    from .database_managers import create_community_managers
+    from .discord_integration import DiscordIntegrationWidget
+    
+    # Import the split components
+    from .community_social import CommunitySocialMixin
+    from .community_content import CommunityContentMixin
+    from .community_account import CommunityAccountMixin
+else:
+    # Dummy classes for PyInstaller analysis
+    class CommunityTheme:
+        COLORS = {'primary': '#FF6B35'}
+        FONTS = {'heading': ('Arial', 16, None)}
+        @classmethod
+        def get_stylesheet(cls):
+            return ""
+    def create_community_managers(client):
+        return {}
+    class DiscordIntegrationWidget: pass
+    class CommunitySocialMixin: pass
+    class CommunityContentMixin: pass
+    class CommunityAccountMixin: pass
 
-# Import the split components
-from .community_social import CommunitySocialMixin
-from .community_content import CommunityContentMixin
-from .community_account import CommunityAccountMixin
-
-# Import existing UI components
-try:
-    from trackpro.ui.community_ui import CommunityMainWidget as CommunityTabWidget
-    from trackpro.ui.content_management_ui import ContentManagementMainWidget
-    from trackpro.ui.social_ui import SocialMainWidget
-    from trackpro.ui.achievements_ui import GamificationMainWidget
-    from trackpro.ui.user_account_ui import UserAccountMainWidget
-except ImportError as e:
-    print(f"Warning: Could not import some community UI components: {e}")
-    # Create placeholder widgets if imports fail
+# Import existing UI components only if not in PyInstaller analysis
+if not is_pyinstaller_analysis():
+    try:
+        from trackpro.ui.community_ui import CommunityMainWidget as CommunityTabWidget
+        from trackpro.ui.content_management_ui import ContentManagementMainWidget
+        from trackpro.ui.social_ui import SocialMainWidget
+        from trackpro.ui.achievements_ui import GamificationMainWidget
+        from trackpro.ui.user_account_ui import UserAccountMainWidget
+    except ImportError as e:
+        print(f"Warning: Could not import some community UI components: {e}")
+        # Create placeholder widgets if imports fail
+        CommunityTabWidget = None
+        ContentManagementMainWidget = None
+        SocialMainWidget = None
+        GamificationMainWidget = None
+        UserAccountMainWidget = None
+else:
+    # Dummy classes for PyInstaller analysis
     CommunityTabWidget = None
     ContentManagementMainWidget = None
     SocialMainWidget = None
@@ -38,7 +102,11 @@ except ImportError as e:
     UserAccountMainWidget = None
 
 # Import the automated achievement system
-from .racing_achievements_automation import create_racing_achievement_monitor
+if not is_pyinstaller_analysis():
+    from .racing_achievements_automation import create_racing_achievement_monitor
+else:
+    def create_racing_achievement_monitor(): 
+        return None
 import random
 
 
@@ -202,7 +270,7 @@ class CommunityNavigationWidget(QWidget):
         # Main button
         button = QPushButton()
         button.setCheckable(True)
-        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         button.setMinimumHeight(75)
         
         # Create layout for button content
@@ -252,7 +320,7 @@ class CommunityNavigationWidget(QWidget):
         # Notification badge
         badge = QLabel()
         badge.setFixedSize(20, 20)
-        badge.setAlignment(Qt.AlignCenter)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(f"""
             QLabel {{
                 background-color: #FF4444;
@@ -323,10 +391,10 @@ class CommunityNavigationWidget(QWidget):
         self.fade_animation.setDuration(1000)
         self.fade_animation.setStartValue(1.0)
         self.fade_animation.setEndValue(0.5)
-        self.fade_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.fade_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.fade_animation.finished.connect(lambda: self.fade_animation.setDirection(
-            QPropertyAnimation.Forward if self.fade_animation.direction() == QPropertyAnimation.Backward 
-            else QPropertyAnimation.Backward
+            QPropertyAnimation.Direction.Forward if self.fade_animation.direction() == QPropertyAnimation.Direction.Backward 
+            else QPropertyAnimation.Direction.Backward
         ))
         self.fade_animation.finished.connect(self.fade_animation.start)
         self.fade_animation.start()
@@ -457,18 +525,18 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         """Create a login required widget that blocks all content until user signs in"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setContentsMargins(50, 50, 50, 50)
         
         # Large lock icon
         icon_label = QLabel("🔐")
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setStyleSheet(f"font-size: 64px; color: {CommunityTheme.COLORS['accent']};")
         layout.addWidget(icon_label)
         
         # Title
         title_label = QLabel("Sign In Required")
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_primary']};
             font-size: 24px;
@@ -489,7 +557,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         
         section_message = section_messages.get(section_id, "Access community features")
         message_label = QLabel(f"Sign in to {section_message}")
-        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_label.setWordWrap(True)
         message_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_secondary']};
@@ -526,7 +594,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         
         # Additional info
         info_label = QLabel("All community features require authentication to protect user privacy and enable personalized experiences.")
-        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_label.setWordWrap(True)
         info_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_secondary']};
@@ -543,7 +611,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         """Create a placeholder widget for sections that aren't available"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Icon - different icons for different states
         if "log in" in message.lower():
@@ -554,13 +622,13 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             icon_color = CommunityTheme.COLORS['text_secondary']
             
         icon_label = QLabel(icon_text)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setStyleSheet(f"font-size: 48px; color: {icon_color};")
         layout.addWidget(icon_label)
         
         # Message
         message_label = QLabel(message)
-        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_primary']};
             font-size: 16px;
@@ -599,7 +667,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             status_text = "This feature will be available when all components are loaded."
             
         status_label = QLabel(status_text)
-        status_label.setAlignment(Qt.AlignCenter)
+        status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_label.setWordWrap(True)
         status_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_secondary']};
@@ -612,7 +680,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         return widget
     
     def create_discord_widget(self):
-        """Create Discord integration widget."""
+        """Create Discord integration widget with smooth loading."""
         try:
             # Create the Discord integration widget
             discord_widget = DiscordIntegrationWidget(self)
@@ -633,12 +701,20 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             # Store reference for notification testing
             self.discord_widget_instance = discord_widget
             
-            # Notification testing panel REMOVED for production to save screen space
+            # Ensure smooth appearance
+            wrapper.setStyleSheet(f"""
+                QWidget {{
+                    background-color: {CommunityTheme.COLORS['background']};
+                }}
+            """)
             
+            print("✅ Discord widget created successfully")
             return wrapper
             
         except Exception as e:
-            print(f"Error creating Discord widget: {e}")
+            print(f"❌ Error creating Discord widget: {e}")
+            import traceback
+            traceback.print_exc()
             return self.create_placeholder_widget("Discord integration temporarily unavailable")
 
     def open_login_dialog(self):
@@ -657,7 +733,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             print(f"Error opening login dialog: {e}")
         
     def switch_section(self, section_id):
-        """Switch to a different community section with lazy loading"""
+        """Switch to a different community section with smooth loading"""
         self.current_section = section_id
         
         # Lazy load the widget if it hasn't been created yet
@@ -677,59 +753,69 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         # Get the widget for this section
         widget = widget_mapping.get(section_id)
         if widget:
-            # Find the widget's index in the stack or add it
+            # Check if widget is already in stack
             index = self.content_stack.indexOf(widget)
-            if index == -1:
-                # Widget not in stack yet, add it
+            if index != -1:
+                # Widget already in stack, just switch to it smoothly
+                self.content_stack.setCurrentIndex(index)
+            else:
+                # This shouldn't happen with the fixed _load_section_widget, but handle it gracefully
+                print(f"Warning: Widget for {section_id} not in stack, adding now...")
                 index = self.content_stack.addWidget(widget)
-            
-            self.content_stack.setCurrentIndex(index)
+                self.content_stack.setCurrentIndex(index)
             
         # Update navigation
         self.navigation.set_active_section(section_id)
     
     def _load_section_widget(self, section_id):
-        """Load a specific section widget on demand"""
+        """Load a specific section widget on demand and immediately add to stack"""
         if section_id in self.loaded_sections:
             return  # Already loaded
         
         print(f"Loading community section: {section_id}")
         
         try:
+            widget = None
+            
             # CHECK AUTHENTICATION FIRST - if not authenticated, show login screen for ALL sections
             if not self.user_id or not self.supabase_client:
                 print(f"User not authenticated, showing login screen for {section_id}")
                 # Create login screen for this section
-                login_widget = self.create_login_required_widget(section_id)
-                
-                # Assign to the appropriate section
-                if section_id == "social":
-                    self.social_widget = login_widget
-                elif section_id == "discord":
-                    self.discord_widget = login_widget
-                elif section_id == "community":
-                    self.community_widget = login_widget
-                elif section_id == "content":
-                    self.content_widget = login_widget
-                elif section_id == "achievements":
-                    self.achievements_widget = login_widget
-                elif section_id == "account":
-                    self.account_widget = login_widget
+                widget = self.create_login_required_widget(section_id)
             else:
                 # User is authenticated, create the actual content widget
                 print(f"User authenticated, loading real content for {section_id}")
                 if section_id == "social":
-                    self.social_widget = self.create_modern_social_widget()
+                    widget = self.create_modern_social_widget()
                 elif section_id == "discord":
-                    self.discord_widget = self.create_discord_widget()
+                    widget = self.create_discord_widget()
                 elif section_id == "community":
-                    self.community_widget = self.create_modern_community_widget()
+                    widget = self.create_modern_community_widget()
                 elif section_id == "content":
-                    self.content_widget = self.create_modern_content_widget()
+                    widget = self.create_modern_content_widget()
                 elif section_id == "achievements":
-                    self.achievements_widget = self.create_modern_achievements_widget()
+                    widget = self.create_modern_achievements_widget()
                 elif section_id == "account":
-                    self.account_widget = self.create_modern_account_widget()
+                    widget = self.create_modern_account_widget()
+            
+            # Assign widget to the appropriate section reference AND add to stack immediately
+            if widget:
+                if section_id == "social":
+                    self.social_widget = widget
+                elif section_id == "discord":
+                    self.discord_widget = widget
+                elif section_id == "community":
+                    self.community_widget = widget
+                elif section_id == "content":
+                    self.content_widget = widget
+                elif section_id == "achievements":
+                    self.achievements_widget = widget
+                elif section_id == "account":
+                    self.account_widget = widget
+                
+                # IMMEDIATELY add to stack to prevent "reopening" effect
+                self.content_stack.addWidget(widget)
+                print(f"Added {section_id} widget to stack immediately")
             
             # Mark as loaded
             self.loaded_sections.add(section_id)
@@ -1532,4 +1618,4 @@ if __name__ == "__main__":
     widget.resize(1200, 800)
     widget.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

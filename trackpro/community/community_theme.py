@@ -3,7 +3,27 @@ Community Theme Configuration
 Provides consistent styling and colors for all community features.
 """
 
-from PyQt5.QtGui import QFont
+import sys
+import os
+
+# Check if we're running under PyInstaller's analysis
+def is_pyinstaller_analysis():
+    """Check if we're running under PyInstaller's import analysis"""
+    return (
+        hasattr(sys, '_MEIPASS') or 
+        'PyInstaller' in sys.modules or
+        '__compiled__' in globals() or
+        os.environ.get('_PYINSTALLER_ANALYZING', False)
+    )
+
+# Only import PyQt6 if not in PyInstaller analysis mode
+if not is_pyinstaller_analysis():
+    from PyQt6.QtGui import QFont
+else:
+    # Create dummy class during PyInstaller analysis
+    class QFont:
+        class Weight:
+            Bold = None
 
 
 class CommunityTheme:
@@ -31,8 +51,8 @@ class CommunityTheme:
     
     # Typography
     FONTS = {
-        'heading': ('Arial', 16, QFont.Bold),
-        'subheading': ('Arial', 14, QFont.Bold),
+        'heading': ('Arial', 16, QFont.Weight.Bold),
+        'subheading': ('Arial', 14, QFont.Weight.Bold),
         'body': ('Arial', 12),
         'caption': ('Arial', 10),
     }

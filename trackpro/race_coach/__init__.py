@@ -1,7 +1,7 @@
 """TrackPro Race Coach - AI-powered racing coach and performance analyzer"""
 
 import logging
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 # Set higher logging level for noisy HTTP and Supabase libraries
 for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:

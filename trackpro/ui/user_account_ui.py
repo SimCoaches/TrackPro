@@ -3,9 +3,9 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from .social_ui import SocialTheme
 from ..social import enhanced_user_manager, friends_manager, achievements_manager, reputation_manager
 
@@ -33,7 +33,7 @@ class ProfileEditDialog(QDialog):
         # Header
         header_label = QLabel("Edit Your Profile")
         header_label.setFont(SocialTheme.FONTS['heading'])
-        header_label.setAlignment(Qt.AlignCenter)
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Scroll area for form
         scroll_area = QScrollArea()
@@ -42,11 +42,12 @@ class ProfileEditDialog(QDialog):
         
         # Avatar section
         avatar_group = QGroupBox("Profile Picture")
-        avatar_layout = QVBoxLayout(avatar_group)
+        avatar_layout = QVBoxLayout()
+        avatar_layout.setSpacing(8)
         
         self.avatar_label = QLabel()
         self.avatar_label.setFixedSize(120, 120)
-        self.avatar_label.setAlignment(Qt.AlignCenter)
+        self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.avatar_label.setStyleSheet(f"""
             QLabel {{
                 border: 3px solid {SocialTheme.COLORS['accent']};
@@ -67,7 +68,7 @@ class ProfileEditDialog(QDialog):
         avatar_buttons_layout.addWidget(upload_avatar_btn)
         avatar_buttons_layout.addWidget(remove_avatar_btn)
         
-        avatar_layout.addWidget(self.avatar_label, alignment=Qt.AlignCenter)
+        avatar_layout.addWidget(self.avatar_label, alignment=Qt.AlignmentFlag.AlignCenter)
         avatar_layout.addLayout(avatar_buttons_layout)
         
         # Basic info section
@@ -250,7 +251,7 @@ class ProfileEditDialog(QDialog):
             pixmap = QPixmap(file_path)
             if not pixmap.isNull():
                 # Scale and crop to fit
-                scaled_pixmap = pixmap.scaled(120, 120, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                scaled_pixmap = pixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
                 self.avatar_label.setPixmap(scaled_pixmap)
                 self.avatar_label.setText("")
     
@@ -486,10 +487,10 @@ class PrivacySettingsWidget(QWidget):
         reply = QMessageBox.question(
             self, "Export Data", 
             "This will create a file containing all your TrackPro data. Continue?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             file_dialog = QFileDialog()
             file_path, _ = file_dialog.getSaveFileName(
                 self, "Save Data Export", f"trackpro_data_{datetime.now().strftime('%Y%m%d')}.json",
@@ -505,11 +506,11 @@ class PrivacySettingsWidget(QWidget):
         reply = QMessageBox.warning(
             self, "Delete Account",
             "Are you sure you want to delete your account? This action cannot be undone.\n\nAll your data, including lap times, achievements, and social connections will be permanently deleted.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Second confirmation
             text, ok = QInputDialog.getText(
                 self, "Confirm Deletion",
@@ -577,7 +578,7 @@ class NotificationSettingsWidget(QWidget):
         
         self.sound_enabled_cb = QCheckBox("Enable notification sounds")
         
-        self.sound_volume_slider = QSlider(Qt.Horizontal)
+        self.sound_volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.sound_volume_slider.setRange(0, 100)
         self.sound_volume_slider.setValue(50)
         
@@ -773,7 +774,7 @@ class AvatarFrameSelector(QWidget):
         # Frame preview
         preview_label = QLabel()
         preview_label.setFixedSize(80, 80)
-        preview_label.setAlignment(Qt.AlignCenter)
+        preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         if is_unlocked:
             # Show frame preview (would load actual frame image)
@@ -798,7 +799,7 @@ class AvatarFrameSelector(QWidget):
         # Frame name
         name_label = QLabel(frame.get('name', 'Unknown'))
         name_label.setFont(SocialTheme.FONTS['caption'])
-        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name_label.setWordWrap(True)
         
         # Status/button
@@ -974,7 +975,7 @@ class UserAccountMainWidget(QWidget):
         """Open profile edit dialog."""
         dialog = ProfileEditDialog(self.current_user_id, self)
         dialog.profile_updated.connect(self.on_profile_updated)
-        dialog.exec_()
+        dialog.exec()
     
     def on_profile_updated(self, profile_data: Dict[str, Any]):
         """Handle profile update."""
@@ -1017,7 +1018,7 @@ class UserAccountMainWidget(QWidget):
         layout.addWidget(confirm_password)
         layout.addLayout(button_layout)
         
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             QMessageBox.information(self, "Success", "Password changed successfully!")
     
     def setup_two_factor(self):

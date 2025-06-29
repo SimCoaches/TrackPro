@@ -8,8 +8,10 @@ from collections import deque
 from .telemetry_saver import TelemetrySaver
 # from .integrate_simple_timing import SimpleSectorTimingIntegration  # REMOVED: Use main sector timing instead
 from .sector_timing import SectorTimingCollector
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 import queue
+from typing import Dict, List, Optional, Any, Callable
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 

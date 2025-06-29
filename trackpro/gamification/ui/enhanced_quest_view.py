@@ -1,10 +1,11 @@
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QTabWidget, QScrollArea, QFrame,
-    QProgressBar, QGraphicsOpacityEffect, QMessageBox
+    QProgressBar, QGraphicsOpacityEffect, QMessageBox,
+    QGroupBox, QSizePolicy, QGridLayout
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup
-from PyQt5.QtGui import QFont, QPixmap, QPainter, QColor, QLinearGradient, QPen
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup
+from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor, QLinearGradient, QPen
 import logging
 
 # Import the quest card widget and Supabase functions
@@ -60,7 +61,7 @@ class QuestHeaderWidget(QWidget):
         
         # Level display
         self.level_label = QLabel("Level 1")
-        self.level_label.setFont(QFont("Arial", 18, QFont.Bold))
+        self.level_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         self.level_label.setStyleSheet("color: #F39C12; font-weight: bold;")
         layout.addWidget(self.level_label)
         
@@ -88,7 +89,7 @@ class QuestHeaderWidget(QWidget):
         self.xp_label = QLabel("0 / 100 XP")
         self.xp_label.setFont(QFont("Arial", 10))
         self.xp_label.setStyleSheet("color: #BDC3C7;")
-        self.xp_label.setAlignment(Qt.AlignCenter)
+        self.xp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.xp_label)
         
         return frame
@@ -101,9 +102,9 @@ class QuestHeaderWidget(QWidget):
         
         # Title
         title = QLabel("Quest Progress")
-        title.setFont(QFont("Arial", 14, QFont.Bold))
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         title.setStyleSheet("color: #ECF0F1;")
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Progress stats
@@ -141,15 +142,15 @@ class QuestHeaderWidget(QWidget):
         layout.setSpacing(2)
         
         title_label = QLabel(title)
-        title_label.setFont(QFont("Arial", 8, QFont.Bold))
+        title_label.setFont(QFont("Arial", 8, QFont.Weight.Bold))
         title_label.setStyleSheet(f"color: {color};")
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         value_label = QLabel(value)
-        value_label.setFont(QFont("Arial", 10, QFont.Bold))
+        value_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         value_label.setStyleSheet("color: white;")
-        value_label.setAlignment(Qt.AlignCenter)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(value_label)
         
         # Store references for updates
@@ -277,9 +278,9 @@ class EnhancedQuestViewWidget(QWidget):
         
         # Main title
         title_label = QLabel("Quest System")
-        title_font = QFont("Arial", 24, QFont.Bold)
+        title_font = QFont("Arial", 24, QFont.Weight.Bold)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("""
             color: #2C3E50;
                             font-weight: bold;
@@ -490,7 +491,7 @@ class EnhancedQuestViewWidget(QWidget):
         if not quest_list:
             # Show empty state
             empty_label = QLabel("No quests available")
-            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_label.setStyleSheet("""
                 color: #7F8C8D;
                 font-size: 14pt;

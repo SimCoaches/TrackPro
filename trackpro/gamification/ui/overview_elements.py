@@ -1,6 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QGroupBox, QFrame, QSpacerItem, QSizePolicy, QPushButton
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QColor, QPalette
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QGroupBox, QFrame, QSpacerItem, QSizePolicy, QPushButton
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QColor, QPalette
 
 # --- Add import for RacePassViewWidget ---
 from .race_pass_view import RacePassViewWidget
@@ -11,8 +11,8 @@ class GamificationCard(QFrame):
     def __init__(self, title_text, icon_char=None, parent=None):
         super().__init__(parent)
         self.setObjectName("GamificationCard")
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setFrameShadow(QFrame.Raised) # Can be QFrame.Sunken or QFrame.Plain
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QFrame.Shadow.Raised) # Can be QFrame.Shadow.Sunken or QFrame.Shadow.Plain
         self.setStyleSheet("""
             GamificationCard {
                 background-color: #2E3440; /* Nord Polar Night - darker */
@@ -64,10 +64,10 @@ class GamificationOverviewWidget(QWidget):
 
         # Main Title for the Gamification Section
         section_title_label = QLabel("Your Journey")
-        section_title_font = QFont("Arial", 16, QFont.Bold)
+        section_title_font = QFont("Arial", 16, QFont.Weight.Bold)
         section_title_label.setFont(section_title_font)
         section_title_label.setStyleSheet("color: #D8DEE9; padding-bottom: 5px;") # Nord Snow Storm - gray
-        section_title_label.setAlignment(Qt.AlignCenter)
+        section_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # main_layout.addWidget(section_title_label)
 
         # --- Level and XP Card ---
@@ -76,7 +76,7 @@ class GamificationOverviewWidget(QWidget):
         progression_content_layout.setSpacing(6)
 
         self.level_label = QLabel("Level: 1")
-        self.level_label.setFont(QFont("Arial", 14, QFont.Bold))
+        self.level_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         self.level_label.setStyleSheet("color: #A3BE8C;") # Nord Frost - green for positive/level
 
         xp_layout = QHBoxLayout()
@@ -113,7 +113,7 @@ class GamificationOverviewWidget(QWidget):
         
         # Season name
         self.season_name_label = QLabel("Season 1: Genesis")
-        self.season_name_label.setFont(QFont("Arial", 12, QFont.Bold))
+        self.season_name_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.season_name_label.setStyleSheet("color: #EBCB8B;") # Nord Aurora - yellow for season
         
         # Current tier
@@ -158,14 +158,14 @@ class GamificationOverviewWidget(QWidget):
             font-size: 9pt;
         }
         QPushButton:hover { color: #ECEFF4; }""")
-        view_race_pass_button.setCursor(Qt.PointingHandCursor)
+        view_race_pass_button.setCursor(Qt.CursorShape.PointingHandCursor)
         view_race_pass_button.clicked.connect(self.show_race_pass_view)
         
         race_pass_content_layout.addWidget(self.season_name_label)
         race_pass_content_layout.addLayout(tier_layout)
         race_pass_content_layout.addWidget(self.tier_progress_bar)
         race_pass_content_layout.addWidget(self.time_remaining_label)
-        race_pass_content_layout.addWidget(view_race_pass_button, 0, Qt.AlignRight)
+        race_pass_content_layout.addWidget(view_race_pass_button, 0, Qt.AlignmentFlag.AlignRight)
         race_pass_card.addContentLayout(race_pass_content_layout)
         main_layout.addWidget(race_pass_card)
         
@@ -252,26 +252,26 @@ class GamificationOverviewWidget(QWidget):
 # Example usage (for testing standalone)
 if __name__ == '__main__':
     import sys
-    from PyQt5.QtWidgets import QApplication, QMainWindow
+    from PyQt6.QtWidgets import QApplication, QMainWindow
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion") # Fusion often looks better than default on some systems
     
     # Apply a Nord-like palette for testing
     nord_palette = QPalette()
-    nord_palette.setColor(QPalette.Window, QColor("#2E3440")) # Dark base
-    nord_palette.setColor(QPalette.WindowText, QColor("#D8DEE9")) # Light text
-    nord_palette.setColor(QPalette.Base, QColor("#3B4252")) # Slightly lighter base for inputs
-    nord_palette.setColor(QPalette.AlternateBase, QColor("#434C5E"))
-    nord_palette.setColor(QPalette.ToolTipBase, QColor("#2E3440"))
-    nord_palette.setColor(QPalette.ToolTipText, QColor("#D8DEE9"))
-    nord_palette.setColor(QPalette.Text, QColor("#D8DEE9"))
-    nord_palette.setColor(QPalette.Button, QColor("#4C566A"))
-    nord_palette.setColor(QPalette.ButtonText, QColor("#ECEFF4"))
-    nord_palette.setColor(QPalette.BrightText, QColor("#BF616A")) # Red for alerts
-    nord_palette.setColor(QPalette.Link, QColor("#88C0D0"))
-    nord_palette.setColor(QPalette.Highlight, QColor("#5E81AC")) # Blue for selection
-    nord_palette.setColor(QPalette.HighlightedText, QColor("#ECEFF4"))
+    nord_palette.setColor(QPalette.ColorRole.Window, QColor("#2E3440")) # Dark base
+    nord_palette.setColor(QPalette.ColorRole.WindowText, QColor("#D8DEE9")) # Light text
+    nord_palette.setColor(QPalette.ColorRole.Base, QColor("#3B4252")) # Slightly lighter base for inputs
+    nord_palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#434C5E"))
+    nord_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#2E3440"))
+    nord_palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#D8DEE9"))
+    nord_palette.setColor(QPalette.ColorRole.Text, QColor("#D8DEE9"))
+    nord_palette.setColor(QPalette.ColorRole.Button, QColor("#4C566A"))
+    nord_palette.setColor(QPalette.ColorRole.ButtonText, QColor("#ECEFF4"))
+    nord_palette.setColor(QPalette.ColorRole.BrightText, QColor("#BF616A")) # Red for alerts
+    nord_palette.setColor(QPalette.ColorRole.Link, QColor("#88C0D0"))
+    nord_palette.setColor(QPalette.ColorRole.Highlight, QColor("#5E81AC")) # Blue for selection
+    nord_palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ECEFF4"))
     app.setPalette(nord_palette)
 
     main_window = QMainWindow()
@@ -285,4 +285,4 @@ if __name__ == '__main__':
     gamification_widget.update_race_pass_summary("Season 1: Genesis", 5, 50, 65, 28)
     
     main_window.show()
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

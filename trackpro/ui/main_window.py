@@ -6,9 +6,9 @@ import logging
 import traceback
 
 from .shared_imports import *
-from PyQt5.QtWidgets import QGraphicsOpacityEffect
-from PyQt5.QtCore import QPropertyAnimation, QEasingCurve, QTimer, QPointF
-from PyQt5.QtGui import QHideEvent, QShowEvent
+from PyQt6.QtWidgets import QGraphicsOpacityEffect, QMessageBox
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, QPointF
+from PyQt6.QtGui import QHideEvent, QShowEvent
 from .chart_widgets import IntegratedCalibrationChart
 from .auth_dialogs import PasswordDialog
 from .theme import setup_dark_theme
@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
             }
         """)
         self.update_notification.setVisible(False)
-        layout.addWidget(self.update_notification, 0, Qt.AlignLeft)
+        layout.addWidget(self.update_notification, 0, Qt.AlignmentFlag.AlignLeft)
         
         # Create enhanced status bar with login info
         self.statusBar = QStatusBar()
@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         curve_selector.setMinimumWidth(130)  # Reduced from 180 to 130
         curve_selector.setMaximumWidth(140)  # Add maximum width constraint
         curve_selector.setFixedHeight(27)
-        curve_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # Fixed in both directions
+        curve_selector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # Fixed in both directions
         
         # Style with precise height control
         curve_selector.setStyleSheet("""
@@ -612,10 +612,10 @@ class MainWindow(QMainWindow):
         reset_btn.setFixedHeight(27)
         
         # Fix alignments
-        min_label.setAlignment(Qt.AlignCenter)
-        max_label.setAlignment(Qt.AlignCenter)
-        reset_label.setAlignment(Qt.AlignCenter)
-        curve_label.setAlignment(Qt.AlignCenter)
+        min_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        max_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        reset_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        curve_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Add the controls layout to the main layout
         cal_layout.addLayout(controls_layout)
@@ -1018,16 +1018,16 @@ class MainWindow(QMainWindow):
             return
         
         # Confirm deletion
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
         reply = QMessageBox.question(
             self, 
             "Delete Curve", 
             f"Are you sure you want to delete the curve '{current_curve}' for {pedal}?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Delete the curve
             self.delete_custom_curve(pedal, current_curve)
     
@@ -1455,7 +1455,7 @@ class MainWindow(QMainWindow):
         try:
             from ..auth import LoginDialog
             dialog = LoginDialog(self, self.oauth_handler)
-            dialog.exec_()
+            dialog.exec()
             # Update auth state after dialog closes
             QTimer.singleShot(100, self.update_auth_state)
         except Exception as e:
@@ -1467,7 +1467,7 @@ class MainWindow(QMainWindow):
         try:
             from ..auth import SignupDialog
             dialog = SignupDialog(self, self.oauth_handler)
-            dialog.exec_()
+            dialog.exec()
             # Update auth state after dialog closes
             QTimer.singleShot(100, self.update_auth_state)
         except Exception as e:
@@ -1548,17 +1548,17 @@ class MainWindow(QMainWindow):
                 "   • Performance tracking\n\n"
                 "Please log in to continue."
             )
-            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setIcon(QMessageBox.Icon.Information)
             
             # Add buttons
-            login_button = msg_box.addButton("🔑 Login Now", QMessageBox.ActionRole)
-            signup_button = msg_box.addButton("📝 Sign Up", QMessageBox.ActionRole)
-            cancel_button = msg_box.addButton("❌ Cancel", QMessageBox.RejectRole)
+            login_button = msg_box.addButton("🔑 Login Now", QMessageBox.ButtonRole.ActionRole)
+            signup_button = msg_box.addButton("📝 Sign Up", QMessageBox.ButtonRole.ActionRole)
+            cancel_button = msg_box.addButton("❌ Cancel", QMessageBox.ButtonRole.RejectRole)
             
             # Set default button
             msg_box.setDefaultButton(login_button)
             
-            result = msg_box.exec_()
+            result = msg_box.exec()
             
             # Check which button was clicked
             if msg_box.clickedButton() == login_button:
@@ -1726,13 +1726,13 @@ class MainWindow(QMainWindow):
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Login Required")
             msg_box.setText("You need to be logged in to access the Race Pass feature.")
-            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setIcon(QMessageBox.Icon.Information)
             
             # Add a button to open login dialog
-            login_button = msg_box.addButton("Login Now", QMessageBox.ActionRole)
-            cancel_button = msg_box.addButton(QMessageBox.Cancel)
+            login_button = msg_box.addButton("Login Now", QMessageBox.ButtonRole.ActionRole)
+            cancel_button = msg_box.addButton(QMessageBox.StandardButton.Cancel)
             
-            msg_box.exec_()
+            msg_box.exec()
             
             # Check which button was clicked
             if msg_box.clickedButton() == login_button:
@@ -2000,7 +2000,7 @@ class MainWindow(QMainWindow):
                     eye_tracking_manager = None
             
             dialog = EyeTrackingSettingsDialog(self, eye_tracking_manager)
-            dialog.exec_()
+            dialog.exec()
             
         except Exception as e:
             logger.error(f"Error showing eye tracking settings: {e}")
@@ -2021,7 +2021,7 @@ class MainWindow(QMainWindow):
             dialog = TrackMapOverlaySettingsDialog(self)
             # Replace the dialog's manager with our persistent one
             dialog.overlay_manager = self.track_map_overlay_manager
-            dialog.exec_()
+            dialog.exec()
             
         except Exception as e:
             logger.error(f"Error showing track map overlay settings: {e}")
@@ -2145,7 +2145,7 @@ class MainWindow(QMainWindow):
         try:
             from ..pedals.calibration import CalibrationWizard
             wizard = CalibrationWizard(self)
-            if wizard.exec_() == QDialog.Accepted:
+            if wizard.exec() == QDialog.DialogCode.Accepted:
                 results = wizard.get_results()
                 self.on_calibration_wizard_completed(results)
         except ImportError:
@@ -2346,7 +2346,7 @@ class MainWindow(QMainWindow):
                 self.badge_animation.setDuration(800)
                 self.badge_animation.setStartValue(1.0)
                 self.badge_animation.setEndValue(0.6)
-                self.badge_animation.setEasingCurve(QEasingCurve.InOutQuad)
+                self.badge_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
                 
                 # Set up auto-reverse
                 self.badge_animation.finished.connect(lambda: self.badge_animation.setDirection(
