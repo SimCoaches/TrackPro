@@ -218,26 +218,89 @@ class Config:
     # Twilio configuration properties for SMS 2FA
     @property
     def twilio_account_sid(self) -> str:
-        """Get Twilio Account SID from environment or config."""
-        sid = os.getenv('TWILIO_ACCOUNT_SID') or self.get('twilio.account_sid', '')
+        """Get Twilio Account SID from environment, config.ini, or config."""
+        # First check environment variable
+        sid = os.getenv('TWILIO_ACCOUNT_SID')
+        if sid:
+            return sid
+            
+        # Then check config.ini file
+        try:
+            import configparser
+            config_ini_path = Path(__file__).parent.parent / "config.ini"
+            if config_ini_path.exists():
+                config_parser = configparser.ConfigParser()
+                config_parser.read(config_ini_path)
+                if 'twilio' in config_parser and 'account_sid' in config_parser['twilio']:
+                    sid = config_parser['twilio']['account_sid'].strip()
+                    if sid:
+                        logger.info("Found Twilio Account SID in config.ini")
+                        return sid
+        except Exception as e:
+            logger.warning(f"Error reading config.ini for Twilio Account SID: {e}")
+            
+        # Finally check JSON config
+        sid = self.get('twilio.account_sid', '')
         if not sid:
-            logger.warning("Twilio Account SID not found in environment or config")
+            logger.warning("Twilio Account SID not found in environment, config.ini, or config")
         return sid
 
     @property
     def twilio_auth_token(self) -> str:
-        """Get Twilio Auth Token from environment or config."""
-        token = os.getenv('TWILIO_AUTH_TOKEN') or self.get('twilio.auth_token', '')
+        """Get Twilio Auth Token from environment, config.ini, or config."""
+        # First check environment variable
+        token = os.getenv('TWILIO_AUTH_TOKEN')
+        if token:
+            return token
+            
+        # Then check config.ini file
+        try:
+            import configparser
+            config_ini_path = Path(__file__).parent.parent / "config.ini"
+            if config_ini_path.exists():
+                config_parser = configparser.ConfigParser()
+                config_parser.read(config_ini_path)
+                if 'twilio' in config_parser and 'auth_token' in config_parser['twilio']:
+                    token = config_parser['twilio']['auth_token'].strip()
+                    if token:
+                        logger.info("Found Twilio Auth Token in config.ini")
+                        return token
+        except Exception as e:
+            logger.warning(f"Error reading config.ini for Twilio Auth Token: {e}")
+            
+        # Finally check JSON config
+        token = self.get('twilio.auth_token', '')
         if not token:
-            logger.warning("Twilio Auth Token not found in environment or config")
+            logger.warning("Twilio Auth Token not found in environment, config.ini, or config")
         return token
 
     @property
     def twilio_verify_service_sid(self) -> str:
-        """Get Twilio Verify Service SID from environment or config."""
-        service_sid = os.getenv('TWILIO_VERIFY_SERVICE_SID') or self.get('twilio.verify_service_sid', '')
+        """Get Twilio Verify Service SID from environment, config.ini, or config."""
+        # First check environment variable
+        service_sid = os.getenv('TWILIO_VERIFY_SERVICE_SID')
+        if service_sid:
+            return service_sid
+            
+        # Then check config.ini file
+        try:
+            import configparser
+            config_ini_path = Path(__file__).parent.parent / "config.ini"
+            if config_ini_path.exists():
+                config_parser = configparser.ConfigParser()
+                config_parser.read(config_ini_path)
+                if 'twilio' in config_parser and 'verify_service_sid' in config_parser['twilio']:
+                    service_sid = config_parser['twilio']['verify_service_sid'].strip()
+                    if service_sid:
+                        logger.info("Found Twilio Verify Service SID in config.ini")
+                        return service_sid
+        except Exception as e:
+            logger.warning(f"Error reading config.ini for Twilio Verify Service SID: {e}")
+            
+        # Finally check JSON config
+        service_sid = self.get('twilio.verify_service_sid', '')
         if not service_sid:
-            logger.warning("Twilio Verify Service SID not found in environment or config")
+            logger.warning("Twilio Verify Service SID not found in environment, config.ini, or config")
         return service_sid
 
     @property

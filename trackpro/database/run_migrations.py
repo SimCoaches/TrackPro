@@ -119,10 +119,14 @@ def run_migrations(skip_existing: bool = True) -> Tuple[bool, int, int]:
         # Execute migration
         try:
             migration_name = os.path.splitext(migration_file)[0]
-            supabase.client.rpc(
-                'run_sql', 
+            result = supabase.client.rpc(
+                'execute_sql', 
                 {'sql': sql}
             ).execute()
+
+            if hasattr(result, 'error') and result.error:
+                # Raise an exception to be caught and logged
+                raise Exception(str(result.error))
             
             logger.info(f"Successfully applied migration: {migration_file}")
             success_count += 1
@@ -165,11 +169,15 @@ def create_check_table_function() -> bool:
         $$ LANGUAGE plpgsql SECURITY DEFINER;
         """
         
-        supabase.client.rpc('run_sql', {'sql': sql}).execute()
+        supabase.client.rpc('execute_sql', {'sql': sql}).execute()
         return True
     except Exception as e:
-        logger.error(f"Error creating check_table_exists function: {e}")
-        return False
+        # Check for a specific error that we can ignore
+        # 42723 is 'duplicate_function' - it's okay if it already exists
+        if '42723' not in str(e):
+            logger.error(f"Error creating check_table_exists function: {e}")
+            return False
+        return True
 
 def create_run_sql_function() -> bool:
     """
@@ -195,11 +203,15 @@ def create_run_sql_function() -> bool:
         
         # Make direct query to create the function
         # Since we're bootstrapping, we need to use the low-level client
-        result = supabase.client.postgrest.rpc("run_sql", {"sql": sql}).execute()
+        # Use execute_sql which should exist, not run_sql which we are creating
+        result = supabase.client.rpc("execute_sql", {"sql": sql}).execute()
         
-        if result.get("error"):
-            logger.error(f"Error creating run_sql function: {result.get('error')}")
-            return False
+        if hasattr(result, 'error') and result.error:
+            # Check for a specific error that we can ignore
+            # 42723 is 'duplicate_function' - it's okay if it already exists
+            if '42723' not in str(result.error):
+                logger.error(f"Error creating run_sql function: {result.error}")
+                return False
         
         return True
     except Exception as e:

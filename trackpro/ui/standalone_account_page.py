@@ -23,54 +23,57 @@ class AccountPage(QWidget):
         self.is_oauth_user = False
         self.has_password = False
         self.setup_ui()
-        self.load_user_data()
+        # Remove the duplicate load_user_data() call from here
         
     def setup_ui(self):
-        """Setup the account page UI with all form fields and sections."""
-        # Main layout with proper spacing
+        """Set up the complete account page UI."""
+        # Main layout
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
         
-        # Header section
-        header_layout = QHBoxLayout()
-        
+        # Page title - with better styling and visibility
         title_label = QLabel("Account Settings")
-        title_label.setFont(QFont("Arial", 24, QFont.Bold))
-        title_label.setStyleSheet("color: #BF616A; font-weight: bold;")
+        title_label.setFont(QFont("Arial", 20, QFont.Bold))
+        title_label.setStyleSheet("""
+            QLabel {
+                color: #2E3440; 
+                background-color: transparent;
+                margin-bottom: 15px;
+                padding: 10px 0;
+                border: none;
+            }
+        """)
+        title_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title_label)
         
-        subtitle_label = QLabel("Manage your profile, privacy, and preferences")
-        subtitle_label.setFont(QFont("Arial", 12))
-        subtitle_label.setStyleSheet("color: #5E81AC;")
-        
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(subtitle_label)
-        
-        main_layout.addLayout(header_layout)
-        
-        # Create scroll area for content
+        # Create scrollable area for all sections
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_widget = QWidget()
-        content_layout = QVBoxLayout(scroll_widget)
-        content_layout.setSpacing(20)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background-color: transparent; }")
         
-        # SECTION 1: Profile Information (Editable Form)
-        profile_section = self.create_profile_section()
-        content_layout.addWidget(profile_section)
+        # Content widget for scroll area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(25)
+        content_layout.setContentsMargins(10, 10, 10, 10)
         
-        # SECTION 2: Account Security
-        security_section = self.create_security_section()
-        content_layout.addWidget(security_section)
+        # Add sections
+        content_layout.addWidget(self.create_profile_section())
+        content_layout.addWidget(self.create_security_section())
+        content_layout.addWidget(self.create_2fa_section())
+        content_layout.addWidget(self.create_actions_section())
         
-        # SECTION 3: Account Actions
-        actions_section = self.create_actions_section()
-        content_layout.addWidget(actions_section)
+        # Add stretch to push everything to the top
+        content_layout.addStretch()
         
-        scroll_area.setWidget(scroll_widget)
+        # Set the content widget to the scroll area
+        scroll_area.setWidget(content_widget)
         main_layout.addWidget(scroll_area)
+        
+        # Load user data ONLY once and properly initialize UI
+        self.load_user_data()
 
     def create_profile_section(self):
         """Create the Profile Information section with all form fields."""
@@ -209,15 +212,321 @@ class AccountPage(QWidget):
         security_layout.addRow("", self.change_password_btn)
         
         # OAuth users message (conditional visibility)
-        self.oauth_message = QLabel("You signed in with a social account. You can create a password for additional security.")
+        self.oauth_message = QLabel("")
         self.oauth_message.setStyleSheet("color: #5E81AC; font-style: italic; margin: 10px;")
         self.oauth_message.setWordWrap(True)
+        self.oauth_message.hide()  # Hide by default
         
         layout.addWidget(self.oauth_message)
         layout.addWidget(self.security_content)
         
         return group_box
+
+    def create_2fa_section(self):
+        """Create the Two-Factor Authentication section with improved UI."""
+        group_box = QGroupBox("Two-Factor Authentication")
+        group_box.setFont(QFont("Arial", 14, QFont.Bold))
+        group_box.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #D8DEE9;
+                border-radius: 8px;
+                margin-top: 15px;
+                padding-top: 15px;
+                background-color: #FDFDFD;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 0 10px 0 10px;
+                background-color: #FDFDFD;
+                color: #2E3440;
+            }
+        """)
         
+        # Main layout with proper spacing
+        main_layout = QVBoxLayout(group_box)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(20, 25, 20, 20)
+        
+        # 2FA Status Display - Fixed height and styling
+        self.twofa_status_label = QLabel("🔐 Set up 2FA for enhanced security")
+        self.twofa_status_label.setStyleSheet("""
+            QLabel {
+                color: #5E81AC; 
+                font-weight: bold; 
+                font-size: 14px;
+                padding: 10px 15px;
+                background-color: #E5E9F0;
+                border-radius: 6px;
+                border: 1px solid #D8DEE9;
+            }
+        """)
+        self.twofa_status_label.setWordWrap(True)
+        self.twofa_status_label.setMinimumHeight(50)
+        main_layout.addWidget(self.twofa_status_label)
+        
+        # Phone number section with better layout
+        phone_section = QFrame()
+        phone_section.setStyleSheet("""
+            QFrame {
+                background-color: #F8F9FA;
+                border: 1px solid #E1E5E9;
+                border-radius: 6px;
+                padding: 15px;
+            }
+        """)
+        phone_layout = QVBoxLayout(phone_section)
+        phone_layout.setSpacing(12)
+        
+        # Phone number label
+        phone_label = QLabel("Phone Number:")
+        phone_label.setStyleSheet("""
+            QLabel {
+                color: #2E3440;
+                font-weight: bold;
+                font-size: 13px;
+                margin-bottom: 5px;
+            }
+        """)
+        phone_layout.addWidget(phone_label)
+        
+        # Phone input with country code
+        phone_input_layout = QHBoxLayout()
+        phone_input_layout.setSpacing(8)
+        
+        # Country code prefix (read-only)
+        self.country_code_label = QLabel("+1")
+        self.country_code_label.setStyleSheet("""
+            QLabel {
+                background-color: #ECEFF4;
+                color: #2E3440;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 12px 15px;
+                border: 1px solid #D8DEE9;
+                border-radius: 4px;
+                min-width: 30px;
+            }
+        """)
+        self.country_code_label.setAlignment(Qt.AlignCenter)
+        phone_input_layout.addWidget(self.country_code_label)
+        
+        # Phone number input (without country code)
+        self.phone_input = QLineEdit()
+        self.phone_input.setPlaceholderText("Enter phone number (e.g., 2345678901)")
+        self.phone_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #D8DEE9;
+                border-radius: 4px;
+                padding: 12px 15px;
+                background-color: white;
+                color: #2E3440;
+                font-size: 14px;
+                min-height: 20px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #5E81AC;
+                background-color: #FFFFFF;
+            }
+        """)
+        # Add input validation for phone numbers
+        self.phone_input.setMaxLength(10)  # US phone numbers are 10 digits
+        
+        # Add input filter to only allow digits
+        from PyQt5.QtGui import QRegExpValidator
+        from PyQt5.QtCore import QRegExp
+        digit_validator = QRegExpValidator(QRegExp(r'^\d{0,10}$'))
+        self.phone_input.setValidator(digit_validator)
+        
+        # Add real-time formatting feedback
+        self.phone_input.textChanged.connect(self.format_phone_input)
+        
+        phone_input_layout.addWidget(self.phone_input, 1)
+        
+        phone_layout.addLayout(phone_input_layout)
+        
+        # Send verification button
+        self.setup_phone_btn = QPushButton("Send Verification Code")
+        self.setup_phone_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #5E81AC;
+                color: white;
+                border: none;
+                padding: 12px 20px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #81A1C1;
+            }
+            QPushButton:pressed {
+                background-color: #4C566A;
+            }
+            QPushButton:disabled {
+                background-color: #D8DEE9;
+                color: #88C0D0;
+            }
+        """)
+        self.setup_phone_btn.clicked.connect(self.send_2fa_verification)
+        phone_layout.addWidget(self.setup_phone_btn)
+        
+        main_layout.addWidget(phone_section)
+        
+        # Verification code section (initially hidden)
+        self.verification_section = QFrame()
+        self.verification_section.setStyleSheet("""
+            QFrame {
+                background-color: #FFF9E5;
+                border: 1px solid #E8D975;
+                border-radius: 6px;
+                padding: 15px;
+            }
+        """)
+        verification_layout = QVBoxLayout(self.verification_section)
+        verification_layout.setSpacing(12)
+        
+        # Verification label
+        verification_label = QLabel("Verification Code:")
+        verification_label.setStyleSheet("""
+            QLabel {
+                color: #2E3440;
+                font-weight: bold;
+                font-size: 13px;
+                margin-bottom: 5px;
+            }
+        """)
+        verification_layout.addWidget(verification_label)
+        
+        # Verification code input
+        self.verification_code_input = QLineEdit()
+        self.verification_code_input.setMaxLength(6)
+        self.verification_code_input.setPlaceholderText("Enter 6-digit verification code")
+        self.verification_code_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #D8DEE9;
+                border-radius: 4px;
+                padding: 12px 15px;
+                background-color: white;
+                color: #2E3440;
+                font-size: 16px;
+                font-family: monospace;
+                text-align: center;
+                letter-spacing: 3px;
+                min-height: 20px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #EBCB8B;
+                background-color: #FFFFFF;
+            }
+        """)
+        verification_layout.addWidget(self.verification_code_input)
+        
+        # Verify button
+        self.verify_code_btn = QPushButton("Verify Code")
+        self.verify_code_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #EBCB8B;
+                color: #2E3440;
+                border: none;
+                padding: 12px 20px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #E8D975;
+            }
+            QPushButton:pressed {
+                background-color: #D4C068;
+            }
+        """)
+        self.verify_code_btn.clicked.connect(self.verify_2fa_code)
+        verification_layout.addWidget(self.verify_code_btn)
+        
+        # Hide verification section initially
+        self.verification_section.hide()
+        main_layout.addWidget(self.verification_section)
+        
+        # 2FA control section
+        control_section = QFrame()
+        control_section.setStyleSheet("""
+            QFrame {
+                background-color: #F0F4F8;
+                border: 1px solid #D8DEE9;
+                border-radius: 6px;
+                padding: 15px;
+            }
+        """)
+        control_layout = QVBoxLayout(control_section)
+        control_layout.setSpacing(15)
+        
+        # 2FA Toggle with better styling
+        self.twofa_toggle = QCheckBox("Enable Two-Factor Authentication")
+        self.twofa_toggle.setStyleSheet("""
+            QCheckBox {
+                color: #2E3440;
+                font-weight: bold;
+                font-size: 14px;
+                spacing: 10px;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #D8DEE9;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #A3BE8C;
+                border: 2px solid #A3BE8C;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAiIGhlaWdodD0iMTAiIHZpZXdCb3g9IjAgMCAxMCAxMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTggMkw0IDZMMiA0IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
+            }
+            QCheckBox::indicator:disabled {
+                background-color: #F0F0F0;
+                border: 2px solid #D8DEE9;
+            }
+        """)
+        self.twofa_toggle.stateChanged.connect(self.toggle_2fa)
+        self.twofa_toggle.setEnabled(False)  # Disabled until phone is verified
+        control_layout.addWidget(self.twofa_toggle)
+        
+        # Disable 2FA Button
+        self.disable_2fa_btn = QPushButton("Disable Two-Factor Authentication")
+        self.disable_2fa_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #BF616A;
+                color: white;
+                border: none;
+                padding: 12px 20px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #D08770;
+            }
+            QPushButton:pressed {
+                background-color: #A54E56;
+            }
+        """)
+        self.disable_2fa_btn.clicked.connect(self.disable_2fa)
+        self.disable_2fa_btn.hide()  # Hidden initially
+        control_layout.addWidget(self.disable_2fa_btn)
+        
+        main_layout.addWidget(control_section)
+        
+        # Set initial state
+        self.twofa_toggle.setChecked(False)
+        self.twofa_toggle.setEnabled(False)
+        self.disable_2fa_btn.hide()
+        
+        return group_box
+
     def create_actions_section(self):
         """Create the Account Actions section for logout and deletion."""
         group_box = QGroupBox("Account Actions")
@@ -237,7 +546,8 @@ class AccountPage(QWidget):
             }
         """)
         
-        layout = QVBoxLayout(group_box)
+        # Change to horizontal layout for side-by-side sections
+        layout = QHBoxLayout(group_box)
         layout.setSpacing(15)
         
         # Delete Account Section
@@ -289,60 +599,60 @@ class AccountPage(QWidget):
         logout_layout.addWidget(logout_title)
         logout_layout.addWidget(self.logout_btn)
         
+        # Add both sections to horizontal layout
         layout.addWidget(delete_section)
         layout.addWidget(logout_section)
         
         return group_box
 
     def load_user_data(self):
-        """Load current user data and populate form fields with robust error handling."""
+        """Load user data from database with enhanced security validation."""
+        logger.info("Loading user data with security validation...")
+        
         try:
             # Import here to avoid circular imports
-            from ..database import supabase_client
+            from ..database import supabase
             
-            # SECURITY FIX: Force a fresh authentication check
-            supabase = supabase_client.get_supabase_client()
-            if not supabase:
-                self.show_login_required()
-                return
-            
-            # Check authentication status using the correct method
-            if not supabase.is_authenticated():
-                logger.error("User is not authenticated")
-                self.show_login_required()
-                return
-            
-            # Get user data with better error handling
+            # Check authentication status using the same reliable method as main window
             try:
-                user = supabase.auth.get_user()
-                if not user or not user.user:
-                    logger.error("No authenticated user found")
+                if not supabase.is_authenticated():
+                    logger.error("User is not authenticated")
                     self.show_login_required()
                     return
                 
-                user_id = user.user.id
-                email = user.user.email
+                # Get user data using the reliable supabase client
+                user_response = supabase.get_user()
+                if not user_response or not user_response.user:
+                    logger.error("User data not available")
+                    self.show_login_required()
+                    return
+                
+                user_id = user_response.user.id
+                email = user_response.user.email
                 
                 if not user_id or not email:
                     logger.error(f"User ID or email not available. user_id={user_id}, email={email}")
                     self.show_error("User ID or email not available.")
                     return
                 
-            except Exception as user_error:
-                logger.error(f"Error getting user info: {user_error}")
-                self.show_error("Failed to get user information.")
+            except Exception as auth_error:
+                logger.error(f"Authentication check failed: {auth_error}")
+                self.show_login_required()
                 return
             
             logger.info(f"🔒 SECURITY: Loading account data for authenticated user {user_id} ({email})")
             
             # Load profile data from both tables
             try:
+                # Use the reliable supabase client for database queries
+                client = supabase.client
+                
                 # Get data from user_details table
-                details_response = supabase.from_("user_details").select("*").eq("user_id", user_id).execute()
+                details_response = client.from_("user_details").select("*").eq("user_id", user_id).execute()
                 details_data = details_response.data[0] if details_response.data else {}
                 
                 # Get data from user_profiles table  
-                profiles_response = supabase.from_("user_profiles").select("*").eq("user_id", user_id).execute()
+                profiles_response = client.from_("user_profiles").select("*").eq("user_id", user_id).execute()
                 profiles_data = profiles_response.data[0] if profiles_response.data else {}
                 
                 # SECURITY VALIDATION: Double-check the returned data
@@ -370,7 +680,11 @@ class AccountPage(QWidget):
                 'last_name': details_data.get('last_name', ''),
                 'bio': profiles_data.get('bio', ''),
                 'date_of_birth': details_data.get('date_of_birth'),
-                'gender': details_data.get('gender', '')
+                'gender': details_data.get('gender', ''),
+                # Add 2FA fields from user_details table
+                'phone_number': details_data.get('phone_number', ''),
+                'twilio_verified': details_data.get('twilio_verified', False),
+                'is_2fa_enabled': details_data.get('is_2fa_enabled', False)
             }
             logger.info(f"✅ SECURITY: Successfully loaded profile for authenticated user {user_id}")
             
@@ -378,8 +692,11 @@ class AccountPage(QWidget):
             self.populate_form()
             
             # Check authentication method and update UI accordingly
-            self.check_user_auth_method(user.user)
+            self.check_user_auth_method(user_response.user)
             self.update_security_section_visibility()
+            
+            # Update 2FA UI to reflect current status
+            self.update_2fa_ui()
             
             # Check if OAuth user needs to complete profile
             self.check_oauth_user_completion()
@@ -448,6 +765,8 @@ class AccountPage(QWidget):
             index = self.gender_combo.findText(gender)
             if index >= 0:
                 self.gender_combo.setCurrentIndex(index)
+        
+        # 2FA UI is updated separately in load_user_data() to avoid duplicates
 
     def save_profile_changes(self):
         """Save profile changes to database with validation."""
@@ -499,14 +818,13 @@ class AccountPage(QWidget):
     def save_to_database(self, profile_data):
         """Save profile data to database with gender and share_data support."""
         try:
-            from ..database import supabase_client
+            from ..database import supabase
             
-            supabase = supabase_client.get_supabase_client()
-            if not supabase:
+            if not supabase.is_authenticated():
                 return False
             
             # Get current user
-            user = supabase.auth.get_user()
+            user = supabase.get_user()
             if not user or not user.user:
                 return False
                 
@@ -514,13 +832,17 @@ class AccountPage(QWidget):
             
             # Update user_details table
             try:
-                details_response = supabase.from_("user_details").upsert({
+                details_response = supabase.client.from_("user_details").upsert({
                     'user_id': user_id,
                     'username': profile_data.get('username', ''),
                     'first_name': profile_data.get('first_name', ''),
                     'last_name': profile_data.get('last_name', ''),
                     'date_of_birth': profile_data.get('date_of_birth', ''),
-                    'gender': profile_data.get('gender', '')
+                    'gender': profile_data.get('gender', ''),
+                    # Add 2FA fields to user_details
+                    'phone_number': profile_data.get('phone_number', ''),
+                    'twilio_verified': profile_data.get('twilio_verified', False),
+                    'is_2fa_enabled': profile_data.get('is_2fa_enabled', False)
                 }).execute()
                 
                 if details_response.data:
@@ -531,7 +853,7 @@ class AccountPage(QWidget):
             
             # Update user_profiles table
             try:
-                profiles_response = supabase.from_("user_profiles").upsert({
+                profiles_response = supabase.client.from_("user_profiles").upsert({
                     'user_id': user_id,
                     'email': profile_data.get('email', ''),
                     'username': profile_data.get('username', ''),
@@ -635,14 +957,36 @@ class AccountPage(QWidget):
             logger.error(f"Error showing login required dialog: {e}")
     
     def show_error(self, message):
-        """Show error message to user."""
+        """Show error message to user with improved styling."""
         try:
-            QMessageBox.critical(self, "Error", message)
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(message)
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #FDFDFD;
+                    color: #2E3440;
+                }
+                QMessageBox QPushButton {
+                    background-color: #BF616A;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    min-width: 80px;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #D08770;
+                }
+            """)
+            msg_box.exec_()
         except Exception as e:
             logger.error(f"Error showing error dialog: {e}")
     
     def show_success(self, message):
-        """Show success message to user."""
+        """Show success message to user with improved styling."""
         try:
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Information)
@@ -650,15 +994,103 @@ class AccountPage(QWidget):
             msg_box.setText(message)
             msg_box.setStyleSheet("""
                 QMessageBox {
-                    background-color: #ECEFF4;
-                }
-                QMessageBox QLabel {
+                    background-color: #FDFDFD;
                     color: #2E3440;
+                }
+                QMessageBox QPushButton {
+                    background-color: #A3BE8C;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    min-width: 80px;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #9FB584;
                 }
             """)
             msg_box.exec_()
         except Exception as e:
             logger.error(f"Error showing success dialog: {e}")
+    
+    def format_phone_input(self):
+        """Provide real-time feedback on phone number formatting."""
+        try:
+            text = self.phone_input.text()
+            
+            if not text:
+                # Reset to default styling
+                self.phone_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 1px solid #D8DEE9;
+                        border-radius: 4px;
+                        padding: 12px 15px;
+                        background-color: white;
+                        color: #2E3440;
+                        font-size: 14px;
+                        min-height: 20px;
+                    }
+                    QLineEdit:focus {
+                        border: 2px solid #5E81AC;
+                        background-color: #FFFFFF;
+                    }
+                """)
+                return
+            
+            if len(text) == 10 and text.isdigit():
+                # Valid phone number - green styling
+                self.phone_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 2px solid #A3BE8C;
+                        border-radius: 4px;
+                        padding: 12px 15px;
+                        background-color: #F8FFF8;
+                        color: #2E3440;
+                        font-size: 14px;
+                        min-height: 20px;
+                    }
+                    QLineEdit:focus {
+                        border: 2px solid #9FB584;
+                        background-color: #F8FFF8;
+                    }
+                """)
+            elif len(text) < 10:
+                # Incomplete phone number - yellow styling
+                self.phone_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 2px solid #EBCB8B;
+                        border-radius: 4px;
+                        padding: 12px 15px;
+                        background-color: #FFFEF8;
+                        color: #2E3440;
+                        font-size: 14px;
+                        min-height: 20px;
+                    }
+                    QLineEdit:focus {
+                        border: 2px solid #E8D975;
+                        background-color: #FFFEF8;
+                    }
+                """)
+            else:
+                # Invalid format - red styling
+                self.phone_input.setStyleSheet("""
+                    QLineEdit {
+                        border: 2px solid #BF616A;
+                        border-radius: 4px;
+                        padding: 12px 15px;
+                        background-color: #FFF8F8;
+                        color: #2E3440;
+                        font-size: 14px;
+                        min-height: 20px;
+                    }
+                    QLineEdit:focus {
+                        border: 2px solid #D08770;
+                        background-color: #FFF8F8;
+                    }
+                """)
+        except Exception as e:
+            logger.error(f"Error in format_phone_input: {e}")
     
     def check_user_auth_method(self, user):
         """Check if user is OAuth or password-based and set flags accordingly."""
@@ -685,16 +1117,19 @@ class AccountPage(QWidget):
     def update_security_section_visibility(self):
         """Update security section visibility based on user authentication method."""
         try:
-            if self.is_oauth_user and not self.has_password:
-                # Show OAuth message, hide current password field
-                self.oauth_message.show()
-                self.current_password_input.hide()
-                self.current_password_input.parentWidget().layout().labelForField(self.current_password_input).hide()
-            else:
-                # Hide OAuth message, show all password fields
-                self.oauth_message.hide()
-                self.current_password_input.show()
-                self.current_password_input.parentWidget().layout().labelForField(self.current_password_input).show()
+            # Always show current password field for security - users need to confirm their identity
+            self.oauth_message.hide()
+            self.current_password_input.show()
+            
+            # Try to show the label for current password field
+            try:
+                form_layout = self.current_password_input.parentWidget().layout()
+                if form_layout and hasattr(form_layout, 'labelForField'):
+                    label = form_layout.labelForField(self.current_password_input)
+                    if label:
+                        label.show()
+            except Exception as label_error:
+                logger.warning(f"Could not show current password label: {label_error}")
                 
         except Exception as e:
             logger.error(f"Error updating security section visibility: {e}")
@@ -737,8 +1172,8 @@ class AccountPage(QWidget):
     def change_password(self):
         """Handle password change for authenticated users."""
         try:
-            # Validate inputs
-            if not self.is_oauth_user and not self.current_password_input.text():
+            # Validate inputs - always require current password for security
+            if not self.current_password_input.text():
                 self.show_error("Current password is required.")
                 return
             
@@ -758,16 +1193,15 @@ class AccountPage(QWidget):
                 return
             
             # Attempt to update password
-            from ..database import supabase_client
-            supabase = supabase_client.get_supabase_client()
+            from ..database import supabase
             
-            if not supabase:
-                self.show_error("Database connection failed.")
+            if not supabase.is_authenticated():
+                self.show_error("You must be logged in to change your password.")
                 return
             
             try:
                 # Update password using Supabase Auth
-                response = supabase.auth.update_user({
+                response = supabase.client.auth.update_user({
                     "password": new_password
                 })
                 
@@ -825,15 +1259,14 @@ class AccountPage(QWidget):
                 return
             
             # Attempt account deletion
-            from ..database import supabase_client
-            supabase = supabase_client.get_supabase_client()
+            from ..database import supabase
             
-            if not supabase:
-                self.show_error("Database connection failed.")
+            if not supabase.is_authenticated():
+                self.show_error("You must be logged in to delete your account.")
                 return
             
             try:
-                user = supabase.auth.get_user()
+                user = supabase.get_user()
                 if not user or not user.user:
                     self.show_error("User authentication failed.")
                     return
@@ -842,8 +1275,8 @@ class AccountPage(QWidget):
                 
                 # Delete user data from all tables
                 # Note: This should be done in a transaction in production
-                supabase.from_("user_details").delete().eq("user_id", user_id).execute()
-                supabase.from_("user_profiles").delete().eq("user_id", user_id).execute()
+                supabase.client.from_("user_details").delete().eq("user_id", user_id).execute()
+                supabase.client.from_("user_profiles").delete().eq("user_id", user_id).execute()
                 
                 # Delete the auth user
                 # Note: This requires admin privileges in Supabase
@@ -871,16 +1304,14 @@ class AccountPage(QWidget):
     def logout(self):
         """Handle user logout."""
         try:
-            from ..database import supabase_client
+            from ..database import supabase
             
-            # Logout from Supabase
-            supabase = supabase_client.get_supabase_client()
-            if supabase:
-                try:
-                    supabase.sign_out()
-                    logger.info("User logged out successfully")
-                except Exception as logout_error:
-                    logger.error(f"Error during logout: {logout_error}")
+            # Logout from Supabase using the reliable client
+            try:
+                supabase.client.auth.sign_out()
+                logger.info("User logged out successfully")
+            except Exception as logout_error:
+                logger.error(f"Error during logout: {logout_error}")
             
             # Clear user data
             self.user_data = None
@@ -919,4 +1350,342 @@ class AccountPage(QWidget):
                 
         except Exception as e:
             logger.error(f"Error during logout: {e}")
-            self.show_error("An error occurred during logout.") 
+            self.show_error("An error occurred during logout.")
+
+    def update_2fa_ui(self):
+        """Update 2FA UI based on current status."""
+        if not self.user_data:
+            # Initialize UI with default state if no user data
+            self.phone_input.clear()
+            self.twofa_status_label.setText("🔐 Set up 2FA for enhanced security")
+            self.twofa_status_label.setStyleSheet("""
+                QLabel {
+                    color: #5E81AC; 
+                    font-weight: bold; 
+                    font-size: 14px;
+                    padding: 10px 15px;
+                    background-color: #E5E9F0;
+                    border-radius: 6px;
+                    border: 1px solid #D8DEE9;
+                }
+            """)
+            self.twofa_toggle.setEnabled(False)
+            self.twofa_toggle.setChecked(False)
+            self.setup_phone_btn.setText("Send Verification Code")
+            self.setup_phone_btn.setEnabled(True)
+            self.disable_2fa_btn.hide()
+            # Hide verification UI
+            self.verification_section.hide()
+            return
+        
+        phone_number = self.user_data.get('phone_number', '')
+        twilio_verified = self.user_data.get('twilio_verified', False)
+        is_2fa_enabled = self.user_data.get('is_2fa_enabled', False)
+        
+        # Update phone input (remove +1 prefix if present)
+        if phone_number.startswith('+1'):
+            display_phone = phone_number[2:]
+        else:
+            display_phone = phone_number
+        self.phone_input.setText(display_phone)
+        
+        # Hide verification section by default
+        self.verification_section.hide()
+        
+        # Reset button states
+        self.setup_phone_btn.setEnabled(True)
+        
+        if is_2fa_enabled and twilio_verified:
+            # 2FA is fully enabled and working
+            self.twofa_status_label.setText("✅ Two-Factor Authentication is ENABLED")
+            self.twofa_status_label.setStyleSheet("""
+                QLabel {
+                    color: #FFFFFF; 
+                    font-weight: bold; 
+                    font-size: 14px;
+                    padding: 10px 15px;
+                    background-color: #A3BE8C;
+                    border-radius: 6px;
+                    border: 1px solid #9FB584;
+                }
+            """)
+            self.twofa_toggle.setChecked(True)
+            self.twofa_toggle.setEnabled(False)  # Don't allow toggle when enabled
+            self.setup_phone_btn.setText("Re-verify Phone")
+            self.disable_2fa_btn.show()
+            
+        elif twilio_verified:
+            # Phone verified but 2FA not enabled
+            self.twofa_status_label.setText("📱 Phone verified - You can enable 2FA")
+            self.twofa_status_label.setStyleSheet("""
+                QLabel {
+                    color: #2E3440; 
+                    font-weight: bold; 
+                    font-size: 14px;
+                    padding: 10px 15px;
+                    background-color: #EBCB8B;
+                    border-radius: 6px;
+                    border: 1px solid #E8D975;
+                }
+            """)
+            self.twofa_toggle.setEnabled(True)
+            self.twofa_toggle.setChecked(False)
+            self.setup_phone_btn.setText("Re-verify Phone")
+            self.disable_2fa_btn.hide()
+            
+        elif phone_number:
+            # Phone number set but not verified
+            self.twofa_status_label.setText("⚠️ Phone number needs verification")
+            self.twofa_status_label.setStyleSheet("""
+                QLabel {
+                    color: #2E3440; 
+                    font-weight: bold; 
+                    font-size: 14px;
+                    padding: 10px 15px;
+                    background-color: #D08770;
+                    border-radius: 6px;
+                    border: 1px solid #C77A62;
+                }
+            """)
+            self.twofa_toggle.setEnabled(False)
+            self.twofa_toggle.setChecked(False)
+            self.setup_phone_btn.setText("Send Verification Code")
+            self.disable_2fa_btn.hide()
+            
+        else:
+            # No phone number set
+            self.twofa_status_label.setText("🔐 Set up 2FA for enhanced security")
+            self.twofa_status_label.setStyleSheet("""
+                QLabel {
+                    color: #5E81AC; 
+                    font-weight: bold; 
+                    font-size: 14px;
+                    padding: 10px 15px;
+                    background-color: #E5E9F0;
+                    border-radius: 6px;
+                    border: 1px solid #D8DEE9;
+                }
+            """)
+            self.twofa_toggle.setEnabled(False)
+            self.twofa_toggle.setChecked(False)
+            self.setup_phone_btn.setText("Send Verification Code")
+            self.disable_2fa_btn.hide()
+    
+    def send_2fa_verification(self):
+        """Send SMS verification code for 2FA setup."""
+        phone_input = self.phone_input.text().strip()
+        
+        if not phone_input:
+            self.show_error("Please enter a phone number first.")
+            return
+        
+        # Validate phone number format (10 digits for US numbers)
+        if not phone_input.isdigit() or len(phone_input) != 10:
+            self.show_error("Please enter a valid 10-digit phone number (without country code).")
+            return
+        
+        # Add country code to create full phone number
+        full_phone_number = f"+1{phone_input}"
+        
+        # Import Twilio service
+        try:
+            from ..auth.twilio_service import twilio_service
+            if not twilio_service or not twilio_service.is_available():
+                self.show_error("SMS service is not available. Please contact support.")
+                return
+        except ImportError:
+            self.show_error("SMS service is not available. Please contact support.")
+            return
+        
+        try:
+            # Send verification code
+            result = twilio_service.send_verification_code(full_phone_number)
+            
+            if result['success']:
+                # Show verification UI
+                self.verification_section.show()
+                self.verification_code_input.clear()
+                self.verification_code_input.setFocus()
+                
+                # Disable send button temporarily
+                self.setup_phone_btn.setEnabled(False)
+                self.setup_phone_btn.setText("Code Sent")
+                
+                # Re-enable after 30 seconds
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(30000, lambda: (
+                    self.setup_phone_btn.setEnabled(True),
+                    self.setup_phone_btn.setText("Resend Code")
+                ))
+                
+                self.show_success(f"Verification code sent to {full_phone_number}")
+                
+            else:
+                self.show_error(f"Failed to send verification code: {result['message']}")
+                
+        except Exception as e:
+            logger.error(f"Error sending 2FA verification: {e}")
+            self.show_error("Failed to send verification code.")
+    
+    def verify_2fa_code(self):
+        """Verify the SMS code entered by user."""
+        phone_input = self.phone_input.text().strip()
+        code = self.verification_code_input.text().strip()
+        
+        if not phone_input:
+            self.show_error("Please enter a phone number first.")
+            return
+        
+        if not code or len(code) != 6:
+            self.show_error("Please enter a valid 6-digit code.")
+            return
+        
+        # Add country code to create full phone number
+        full_phone_number = f"+1{phone_input}"
+        
+        # Import Twilio service
+        try:
+            from ..auth.twilio_service import twilio_service
+            if not twilio_service or not twilio_service.is_available():
+                self.show_error("SMS service is not available. Please contact support.")
+                return
+        except ImportError:
+            self.show_error("SMS service is not available. Please contact support.")
+            return
+        
+        try:
+            # Verify the code
+            result = twilio_service.verify_code(full_phone_number, code)
+            
+            if result['success']:
+                # Update database
+                from ..database import supabase
+                
+                if supabase.is_authenticated():
+                    user_response = supabase.get_user()
+                    if user_response and user_response.user:
+                        user_id = user_response.user.id
+                        
+                        # Update user details with verified phone
+                        details_response = supabase.client.from_("user_details").upsert({
+                            'user_id': user_id,
+                            'phone_number': full_phone_number,
+                            'twilio_verified': True
+                        }).execute()
+                        
+                        if details_response.data:
+                            # Update local user data
+                            self.user_data['phone_number'] = full_phone_number
+                            self.user_data['twilio_verified'] = True
+                            
+                            # Hide verification UI
+                            self.verification_section.hide()
+                            self.verification_code_input.clear()
+                            
+                            # Update UI
+                            self.update_2fa_ui()
+                            
+                            self.show_success("Phone number verified successfully! You can now enable 2FA.")
+                        else:
+                            self.show_error("Failed to save verification status.")
+                    else:
+                        self.show_error("User authentication error.")
+                else:
+                    self.show_error("Database connection error.")
+                    
+            else:
+                self.show_error(f"Verification failed: {result['message']}")
+                
+        except Exception as e:
+            logger.error(f"Error verifying 2FA code: {e}")
+            self.show_error("Failed to verify code.")
+    
+    def toggle_2fa(self, checked):
+        """Toggle 2FA on/off."""
+        try:
+            # Convert checkbox state to boolean (checked can be 0, 1, or 2)
+            is_enabled = bool(checked == 2)  # 2 = checked, 0 = unchecked, 1 = partially checked
+            
+            from ..database import supabase
+            
+            if not supabase.is_authenticated():
+                self.show_error("You must be logged in to change 2FA settings.")
+                return
+            
+            user_response = supabase.get_user()
+            if not user_response or not user_response.user:
+                self.show_error("User authentication error.")
+                return
+            
+            user_id = user_response.user.id
+            
+            # Update 2FA status in database with proper boolean value
+            details_response = supabase.client.from_("user_details").upsert({
+                'user_id': user_id,
+                'is_2fa_enabled': is_enabled
+            }).execute()
+            
+            if details_response.data:
+                # Update local user data
+                self.user_data['is_2fa_enabled'] = is_enabled
+                
+                # Update UI
+                self.update_2fa_ui()
+                
+                if is_enabled:
+                    self.show_success("Two-Factor Authentication has been enabled!")
+                else:
+                    self.show_success("Two-Factor Authentication has been disabled.")
+            else:
+                self.show_error("Failed to update 2FA status.")
+                
+        except Exception as e:
+            logger.error(f"Error toggling 2FA: {e}")
+            self.show_error("Failed to update 2FA status.")
+    
+    def disable_2fa(self):
+        """Disable 2FA after confirmation."""
+        reply = QMessageBox.question(
+            self, "Disable Two-Factor Authentication",
+            "Are you sure you want to disable Two-Factor Authentication?\n\n"
+            "This will make your account less secure.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                from ..database import supabase
+                
+                if not supabase.is_authenticated():
+                    self.show_error("You must be logged in to disable 2FA.")
+                    return
+                
+                user_response = supabase.get_user()
+                if not user_response or not user_response.user:
+                    self.show_error("User authentication error.")
+                    return
+                
+                user_id = user_response.user.id
+                
+                # Disable 2FA in database but keep phone verification
+                details_response = supabase.client.from_("user_details").upsert({
+                    'user_id': user_id,
+                    'is_2fa_enabled': False
+                    # Keep phone_number and twilio_verified so user can re-enable easily
+                }).execute()
+                
+                if details_response.data:
+                    # Update local user data
+                    self.user_data['is_2fa_enabled'] = False
+                    
+                    # Update UI
+                    self.update_2fa_ui()
+                    
+                    self.show_success("Two-Factor Authentication has been disabled.")
+                else:
+                    self.show_error("Failed to disable 2FA.")
+                    
+            except Exception as e:
+                logger.error(f"Error disabling 2FA: {e}")
+                self.show_error("Failed to disable 2FA.") 

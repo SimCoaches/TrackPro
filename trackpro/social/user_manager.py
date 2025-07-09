@@ -54,16 +54,27 @@ class EnhancedUserManager(DatabaseManager):
             True if successful, False otherwise
         """
         try:
-            # Separate profile data from stats data
+            # Separate profile data, stats data, and details data
             profile_fields = {
                 'username', 'display_name', 'bio', 'location', 'avatar_url',
                 'avatar_frame_id', 'profile_theme', 'privacy_settings', 'preferences'
             }
             
+            # 2FA fields belong in user_details table
+            details_fields = {
+                'phone_number', 'twilio_verified', 'is_2fa_enabled'
+            }
+            
             profile_update = {k: v for k, v in profile_data.items() if k in profile_fields}
+            details_update = {k: v for k, v in profile_data.items() if k in details_fields}
             
             if profile_update:
                 response = self.client.from_("user_profiles").update(profile_update).eq("user_id", user_id).execute()
+                if not response.data:
+                    return False
+                    
+            if details_update:
+                response = self.client.from_("user_details").upsert({**details_update, 'user_id': user_id}).execute()
                 if not response.data:
                     return False
             

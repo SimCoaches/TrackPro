@@ -2,7 +2,7 @@
 
 from PyQt5.QtWidgets import (
     QLineEdit, QCheckBox, QFormLayout, QLabel, 
-    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy, QInputDialog
+    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy, QInputDialog, QDialog
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QPixmap
@@ -513,45 +513,99 @@ class LoginDialog(BaseAuthDialog):
     
     def check_and_handle_2fa(self, user_id, user_email="User"):
         """Check if user has 2FA enabled and handle the verification process.
+        This is now a mandatory check.
         
         Args:
             user_id: The user's ID
             user_email: The user's email for display purposes
             
         Returns:
-            bool: True if 2FA passed or not required, False if 2FA failed
+            bool: True if 2FA passed or not required, False if 2FA failed and user should be logged out.
         """
         try:
-            # Fetch profile info (including is_2fa_enabled and phone)
+            # MANDATORY: Check if Twilio is available - if not, block login
+            if not TWILIO_AVAILABLE or not twilio_service or not twilio_service.is_available():
+                QMessageBox.critical(self, "2FA Service Required", 
+                    "TrackPro requires SMS verification for security.\n\n"
+                    "The SMS service is currently not configured or unavailable.\n"
+                    "Please contact support to enable SMS verification.\n\n"
+                    "Login is not allowed without phone verification capability.")
+                logger.error(f"Login blocked for user {user_email} - Twilio service not available")
+                return False  # Block login entirely
+            
             profile_res = enhanced_user_manager.get_complete_user_profile(user_id)
-            if not profile_res:
-                # No profile found, allow login (might be first time)
-                return True
             
-            is_2fa_enabled = profile_res.get('is_2fa_enabled', False)
-            if not is_2fa_enabled:
-                # 2FA not enabled for this user
-                return True
-            
-            # 2FA is enabled, need to verify
-            phone_number = profile_res.get('phone_number', '')
-            twilio_verified = profile_res.get('twilio_verified', False)
-            
-            if not phone_number or not twilio_verified:
-                # 2FA enabled but phone not verified - this shouldn't happen but handle gracefully
-                QMessageBox.warning(self, "2FA Error", 
-                    "Two-factor authentication is enabled but phone number is not verified. "
-                    "Please contact support or disable 2FA in your account settings.")
-                return False
-            
-            # Send 2FA code and prompt for verification
-            return self.send_2fa_code_and_verify(phone_number, user_email)
-            
+            # The primary condition is whether the user's phone has been verified via Twilio.
+            if profile_res and profile_res.get('twilio_verified'):
+                # Phone is verified. Now, check if they have enabled 2FA for logins.
+                if profile_res.get('is_2fa_enabled'):
+                    phone_number = profile_res.get('phone_number')
+                    if not phone_number:
+                        QMessageBox.critical(self, "2FA Error", "2FA is enabled, but no phone number is on file. Please contact support.")
+                        return False # Block login
+                    
+                    logger.info(f"User {user_email} has 2FA enabled. Sending verification code.")
+                    return self.send_2fa_code_and_verify(phone_number, user_email)
+                else:
+                    # Phone is verified, but they haven't opted into 2FA for every login.
+                    # This is fine, let them pass.
+                    logger.info(f"User {user_email} has a verified phone but 2FA is not turned on. Allowing login.")
+                    return True
+            else:
+                # This user has not verified their phone number. Force them to do so now.
+                logger.info(f"User {user_email} has not verified their phone. Forcing verification process.")
+                return self.force_phone_verification(user_id, user_email)
+                
         except Exception as e:
-            logger.error(f"Error checking 2FA status: {e}")
-            QMessageBox.critical(self, "2FA Error", "An error occurred while checking 2FA status.")
-            return False
-    
+            logger.error(f"Error checking 2FA status: {e}", exc_info=True)
+            QMessageBox.critical(self, "2FA Error", f"An error occurred while checking your security status: {e}")
+            return False # Fail safe: if check fails, don't allow login.
+
+    def force_phone_verification(self, user_id, user_email="User"):
+        """Forces the user to complete phone verification. This is not optional.
+        
+        Args:
+            user_id: The user's ID
+            user_email: The user's email for display purposes
+            
+        Returns:
+            bool: True if verification is successful, False otherwise.
+        """
+        from .phone_verification_dialog import PhoneVerificationDialog
+
+        QMessageBox.information(self, 
+            "Account Security Update",
+            "To enhance account security, all users are now required to verify a phone number.\\n\\n"
+            "You will now be guided through the verification process. This is a one-time requirement."
+        )
+        
+        dialog = PhoneVerificationDialog(self, user_id)
+        result = dialog.exec_()
+        
+        if result == QDialog.Accepted:
+            logger.info(f"Phone verification dialog accepted for user {user_id}")
+            
+            # SIMPLE FIX: Direct query to user_details table instead of using the view
+            try:
+                from ..database.supabase_client import supabase
+                response = supabase.client.from_("user_details").select("twilio_verified").eq("user_id", user_id).single().execute()
+                
+                if response.data and response.data.get('twilio_verified') == True:
+                    logger.info(f"Direct query confirmed: User {user_id} is now verified")
+                    return True
+                else:
+                    logger.warning(f"Direct query shows user {user_id} is still not verified: {response.data}")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"Error checking verification status directly: {e}")
+                # If direct query fails, assume success since dialog was accepted
+                return True
+        else:
+            logger.warning(f"User {user_id} cancelled the mandatory phone verification. Logging out.")
+            QMessageBox.warning(self, "Login Cancelled", "Phone verification is required to use TrackPro. You have been logged out.")
+            return False # User chose to cancel, deny login.
+
     def send_2fa_code_and_verify(self, phone_number, user_email="User"):
         """Send 2FA code and prompt user for verification.
         
@@ -562,60 +616,20 @@ class LoginDialog(BaseAuthDialog):
         Returns:
             bool: True if verification successful, False otherwise
         """
-        if not TWILIO_AVAILABLE or not twilio_service:
+        if not TWILIO_AVAILABLE or not twilio_service or not twilio_service.is_available():
             QMessageBox.critical(self, "2FA Error", 
                 "SMS 2FA is not available. Please contact support.")
             return False
         
         try:
-            # Send verification code using service
-            result = twilio_service.send_verification_code(phone_number)
+            from .sms_verification_dialog import SMSVerificationDialog
             
-            if not result['success']:
-                QMessageBox.critical(self, "2FA Error", f"Failed to send verification code: {result['message']}")
-                return False
+            # Create and show the SMS verification dialog
+            dialog = SMSVerificationDialog(self, phone_number)
+            result = dialog.exec_()
             
-            # Prompt user for the code (with retry logic)
-            max_attempts = 3
-            for attempt in range(max_attempts):
-                code, ok = QInputDialog.getText(
-                    self, "Two-Factor Authentication",
-                    f"A login code was sent to {phone_number}.\n\nEnter the 6-digit code to complete login:",
-                    QLineEdit.Normal
-                )
-                
-                if not ok:
-                    # User canceled
-                    QMessageBox.warning(self, "Login Cancelled", "2FA verification is required to login.")
-                    return False
-                
-                if not code or len(code.strip()) != 6:
-                    QMessageBox.warning(self, "Invalid Code", "Please enter a valid 6-digit code.")
-                    continue
-                
-                # Verify the code using service
-                try:
-                    verify_result = twilio_service.verify_code(phone_number, code.strip())
-                    
-                    if verify_result['success']:
-                        # 2FA successful!
-                        return True
-                    else:
-                        remaining_attempts = max_attempts - attempt - 1
-                        if remaining_attempts > 0:
-                            QMessageBox.warning(self, "Invalid Code", 
-                                f"The verification code was incorrect. You have {remaining_attempts} attempt(s) remaining.")
-                        else:
-                            QMessageBox.warning(self, "2FA Failed", 
-                                "Too many incorrect attempts. Please try logging in again.")
-                        
-                except Exception as verify_e:
-                    logger.error(f"Error verifying 2FA code: {verify_e}")
-                    QMessageBox.critical(self, "2FA Error", "Failed to verify code. Please try again.")
-                    return False
-            
-            # All attempts exhausted
-            return False
+            # Return True if verification was successful
+            return dialog.verification_successful
             
         except Exception as e:
             logger.error(f"Error in 2FA process: {e}")

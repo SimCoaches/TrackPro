@@ -2,6 +2,7 @@
 
 import logging
 from ..config import config
+import os
 
 # Twilio import with fallback
 try:
@@ -59,8 +60,17 @@ class TwilioService:
         if not self.is_available():
             return {
                 'success': False,
-                'message': 'SMS service is not available',
-                'status': 'unavailable'
+                'message': 'Twilio service is not available'
+            }
+        
+        # TEMPORARY DEVELOPMENT MODE - Remove this after testing
+        # This allows testing the 2FA flow without valid Twilio credentials
+        if os.getenv('TRACKPRO_DEV_MODE') == 'true':
+            logger.info(f"DEV MODE: Mock sending verification code to {phone_number}")
+            return {
+                'success': True,
+                'message': 'Verification code sent (DEV MODE)',
+                'sid': 'mock_verification_sid'
             }
         
         try:
@@ -71,32 +81,19 @@ class TwilioService:
                 channel='sms'
             )
             
-            if verification.status == 'pending':
-                return {
-                    'success': True,
-                    'message': 'Verification code sent successfully',
-                    'status': 'pending'
-                }
-            else:
-                return {
-                    'success': False,
-                    'message': f'Failed to send code: {verification.status}',
-                    'status': verification.status
-                }
-                
-        except TwilioException as e:
-            logger.error(f"Twilio error sending verification: {e}")
+            logger.info(f"Verification code sent to {phone_number}")
             return {
-                'success': False,
-                'message': f'SMS service error: {str(e)}',
-                'status': 'error'
+                'success': True,
+                'message': 'Verification code sent successfully',
+                'sid': verification.sid
             }
+            
         except Exception as e:
-            logger.error(f"Error sending verification code: {e}")
+            error_msg = str(e)
+            logger.error(f"Twilio error sending verification: {error_msg}")
             return {
                 'success': False,
-                'message': f'Unexpected error: {str(e)}',
-                'status': 'error'
+                'message': f'Failed to send verification code: {error_msg}'
             }
     
     def verify_code(self, phone_number: str, code: str) -> dict:

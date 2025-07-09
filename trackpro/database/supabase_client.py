@@ -485,7 +485,8 @@ class SupabaseManager:
                 return False
             
             def check_auth():
-                return self._client.auth.get_user() is not None
+                user_response = self._client.auth.get_user()
+                return user_response is not None and hasattr(user_response, 'user') and user_response.user is not None
             
             return self._execute_with_retry(check_auth) or False
         except Exception as e:

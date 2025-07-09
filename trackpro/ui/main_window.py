@@ -2086,6 +2086,22 @@ class MainWindow(QMainWindow):
                         user = user_response
                     else:
                         user = None
+                        
+                    # MANDATORY 2FA CHECK FOR AUTHENTICATED USERS - REMOVED
+                    # This check is now handled by the login dialog to prevent double verification
+                    # if user and hasattr(user, 'id'):
+                    #     logger.info(f"User authenticated from saved session, checking 2FA status for user {user.id}")
+                    #     if not self._check_and_handle_2fa_on_startup(user.id, getattr(user, 'email', 'User')):
+                    #         # 2FA check failed, force logout
+                    #         logger.warning("2FA verification failed on startup, logging out user")
+                    #         try:
+                    #             supabase.client.auth.sign_out()
+                    #             is_authenticated = False
+                    #             user = None
+                    #             QMessageBox.warning(self, "Authentication Required", 
+                    #                 "Phone verification is required to use TrackPro. You have been logged out.")
+                    #         except Exception as logout_error:
+                    #             logger.error(f"Error logging out user after failed 2FA: {logout_error}")
                 else:
                     user = None
             except Exception as auth_error:
@@ -2166,6 +2182,153 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error updating authentication state: {e}", exc_info=True)
     
+    def _check_and_handle_2fa_on_startup(self, user_id, user_email="User"):
+        """Check and handle 2FA verification for users authenticated from saved sessions.
+        
+        Args:
+            user_id: The user's ID
+            user_email: The user's email for display purposes
+            
+        Returns:
+            bool: True if 2FA passed or not required, False if 2FA failed
+        """
+        try:
+            # Check if Twilio is available
+            try:
+                from ..auth.twilio_service import twilio_service
+                TWILIO_AVAILABLE = twilio_service and twilio_service.is_available()
+            except ImportError:
+                TWILIO_AVAILABLE = False
+                
+            # MANDATORY: Check if Twilio is available - if not, block access
+            if not TWILIO_AVAILABLE:
+                QMessageBox.critical(self, "2FA Service Required", 
+                    "TrackPro requires SMS verification for security.\n\n"
+                    "The SMS service is currently not configured or unavailable.\n"
+                    "Please contact support to enable SMS verification.\n\n"
+                    "Access is not allowed without phone verification capability.")
+                logger.error(f"Access blocked for user {user_email} - Twilio service not available on startup")
+                return False  # Block access entirely
+            
+            # Get user profile to check verification status
+            from ..social import enhanced_user_manager
+            profile_res = enhanced_user_manager.get_complete_user_profile(user_id)
+            
+            # The primary condition is whether the user's phone has been verified via Twilio.
+            if profile_res and profile_res.get('twilio_verified'):
+                # Phone is verified. Now, check if they have enabled 2FA for logins.
+                if profile_res.get('is_2fa_enabled'):
+                    phone_number = profile_res.get('phone_number')
+                    if not phone_number:
+                        QMessageBox.critical(self, "2FA Error", "2FA is enabled, but no phone number is on file. Please contact support.")
+                        return False # Block login
+                    
+                    logger.info(f"User {user_email} has 2FA enabled. Sending verification code on startup.")
+                    return self._send_2fa_code_and_verify_on_startup(phone_number, user_email)
+                else:
+                    # Phone is verified, but they haven't opted into 2FA for every login.
+                    # This is fine, let them pass.
+                    logger.info(f"User {user_email} has a verified phone but 2FA is not turned on. Allowing access.")
+                    return True
+            else:
+                # This user has not verified their phone number. Force them to do so now.
+                logger.info(f"User {user_email} has not verified their phone. Forcing verification process on startup.")
+                return self._force_phone_verification_on_startup(user_id, user_email)
+                
+        except Exception as e:
+            logger.error(f"Error checking 2FA status on startup: {e}", exc_info=True)
+            QMessageBox.critical(self, "2FA Error", f"An error occurred while checking your security status: {e}")
+            return False # Fail safe: if check fails, don't allow access.
+    
+    def _force_phone_verification_on_startup(self, user_id, user_email="User"):
+        """Forces the user to complete phone verification on startup. This is not optional.
+        
+        Args:
+            user_id: The user's ID
+            user_email: The user's email for display purposes
+            
+        Returns:
+            bool: True if verification is successful, False otherwise.
+        """
+        try:
+            from ..auth.phone_verification_dialog import PhoneVerificationDialog
+            from ..social import enhanced_user_manager
+
+            QMessageBox.information(self, 
+                "Account Security Update",
+                "To enhance account security, all users are now required to verify a phone number.\n\n"
+                "You will now be guided through the verification process. This is a one-time requirement."
+            )
+            
+            # Loop to allow user to retry if they enter wrong number etc.
+            while True:
+                dialog = PhoneVerificationDialog(self, user_id)
+                dialog.exec_()
+                
+                # Re-check the profile to see if verification was successful
+                profile = enhanced_user_manager.get_complete_user_profile(user_id)
+                if profile and profile.get('twilio_verified'):
+                    logger.info(f"User {user_id} successfully verified their phone number on startup.")
+                    QMessageBox.information(self, "Verification Successful", "Your phone number has been successfully verified.")
+                    
+                    # Automatically enable 2FA for them upon first verification
+                    try:
+                        enhanced_user_manager.update_user_profile(user_id, {'is_2fa_enabled': True})
+                        logger.info(f"Automatically enabled 2FA for user {user_id} after first-time verification on startup.")
+                    except Exception as e:
+                        logger.error(f"Failed to auto-enable 2FA for user {user_id}: {e}")
+
+                    return True # Verification successful
+
+                # If we are here, verification failed or was cancelled.
+                reply = QMessageBox.critical(
+                    self, "Verification Required",
+                    "You must verify your phone number to continue. Without verification, you will be logged out.\n\n"
+                    "Do you want to try again?",
+                    QMessageBox.Retry | QMessageBox.Cancel,
+                    QMessageBox.Retry
+                )
+                
+                if reply == QMessageBox.Cancel:
+                    logger.warning(f"User {user_id} cancelled the mandatory phone verification on startup. Will be logged out.")
+                    return False # User chose to cancel, deny access.
+                    
+        except Exception as e:
+            logger.error(f"Error in startup phone verification: {e}", exc_info=True)
+            QMessageBox.critical(self, "Verification Error", f"An error occurred during phone verification: {e}")
+            return False
+    
+    def _send_2fa_code_and_verify_on_startup(self, phone_number, user_email="User"):
+        """Send 2FA code and prompt user for verification on startup.
+        
+        Args:
+            phone_number: The phone number to send the code to
+            user_email: User email for display purposes
+            
+        Returns:
+            bool: True if verification successful, False otherwise
+        """
+        try:
+            from ..auth.twilio_service import twilio_service
+            if not twilio_service or not twilio_service.is_available():
+                QMessageBox.critical(self, "2FA Error", 
+                    "SMS 2FA is not available. Please contact support.")
+                return False
+            
+            from ..auth.sms_verification_dialog import SMSVerificationDialog
+            
+            # Create and show the SMS verification dialog
+            dialog = SMSVerificationDialog(self, phone_number)
+            result = dialog.exec_()
+            
+            # Return True if verification was successful
+            return dialog.verification_successful
+            
+        except Exception as e:
+            logger.error(f"Error in 2FA process on startup: {e}")
+            QMessageBox.critical(self, "2FA Error", f"2FA verification failed: {str(e)}")
+            return False
+
     def setup_early_notification_system(self):
         """Set up early notification system."""
         # This would contain the early notification setup logic
