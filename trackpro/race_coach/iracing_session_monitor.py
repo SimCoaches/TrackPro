@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 IRSDK_EXE_PATH = os.path.join(sys.exec_prefix, 'Scripts', 'irsdk.exe')
 DATA_TXT_PATH = "data.txt" # Output file in the script's running directory
 
-# --- iRacing SDK Initialization (kept global for simplicity in the module) ---
-# Ensure only one instance if multiple parts of TrackPro might use it
-ir = irsdk.IRSDK()
+# --- Shared SDK Instance ---
+# Use shared SDK instance from SimpleIRacingAPI instead of creating our own
+# This prevents multiple SDK instances from conflicting
+_shared_ir = None
 
 # --- State Variables (module level) ---
 # These track the state across monitoring cycles within the thread
@@ -41,6 +42,12 @@ should_stop = False
 
 # Global reference to monitor thread for cleanup
 _monitor_thread = None
+
+def set_shared_sdk_instance(shared_ir):
+    """Set the shared SDK instance to use instead of creating our own."""
+    global _shared_ir
+    _shared_ir = shared_ir
+    print(f"Monitor: Using shared SDK instance: {shared_ir}")
 
 def stop_monitoring():
     """Stop the iRacing monitoring loop."""
@@ -66,9 +73,14 @@ def stop_monitoring():
 
 def _raw_iracing_connection():
     """Raw connection attempt - for use by the smart connection manager."""
+    global _shared_ir
+    if not _shared_ir:
+        print("Monitor: No shared SDK instance available")
+        return False
+        
     try:
         # First check if iRacing is already connected
-        if ir.is_initialized and ir.is_connected:
+        if _shared_ir.is_initialized and _shared_ir.is_connected:
             return True
             
         # Quick check if iRacing process is running before attempting connection
@@ -90,12 +102,12 @@ def _raw_iracing_connection():
         print("iRacing process detected - attempting connection...")
         try:
             # Try to initialize the SDK if not already done
-            if not ir.is_initialized:
-                startup_result = ir.startup()
+            if not _shared_ir.is_initialized:
+                startup_result = _shared_ir.startup()
                 print(f"iRacing SDK startup result: {startup_result}")
                 
             # Check if we're now connected
-            if ir.is_connected:
+            if _shared_ir.is_connected:
                 print("Successfully connected to iRacing")
                 return True
             else:
@@ -111,30 +123,37 @@ def _raw_iracing_connection():
         return False
 
 def is_iracing_available():
-    """Check if iRacing is available and can be connected to - Phase 3 Optimized"""
-    # BUGFIX: Don't use SmartConnectionManager for connectivity checks during monitoring
-    # Only use it for actual connection attempts. For monitoring, do a simple direct check.
+    """Check if iRacing is available and can be connected to - Direct check without smart connection manager"""
+    global _shared_ir
+    if not _shared_ir:
+        print("Monitor: No shared SDK instance available")
+        return False
+        
     try:
-        # Direct check without going through the smart connection manager
-        # This avoids false disconnections due to rate limiting/backoff
-        if ir.is_initialized and ir.is_connected:
+        # SIMPLIFIED: Direct check without smart connection manager
+        # This avoids exponential backoff that prevents quick reconnection
+        if _shared_ir.is_initialized and _shared_ir.is_connected:
             return True
         else:
-            # Only use smart connection manager for actual connection attempts
-            return iracing_connection_manager.attempt_connection()
+            # Try a simple connection attempt without exponential backoff
+            return _raw_iracing_connection()
     except Exception as e:
         print(f"Error checking iRacing availability: {e}")
         return False
 
 def get_session_info_update_count():
     """Get the current session info update count from iRacing"""
+    global _shared_ir
+    if not _shared_ir:
+        return 0
+        
     try:
-        if not ir.is_initialized:
-            ir.startup()
-        if ir.is_connected:
+        if not _shared_ir.is_initialized:
+            _shared_ir.startup()
+        if _shared_ir.is_connected:
             # Try to parse data file when session info updates
             if run_irsdk_parse():
-                return ir.session_info_update
+                return _shared_ir.session_info_update
         return 0
     except Exception as e:
         print(f"Error getting session info update count: {str(e)}")
@@ -467,16 +486,21 @@ def create_supabase_session(supabase: Client, user_id_str, db_track_id, db_car_i
 
 
 def run_irsdk_parse():
-    """Parse iRacing data directly using the irsdk Python module instead of an external executable."""
+    """Parse iRacing data directly using the shared SDK instance."""
+    global _shared_ir
+    if not _shared_ir:
+        print("Monitor: No shared SDK instance available for parsing")
+        return False
+        
     try:
         # If not initialized, try to initialize
-        if not ir.is_initialized:
-            ir.startup()
+        if not _shared_ir.is_initialized:
+            _shared_ir.startup()
             
         # If successfully connected, get the latest data
-        if ir.is_connected:
+        if _shared_ir.is_connected:
             # Parse data directly to a file
-            ir.parse_to(DATA_TXT_PATH)
+            _shared_ir.parse_to(DATA_TXT_PATH)
             # Only log this occasionally, not every time
             if not hasattr(run_irsdk_parse, 'log_counter'):
                 run_irsdk_parse.log_counter = 0
@@ -484,7 +508,7 @@ def run_irsdk_parse():
             
             # Log every 300 calls (about once every 5 seconds at 60Hz)
             if run_irsdk_parse.log_counter % 300 == 0:
-                print("Successfully parsed iRacing data to file using Python module")
+                print("Successfully parsed iRacing data to file using shared SDK instance")
             return True
         else:
             print("Failed to connect to iRacing for parsing")
@@ -1168,6 +1192,14 @@ def start_monitoring(supabase_client: Client, user_id: str, lap_saver, simple_ap
         return None
     if simple_api is None: # Check simple_api
         print("Error starting monitor: Simple API instance not provided.", file=sys.stderr)
+        return None
+
+    # CRITICAL FIX: Set the shared SDK instance for the monitor to use
+    if hasattr(simple_api, 'ir'):
+        set_shared_sdk_instance(simple_api.ir)
+        print("Monitor: ✅ Shared SDK instance configured")
+    else:
+        print("Monitor: ❌ SimpleIRacingAPI instance has no 'ir' attribute")
         return None
 
     print("Starting iRacing background monitor thread...")

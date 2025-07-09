@@ -286,21 +286,10 @@ class IntegratedTrackBuilderWorker(QThread):
             return self.connect_to_iracing_fallback()
     
     def connect_to_iracing_fallback(self) -> bool:
-        """Fallback: Connect to iRacing telemetry with own connection."""
-        self.progress_update.emit("Creating fallback iRacing connection...", 5)
-        
-        self.ir = irsdk.IRSDK()
-        
-        if not self.ir.startup():
-            self.error_occurred.emit("Cannot connect to iRacing. Make sure iRacing is running.")
-            return False
-        
-        if not self.ir.is_connected:
-            self.error_occurred.emit("iRacing is not running or not in a session.")
-            return False
-        
-        self.progress_update.emit("Connected to iRacing successfully", 10)
-        return True
+        """Fallback: DISABLED - Use shared SDK instance only to prevent conflicts."""
+        print("⚠️ FALLBACK DISABLED: Cannot create own iRacing connection - would conflict with shared SDK")
+        self.error_occurred.emit("No shared iRacing connection available. Please ensure iRacing is connected in the main application.")
+        return False
     
     def real_time_building(self):
         """Real-time track building with corner detection."""

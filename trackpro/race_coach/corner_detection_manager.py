@@ -102,22 +102,10 @@ class CornerDetectionWorker(QThread):
                 self.ir.shutdown()
     
     def connect_to_iracing(self) -> bool:
-        """Connect to iRacing telemetry."""
-        self.progress_update.emit("Connecting to iRacing...", 5)
-        
-        self.ir = irsdk.IRSDK()
-        
-        if not self.ir.startup():
-            self.error_occurred.emit("Cannot connect to iRacing. Make sure iRacing is running.")
-            return False
-        
-        if not self.ir.is_connected:
-            self.error_occurred.emit("iRacing is not running or not in a session.")
-            return False
-        
-        self.connection_status.emit(True, "Connected to iRacing")
-        self.progress_update.emit("Connected to iRacing successfully", 10)
-        return True
+        """Connect to iRacing telemetry - DISABLED to prevent conflicts with shared SDK."""
+        self.progress_update.emit("Connection disabled - use shared SDK instance only", 5)
+        self.error_occurred.emit("Corner detection requires a shared iRacing connection. Please ensure iRacing is connected in the main application.")
+        return False
     
     def collect_telemetry_data(self) -> bool:
         """Collect telemetry data for analysis."""

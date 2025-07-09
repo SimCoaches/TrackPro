@@ -110,46 +110,34 @@ class SmartConnectionManager:
         
     def attempt_connection(self) -> bool:
         """
-        Smart connection attempt with backoff and caching.
-        Returns True if connected, False otherwise.
+        SIMPLIFIED connection attempt without backoff delays.
+        This allows quick reconnection during session transitions.
         """
-        if not self.should_attempt_connection():
-            # Return cached state if available
-            cached = self.state.get_cached_state()
-            if cached is not None:
-                return cached
-            return False
-            
         if not self.connection_function:
             logger.error("No connection function registered")
             return False
             
-        # Record attempt
-        current_time = time.time()
-        self.state.set_attempt_time()
-        self.attempt_timestamps.append(current_time)
+        # DISABLED: Backoff and rate limiting that prevents quick reconnection
+        # For session transitions, we need immediate connection attempts
         
-        logger.info(f"SmartConnectionManager: Attempting iRacing connection (attempt #{self.backoff.failure_count + 1})")
+        logger.info("SmartConnectionManager: Attempting direct iRacing connection (no backoff)")
         
         try:
-            # Call the actual connection function
+            # Call the actual connection function directly
             success = self.connection_function()
             
             if success:
-                self.backoff.reset()
                 self.state.set_connected(True)
-                logger.info("SmartConnectionManager: Connection successful - backoff reset")
+                logger.info("SmartConnectionManager: Connection successful")
             else:
                 self.state.set_connected(False)
-                next_delay = self.backoff.next_delay()
-                logger.info(f"SmartConnectionManager: Connection failed - next attempt in {next_delay:.1f}s")
+                logger.info("SmartConnectionManager: Connection failed - will retry on next call")
                 
             return success
             
         except Exception as e:
             logger.error(f"SmartConnectionManager: Connection attempt failed with exception: {e}")
             self.state.set_connected(False)
-            self.backoff.next_delay()
             return False
             
     def force_disconnect(self):
