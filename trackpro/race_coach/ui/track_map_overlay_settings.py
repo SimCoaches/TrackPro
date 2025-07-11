@@ -3,13 +3,13 @@ Track Map Overlay Settings Dialog
 Configuration UI for the transparent track map overlay
 """
 
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                            QLabel, QGroupBox, QSlider, QCheckBox, QSpinBox,
                            QColorDialog, QLineEdit, QTabWidget, QWidget,
                            QMessageBox, QFrame, QGridLayout, QProgressBar,
                            QTextEdit, QFileDialog, QApplication)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QMetaObject
-from PyQt5.QtGui import QColor, QPalette, QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QMetaObject
+from PyQt6.QtGui import QColor, QPalette, QFont
 
 from ..track_map_overlay import TrackMapOverlayManager
 from .track_visualization_window import TrackVisualizationWindow
@@ -482,7 +482,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         desc_label = QLabel(
@@ -666,7 +666,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         simple_iracing_api = None
         try:
             # Access the global iRacing connection through the main window
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
             if app:
                 # Get the main window
@@ -922,7 +922,7 @@ The track map has been saved and is ready for use in:
             
             # Connect to thread signal
             self.track_builder_thread.track_update.connect(
-                self.visualization_window.update_track_data, Qt.QueuedConnection
+                self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
             )
             print("🔗 Connected visualization to track builder thread signals")
         
@@ -941,7 +941,7 @@ The track map has been saved and is ready for use in:
                 
                 # Connect to manager signal
                 manager.track_update.connect(
-                    self.visualization_window.update_track_data, Qt.QueuedConnection
+                    self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
                 )
                 print("🔗 Connected visualization to track builder manager signals")
             
@@ -957,7 +957,7 @@ The track map has been saved and is ready for use in:
                     
                     # Connect to worker signal
                     worker.track_update.connect(
-                        self.visualization_window.update_track_data, Qt.QueuedConnection
+                        self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
                     )
                     print("🔗 Connected visualization to track builder worker signals")
 
@@ -1133,7 +1133,7 @@ The track map has been saved and is ready for use in:
         scale_layout = QGridLayout(scale_group)
         
         scale_layout.addWidget(QLabel("Scale:"), 0, 0)
-        self.scale_slider = QSlider(Qt.Horizontal)
+        self.scale_slider = QSlider(Qt.Orientation.Horizontal)
         self.scale_slider.setMinimum(10)
         self.scale_slider.setMaximum(100)
         self.scale_slider.setValue(30)
@@ -1480,9 +1480,9 @@ The track map has been saved and is ready for use in:
             reply = QMessageBox.question(
                 self, "Overlay Running",
                 "Track map overlay is currently running. Keep it running?",
-                QMessageBox.Yes | QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.StandardButton.No:
                 self.stop_overlay()
         elif getattr(self, '_is_test_overlay', False):
             # For test overlays, show a helpful message
@@ -1507,9 +1507,9 @@ The track map has been saved and is ready for use in:
             reply = QMessageBox.question(
                 self, "Overlay Running",
                 "Track map overlay is currently running. Stop it?",
-                QMessageBox.Yes | QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 self.stop_overlay()
         elif getattr(self, '_is_test_overlay', False):
             # For test overlays, show a helpful message
@@ -1602,7 +1602,7 @@ The track map has been saved and is ready for use in:
         # Create detailed dialog
         msg = QMessageBox(self)
         msg.setWindowTitle("Existing Track Map Found")
-        msg.setIcon(QMessageBox.Question)
+        msg.setIcon(QMessageBox.Icon.Question)
         
         msg.setText(f"<h3>Track Map Available</h3>"
                    f"<b>{full_name}</b><br><br>"
@@ -1612,12 +1612,12 @@ The track map has been saved and is ready for use in:
                    f"What would you like to do?")
         
         # Add custom buttons
-        load_button = msg.addButton("🚀 Load Existing Map", QMessageBox.AcceptRole)
-        rebuild_button = msg.addButton("🔄 Rebuild New Map", QMessageBox.RejectRole)
-        cancel_button = msg.addButton("❌ Cancel", QMessageBox.RejectRole)
+        load_button = msg.addButton("🚀 Load Existing Map", QMessageBox.ButtonRole.AcceptRole)
+        rebuild_button = msg.addButton("🔄 Rebuild New Map", QMessageBox.ButtonRole.RejectRole)
+        cancel_button = msg.addButton("❌ Cancel", QMessageBox.ButtonRole.RejectRole)
         
         msg.setDefaultButton(load_button)
-        msg.exec_()
+        msg.exec()
         
         if msg.clickedButton() == load_button:
             self.load_existing_track_map(track_data)

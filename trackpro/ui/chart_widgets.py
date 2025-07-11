@@ -1,5 +1,9 @@
-"""Chart widgets for pedal calibration."""
+"""Chart widgets for TrackPro with enhanced calibration functionality."""
 
+import time
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QMargins, QTimer
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QMouseEvent, QWheelEvent, QFont
 from .shared_imports import *
 
 class DraggableChartView(QChartView):
@@ -9,9 +13,18 @@ class DraggableChartView(QChartView):
     
     def __init__(self, chart, parent=None):
         super().__init__(chart, parent)
-        self.setRenderHint(QPainter.Antialiasing)
-        self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setViewportUpdateMode(QChartView.MinimalViewportUpdate)  # Use minimal updates for better performance
+        try:
+            self.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            try:
+                self.setRenderHint(QPainter.RenderHint.Antialiasing)
+                self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            except AttributeError:
+                # Skip render hints if not available
+                pass
+        self.setViewportUpdateMode(QChartView.ViewportUpdateMode.MinimalViewportUpdate)  # Use minimal updates for better performance
         self.setMouseTracking(True)
         self.dragging_point = None
         self.scatter_series = None
@@ -34,7 +47,7 @@ class DraggableChartView(QChartView):
     
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press to start dragging points."""
-        if event.button() == Qt.LeftButton and self.scatter_series:
+        if event.button() == Qt.MouseButton.LeftButton and self.scatter_series:
             # Find closest point within 20 pixels
             closest_point = None
             min_distance = float('inf')
@@ -42,7 +55,7 @@ class DraggableChartView(QChartView):
             for i in range(self.scatter_series.count()):
                 point = self.scatter_series.at(i)
                 screen_point = self.chart().mapToPosition(point)
-                distance = (screen_point - event.pos()).manhattanLength()
+                distance = (screen_point - QPointF(event.pos())).manhattanLength()
                 
                 if distance < 20 and distance < min_distance:
                     min_distance = distance
@@ -93,7 +106,7 @@ class DraggableChartView(QChartView):
         if self.dragging_point is None or not self.scatter_series or not self.dragging_active:
             return
             
-        value = self.chart().mapToValue(pos)
+        value = self.chart().mapToValue(QPointF(pos))
         
         # Get current points while maintaining order
         points = self.original_points.copy()
@@ -127,7 +140,7 @@ class DraggableChartView(QChartView):
     
     def mouseReleaseEvent(self, event: QMouseEvent):
         """Handle mouse release to end point dragging."""
-        if event.button() == Qt.LeftButton and self.dragging_point is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self.dragging_point is not None:
             self.dragging_active = False
             self.dragging_point = None
             self.current_drag_pos = None
@@ -157,31 +170,84 @@ class IntegratedCalibrationChart:
         self.chart = QChart()
         # Remove title to save space since we already removed the pedal names
         # from the UI headers
-        self.chart.setBackgroundVisible(True)
-        self.chart.setBackgroundBrush(QColor(53, 53, 53))
-        self.chart.setPlotAreaBackgroundVisible(True)
-        self.chart.setPlotAreaBackgroundBrush(QColor(35, 35, 35))
-        self.chart.setTitleBrush(QColor(255, 255, 255))
-        self.chart.setAnimationOptions(QChart.NoAnimation)  # Disable animations for precise positioning
-        self.chart.legend().hide()
+        try:
+            self.chart.setBackgroundVisible(True)
+        except AttributeError:
+            # Fallback for PyQt6 compatibility - method may have different name
+            pass
+        try:
+            self.chart.setBackgroundBrush(QColor(53, 53, 53))
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
+        try:
+            self.chart.setPlotAreaBackgroundVisible(True)
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
+        try:
+            self.chart.setPlotAreaBackgroundBrush(QColor(35, 35, 35))
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
+        try:
+            self.chart.setTitleBrush(QColor(255, 255, 255))
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
+        try:
+            self.chart.setAnimationOptions(QChart.AnimationOptions.NoAnimation)  # Disable animations for precise positioning
+        except AttributeError:
+            # Fallback for PyQt6 compatibility - try without AnimationOptions prefix
+            try:
+                self.chart.setAnimationOptions(QChart.NoAnimation)
+            except AttributeError:
+                # Final fallback - skip animation options entirely
+                pass
+        try:
+            self.chart.legend().hide()
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
         
         # Adjust chart margins - reduce top and sides, increase bottom substantially
-        self.chart.setContentsMargins(10, 10, 10, 40)  # Restore reasonable margins
+        try:
+            self.chart.setContentsMargins(10, 10, 10, 40)  # Restore reasonable margins
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
         
         # Create persistent line series for deadzone visualization
         self.min_deadzone_lower_series = QLineSeries()
         self.min_deadzone_upper_series = QLineSeries()
-        self.min_deadzone_lower_series.setUseOpenGL(False)  # Disable OpenGL for better performance
-        self.min_deadzone_upper_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        try:
+            self.min_deadzone_lower_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
+        try:
+            self.min_deadzone_upper_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         
         self.max_deadzone_lower_series = QLineSeries()
         self.max_deadzone_upper_series = QLineSeries()
-        self.max_deadzone_lower_series.setUseOpenGL(False)  # Disable OpenGL for better performance
-        self.max_deadzone_upper_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        try:
+            self.max_deadzone_lower_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
+        try:
+            self.max_deadzone_upper_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         
         # Create axes with grid
         self.axis_x = QValueAxis()
-        self.axis_x.setRange(0, 100)
+        try:
+            self.axis_x.setRange(0, 100)
+        except AttributeError:
+            # PyQt6 compatibility - use setMin/setMax instead of setRange
+            self.axis_x.setMin(0)
+            self.axis_x.setMax(100)
         self.axis_x.setTitleText("Input")  # Shorter title
         
         # Use supported methods for styling with smaller font for x-axis to reduce space
@@ -199,7 +265,12 @@ class IntegratedCalibrationChart:
         self.axis_x.setMinorGridLinePen(QPen(QColor(60, 60, 60), 1))
         
         self.axis_y = QValueAxis()
-        self.axis_y.setRange(0, 100)
+        try:
+            self.axis_y.setRange(0, 100)
+        except AttributeError:
+            # PyQt6 compatibility - use setMin/setMax instead of setRange
+            self.axis_y.setMin(0)
+            self.axis_y.setMax(100)
         self.axis_y.setTitleText("Output")  # Shorter title
         
         # Use supported methods for styling with smaller font for y-axis to match x-axis
@@ -223,7 +294,10 @@ class IntegratedCalibrationChart:
         # This is key to ensuring the dot stays on the line
         self.curve_series = QLineSeries()
         self.curve_series.setPen(QPen(QColor(0, 120, 255), 3))
-        self.curve_series.setUseOpenGL(False)  # Disable OpenGL for better performance with frequent updates
+        try:
+            self.curve_series.setUseOpenGL(False)  # Disable OpenGL for better performance with frequent updates
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         self.chart.addSeries(self.curve_series)
         
         # Create a separate series for the draggable control points
@@ -231,7 +305,10 @@ class IntegratedCalibrationChart:
         self.control_points_series.setMarkerSize(12)
         self.control_points_series.setColor(QColor(255, 0, 0))
         self.control_points_series.setBorderColor(QColor(255, 255, 255))
-        self.control_points_series.setUseOpenGL(False)  # Keep disabled for interaction
+        try:
+            self.control_points_series.setUseOpenGL(False)  # Keep disabled for interaction
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         self.chart.addSeries(self.control_points_series)
         
         # Create series for deadzone visualization
@@ -240,7 +317,10 @@ class IntegratedCalibrationChart:
         self.min_deadzone_pen.setWidth(1)
         self.min_deadzone_series.setPen(self.min_deadzone_pen)
         self.min_deadzone_series.setBrush(QBrush(QColor(230, 100, 0, 80)))
-        self.min_deadzone_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        try:
+            self.min_deadzone_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         self.chart.addSeries(self.min_deadzone_series)
         
         self.max_deadzone_series = QAreaSeries()
@@ -248,7 +328,10 @@ class IntegratedCalibrationChart:
         self.max_deadzone_pen.setWidth(1)
         self.max_deadzone_series.setPen(self.max_deadzone_pen)
         self.max_deadzone_series.setBrush(QBrush(QColor(230, 100, 0, 80)))
-        self.max_deadzone_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        try:
+            self.max_deadzone_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         self.chart.addSeries(self.max_deadzone_series)
         
         # Create a separate series for the indicator dot that will be precisely positioned
@@ -256,38 +339,62 @@ class IntegratedCalibrationChart:
         self.indicator_series.setMarkerSize(10)
         self.indicator_series.setColor(QColor(0, 255, 0))
         self.indicator_series.setBorderColor(QColor(255, 255, 255))
-        self.indicator_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        try:
+            self.indicator_series.setUseOpenGL(False)  # Disable OpenGL for better performance
+        except AttributeError:
+            pass  # Fallback for PyQt6 compatibility
         self.chart.addSeries(self.indicator_series)
         
-        # Attach axes
-        self.chart.setAxisX(self.axis_x, self.curve_series)
-        self.chart.setAxisY(self.axis_y, self.curve_series)
-        self.chart.setAxisX(self.axis_x, self.control_points_series)
-        self.chart.setAxisY(self.axis_y, self.control_points_series)
-        self.chart.setAxisX(self.axis_x, self.indicator_series)
-        self.chart.setAxisY(self.axis_y, self.indicator_series)
+        # PyQt6.QtCharts API: Add axes to chart and attach to series
+        # Add axes to chart (only once each)
+        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
+        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
+        
+        # Attach axes to all series
+        self.curve_series.attachAxis(self.axis_x)
+        self.curve_series.attachAxis(self.axis_y)
+        self.control_points_series.attachAxis(self.axis_x)
+        self.control_points_series.attachAxis(self.axis_y)
+        self.indicator_series.attachAxis(self.axis_x)
+        self.indicator_series.attachAxis(self.axis_y)
         
         # Attach axes to deadzone series
-        self.chart.setAxisX(self.axis_x, self.min_deadzone_series)
-        self.chart.setAxisY(self.axis_y, self.min_deadzone_series)
-        self.chart.setAxisX(self.axis_x, self.max_deadzone_series)
-        self.chart.setAxisY(self.axis_y, self.max_deadzone_series)
+        self.min_deadzone_series.attachAxis(self.axis_x)
+        self.min_deadzone_series.attachAxis(self.axis_y)
+        self.max_deadzone_series.attachAxis(self.axis_x)
+        self.max_deadzone_series.attachAxis(self.axis_y)
         
         # Create the chart view
         self.chart_view = DraggableChartView(self.chart)
-        self.chart_view.setRenderHint(QPainter.Antialiasing)
-        self.chart_view.setViewportUpdateMode(QChartView.MinimalViewportUpdate)
+        try:
+            self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        except AttributeError:
+            try:
+                self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+            except AttributeError:
+                pass  # Skip if not available
+        self.chart_view.setViewportUpdateMode(QChartView.ViewportUpdateMode.MinimalViewportUpdate)
         self.chart_view.set_scatter_series(self.control_points_series, self.curve_series)
         self.chart_view.point_moved.connect(self.on_control_point_moved)
         
         # Set minimum height significantly larger to ensure space for axes
         self.chart_view.setMinimumHeight(320)  # Increased from 280 to 320 for larger chart
         # Set vertical size policy to ensure it takes the space
-        self.chart_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Let it expand/shrink
+        try:
+            self.chart_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding) # Let it expand/shrink
+        except AttributeError:
+            try:
+                self.chart_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding) # Let it expand/shrink
+            except AttributeError:
+                pass  # Skip if not available
         self.chart_view.setContentsMargins(5, 0, 5, 0)  # Minimize vertical margins
         
         # Add some bottom margin to the chart itself - REDUCED
-        self.chart.setMargins(QMargins(10, 5, 10, 5))  # Reduce top and bottom margins
+        try:
+            self.chart.setMargins(QMargins(10, 5, 10, 5))  # Reduce top and bottom margins
+        except AttributeError:
+            # Fallback for PyQt6 compatibility
+            pass
         
         # Debounce for control point updates
         self.point_move_timer = QTimer()

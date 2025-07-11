@@ -1,6 +1,7 @@
 """System tray functionality for MainWindow."""
 
 from .shared_imports import *
+from PyQt6.QtCore import QObject, QTimer
 
 
 def setup_system_tray(main_window):
@@ -86,7 +87,7 @@ def setup_system_tray(main_window):
 
 def tray_icon_activated(main_window, reason):
     """Handle tray icon activation."""
-    if reason == QSystemTrayIcon.DoubleClick:
+    if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
         show_from_tray(main_window)
 
 
@@ -112,7 +113,7 @@ def toggle_minimize_to_tray(main_window, checked):
     # Show a notification about the setting change
     if hasattr(main_window, 'tray_icon') and main_window.tray_icon.isVisible():
         message = "TrackPro will minimize to tray when closed" if checked else "TrackPro will exit when closed"
-        main_window.tray_icon.showMessage("Settings Changed", message, QSystemTrayIcon.Information, 3000)
+        main_window.tray_icon.showMessage("Settings Changed", message, QSystemTrayIcon.MessageIcon.Information, 3000)
 
 
 def exit_application(main_window):
@@ -126,8 +127,28 @@ def exit_application(main_window):
     original_setting = config.minimize_to_tray
     config.set('ui.minimize_to_tray', False)
     
-    # Close the application
-    main_window.close()
+    # Find the main app instance and call its cleanup method
+    app = QApplication.instance()
+    if app:
+        # Try to find the TrackPro app instance
+        for obj in app.findChildren(QObject):
+            if hasattr(obj, 'cleanup') and hasattr(obj, 'hardware') and hasattr(obj, 'window'):
+                logger.info("Found TrackPro app instance from system tray, calling cleanup")
+                try:
+                    obj.cleanup()
+                except Exception as cleanup_e:
+                    logger.error(f"Error during app cleanup from system tray: {cleanup_e}")
+                break
+        
+        # Force application exit
+        logger.info("Forcing application exit from system tray")
+        QTimer.singleShot(100, lambda: app.exit(0))
+    
+    # Close the main window as a backup
+    try:
+        main_window.close()
+    except Exception as e:
+        logger.error(f"Error closing main window: {e}")
     
     # Restore the original setting (though the app will be closed)
     config.set('ui.minimize_to_tray', original_setting) 

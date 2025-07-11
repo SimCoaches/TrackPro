@@ -1,11 +1,11 @@
 """Login dialog for user authentication."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QLineEdit, QCheckBox, QFormLayout, QLabel, 
-    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy, QInputDialog, QDialog
+    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy, QInputDialog, QDialog, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap, QFont
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 from ..config import config
@@ -26,6 +26,333 @@ except ImportError:
     twilio_service = None
 
 logger = logging.getLogger(__name__)
+
+
+class ForgotPasswordDialog(QDialog):
+    """Simple dialog to collect email for password reset."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Reset Password")
+        self.setModal(True)
+        self.setFixedSize(400, 200)
+        
+        # Initialize UI
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Set up the dialog UI."""
+        layout = QVBoxLayout()
+        
+        # Title
+        title_label = QLabel("Reset Your Password")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+        
+        # Instructions
+        instructions = QLabel("Enter your email address and we'll send you a link to reset your password.")
+        instructions.setWordWrap(True)
+        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        instructions.setStyleSheet("margin-bottom: 15px; color: #666;")
+        layout.addWidget(instructions)
+        
+        # Email input
+        form_layout = QFormLayout()
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("Enter your email address")
+        self.email_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 8px;
+                border-radius: 4px;
+                color: #ddd;
+            }
+            QLineEdit:focus {
+                border: 1px solid #77aaff;
+                background-color: #4a4a4a;
+            }
+        """)
+        form_layout.addRow("Email:", self.email_input)
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_button)
+        
+        self.send_button = QPushButton("Send Reset Email")
+        self.send_button.clicked.connect(self.send_reset_email)
+        self.send_button.setDefault(True)
+        self.send_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0066cc;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0052a3;
+            }
+            QPushButton:pressed {
+                background-color: #004080;
+            }
+        """)
+        button_layout.addWidget(self.send_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        
+        # Set focus to email input
+        self.email_input.setFocus()
+        
+        # Allow Enter key to submit
+        self.email_input.returnPressed.connect(self.send_reset_email)
+    
+    def send_reset_email(self):
+        """Send the password reset email."""
+        email = self.email_input.text().strip()
+        
+        if not email:
+            QMessageBox.warning(self, "Email Required", "Please enter your email address.")
+            return
+        
+        # Basic email validation
+        if "@" not in email or "." not in email:
+            QMessageBox.warning(self, "Invalid Email", "Please enter a valid email address.")
+            return
+        
+        # Disable the send button to prevent multiple clicks
+        self.send_button.setEnabled(False)
+        self.send_button.setText("Sending...")
+        
+        try:
+            # Get the OAuth port from the parent window (main app)
+            oauth_port = 3000
+            try:
+                from PyQt6.QtWidgets import QApplication
+                for widget in QApplication.topLevelWidgets():
+                    if hasattr(widget, 'oauth_port') and widget.oauth_port:
+                        oauth_port = widget.oauth_port
+                        break
+            except:
+                pass
+            
+            # Use localhost for the redirect URL since it will be handled by our callback server
+            redirect_url = f"http://localhost:{oauth_port}/auth/reset-password"
+            
+            # Send the password reset email with our callback URL
+            result = supabase.reset_password_for_email(email, redirect_url)
+            
+            if result.get("success"):
+                QMessageBox.information(self, "Reset Email Sent", 
+                    f"A password reset email has been sent to {email}.\n\n"
+                    "Please check your email and click the link to reset your password.\n\n"
+                    "Note: If you're checking email on your phone, please copy the link and open it on this computer where TrackPro is running.")
+                self.accept()
+            else:
+                error_msg = result.get("error", "Unknown error occurred")
+                QMessageBox.warning(self, "Reset Failed", f"Failed to send reset email:\n\n{error_msg}")
+                
+        except Exception as e:
+            logger.error(f"Error sending password reset email: {e}")
+            QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n\n{str(e)}")
+        finally:
+            # Re-enable the send button
+            self.send_button.setEnabled(True)
+            self.send_button.setText("Send Reset Email")
+
+
+class PasswordResetCompletionDialog(QDialog):
+    """Dialog for completing password reset after clicking email link."""
+    
+    def __init__(self, parent=None, access_token=None, refresh_token=None):
+        super().__init__(parent)
+        self.setWindowTitle("Complete Password Reset")
+        self.setModal(True)
+        self.setFixedSize(450, 300)
+        
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        
+        # Initialize UI
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Set up the dialog UI."""
+        layout = QVBoxLayout()
+        
+        # Title
+        title_label = QLabel("Set New Password")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 15px;")
+        layout.addWidget(title_label)
+        
+        # Instructions
+        instructions = QLabel("Please enter your new password below.")
+        instructions.setWordWrap(True)
+        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        instructions.setStyleSheet("margin-bottom: 20px; color: #666;")
+        layout.addWidget(instructions)
+        
+        # Form layout
+        form_layout = QFormLayout()
+        
+        # New password input
+        self.new_password_input = QLineEdit()
+        self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.new_password_input.setPlaceholderText("Enter new password")
+        self.new_password_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 10px;
+                border-radius: 4px;
+                color: #ddd;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #77aaff;
+                background-color: #4a4a4a;
+            }
+        """)
+        form_layout.addRow("New Password:", self.new_password_input)
+        
+        # Confirm password input
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password_input.setPlaceholderText("Confirm new password")
+        self.confirm_password_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #444;
+                border: 1px solid #555;
+                padding: 10px;
+                border-radius: 4px;
+                color: #ddd;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #77aaff;
+                background-color: #4a4a4a;
+            }
+        """)
+        form_layout.addRow("Confirm Password:", self.confirm_password_input)
+        
+        layout.addLayout(form_layout)
+        
+        # Password requirements
+        requirements = QLabel("Password must be at least 8 characters long.")
+        requirements.setStyleSheet("color: #999; font-size: 12px; margin: 10px 0;")
+        requirements.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(requirements)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_button)
+        
+        self.reset_button = QPushButton("Reset Password")
+        self.reset_button.clicked.connect(self.reset_password)
+        self.reset_button.setDefault(True)
+        self.reset_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0066cc;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #0052a3;
+            }
+            QPushButton:pressed {
+                background-color: #004080;
+            }
+            QPushButton:disabled {
+                background-color: #666;
+                color: #999;
+            }
+        """)
+        button_layout.addWidget(self.reset_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        
+        # Set focus to password input
+        self.new_password_input.setFocus()
+        
+        # Allow Enter key to submit
+        self.new_password_input.returnPressed.connect(self.reset_password)
+        self.confirm_password_input.returnPressed.connect(self.reset_password)
+    
+    def reset_password(self):
+        """Reset the user's password."""
+        new_password = self.new_password_input.text()
+        confirm_password = self.confirm_password_input.text()
+        
+        # Validate inputs
+        if not new_password:
+            QMessageBox.warning(self, "Password Required", "Please enter a new password.")
+            return
+        
+        if len(new_password) < 8:
+            QMessageBox.warning(self, "Password Too Short", "Password must be at least 8 characters long.")
+            return
+        
+        if new_password != confirm_password:
+            QMessageBox.warning(self, "Passwords Don't Match", "The passwords you entered don't match. Please try again.")
+            return
+        
+        # Disable the reset button to prevent multiple clicks
+        self.reset_button.setEnabled(False)
+        self.reset_button.setText("Resetting...")
+        
+        try:
+            # Set the session using the tokens from the email link
+            if self.access_token and self.refresh_token:
+                # Set the session in Supabase client
+                supabase.client.auth.set_session(self.access_token, self.refresh_token)
+                
+                # Update the password
+                response = supabase.client.auth.update_user({
+                    "password": new_password
+                })
+                
+                if response and response.user:
+                    QMessageBox.information(self, "Password Reset Successful", 
+                        "Your password has been reset successfully!\n\n"
+                        "You can now log in with your new password.")
+                    self.accept()
+                else:
+                    QMessageBox.warning(self, "Reset Failed", "Failed to reset password. Please try again.")
+            else:
+                QMessageBox.warning(self, "Invalid Reset Link", 
+                    "This reset link is invalid or has expired. Please request a new password reset email.")
+                
+        except Exception as e:
+            logger.error(f"Error resetting password: {e}")
+            error_msg = str(e)
+            if "expired" in error_msg.lower() or "invalid" in error_msg.lower():
+                QMessageBox.warning(self, "Reset Link Expired", 
+                    "This password reset link has expired. Please request a new password reset email.")
+            else:
+                QMessageBox.critical(self, "Error", f"An error occurred while resetting your password:\n\n{error_msg}")
+        finally:
+            # Re-enable the reset button
+            self.reset_button.setEnabled(True)
+            self.reset_button.setText("Reset Password")
+
 
 class LoginDialog(BaseAuthDialog):
     """Dialog for user login."""
@@ -61,13 +388,13 @@ class LoginDialog(BaseAuthDialog):
         
         # Add Heading
         heading_label = QLabel("TrackPro")
-        heading_label.setAlignment(Qt.AlignCenter)
+        heading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         heading_label.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 5px;")
         left_column_layout.addWidget(heading_label)
         
         # Add Subheading
         subheading_label = QLabel("Making Drivers Faster One Lap At A Time")
-        subheading_label.setAlignment(Qt.AlignCenter)
+        subheading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subheading_label.setStyleSheet("font-size: 12px; color: #bbb; margin-bottom: 20px;")
         left_column_layout.addWidget(subheading_label)
         
@@ -90,7 +417,7 @@ class LoginDialog(BaseAuthDialog):
         
         # Add Sign In With header
         header_label = QLabel("Sign In With:")
-        header_label.setAlignment(Qt.AlignCenter)
+        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_label.setStyleSheet("font-weight: bold; margin-top: 10px; margin-bottom: 5px;")
         left_column_layout.addWidget(header_label)
         
@@ -154,15 +481,15 @@ class LoginDialog(BaseAuthDialog):
         
         # Placeholder for image
         image_label = QLabel("Login Image Placeholder")
-        image_label.setAlignment(Qt.AlignCenter)
-        image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         image_label.setStyleSheet("color: #ccc; font-size: 16px;")
         
         # Optional: Load an actual image if available
         image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "images", "login_image.png")
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path)
-            image_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            image_label.setPixmap(pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
             image_label.setText("Image not found")
         
@@ -173,6 +500,20 @@ class LoginDialog(BaseAuthDialog):
         
         # Set tab order (consider how it flows across columns if needed)
         self.set_tab_order()
+    
+    def show_forgot_password_dialog(self):
+        """Show the forgot password dialog."""
+        # Connect to the password reset signal before showing the dialog
+        if self.oauth_handler:
+            try:
+                self.oauth_handler.password_reset_required.disconnect(self.on_password_reset_required)
+            except TypeError:
+                pass # Signal not connected
+            self.oauth_handler.password_reset_required.connect(self.on_password_reset_required)
+            logger.info("Connected to password reset signal for forgot password flow")
+        
+        dialog = ForgotPasswordDialog(self)
+        dialog.exec()
     
     def setup_form_fields(self, form_layout):
         """Set up the form fields.
@@ -203,13 +544,33 @@ class LoginDialog(BaseAuthDialog):
         
         # Password field
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setStyleSheet(input_style)
         form_layout.addRow("Password:", self.password_input)
         
-        # Remember me checkbox
+        # Remember me checkbox - checked by default for persistent sessions
         self.remember_me_checkbox = QCheckBox("Remember me")
+        self.remember_me_checkbox.setChecked(True)  # Default to keeping users logged in
         form_layout.addRow("", self.remember_me_checkbox)
+        
+        # Forgot password link
+        self.forgot_password_link = QPushButton("Forgot Password?")
+        self.forgot_password_link.setFlat(True)
+        self.forgot_password_link.setStyleSheet("""
+            QPushButton {
+                border: none;
+                color: #77aaff;
+                text-decoration: underline;
+                text-align: left;
+                padding: 2px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                color: #99ccff;
+            }
+        """)
+        self.forgot_password_link.clicked.connect(self.show_forgot_password_dialog)
+        form_layout.addRow("", self.forgot_password_link)
     
     def handle_google_login(self):
         """Handle login with Google."""
@@ -238,14 +599,20 @@ class LoginDialog(BaseAuthDialog):
                 # Open browser with the URL
                 webbrowser.open(response.url)
                 
-                # Connect to the oauth handler's signal if available
+                # Connect to the oauth handler's signals if available
                 if self.oauth_handler:
                     # Disconnect first to avoid duplicate connections if called multiple times
                     try:
                         self.oauth_handler.auth_completed.disconnect(self.on_oauth_completed)
                     except TypeError:
                         pass # Signal not connected
+                    try:
+                        self.oauth_handler.password_reset_required.disconnect(self.on_password_reset_required)
+                    except TypeError:
+                        pass # Signal not connected
+                    
                     self.oauth_handler.auth_completed.connect(self.on_oauth_completed)
+                    self.oauth_handler.password_reset_required.connect(self.on_password_reset_required)
                 
                 # Show message to the user
                 self.show_info("A browser window will open for you to sign in with Google.\n\n"
@@ -314,7 +681,7 @@ class LoginDialog(BaseAuthDialog):
                 try:
                     parent = self.parent()
                     if parent:
-                        from PyQt5.QtWidgets import QApplication
+                        from PyQt6.QtWidgets import QApplication
                         logger.info("Forcing parent window to update authentication state after Google login")
                         QApplication.processEvents()
                         
@@ -378,13 +745,19 @@ class LoginDialog(BaseAuthDialog):
                 if self.show_network_error("Cannot connect to server to authenticate with Discord."):
                     return
 
-            # Connect to the existing handler's signal
+            # Connect to the existing handler's signals
             # Disconnect first to avoid duplicate connections if called multiple times
             try:
                 self.oauth_handler.auth_completed.disconnect(self.on_oauth_completed)
             except TypeError:
                 pass # Signal not connected
+            try:
+                self.oauth_handler.password_reset_required.disconnect(self.on_password_reset_required)
+            except TypeError:
+                pass # Signal not connected
+            
             self.oauth_handler.auth_completed.connect(self.on_oauth_completed)
+            self.oauth_handler.password_reset_required.connect(self.on_password_reset_required)
 
             # Use the shared handler to start the Discord OAuth flow with PKCE
             # The server is already running, so we don't need to manage it here
@@ -476,7 +849,7 @@ class LoginDialog(BaseAuthDialog):
             try:
                 parent = self.parent()
                 if parent:
-                    from PyQt5.QtWidgets import QApplication
+                    from PyQt6.QtWidgets import QApplication
                     logger.info("Forcing parent window to update authentication state")
                     QApplication.processEvents()
                     
@@ -502,6 +875,39 @@ class LoginDialog(BaseAuthDialog):
                 provider = self.pending_provider
             
             self.show_error(f"{provider.capitalize()} authentication failed. Please try again.")
+    
+    def on_password_reset_required(self, access_token, refresh_token):
+        """Handle password reset completion - this follows the exact same pattern as OAuth."""
+        logger.info(f"Password reset signal received - access_token: {access_token[:20]}...")
+        
+        try:
+            # Create and show the password reset dialog - this runs on the main thread since it's a signal handler
+            dialog = PasswordResetCompletionDialog(
+                parent=self,
+                access_token=access_token,
+                refresh_token=refresh_token
+            )
+            
+            logger.info("Showing password reset completion dialog...")
+            result = dialog.exec()
+            
+            if result == QDialog.DialogCode.Accepted:
+                logger.info("Password reset completed successfully")
+                # Show success message
+                QMessageBox.information(self, "Password Reset Complete", 
+                    "Your password has been reset successfully!\n\n"
+                    "You can now log in with your new password.")
+                
+                # Optionally close the login dialog since password was reset
+                # self.accept()
+            else:
+                logger.info("Password reset dialog was cancelled")
+                
+        except Exception as e:
+            logger.error(f"Error showing password reset dialog: {e}", exc_info=True)
+            QMessageBox.warning(self, "Password Reset Error", 
+                f"An error occurred while processing your password reset:\n\n{str(e)}\n\n"
+                "Please try requesting a new password reset email.")
     
     def check_connection(self):
         """Check if we have a connection to the Supabase server.
@@ -580,9 +986,9 @@ class LoginDialog(BaseAuthDialog):
         )
         
         dialog = PhoneVerificationDialog(self, user_id)
-        result = dialog.exec_()
+        result = dialog.exec()
         
-        if result == QDialog.Accepted:
+        if result == QDialog.DialogCode.Accepted:
             logger.info(f"Phone verification dialog accepted for user {user_id}")
             
             # SIMPLE FIX: Direct query to user_details table instead of using the view
@@ -626,7 +1032,7 @@ class LoginDialog(BaseAuthDialog):
             
             # Create and show the SMS verification dialog
             dialog = SMSVerificationDialog(self, phone_number)
-            result = dialog.exec_()
+            result = dialog.exec()
             
             # Return True if verification was successful
             return dialog.verification_successful
@@ -677,7 +1083,7 @@ class LoginDialog(BaseAuthDialog):
         # Get form values
         email = self.email_input.text()
         password = self.password_input.text()
-        remember_me = self.remember_me_checkbox.isChecked()
+        remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
         
         logger.info(f"Signing in user: {email}")
         
@@ -720,7 +1126,7 @@ class LoginDialog(BaseAuthDialog):
                 try:
                     parent = self.parent()
                     if parent:
-                        from PyQt5.QtWidgets import QApplication
+                        from PyQt6.QtWidgets import QApplication
                         logger.info("Forcing parent window to update authentication state")
                         QApplication.processEvents()
                         

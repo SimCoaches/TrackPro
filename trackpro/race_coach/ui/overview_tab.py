@@ -8,13 +8,13 @@ import logging
 import math
 import statistics
 from datetime import datetime, timedelta
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGridLayout, QSizePolicy, QPushButton, QScrollArea, QProgressBar,
-    QTableWidget, QTableWidgetItem, QHeaderView, QTextEdit
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
+    QComboBox, QSpinBox, QSlider, QGroupBox, QTextEdit, QScrollArea,
+    QFrame, QSizePolicy, QMessageBox, QGridLayout
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QPainter, QPen, QBrush, QColor, QPixmap
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor, QPixmap
 from .coaching_data_manager import CoachingDataManager
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class SessionSummaryCard(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel)
+        self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             QFrame {
                 background-color: #2d2d2d;
@@ -91,7 +91,7 @@ class PerformanceAnalysisWidget(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel)
+        self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             QFrame {
                 background-color: #3a3a3a;
@@ -129,7 +129,7 @@ class NextSessionPlannerWidget(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel)
+        self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             QFrame {
                 background-color: #3a3a3a;
@@ -167,7 +167,7 @@ class AchievementsWidget(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel)
+        self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             QFrame {
                 background-color: #3a3a3a;
@@ -205,7 +205,7 @@ class ProgressTrackingWidget(QFrame):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFrameStyle(QFrame.StyledPanel)
+        self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             QFrame {
                 background-color: #3a3a3a;

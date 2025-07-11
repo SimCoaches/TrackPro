@@ -8,9 +8,9 @@ import logging
 import math
 import threading
 import numpy as np
-from PyQt5.QtWidgets import QWidget, QLabel
-from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QRectF, QSizeF
-from PyQt5.QtGui import (
+from PyQt6.QtWidgets import QWidget, QLabel
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QSizeF
+from PyQt6.QtGui import (
     QFont, QColor, QPalette, QPainter, QPen, QBrush,
     QLinearGradient, QRadialGradient, QConicalGradient,
     QPixmap, QPainterPath
@@ -71,7 +71,7 @@ class SpeedGauge(GaugeBase):
     def paintEvent(self, event):
         """Paint the speed gauge."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         width = self.width()
         height = self.height()
@@ -79,7 +79,7 @@ class SpeedGauge(GaugeBase):
         # Enforce minimum size for proper rendering
         if width < 100 or height < 50:
             # Draw a simplified version for very small sizes
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(self.background_color))
             painter.drawRect(0, 0, width, height)
 
@@ -99,7 +99,7 @@ class SpeedGauge(GaugeBase):
             # Add basic speed text if there's enough room
             if width >= 40 and height >= 20:
                 painter.setPen(QPen(self.text_color))
-                painter.drawText(0, 0, width, height, Qt.AlignCenter, f"{self.value:.0f}")
+                painter.drawText(0, 0, width, height, Qt.AlignmentFlag.AlignCenter, f"{self.value:.0f}")
 
             return
 
@@ -110,7 +110,7 @@ class SpeedGauge(GaugeBase):
         gauge_height = max(10, min(30, height / 5))  # Adaptive height
 
         # Draw gauge background
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(self.background_color.darker(120)))
         painter.drawRoundedRect(padding, height - gauge_height - padding, gauge_width, gauge_height, 5, 5)
 
@@ -133,7 +133,7 @@ class SpeedGauge(GaugeBase):
             title_font.setBold(True)
             painter.setFont(title_font)
             painter.setPen(QPen(self.text_color))
-            painter.drawText(padding, padding, gauge_width, 30, Qt.AlignLeft | Qt.AlignVCenter, self.title)
+            painter.drawText(padding, padding, gauge_width, 30, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.title)
 
         # Draw value with adaptive font size
         value_font = painter.font()
@@ -141,7 +141,7 @@ class SpeedGauge(GaugeBase):
         value_font.setBold(True)
         painter.setFont(value_font)
         value_text = f"{self.value:.1f} {self.units}"
-        painter.drawText(padding, 40, gauge_width, 50, Qt.AlignCenter, value_text)
+        painter.drawText(padding, 40, gauge_width, 50, Qt.AlignmentFlag.AlignCenter, value_text)
 
         # Only draw tick marks if there's enough room
         if width >= 200 and height >= 100:
@@ -154,7 +154,7 @@ class SpeedGauge(GaugeBase):
                 painter.drawLine(int(tick_x), tick_y, int(tick_x), tick_y - 10)
 
                 # Draw tick label
-                painter.drawText(int(tick_x) - 15, tick_y - 15, 30, 20, Qt.AlignCenter, str(speed))
+                painter.drawText(int(tick_x) - 15, tick_y - 15, 30, 20, Qt.AlignmentFlag.AlignCenter, str(speed))
 
             # Minor ticks every 10 km/h
             painter.setPen(QPen(self.text_color.lighter(120), 0.5))
@@ -181,7 +181,7 @@ class RPMGauge(GaugeBase):
     def paintEvent(self, event):
         """Paint the RPM gauge."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         width = self.width()
         height = self.height()
@@ -189,7 +189,7 @@ class RPMGauge(GaugeBase):
         # Enforce minimum size for proper rendering
         if width < 100 or height < 100:
             # Draw a simplified version for very small sizes
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(self.background_color))
             painter.drawRect(0, 0, width, height)
 
@@ -218,14 +218,14 @@ class RPMGauge(GaugeBase):
                         gauge_color = QColor(255, 50, 50)  # Red for at/beyond redline
 
                     # Draw filled arc
-                    painter.setPen(QPen(gauge_color, 2, Qt.SolidLine, Qt.RoundCap))
+                    painter.setPen(QPen(gauge_color, 2, Qt.PenStyle.SolidLine, Qt.RoundCap))
                     span = normalized * 270
                     painter.drawArc(arc_rect, 135 * 16, int(span * 16))
 
             # Add basic RPM text
             painter.setPen(QPen(self.text_color))
             rpm_text = f"{self.value/1000:.1f}k"
-            painter.drawText(0, 0, width, height, Qt.AlignCenter, rpm_text)
+            painter.drawText(0, 0, width, height, Qt.AlignmentFlag.AlignCenter, rpm_text)
 
             return
 
@@ -261,7 +261,7 @@ class RPMGauge(GaugeBase):
 
             # Draw filled arc
             pen_width = max(5, min(10, width / 30))  # Adaptive pen width
-            painter.setPen(QPen(gauge_color, pen_width, Qt.SolidLine, Qt.RoundCap))
+            painter.setPen(QPen(gauge_color, pen_width, Qt.PenStyle.SolidLine, Qt.RoundCap))
             span = normalized * span_angle
             painter.drawArc(arc_rect, start_angle * 16, int(span * 16))
 
@@ -283,14 +283,14 @@ class RPMGauge(GaugeBase):
 
         # Format RPM text - show in thousands with one decimal place
         rpm_text = f"{self.value/1000:.1f}k"
-        painter.drawText(arc_rect, Qt.AlignCenter, rpm_text)
+        painter.drawText(arc_rect, Qt.AlignmentFlag.AlignCenter, rpm_text)
 
         # Draw title text
         title_font = painter.font()
         title_font.setPointSize(12)
         painter.setFont(title_font)
         title_rect = QRectF(arc_rect.left(), arc_rect.top() + arc_rect.height() // 2 + 10, arc_rect.width(), 30)
-        painter.drawText(title_rect, Qt.AlignCenter, self.title)
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, self.title)
 
 
 class SteeringWheelWidget(GaugeBase):
@@ -340,7 +340,7 @@ class SteeringWheelWidget(GaugeBase):
     def paintEvent(self, event):
         """Paint the steering wheel visualization."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         width = self.width()
         height = self.height()
@@ -348,7 +348,7 @@ class SteeringWheelWidget(GaugeBase):
         # Enforce minimum size for proper rendering
         if width < 100 or height < 100:
             # Draw a simplified version for very small sizes
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(self.background_color))
             painter.drawRect(0, 0, width, height)
 
@@ -392,7 +392,7 @@ class SteeringWheelWidget(GaugeBase):
 
             # Create a painter for the cached wheel
             cache_painter = QPainter(self._cached_wheel)
-            cache_painter.setRenderHint(QPainter.Antialiasing)
+            cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             # Draw the wheel on the cached pixmap
             self._draw_wheel(cache_painter, width, height, center_x, center_y)
@@ -452,7 +452,7 @@ class SteeringWheelWidget(GaugeBase):
         painter.drawLine(int(-x1), int(-y1), int(-x2), int(-y2))
 
         # Draw central hub
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(self.wheel_color))
         painter.drawEllipse(QPointF(0, 0), inner_radius, inner_radius)
 
@@ -475,13 +475,13 @@ class SteeringWheelWidget(GaugeBase):
 
         # Position text below the wheel
         text_y = center_y + wheel_radius + 20
-        painter.drawText(0, int(text_y), width, 20, Qt.AlignCenter, angle_text)
+        painter.drawText(0, int(text_y), width, 20, Qt.AlignmentFlag.AlignCenter, angle_text)
 
         # Draw title
         title_font = painter.font()
         title_font.setPointSize(12)
         painter.setFont(title_font)
-        painter.drawText(0, 15, width, 20, Qt.AlignCenter, self.title)
+        painter.drawText(0, 15, width, 20, Qt.AlignmentFlag.AlignCenter, self.title)
 
         # Draw steering angle bar at the bottom
         bar_width = width * 0.8
@@ -524,7 +524,7 @@ class SteeringWheelWidget(GaugeBase):
             indicator_color = QColor(255, 100, 0)  # Orange for right turns
 
         indicator_width = bar_width / 10
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(indicator_color))
         painter.drawRect(int(center_line_x), int(bar_y), int((position - center_line_x)), int(bar_height))
 
@@ -609,7 +609,7 @@ class InputTraceWidget(QWidget):
             clutch_data = self.clutch_data.copy()
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         width = self.width()
         height = self.height()
@@ -648,7 +648,7 @@ class InputTraceWidget(QWidget):
         painter.drawText(int(width / 2 - 15), height - 5, "Time →")
 
         # Draw grid lines
-        painter.setPen(QPen(self.grid_color, 1, Qt.DashLine))
+        painter.setPen(QPen(self.grid_color, 1, Qt.PenStyle.DashLine))
 
         # Horizontal grid lines at 25%, 50%, 75%
         for y_pct in [0.25, 0.5, 0.75]:
@@ -713,7 +713,7 @@ class InputTraceWidget(QWidget):
         legend_y = top_padding + 10
 
         # Draw legend background for better visibility
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(30, 30, 30, 180)))
         painter.drawRect(legend_x - 5, legend_y - 5, legend_width, 3 * legend_height + 2 * legend_spacing + 10)
 

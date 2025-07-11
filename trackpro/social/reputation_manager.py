@@ -633,4 +633,5 @@ class ReputationManager(DatabaseManager):
             logger.error(f"Error creating reputation level activity: {e}")
 
 # Create a global instance
-reputation_manager = ReputationManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.reputation_manager or trackpro.social.get_reputation_manager() instead 

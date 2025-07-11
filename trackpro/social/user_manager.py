@@ -479,8 +479,8 @@ class EnhancedUserManager(DatabaseManager):
                 return True
             elif profile_visibility == 'friends':
                 # Check if they are friends
-                from .friends_manager import FriendsManager
-                friends_manager = FriendsManager()
+                from . import get_friends_manager
+                friends_manager = get_friends_manager()
                 return friends_manager.are_friends(viewer_id, target_id)
             elif profile_visibility == 'private':
                 return False
@@ -567,5 +567,5 @@ class EnhancedUserManager(DatabaseManager):
             logger.error(f"Error getting user level info: {e}")
             return {}
 
-# Create a global instance
-enhanced_user_manager = EnhancedUserManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.enhanced_user_manager or trackpro.social.get_enhanced_user_manager() instead 

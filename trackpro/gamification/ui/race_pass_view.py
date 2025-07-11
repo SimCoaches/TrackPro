@@ -1,9 +1,9 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QScrollArea, QFrame, QGridLayout, 
                              QProgressBar, QGroupBox, QTabWidget, QSplitter, QSizePolicy,
                              QMessageBox, QDialog, QLineEdit, QFormLayout, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot
-from PyQt5.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot
+from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 import requests
 import json
 import logging
@@ -39,14 +39,14 @@ class StripePaymentDialog(QDialog):
         
         # Title
         title = QLabel("Premium Race Pass")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("color: #e67e22; margin-bottom: 10px;")
         layout.addWidget(title)
         
         # Description
         desc = QLabel(f"Unlock premium rewards for ${amount:.2f}/month\nRecurring monthly subscription")
-        desc.setAlignment(Qt.AlignCenter)
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setStyleSheet("color: #FFF; margin-bottom: 20px;")
         layout.addWidget(desc)
         
@@ -202,14 +202,14 @@ class RacePassOverviewWidget(QWidget):
         
         # Title
         title_label = QLabel("Race Pass Overview")
-        title_font = QFont("Arial", 18, QFont.Bold)
+        title_font = QFont("Arial", 18, QFont.Weight.Bold)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("color: #e67e22; margin-bottom: 10px;")
         main_layout.addWidget(title_label)
         
         # Create a splitter for side-by-side layout
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
         
         # Left side - Current Progress
@@ -228,7 +228,7 @@ class RacePassOverviewWidget(QWidget):
     def _create_progress_section(self):
         """Create the current progress section."""
         frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         frame.setStyleSheet("""
             QFrame {
                 background-color: #2A2A2A;
@@ -243,20 +243,20 @@ class RacePassOverviewWidget(QWidget):
         
         # Section title
         section_title = QLabel("Current Season Progress")
-        section_title.setFont(QFont("Arial", 14, QFont.Bold))
+        section_title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         section_title.setStyleSheet("color: #FFF; margin-bottom: 10px;")
         layout.addWidget(section_title)
         
         # Season info
         self.season_name_label = QLabel("Season 1: Genesis")
-        self.season_name_label.setFont(QFont("Arial", 12, QFont.Bold))
+        self.season_name_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.season_name_label.setStyleSheet("color: #e67e22;")
         layout.addWidget(self.season_name_label)
         
         # Current tier display
         tier_layout = QHBoxLayout()
         self.current_tier_label = QLabel("Current Tier: 5")
-        self.current_tier_label.setFont(QFont("Arial", 16, QFont.Bold))
+        self.current_tier_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         self.current_tier_label.setStyleSheet("color: #FFF;")
         tier_layout.addWidget(self.current_tier_label)
         tier_layout.addStretch()
@@ -314,7 +314,7 @@ class RacePassOverviewWidget(QWidget):
     def _create_actions_section(self):
         """Create the quick actions and stats section."""
         frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         frame.setStyleSheet("""
             QFrame {
                 background-color: #2A2A2A;
@@ -329,7 +329,7 @@ class RacePassOverviewWidget(QWidget):
         
         # Section title
         section_title = QLabel("Quick Actions")
-        section_title.setFont(QFont("Arial", 14, QFont.Bold))
+        section_title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         section_title.setStyleSheet("color: #FFF; margin-bottom: 10px;")
         layout.addWidget(section_title)
         
@@ -346,7 +346,7 @@ class RacePassOverviewWidget(QWidget):
         premium_layout = QVBoxLayout(self.premium_status_frame)
         
         self.premium_status_label = QLabel("Premium Pass")
-        self.premium_status_label.setFont(QFont("Arial", 12, QFont.Bold))
+        self.premium_status_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.premium_status_label.setStyleSheet("color: #e67e22;")
         premium_layout.addWidget(self.premium_status_label)
         
@@ -375,7 +375,7 @@ class RacePassOverviewWidget(QWidget):
         
         # Quick stats
         stats_title = QLabel("Season Stats")
-        stats_title.setFont(QFont("Arial", 12, QFont.Bold))
+        stats_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         stats_title.setStyleSheet("color: #FFF; margin-top: 15px;")
         layout.addWidget(stats_title)
         
@@ -518,9 +518,9 @@ class RacePassTrackWidget(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 4)
         
         title_label = QLabel("Race Pass - Season 1: Genesis")
-        title_font = QFont("Arial", 14, QFont.Bold)
+        title_font = QFont("Arial", 14, QFont.Weight.Bold)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignLeft)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         header_layout.addWidget(title_label)
         
         header_layout.addStretch()
@@ -550,7 +550,7 @@ class RacePassTrackWidget(QWidget):
         # Compact premium pass info - single line
         premium_info_layout = QHBoxLayout()
         premium_title = QLabel("Premium Race Pass")
-        premium_title.setFont(QFont("Arial", 12, QFont.Bold))
+        premium_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         premium_title.setStyleSheet("color: #e67e22;")
         
         premium_desc = QLabel("• Exclusive rewards • Double XP • Season-long access")
@@ -591,7 +591,7 @@ class RacePassTrackWidget(QWidget):
                 color: white;
             }
         """)
-        self.purchase_pass_button.setCursor(Qt.PointingHandCursor)
+        self.purchase_pass_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.purchase_pass_button.clicked.connect(self.on_purchase_pass)
         purchase_layout.addWidget(self.purchase_pass_button)
         
@@ -664,8 +664,8 @@ class RacePassTrackWidget(QWidget):
         # Horizontal Scroll Area for Tiers
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setStyleSheet("""
             QScrollArea { 
                 border: none; 
@@ -844,8 +844,8 @@ class RacePassTrackWidget(QWidget):
         """Creates a widget for a single tier in the horizontal Race Pass."""
         tier_frame = QFrame()
         tier_frame.setObjectName(f"TierFrame{tier_num}")
-        tier_frame.setFrameShape(QFrame.StyledPanel)
-        tier_frame.setFrameShadow(QFrame.Raised)
+        tier_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        tier_frame.setFrameShadow(QFrame.Shadow.Raised)
         tier_frame.setMinimumWidth(220)  # Increased minimum width for better text readability
         tier_frame.setMaximumWidth(280)  # Allow more flexibility
         tier_frame.setMinimumHeight(380)  # Increased height for better content fit with larger reward boxes
@@ -875,8 +875,8 @@ class RacePassTrackWidget(QWidget):
 
         # Tier number at top
         tier_label = QLabel(f"TIER {tier_num}")
-        tier_label.setFont(QFont("Arial", 12, QFont.Bold))
-        tier_label.setAlignment(Qt.AlignCenter)
+        tier_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        tier_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if unlocked: 
             tier_label.setStyleSheet("color: #e67e22; background-color: #1a1a1a; padding: 5px; border-radius: 5px;")
         else:
@@ -894,7 +894,7 @@ class RacePassTrackWidget(QWidget):
         elif self.current_view == 'premium' and not premium_reward:
             # Empty premium slot
             empty_widget = QLabel("No Premium\nReward")
-            empty_widget.setAlignment(Qt.AlignCenter)
+            empty_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_widget.setStyleSheet("color: #666; font-style: italic; padding: 20px;")
             layout.addWidget(empty_widget)
 
@@ -945,8 +945,8 @@ class RacePassTrackWidget(QWidget):
             track_label_text += " 🔒"
         
         track_label = QLabel(track_label_text)
-        track_label.setFont(QFont("Arial", 12, QFont.Bold))  # Increased font size for better readability
-        track_label.setAlignment(Qt.AlignCenter)
+        track_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # Increased font size for better readability
+        track_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         track_label.setFixedHeight(25)  # Fixed height for consistent layout
         
         if is_premium and premium_active:
@@ -994,14 +994,14 @@ class RacePassTrackWidget(QWidget):
         
         reward_icon = QLabel(reward_data.get("icon", "🎁"))
         reward_icon.setFont(QFont("Arial", 24))  # Larger icon for better visibility
-        reward_icon.setAlignment(Qt.AlignCenter)
+        reward_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_layout.addWidget(reward_icon)
         reward_layout.addWidget(icon_container)
         
         # Reward name with better formatting
         reward_name = QLabel(reward_data["name"])
-        reward_name.setFont(QFont("Arial", 13, QFont.Bold))  # Larger font for better readability
-        reward_name.setAlignment(Qt.AlignCenter)
+        reward_name.setFont(QFont("Arial", 13, QFont.Weight.Bold))  # Larger font for better readability
+        reward_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reward_name.setWordWrap(True)
         reward_name.setMinimumHeight(50)  # More space for text
         reward_name.setMaximumHeight(70)  # Allow more space for longer names
@@ -1051,9 +1051,9 @@ class RacePassTrackWidget(QWidget):
                                        f"• Double XP progression\n"
                                        f"• Premium cosmetics\n"
                                        f"• Access for entire season",
-                                       QMessageBox.Yes | QMessageBox.No)
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 # Spend TrackCoins and activate premium
                 self.trackcoins_balance.update_balance(current_balance - required_coins)
                 self._activate_premium_track()
@@ -1101,7 +1101,7 @@ class RacePassTrackWidget(QWidget):
         close_btn.clicked.connect(store_dialog.accept)
         layout.addWidget(close_btn)
         
-        store_dialog.exec_()
+        store_dialog.exec()
     
     def _on_coins_purchased(self, coins):
         """Handle when TrackCoins are purchased."""
@@ -1150,16 +1150,16 @@ class RacePassViewWidget(QWidget):
 
         # Main title
         title_label = QLabel("Race Pass")
-        title_font = QFont("Arial", 20, QFont.Bold)
+        title_font = QFont("Arial", 20, QFont.Weight.Bold)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet("color: #e67e22; margin-bottom: 15px;")
         main_layout.addWidget(title_label)
 
         # Create tab widget for different sections
         self.tab_widget = QTabWidget()
         self.tab_widget.setMinimumHeight(600)  # Ensure minimum height
-        self.tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tab_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
                 border: 1px solid #444;
@@ -1322,7 +1322,7 @@ class RacePassViewWidget(QWidget):
 # Example usage (for testing standalone)
 if __name__ == '__main__':
     import sys
-    from PyQt5.QtWidgets import QApplication, QMainWindow
+    from PyQt6.QtWidgets import QApplication, QMainWindow
 
     app = QApplication(sys.argv)
     # Set a dark theme for testing
@@ -1341,4 +1341,4 @@ if __name__ == '__main__':
     main_window.setGeometry(100, 100, 1000, 800)
     main_window.show()
 
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

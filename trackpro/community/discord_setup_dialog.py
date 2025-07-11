@@ -1,11 +1,11 @@
 """Discord Setup Dialog for TrackPro - Configure Discord server connection."""
 
 import logging
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                              QLineEdit, QPushButton, QLabel, QTextEdit, QCheckBox,
                              QMessageBox, QFrame, QTabWidget, QWidget, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont, QPixmap, QIcon
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QPixmap, QIcon
 import requests
 import json
 import re
@@ -104,12 +104,12 @@ class DiscordSetupDialog(QDialog):
         layout = QVBoxLayout(header)
         
         title = QLabel("Discord Integration Setup")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         subtitle = QLabel("Connect your Discord server to TrackPro")
-        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
         
         return header
@@ -447,12 +447,12 @@ For advanced users who know their Discord server ID directly.
 # Example usage and testing
 if __name__ == "__main__":
     import sys
-    from PyQt5.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication
     
     app = QApplication(sys.argv)
     dialog = DiscordSetupDialog()
     
-    if dialog.exec_() == QDialog.Accepted:
+    if dialog.exec() == QDialog.DialogCode.Accepted:
         print(f"Server ID: {dialog.server_id}")
         print(f"Channel ID: {dialog.channel_id}")
     

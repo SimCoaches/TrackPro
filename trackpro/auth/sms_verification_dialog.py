@@ -1,12 +1,11 @@
 """SMS verification dialog for login 2FA."""
 
 import logging
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QMessageBox, QSpacerItem, QSizePolicy
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QFrame
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 from .twilio_service import twilio_service, TWILIO_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -37,13 +36,13 @@ class SMSVerificationDialog(QDialog):
         # Title
         title = QLabel("Enter verification code")
         title.setFont(QFont("Segoe UI", 14))
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Phone number info
         masked_phone = self.mask_phone_number(self.phone_number) if self.phone_number else "your phone"
         info_label = QLabel(f"Sent to {masked_phone}")
-        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_label.setStyleSheet("color: #666; font-size: 12px;")
         layout.addWidget(info_label)
         
@@ -51,7 +50,7 @@ class SMSVerificationDialog(QDialog):
         self.code_input = QLineEdit()
         self.code_input.setPlaceholderText("6-digit code")
         self.code_input.setMaxLength(6)
-        self.code_input.setAlignment(Qt.AlignCenter)
+        self.code_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.code_input.setFont(QFont("Segoe UI", 16))
         self.code_input.setStyleSheet("""
             QLineEdit {
@@ -138,7 +137,7 @@ class SMSVerificationDialog(QDialog):
         self.resend_btn.setEnabled(False)
         
         error_label = QLabel("SMS verification unavailable")
-        error_label.setAlignment(Qt.AlignCenter)
+        error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         error_label.setStyleSheet("color: #d93025; font-size: 12px;")
         self.layout().insertWidget(2, error_label)
     
@@ -156,7 +155,7 @@ class SMSVerificationDialog(QDialog):
             
             if result['success']:
                 # Re-enable after 30 seconds
-                from PyQt5.QtCore import QTimer
+                from PyQt6.QtCore import QTimer
                 QTimer.singleShot(30000, lambda: (
                     self.resend_btn.setEnabled(True),
                     self.resend_btn.setText("Resend")

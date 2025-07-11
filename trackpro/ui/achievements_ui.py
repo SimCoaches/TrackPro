@@ -1,11 +1,19 @@
-"""Achievements UI Components for TrackPro - Gamification interface elements."""
+"""Achievements UI Components for TrackPro."""
 
+import os
+import sys
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+    QTextEdit, QComboBox, QCheckBox, QGroupBox, QFormLayout, QScrollArea,
+    QFrame, QSizePolicy, QMessageBox, QDialog, QTabWidget, QListWidget,
+    QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
+    QGridLayout
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
 from .social_ui import SocialTheme
 from ..social import achievements_manager, reputation_manager
 
@@ -40,7 +48,7 @@ class AchievementCard(QFrame):
         icon_label = QLabel(self._get_achievement_icon())
         icon_label.setFont(QFont('Segoe UI', 24))
         icon_label.setFixedSize(40, 40)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Rarity badge
         rarity = self.achievement_data.get('rarity', 'common')
@@ -314,7 +322,7 @@ class XPProgressWidget(QFrame):
         
         self.xp_label = QLabel("0 / 1000 XP")
         self.xp_label.setFont(SocialTheme.FONTS['caption'])
-        self.xp_label.setAlignment(Qt.AlignCenter)
+        self.xp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.xp_label.setStyleSheet(f"color: {SocialTheme.COLORS['text_secondary']};")
         
         # XP Categories
@@ -333,15 +341,15 @@ class XPProgressWidget(QFrame):
             
             icon_label = QLabel(icon)
             icon_label.setFont(QFont('Segoe UI', 16))
-            icon_label.setAlignment(Qt.AlignCenter)
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             name_label = QLabel(name)
             name_label.setFont(SocialTheme.FONTS['caption'])
-            name_label.setAlignment(Qt.AlignCenter)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             xp_label = QLabel("0 XP")
             xp_label.setFont(SocialTheme.FONTS['caption'])
-            xp_label.setAlignment(Qt.AlignCenter)
+            xp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             xp_label.setStyleSheet(f"color: {SocialTheme.COLORS['text_secondary']};")
             
             category_widget.addWidget(icon_label)
@@ -481,7 +489,7 @@ class StreaksWidget(QFrame):
         icon_label = QLabel(streak_icons.get(streak_type, '🔥'))
         icon_label.setFont(QFont('Segoe UI', 16))
         icon_label.setFixedSize(24, 24)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Streak info
         info_layout = QVBoxLayout()
@@ -551,7 +559,7 @@ class ReputationWidget(QFrame):
         # Reputation level
         self.level_label = QLabel("Newcomer")
         self.level_label.setFont(SocialTheme.FONTS['body'])
-        self.level_label.setAlignment(Qt.AlignCenter)
+        self.level_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Progress to next level
         self.progress_bar = QProgressBar()
@@ -571,7 +579,7 @@ class ReputationWidget(QFrame):
         
         self.progress_label = QLabel("Progress to next level")
         self.progress_label.setFont(SocialTheme.FONTS['caption'])
-        self.progress_label.setAlignment(Qt.AlignCenter)
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.progress_label.setStyleSheet(f"color: {SocialTheme.COLORS['text_secondary']};")
         
         layout.addLayout(header_layout)

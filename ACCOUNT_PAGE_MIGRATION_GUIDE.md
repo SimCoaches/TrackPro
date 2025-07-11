@@ -11,7 +11,7 @@ This is a complete, step-by-step implementation guide for building the TrackPro 
 - OAuth user support and profile completion
 
 ## 📋 Prerequisites
-- TrackPro application with PyQt5 UI framework
+- TrackPro application with PyQt6 UI framework
 - Supabase database connection
 - Existing user authentication system
 - Main window with stacked widget architecture
@@ -108,9 +108,9 @@ import os
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, date
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class AccountPage(QWidget):
         header_layout = QHBoxLayout()
         
         title_label = QLabel("Account Settings")
-        title_label.setFont(QFont("Arial", 24, QFont.Bold))
+        title_label.setFont(QFont("Arial", 24, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #BF616A; font-weight: bold;")
         
         subtitle_label = QLabel("Manage your profile, privacy, and preferences")
@@ -181,7 +181,7 @@ class AccountPage(QWidget):
     def create_profile_section(self):
         """Create the Profile Information section with all form fields."""
         group_box = QGroupBox("Profile Information")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
+        group_box.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         group_box.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -319,7 +319,7 @@ class AccountPage(QWidget):
     def create_security_section(self):
         """Create the Account Security section for password management."""
         group_box = QGroupBox("Account Security")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
+        group_box.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         group_box.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -343,19 +343,19 @@ class AccountPage(QWidget):
         
         # Current Password (for existing password users)
         self.current_password_input = QLineEdit()
-        self.current_password_input.setEchoMode(QLineEdit.Password)
+        self.current_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.current_password_input.setStyleSheet(self.get_input_style())
         security_layout.addRow("Current Password:", self.current_password_input)
         
         # New Password
         self.new_password_input = QLineEdit()
-        self.new_password_input.setEchoMode(QLineEdit.Password)
+        self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.new_password_input.setStyleSheet(self.get_input_style())
         security_layout.addRow("New Password:", self.new_password_input)
         
         # Confirm New Password
         self.confirm_password_input = QLineEdit()
-        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.confirm_password_input.setStyleSheet(self.get_input_style())
         security_layout.addRow("Confirm New Password:", self.confirm_password_input)
         
@@ -378,7 +378,7 @@ class AccountPage(QWidget):
     def create_actions_section(self):
         """Create the Account Actions section for logout and deletion."""
         group_box = QGroupBox("Account Actions")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
+        group_box.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         group_box.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -403,7 +403,7 @@ class AccountPage(QWidget):
         delete_layout = QVBoxLayout(delete_section)
         
         delete_title = QLabel("Delete Account")
-        delete_title.setFont(QFont("Arial", 12, QFont.Bold))
+        delete_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         delete_title.setStyleSheet("color: #BF616A; border: none; background: transparent;")
         
         delete_description = QLabel("Permanently delete your TrackPro account and all associated data. This action cannot be undone.")
@@ -436,7 +436,7 @@ class AccountPage(QWidget):
         logout_layout = QVBoxLayout(logout_section)
         
         logout_title = QLabel("Sign Out")
-        logout_title.setFont(QFont("Arial", 12, QFont.Bold))
+        logout_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         logout_title.setStyleSheet("color: #5E81AC; border: none; background: transparent;")
         
         self.logout_btn = QPushButton("Sign Out")
@@ -790,7 +790,7 @@ class AccountPage(QWidget):
 
     def on_data_sharing_changed(self, state):
         """Handle data sharing toggle change."""
-        if state == Qt.Unchecked:  # User is disabling data sharing
+        if state == Qt.CheckState.Unchecked:  # User is disabling data sharing
             # Show warning modal
             self.show_data_sharing_warning()
         else:
@@ -807,7 +807,7 @@ class AccountPage(QWidget):
         msg_box.addButton("Cancel", QMessageBox.RejectRole)
         confirm_btn = msg_box.addButton("Confirm Disable", QMessageBox.AcceptRole)
         
-        result = msg_box.exec_()
+        result = msg_box.exec()
         
         if msg_box.clickedButton() == confirm_btn:
             # User confirmed disabling
@@ -891,9 +891,9 @@ class AccountPage(QWidget):
             
             # Test title
             title = QLabel("📊 Data Flow Control Test Results")
-            title.setFont(QFont("Arial", 14, QFont.Bold))
+            title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
             title.setStyleSheet("color: #5E81AC; margin: 10px 0;")
-            title.setAlignment(Qt.AlignCenter)
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(title)
             
             # Test results area
@@ -949,7 +949,7 @@ class AccountPage(QWidget):
             close_btn.clicked.connect(test_dialog.accept)
             layout.addWidget(close_btn)
             
-            test_dialog.exec_()
+            test_dialog.exec()
             
         except Exception as e:
             logger.error(f"Error running data flow test: {e}")
@@ -1065,7 +1065,7 @@ class AccountPage(QWidget):
             msg_box.setWindowTitle("Complete Your Profile")
             msg_box.setText("Please complete your profile information to continue using TrackPro.")
             msg_box.setInformativeText(f"Missing: {', '.join(missing_fields)}")
-            msg_box.exec_()
+            msg_box.exec()
 
     def force_refresh_user_data(self):
         """Force a complete refresh of user data for security."""
@@ -1106,7 +1106,7 @@ class AccountPage(QWidget):
         
         login_label = QLabel("Please log in to access your account settings.")
         login_label.setFont(QFont("Arial", 16))
-        login_label.setAlignment(Qt.AlignCenter)
+        login_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         login_label.setStyleSheet("color: #5E81AC; margin: 20px;")
         
         if layout:
@@ -1223,7 +1223,7 @@ if hasattr(self, 'stacked_widget'):
 ```python
 # SECURITY FIX: Trigger showEvent for account page when switched to
 if hasattr(current_widget, 'showEvent'):
-    from PyQt5.QtGui import QShowEvent
+    from PyQt6.QtGui import QShowEvent
     # Create and dispatch a show event
     show_event = QShowEvent()
     # Call the widget's showEvent method

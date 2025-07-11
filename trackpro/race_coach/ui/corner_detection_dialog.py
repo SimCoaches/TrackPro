@@ -2,11 +2,11 @@
 Corner Detection Dialog - UI for Track Analysis
 """
 
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                            QLabel, QProgressBar, QTextEdit, QSpinBox, 
                            QGroupBox, QMessageBox, QListWidget, QListWidgetItem, QWidget)
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
 
 from ..corner_detection_manager import CornerDetectionManager, Corner
 
@@ -32,15 +32,15 @@ class CornerDetectionDialog(QDialog):
         
         # Title
         title = QLabel("🏁 Corner Detection - Task 2.2")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Description
         desc = QLabel("Automatically detect corners using speed drops and steering increases.\n"
                      "Corners will be numbered starting from the start/finish line.")
         desc.setWordWrap(True)
-        desc.setAlignment(Qt.AlignCenter)
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(desc)
         
         # Settings group
@@ -216,14 +216,14 @@ class CornerDetectionDialog(QDialog):
             f"• Use existing data (recommended)\n"
             f"• Regenerate new corner data\n\n"
             f"Note: Regenerating will overwrite the existing data.",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Use existing data
             self.load_existing_corners(existing_data)
-        elif reply == QMessageBox.No:
+        elif reply == QMessageBox.StandardButton.No:
             # Regenerate data
             self.add_log_entry("User chose to regenerate corner data...")
             self.start_detection(force_regenerate=True)
@@ -288,11 +288,11 @@ class CornerDetectionDialog(QDialog):
                 self,
                 "Corner Detection Running",
                 "Corner detection is currently running. Do you want to stop it and close?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
             
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 self.stop_detection()
                 event.accept()
             else:

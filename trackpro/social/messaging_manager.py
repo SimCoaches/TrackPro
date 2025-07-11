@@ -793,4 +793,5 @@ class MessagingManager(DatabaseManager):
         return descriptions.get(activity_type, "")
 
 # Create a global instance
-messaging_manager = MessagingManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.messaging_manager or trackpro.social.get_messaging_manager() instead 

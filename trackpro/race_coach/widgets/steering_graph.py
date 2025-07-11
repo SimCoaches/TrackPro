@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
-from PyQt5.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 import numpy as np
 import math
@@ -56,12 +56,12 @@ class SteeringGraphWidget(GraphBase):
                                                  pen='#30363d')
         
         # Add horizontal line at 0 with better styling
-        self.zero_line = pg.InfiniteLine(angle=0, pos=0, pen=pg.mkPen('#6e7681', width=1, style=Qt.DashLine))
+        self.zero_line = pg.InfiniteLine(angle=0, pos=0, pen=pg.mkPen('#6e7681', width=1, style=Qt.PenStyle.DashLine))
         self.plot_widget.addItem(self.zero_line)
         
         # Create crosshair lines with modern styling
-        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
-        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.PenStyle.DotLine))
+        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.PenStyle.DotLine))
         self.plot_widget.addItem(self.vLine, ignoreBounds=True)
         self.plot_widget.addItem(self.hLine, ignoreBounds=True)
         
@@ -105,7 +105,7 @@ class SteeringGraphWidget(GraphBase):
         self.label_b = "Lap B"
         # Use improved pen settings for smoother, higher-quality lines
         smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
-        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine, cosmetic=True)
+        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)
         
         self.steering_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Steering", autoDownsample=False, clipToView=False, antialias=True)
         self.steering_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Steering", autoDownsample=False, clipToView=False, antialias=True)
@@ -128,7 +128,7 @@ class SteeringGraphWidget(GraphBase):
         try:
             # Convert tuple to QPointF if needed (happens with SignalProxy)
             if isinstance(evt, tuple):
-                from PyQt5.QtCore import QPointF
+                from PyQt6.QtCore import QPointF
                 if len(evt) >= 2:
                     pos = QPointF(evt[0], evt[1])
                 elif len(evt) == 1:
@@ -259,7 +259,7 @@ class SteeringGraphWidget(GraphBase):
         corner_marker = pg.InfiniteLine(
             angle=90, 
             movable=False,
-            pen=pg.mkPen('c', width=1, style=Qt.DotLine),
+            pen=pg.mkPen('c', width=1, style=Qt.PenStyle.DotLine),
             label=f"C{corner_number}", 
             labelOpts={'position': 0.9, 'color': 'c', 'fill': (0, 0, 0, 100)}
         )
@@ -277,7 +277,7 @@ class SteeringGraphWidget(GraphBase):
         distance_marker = pg.InfiniteLine(
             angle=90, 
             movable=False,
-            pen=pg.mkPen('w', width=1, style=Qt.DotLine),
+            pen=pg.mkPen('w', width=1, style=Qt.PenStyle.DotLine),
             label=label, 
             labelOpts={'position': 0.05, 'color': 'w', 'fill': (0, 0, 0, 100)}
         )
@@ -319,7 +319,7 @@ class SteeringGraphWidget(GraphBase):
             line = pg.InfiniteLine(
                 pos=pos, 
                 angle=90, 
-                pen=pg.mkPen((80, 80, 80), width=1, style=Qt.DashLine),
+                pen=pg.mkPen((80, 80, 80), width=1, style=Qt.PenStyle.DashLine),
                 movable=False
             )
             self.plot_widget.addItem(line)

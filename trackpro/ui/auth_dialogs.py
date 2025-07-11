@@ -19,7 +19,7 @@ class PasswordDialog(QDialog):
         
         # Add password field
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.password_input)
         
         # Add buttons

@@ -6,13 +6,13 @@ telemetry data between different laps.
 
 import logging
 import math
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QFrame, QGridLayout, QSizePolicy, QDialog,
     QTextEdit, QDialogButtonBox, QMessageBox, QScrollArea
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
-from PyQt5.QtGui import QFont, QColor, QPainter, QPen, QBrush
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
+from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush
 
 # Import graph widgets from the widgets directory
 from trackpro.race_coach.widgets.throttle_graph import ThrottleGraphWidget
@@ -234,7 +234,7 @@ class TelemetryComparisonWidget(QWidget):
 
         # Driver comparison header
         header_frame = QFrame()
-        header_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        header_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         header_frame.setStyleSheet("background-color: #2D2D30; border-radius: 5px;")
         header_layout = QHBoxLayout(header_frame)
 
@@ -334,7 +334,7 @@ class DeltaGraphWidget(QWidget):
     def paintEvent(self, event):
         """Paint the delta graph."""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         width = self.width()
         height = self.height()
@@ -345,7 +345,7 @@ class DeltaGraphWidget(QWidget):
         if not self.delta_data:
             # Draw "No Data" message
             painter.setPen(QPen(QColor(128, 128, 128)))
-            painter.drawText(0, 0, width, height, Qt.AlignCenter, "No Delta Data")
+            painter.drawText(0, 0, width, height, Qt.AlignmentFlag.AlignCenter, "No Delta Data")
             return
 
         # Draw grid
@@ -527,7 +527,7 @@ class TelemetryTab(QWidget):
 
         # Status label
         self.graph_status_label = QLabel()
-        self.graph_status_label.setAlignment(Qt.AlignLeft)
+        self.graph_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.graph_status_label.setStyleSheet("""
             QLabel {
                 color: #ffa500;
@@ -558,7 +558,7 @@ class TelemetryTab(QWidget):
 
         # Loading indicator - much more compact
         self.loading_label = QLabel("🔄 Loading...")
-        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loading_label.setStyleSheet("""
             QLabel {
                 color: #aaa;
@@ -577,8 +577,8 @@ class TelemetryTab(QWidget):
         # COMPACT GRAPHS CONTAINER - like RaceStudio3 stacked view
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_area.setStyleSheet("""
             QScrollArea {
                 background-color: #0d1117;
@@ -623,7 +623,7 @@ class TelemetryTab(QWidget):
 
         # LARGER heights now that we removed the header waste - more like RaceStudio3
         GRAPH_HEIGHT = 150  # Increased from 120 since we removed title headers
-        graph_size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        graph_size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # Create graph containers WITHOUT title headers to maximize drawing area
         def create_graph_container(graph_widget):

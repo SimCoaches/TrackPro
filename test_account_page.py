@@ -6,8 +6,8 @@ Demonstrates the complete account management interface functionality.
 
 import sys
 import os
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton
-from PyQt5.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton
+from PyQt6.QtCore import Qt
 
 # Add the trackpro module to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -94,7 +94,7 @@ def main():
     print("   • The user_details and user_profiles tables should exist")
     
     # Run the application
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main() 

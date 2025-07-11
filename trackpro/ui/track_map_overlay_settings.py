@@ -5,12 +5,12 @@ Allows users to configure and control the transparent track map overlay.
 """
 
 import logging
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                           QLabel, QSlider, QSpinBox, QCheckBox, QGroupBox,
-                           QGridLayout, QMessageBox, QColorDialog, QComboBox,
-                           QFrame)
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QColor
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+                             QLabel, QSlider, QCheckBox, QComboBox, QSpinBox,
+                             QGroupBox, QFormLayout, QColorDialog, QMessageBox,
+                             QTabWidget, QWidget, QScrollArea)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QColor
 
 from ..race_coach.track_map_overlay import TrackMapOverlayManager
 
@@ -44,7 +44,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         # Description
@@ -105,7 +105,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         # Scale slider
         position_layout.addWidget(QLabel("Overlay Scale:"), 0, 0)
-        self.scale_slider = QSlider(Qt.Horizontal)
+        self.scale_slider = QSlider(Qt.Orientation.Horizontal)
         self.scale_slider.setRange(10, 50)  # 10% to 50%
         self.scale_slider.setValue(30)  # Default 30%
         position_layout.addWidget(self.scale_slider, 0, 1)

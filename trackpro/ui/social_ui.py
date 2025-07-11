@@ -1,11 +1,16 @@
-"""Social UI Framework for TrackPro - Comprehensive social interface components."""
+"""Social UI Components for TrackPro Community Features."""
 
 import logging
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+    QTextEdit, QComboBox, QCheckBox, QGroupBox, QFormLayout, QScrollArea,
+    QFrame, QSizePolicy, QMessageBox, QDialog, QTabWidget, QListWidget,
+    QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
 from ..social import (
     enhanced_user_manager, friends_manager, messaging_manager, 
     activity_manager, community_manager, achievements_manager, 
@@ -34,11 +39,11 @@ class SocialTheme:
     
     # Fonts
     FONTS = {
-        'heading': QFont('Segoe UI', 16, QFont.Bold),
-        'subheading': QFont('Segoe UI', 14, QFont.Bold),
-        'body': QFont('Segoe UI', 12),
-        'caption': QFont('Segoe UI', 10),
-        'button': QFont('Segoe UI', 11, QFont.Bold)
+        'heading': QFont('Segoe UI', 16, QFont.Weight.Bold),
+        'subheading': QFont('Segoe UI', 14, QFont.Weight.Bold),
+        'body': QFont('Segoe UI', 11),
+        'small': QFont('Segoe UI', 9),
+        'button': QFont('Segoe UI', 11, QFont.Weight.Bold)
     }
     
     @staticmethod
@@ -168,7 +173,7 @@ class UserProfileWidget(QFrame):
                 background-color: {SocialTheme.COLORS['surface']};
             }}
         """)
-        self.avatar_label.setAlignment(Qt.AlignCenter)
+        self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.avatar_label.setText("👤")  # Default avatar
         
         # User info
@@ -209,10 +214,10 @@ class UserProfileWidget(QFrame):
                 stat_widget = QVBoxLayout()
                 count_label = QLabel("0")
                 count_label.setFont(SocialTheme.FONTS['subheading'])
-                count_label.setAlignment(Qt.AlignCenter)
+                count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 name_label = QLabel(stat)
                 name_label.setFont(SocialTheme.FONTS['caption'])
-                name_label.setAlignment(Qt.AlignCenter)
+                name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 stat_widget.addWidget(count_label)
                 stat_widget.addWidget(name_label)
                 stats_layout.addLayout(stat_widget)
@@ -348,7 +353,7 @@ class FriendsListWidget(QWidget):
         # Avatar
         avatar = QLabel("👤")
         avatar.setFixedSize(40, 40)
-        avatar.setAlignment(Qt.AlignCenter)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar.setStyleSheet(f"""
             QLabel {{
                 border: 2px solid {SocialTheme.COLORS['accent']};
@@ -422,7 +427,7 @@ class FriendsListWidget(QWidget):
     def show_add_friend_dialog(self):
         """Show add friend dialog."""
         dialog = AddFriendDialog(self.current_user_id, self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self.load_friends()
     
     def start_conversation(self, friend_id: str):
@@ -483,7 +488,7 @@ class MessagingWidget(QWidget):
         # Chat header
         self.chat_header = QLabel("Select a conversation")
         self.chat_header.setFont(SocialTheme.FONTS['subheading'])
-        self.chat_header.setAlignment(Qt.AlignCenter)
+        self.chat_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Messages area
         self.messages_area = QScrollArea()
@@ -522,7 +527,7 @@ class MessagingWidget(QWidget):
                 item = QListWidgetItem()
                 widget = self.create_conversation_item(conversation)
                 item.setSizeHint(widget.sizeHint())
-                item.setData(Qt.UserRole, conversation['id'])
+                item.setData(Qt.ItemDataRole.UserRole, conversation['id'])
                 self.conversations_list.addItem(item)
                 self.conversations_list.setItemWidget(item, widget)
                 
@@ -561,7 +566,7 @@ class MessagingWidget(QWidget):
         if unread_count > 0:
             unread_label = QLabel(str(unread_count))
             unread_label.setFixedSize(20, 20)
-            unread_label.setAlignment(Qt.AlignCenter)
+            unread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             unread_label.setStyleSheet(f"""
                 QLabel {{
                     background-color: {SocialTheme.COLORS['primary']};
@@ -578,7 +583,7 @@ class MessagingWidget(QWidget):
     
     def on_conversation_selected(self, item):
         """Handle conversation selection."""
-        conversation_id = item.data(Qt.UserRole)
+        conversation_id = item.data(Qt.ItemDataRole.UserRole)
         self.current_conversation_id = conversation_id
         self.load_messages()
     
@@ -622,7 +627,7 @@ class MessagingWidget(QWidget):
         content_label.setFont(SocialTheme.FONTS['body'])
         
         if is_own_message:
-            content_label.setAlignment(Qt.AlignRight)
+            content_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             content_label.setStyleSheet(f"""
                 QLabel {{
                     background-color: {SocialTheme.COLORS['primary']};
@@ -632,7 +637,7 @@ class MessagingWidget(QWidget):
                 }}
             """)
         else:
-            content_label.setAlignment(Qt.AlignLeft)
+            content_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
             content_label.setStyleSheet(f"""
                 QLabel {{
                     background-color: {SocialTheme.COLORS['surface']};
@@ -649,9 +654,9 @@ class MessagingWidget(QWidget):
         time_label.setStyleSheet(f"color: {SocialTheme.COLORS['text_secondary']};")
         
         if is_own_message:
-            time_label.setAlignment(Qt.AlignRight)
+            time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         else:
-            time_label.setAlignment(Qt.AlignLeft)
+            time_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         
         layout.addWidget(content_label)
         layout.addWidget(time_label)

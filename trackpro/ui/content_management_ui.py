@@ -1,16 +1,19 @@
-"""
-TrackPro Content Management UI Components
-Racing-themed interface for sharing setups, media, and racing content
-"""
+"""Content Management UI Components for TrackPro."""
 
-import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
-from datetime import datetime, timedelta
-import json
 import os
-from typing import Dict, List, Optional, Any
+import sys
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
+    QTextEdit, QComboBox, QCheckBox, QGroupBox, QFormLayout, QScrollArea,
+    QFrame, QSizePolicy, QMessageBox, QDialog, QTabWidget, QListWidget,
+    QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
+    QGridLayout
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
 
 # Import the community theme
 from .community_ui import CommunityTheme
@@ -39,7 +42,7 @@ class ContentCard(QWidget):
         """Setup the content card UI"""
         self.setFixedHeight(280)
         self.setObjectName("community-card")
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -62,7 +65,7 @@ class ContentCard(QWidget):
         icon_label = QLabel(type_icons.get(content_type, '📄'))
         icon_label.setFont(QFont('Segoe UI Emoji', 20))
         icon_label.setFixedSize(32, 32)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Content info
         info_layout = QVBoxLayout()
@@ -91,7 +94,7 @@ class ContentCard(QWidget):
                 border-radius: 10px;
             """)
             category_label.setMaximumWidth(100)
-            category_label.setAlignment(Qt.AlignCenter)
+            category_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
         header_layout.addWidget(icon_label)
         header_layout.addLayout(info_layout)
@@ -221,7 +224,7 @@ class ContentCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.content_clicked.emit(self.content_data)
 
 class ContentBrowserWidget(QWidget):
@@ -288,34 +291,34 @@ class ContentBrowserWidget(QWidget):
         # All content tab
         self.all_content_scroll = QScrollArea()
         self.all_content_scroll.setWidgetResizable(True)
-        self.all_content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.all_content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.all_content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.all_content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.all_content_widget = QWidget()
         self.all_content_layout = QGridLayout(self.all_content_widget)
-        self.all_content_layout.setAlignment(Qt.AlignTop)
+        self.all_content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.all_content_scroll.setWidget(self.all_content_widget)
         
         # My content tab
         self.my_content_scroll = QScrollArea()
         self.my_content_scroll.setWidgetResizable(True)
-        self.my_content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.my_content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.my_content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.my_content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.my_content_widget = QWidget()
         self.my_content_layout = QGridLayout(self.my_content_widget)
-        self.my_content_layout.setAlignment(Qt.AlignTop)
+        self.my_content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.my_content_scroll.setWidget(self.my_content_widget)
         
         # Liked content tab
         self.liked_content_scroll = QScrollArea()
         self.liked_content_scroll.setWidgetResizable(True)
-        self.liked_content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.liked_content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.liked_content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.liked_content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.liked_content_widget = QWidget()
         self.liked_content_layout = QGridLayout(self.liked_content_widget)
-        self.liked_content_layout.setAlignment(Qt.AlignTop)
+        self.liked_content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.liked_content_scroll.setWidget(self.liked_content_widget)
         
         self.tab_widget.addTab(self.all_content_scroll, "All Content")
@@ -460,7 +463,7 @@ class ContentBrowserWidget(QWidget):
     def show_upload_dialog(self):
         """Show dialog to upload new content"""
         dialog = UploadContentDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             content_data = dialog.get_content_data()
             self.upload_content(content_data)
             
@@ -521,12 +524,12 @@ class ContentBrowserWidget(QWidget):
         content_item = next((item for item in self.content_items if item['id'] == content_id), None)
         if content_item:
             dialog = ShareContentDialog(content_item, self)
-            dialog.exec_()
+            dialog.exec()
             
     def show_content_details(self, content_data: Dict[str, Any]):
         """Show detailed content information"""
         dialog = ContentDetailsDialog(content_data, self.content_manager, self.user_id, self)
-        dialog.exec_()
+        dialog.exec()
         
     def show_success(self, message: str):
         """Show success message"""
@@ -591,7 +594,7 @@ class UploadContentDialog(QDialog):
                 color: {CommunityTheme.COLORS['text_secondary']};
             }}
         """)
-        self.file_label.setAlignment(Qt.AlignCenter)
+        self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.file_label.setMinimumHeight(80)
         
         browse_button = QPushButton("Browse...")
@@ -809,7 +812,7 @@ class ContentDetailsDialog(QDialog):
         icon_label = QLabel(type_icons.get(content_type, '📄'))
         icon_label.setFont(QFont('Segoe UI Emoji', 32))
         icon_label.setFixedSize(48, 48)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Content info
         info_layout = QVBoxLayout()
@@ -981,7 +984,7 @@ class ContentDetailsDialog(QDialog):
     def share_content(self):
         """Share the content"""
         dialog = ShareContentDialog(self.content_data, self)
-        dialog.exec_()
+        dialog.exec()
 
 class ContentManagementMainWidget(QWidget):
     """Main content management interface"""
@@ -1041,12 +1044,12 @@ class ContentManagementMainWidget(QWidget):
             value_label = QLabel(stat_value)
             value_label.setFont(QFont(*CommunityTheme.FONTS['subheading']))
             value_label.setStyleSheet(f"color: {CommunityTheme.COLORS['primary']};")
-            value_label.setAlignment(Qt.AlignCenter)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             name_label = QLabel(stat_name)
             name_label.setFont(QFont(*CommunityTheme.FONTS['caption']))
             name_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']};")
-            name_label.setAlignment(Qt.AlignCenter)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
             stat_layout.addWidget(value_label)
             stat_layout.addWidget(name_label)
@@ -1111,4 +1114,4 @@ if __name__ == "__main__":
     content_widget = ContentManagementMainWidget(mock_manager, 'test_user')
     content_widget.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

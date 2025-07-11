@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
-from PyQt5.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 import numpy as np
 import logging
@@ -49,8 +49,8 @@ class ThrottleGraphWidget(GraphBase):
                                                  pen='#30363d')
         
         # Create crosshair lines with modern styling
-        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
-        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.DotLine))
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.PenStyle.DotLine))
+        self.hLine = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.PenStyle.DotLine))
         self.plot_widget.addItem(self.vLine, ignoreBounds=True)
         self.plot_widget.addItem(self.hLine, ignoreBounds=True)
         
@@ -65,7 +65,7 @@ class ThrottleGraphWidget(GraphBase):
         self.start_finish_line = pg.InfiniteLine(
             angle=90, 
             movable=False, 
-            pen=pg.mkPen('y', width=2, style=Qt.DashLine),
+            pen=pg.mkPen('y', width=2, style=Qt.PenStyle.DashLine),
             label="Start/Finish", 
             labelOpts={'position': 0.9, 'color': 'y'}
         )
@@ -112,7 +112,7 @@ class ThrottleGraphWidget(GraphBase):
         self.label_b = "Lap B" 
         # Use improved pen settings for smoother, higher-quality lines
         smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
-        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.SolidLine, cosmetic=True)
+        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)
         
         self.throttle_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Throttle", autoDownsample=False, clipToView=False, antialias=True)
         self.throttle_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Throttle", autoDownsample=False, clipToView=False, antialias=True)
@@ -135,7 +135,7 @@ class ThrottleGraphWidget(GraphBase):
         try:
             # Handle different position data formats robustly
             if isinstance(pos, tuple):
-                from PyQt5.QtCore import QPointF
+                from PyQt6.QtCore import QPointF
                 if len(pos) >= 2:
                     pos = QPointF(pos[0], pos[1])
                 elif len(pos) == 1:
@@ -296,7 +296,7 @@ class ThrottleGraphWidget(GraphBase):
         corner_marker = pg.InfiniteLine(
             angle=90, 
             movable=False,
-            pen=pg.mkPen('c', width=1, style=Qt.DotLine),
+            pen=pg.mkPen('c', width=1, style=Qt.PenStyle.DotLine),
             label=f"C{corner_number}", 
             labelOpts={'position': 0.1, 'color': 'c', 'fill': (0, 0, 0, 100)}
         )
@@ -314,7 +314,7 @@ class ThrottleGraphWidget(GraphBase):
         distance_marker = pg.InfiniteLine(
             angle=90, 
             movable=False,
-            pen=pg.mkPen('w', width=1, style=Qt.DotLine),
+            pen=pg.mkPen('w', width=1, style=Qt.PenStyle.DotLine),
             label=label, 
             labelOpts={'position': 0.05, 'color': 'w', 'fill': (0, 0, 0, 100)}
         )
@@ -400,7 +400,7 @@ class ThrottleGraphWidget(GraphBase):
     def add_distance_grid(self):
         """Add distance grid lines at specific intervals (500m)."""
         grid_interval = 500  # Grid interval in meters
-        grid_pen = pg.mkPen((80, 80, 80), width=1, style=Qt.DashLine)
+        grid_pen = pg.mkPen((80, 80, 80), width=1, style=Qt.PenStyle.DashLine)
         
         # Create custom grid using InfiniteLine objects
         self.grid_lines = []
@@ -436,7 +436,7 @@ class ThrottleGraphWidget(GraphBase):
             line = pg.InfiniteLine(
                 pos=pos, 
                 angle=90, 
-                pen=pg.mkPen((80, 80, 80), width=1, style=Qt.DashLine),
+                pen=pg.mkPen((80, 80, 80), width=1, style=Qt.PenStyle.DashLine),
                 movable=False
             )
             self.plot_widget.addItem(line)

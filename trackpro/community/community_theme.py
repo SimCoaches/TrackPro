@@ -3,7 +3,7 @@ Community Theme Configuration
 Provides consistent styling and colors for all community features.
 """
 
-from PyQt5.QtGui import QFont
+from PyQt6.QtGui import QFont
 
 
 class CommunityTheme:
@@ -31,8 +31,8 @@ class CommunityTheme:
     
     # Typography
     FONTS = {
-        'heading': ('Arial', 16, QFont.Bold),
-        'subheading': ('Arial', 14, QFont.Bold),
+        'heading': ('Arial', 16, QFont.Weight.Bold),
+        'subheading': ('Arial', 14, QFont.Weight.Bold),
         'body': ('Arial', 12),
         'caption': ('Arial', 10),
     }

@@ -4,9 +4,9 @@ Integrated community interface that works as a tab within the main TrackPro appl
 """
 
 import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from datetime import datetime
 import json
 from typing import Dict, List, Optional, Any
@@ -202,7 +202,7 @@ class CommunityNavigationWidget(QWidget):
         # Main button
         button = QPushButton()
         button.setCheckable(True)
-        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         button.setMinimumHeight(75)
         
         # Create layout for button content
@@ -252,7 +252,7 @@ class CommunityNavigationWidget(QWidget):
         # Notification badge
         badge = QLabel()
         badge.setFixedSize(20, 20)
-        badge.setAlignment(Qt.AlignCenter)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(f"""
             QLabel {{
                 background-color: #FF4444;
@@ -323,7 +323,7 @@ class CommunityNavigationWidget(QWidget):
         self.fade_animation.setDuration(1000)
         self.fade_animation.setStartValue(1.0)
         self.fade_animation.setEndValue(0.5)
-        self.fade_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.fade_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.fade_animation.finished.connect(lambda: self.fade_animation.setDirection(
             QPropertyAnimation.Forward if self.fade_animation.direction() == QPropertyAnimation.Backward 
             else QPropertyAnimation.Backward
@@ -457,18 +457,18 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         """Create a login required widget that blocks all content until user signs in"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setContentsMargins(50, 50, 50, 50)
         
         # Large lock icon
         icon_label = QLabel("🔐")
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setStyleSheet(f"font-size: 64px; color: {CommunityTheme.COLORS['accent']};")
         layout.addWidget(icon_label)
         
         # Title
         title_label = QLabel("Sign In Required")
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_primary']};
             font-size: 24px;
@@ -489,7 +489,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         
         section_message = section_messages.get(section_id, "Access community features")
         message_label = QLabel(f"Sign in to {section_message}")
-        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_label.setWordWrap(True)
         message_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_secondary']};
@@ -526,7 +526,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         
         # Additional info
         info_label = QLabel("All community features require authentication to protect user privacy and enable personalized experiences.")
-        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_label.setWordWrap(True)
         info_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_secondary']};
@@ -543,7 +543,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         """Create a placeholder widget for sections that aren't available"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Icon - different icons for different states
         if "log in" in message.lower():
@@ -554,13 +554,13 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             icon_color = CommunityTheme.COLORS['text_secondary']
             
         icon_label = QLabel(icon_text)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setStyleSheet(f"font-size: 48px; color: {icon_color};")
         layout.addWidget(icon_label)
         
         # Message
         message_label = QLabel(message)
-        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_primary']};
             font-size: 16px;
@@ -599,7 +599,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             status_text = "This feature will be available when all components are loaded."
             
         status_label = QLabel(status_text)
-        status_label.setAlignment(Qt.AlignCenter)
+        status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_label.setWordWrap(True)
         status_label.setStyleSheet(f"""
             color: {CommunityTheme.COLORS['text_secondary']};
@@ -1519,6 +1519,12 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
 # Factory function for creating the community widget
 def create_community_widget(parent=None):
     """Create a community widget for embedding in the main application"""
+    # Check if QApplication exists before creating widgets
+    from PyQt6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        print("No QApplication instance available - cannot create community widget")
+        return None
+        
     return CommunityMainWidget(parent)
 
 
@@ -1532,4 +1538,4 @@ if __name__ == "__main__":
     widget.resize(1200, 800)
     widget.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

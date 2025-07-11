@@ -1,10 +1,10 @@
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QProgressBar, 
     QSizePolicy
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, pyqtProperty, QObject
-from PyQt5.QtGui import QFont, QPixmap, QColor
-from PyQt5.QtMultimedia import QSoundEffect
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, pyqtProperty, QObject
+from PyQt6.QtGui import QFont, QPixmap, QColor
+from PyQt6.QtMultimedia import QSoundEffect
 import logging
 # External UI helper for toast notifications
 from .notifications import ToastNotification
@@ -198,14 +198,14 @@ class QuestCardWidget(QWidget):
         right_layout = QVBoxLayout(right_section_widget)
         right_layout.setContentsMargins(0,0,0,0)
         right_layout.setSpacing(5)
-        right_layout.setAlignment(Qt.AlignTop) # Align content to top
+        right_layout.setAlignment(Qt.AlignmentFlag.AlignTop) # Align content to top
 
         # New rewards layout area
         self.rewards_layout_widget = QWidget() # Create a container widget for the QHBoxLayout
         self.rewards_layout = QHBoxLayout(self.rewards_layout_widget)
         self.rewards_layout.setContentsMargins(0,0,0,0)
         self.rewards_layout.setSpacing(5) # Spacing between icon and text, and between reward items
-        self.rewards_layout.setAlignment(Qt.AlignRight | Qt.AlignTop) # Align entire block to top-right
+        self.rewards_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop) # Align entire block to top-right
 
         self.claim_button = QPushButton("Claim")
         self.claim_button.setFixedHeight(30)
@@ -220,9 +220,9 @@ class QuestCardWidget(QWidget):
         self.claim_button.clicked.connect(self._on_claim_button_clicked_animated)
 
 
-        right_layout.addWidget(self.rewards_layout_widget, 0, Qt.AlignTop) # Add new rewards container
+        right_layout.addWidget(self.rewards_layout_widget, 0, Qt.AlignmentFlag.AlignTop) # Add new rewards container
         right_layout.addStretch(1) # Pushes claim button towards the bottom of its area
-        right_layout.addWidget(self.claim_button, 0, Qt.AlignBottom) # Add claim button, align bottom
+        right_layout.addWidget(self.claim_button, 0, Qt.AlignmentFlag.AlignBottom) # Add claim button, align bottom
 
 
         # Add sections to main layout
@@ -294,7 +294,7 @@ class QuestCardWidget(QWidget):
             # Display a default message if no specific rewards or only a 'none' type reward
             no_reward_label = QLabel("No specific rewards") # Or an empty string: ""
             no_reward_label.setStyleSheet("color: #AAAAAA; font-style: italic;")
-            no_reward_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            no_reward_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.rewards_layout.addWidget(no_reward_label)
         else:
             for reward_item in rewards_list:
@@ -330,7 +330,7 @@ class QuestCardWidget(QWidget):
                 font_rewards_text.setPointSize(9)
                 text_label.setFont(font_rewards_text)
                 text_label.setStyleSheet("color: #DAA520;") # Gold-like color for rewards text
-                text_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter) # Align text within its own space
+                text_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) # Align text within its own space
                 self.rewards_layout.addWidget(text_label)
 
                 # Store references to labels for animation
@@ -468,7 +468,7 @@ class QuestCardWidget(QWidget):
             self._button_fill_anim.setDuration(600)  # Duration of the fill in ms
             self._button_fill_anim.setStartValue(0.0)
             self._button_fill_anim.setEndValue(1.0)
-            self._button_fill_anim.setEasingCurve(QEasingCurve.InOutQuad)
+            self._button_fill_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
             
             # Disconnect previous connection if any to avoid multiple emissions
             try:
@@ -544,7 +544,7 @@ class QuestCardWidget(QWidget):
         # Create animation if not already running
         anim = QPropertyAnimation(self, b"geometry")
         anim.setDuration(250)
-        anim.setEasingCurve(QEasingCurve.OutBack)
+        anim.setEasingCurve(QEasingCurve.Type.OutBack)
         anim.setKeyValueAt(0.0, original_geom)
         anim.setKeyValueAt(0.5, enlarged_geom)
         anim.setKeyValueAt(1.0, original_geom)
@@ -572,7 +572,7 @@ class QuestCardWidget(QWidget):
             self._xp_count_anim.setDuration(700) # Animation duration in ms
             self._xp_count_anim.setStartValue(0)
             self._xp_count_anim.setEndValue(xp_to_animate)
-            self._xp_count_anim.setEasingCurve(QEasingCurve.OutCubic)
+            self._xp_count_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             self._xp_count_anim.start()
         
         if self.rp_xp_reward_label and rp_xp_to_animate > 0:
@@ -581,14 +581,14 @@ class QuestCardWidget(QWidget):
             self._rp_xp_count_anim.setDuration(700)
             self._rp_xp_count_anim.setStartValue(0)
             self._rp_xp_count_anim.setEndValue(rp_xp_to_animate)
-            self._rp_xp_count_anim.setEasingCurve(QEasingCurve.OutCubic)
+            self._rp_xp_count_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             self._rp_xp_count_anim.start()
 
     # ------------------------------------------------------------------
     # Testing helper: double-click to replay feedback when already claimed
     # ------------------------------------------------------------------
     def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.LeftButton and self._previously_claimed:
+        if event.button() == Qt.MouseButton.LeftButton and self._previously_claimed:
             # Replay feedback using stored rewards
             self._play_claim_feedback("claimed", self._rewards_list)
         super().mouseDoubleClickEvent(event)
@@ -596,8 +596,8 @@ class QuestCardWidget(QWidget):
 # Example Usage (for testing QuestCardWidget standalone if needed)
 if __name__ == '__main__':
     import sys
-    from PyQt5.QtWidgets import QApplication, QMainWindow
-    from PyQt5.QtCore import QUrl # Required for QSoundEffect paths
+    from PyQt6.QtWidgets import QApplication, QMainWindow
+    from PyQt6.QtCore import QUrl # Required for QSoundEffect paths
     
     # Example quest data structures
     quest_data_incomplete = {
@@ -657,4 +657,4 @@ if __name__ == '__main__':
 
     main_window.setCentralWidget(container)
     main_window.show()
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

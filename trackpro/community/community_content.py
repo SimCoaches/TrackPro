@@ -3,9 +3,9 @@ Community Content and Teams Components
 Contains community features and content management functionality for TrackPro Community.
 """
 
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from .community_theme import CommunityTheme
 
 
@@ -342,19 +342,19 @@ class CommunityContentMixin:
                         self.my_content_layout.addWidget(content_card)
                 else:
                     empty_label = QLabel("You haven't shared any content yet. Go to the Upload tab to share!")
-                    empty_label.setAlignment(Qt.AlignCenter)
+                    empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
                     empty_label.setWordWrap(True)
                     self.my_content_layout.addWidget(empty_label)
 
             except Exception as e:
                 error_label = QLabel(f"Could not load your content: {str(e)}")
-                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 error_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']}; padding: 40px;")
                 self.my_content_layout.addWidget(error_label)
         else:
             placeholder_label = QLabel("Log in and connect to the database to see your content.")
-            placeholder_label.setAlignment(Qt.AlignCenter)
+            placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
             self.my_content_layout.addWidget(placeholder_label)
 
@@ -418,17 +418,17 @@ class CommunityContentMixin:
                         content_layout.addWidget(content_card)
                 else:
                     empty_label = QLabel("No featured content available right now. Check back later!")
-                    empty_label.setAlignment(Qt.AlignCenter)
+                    empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
                     content_layout.addWidget(empty_label)
             except Exception as e:
                 error_label = QLabel(f"Could not load featured content: {str(e)}")
-                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 error_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']}; padding: 40px;")
                 content_layout.addWidget(error_label)
         else:
             placeholder_label = QLabel("Connect to the database to browse community content.")
-            placeholder_label.setAlignment(Qt.AlignCenter)
+            placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
             content_layout.addWidget(placeholder_label)
 
@@ -849,11 +849,11 @@ class CommunityContentMixin:
             self, 
             "Join Club", 
             f"Do you want to join '{club_name}'?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 success = self.db_managers['community_manager'].join_club(self.user_id, club_id)
                 if success:
@@ -873,11 +873,11 @@ class CommunityContentMixin:
             self,
             "Delete Content",
             f"Are you sure you want to delete '{title}'?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 success = self.db_managers['content_manager'].delete_content(self.user_id, content_id, content_type)
                 if success:

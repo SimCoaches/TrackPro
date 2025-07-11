@@ -34,13 +34,16 @@ This architecture ensures that:
 
 import logging
 import math
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTabWidget, QFrame, QSizePolicy, QMessageBox, QDialog,
-    QTextEdit, QDialogButtonBox, QInputDialog, QProgressBar
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
+    QSplitter, QGroupBox, QLabel, QPushButton, QCheckBox, QComboBox,
+    QSpinBox, QSlider, QProgressBar, QTextEdit, QScrollArea, QFrame,
+    QSizePolicy, QSpacerItem, QMessageBox, QDialog, QDialogButtonBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QFileDialog, QInputDialog, QApplication, QTabBar
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtWidgets import QApplication
 
 # Import the individual tab modules
 from .overview_tab import OverviewTab
@@ -138,12 +141,12 @@ class RaceCoachWidget(QWidget):
         loading_layout = QVBoxLayout(self.loading_frame)
         
         loading_title = QLabel("🏁 TrackPro Race Coach")
-        loading_title.setAlignment(Qt.AlignCenter)
+        loading_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         loading_title.setStyleSheet("color: #FF4500; font-size: 24px; font-weight: bold;")
         loading_layout.addWidget(loading_title)
         
         self.loading_label = QLabel("Initializing advanced coaching systems...")
-        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loading_label.setStyleSheet("color: #CCCCCC; font-size: 14px; margin: 20px;")
         loading_layout.addWidget(self.loading_label)
         
@@ -193,6 +196,13 @@ class RaceCoachWidget(QWidget):
             from ..utils.telemetry_worker import TelemetryMonitorWorker
             self.telemetry_monitor_worker = TelemetryMonitorWorker()
             logger.info("✅ TelemetryMonitorWorker initialized in background")
+        except ImportError as e:
+            if "elevenlabs" in str(e):
+                logger.warning(f"⚠️ AI Coach features disabled - elevenlabs not available: {e}")
+                self.telemetry_monitor_worker = None
+            else:
+                logger.error(f"❌ Error importing TelemetryMonitorWorker: {e}")
+                self.telemetry_monitor_worker = None
         except Exception as e:
             logger.error(f"❌ Error initializing TelemetryMonitorWorker: {e}")
             self.telemetry_monitor_worker = None
@@ -226,17 +236,18 @@ class RaceCoachWidget(QWidget):
         QTimer.singleShot(100, self._step_3_create_ui)
 
     def _step_3_create_ui(self):
-        """Step 3: Create the actual UI."""
+        """Step 3: Create the actual UI - MUST run in main thread."""
         try:
             self._update_progress(70, "Building user interface...")
-            logger.debug("🎨 [BACKGROUND] Creating actual UI...")
-            self._create_actual_ui()
-            logger.info("✅ Actual UI created in background")
+            logger.debug("🎨 [MAIN THREAD] Creating actual UI in main thread...")
+            
+            # Schedule UI creation on main thread to avoid Qt threading issues
+            QTimer.singleShot(10, self._create_actual_ui_main_thread)
+            
         except Exception as e:
-            logger.error(f"❌ Error creating actual UI: {e}")
-        
-        # Move to next step
-        QTimer.singleShot(100, self._step_4_setup_connections)
+            logger.error(f"❌ Error scheduling UI creation: {e}")
+            # Move to next step even if scheduling fails
+            QTimer.singleShot(100, self._step_4_setup_connections)
 
     def _step_4_setup_connections(self):
         """Step 4: Setup iRacing connections."""
@@ -268,23 +279,34 @@ class RaceCoachWidget(QWidget):
         self.progress_bar.setValue(value)
         self.loading_label.setText(message)
 
-    def _create_actual_ui(self):
-        """Create the actual Race Coach UI - moved to background."""
+    def _create_actual_ui_main_thread(self):
+        """Create the actual Race Coach UI safely in the main thread."""
         try:
-            logger.debug("🎨 [BACKGROUND] Creating actual UI widget...")
+            logger.debug("🎨 [MAIN THREAD] Creating actual UI widget in main thread...")
             self.actual_ui_widget = QWidget()
             self.setup_ui_on_widget(self.actual_ui_widget)
-            logger.info("✅ Actual UI widget created successfully")
+            logger.info("✅ Actual UI widget created successfully in main thread")
+            
+            # Continue to next step after UI creation
+            QTimer.singleShot(50, self._step_4_setup_connections)
+            
         except Exception as e:
-            logger.error(f"❌ Error creating actual UI: {e}")
+            logger.error(f"❌ Error creating actual UI in main thread: {e}")
             self.actual_ui_widget = None
+            # Continue anyway to avoid hanging
+            QTimer.singleShot(100, self._step_4_setup_connections)
+
+    def _create_actual_ui(self):
+        """Legacy method - redirects to main thread safe version."""
+        logger.warning("🎨 [LEGACY] _create_actual_ui called - redirecting to main thread version")
+        QTimer.singleShot(10, self._create_actual_ui_main_thread)
 
     def _setup_iracing_connections(self):
         """Setup iRacing connections - moved to background."""
         try:
             self._update_progress(90, "Connecting to iRacing...")
             # Try to get shared API
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             main_window = None
             for widget in QApplication.topLevelWidgets():
                 if hasattr(widget, 'get_shared_iracing_api'):
@@ -300,6 +322,11 @@ class RaceCoachWidget(QWidget):
                 # Connect signals for connection status updates
                 if hasattr(self.iracing_api, 'connection_changed'):
                     self.iracing_api.connection_changed.connect(self.on_iracing_connected)
+                
+                # 🔧 BUGFIX: Connect sessionInfoUpdated signal to update UI when session changes
+                if hasattr(self.iracing_api, 'sessionInfoUpdated'):
+                    self.iracing_api.sessionInfoUpdated.connect(self._update_connection_status)
+                    logger.info("✅ Connected sessionInfoUpdated signal for UI updates")
                 
                 # Update initial connection status
                 if hasattr(self.iracing_api, 'is_connected') and self.iracing_api.is_connected():
@@ -496,7 +523,7 @@ class RaceCoachWidget(QWidget):
         
         # Loading message
         loading_label = QLabel(loading_message)
-        loading_label.setAlignment(Qt.AlignCenter)
+        loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         loading_label.setStyleSheet("""
             color: #888;
             font-size: 16px;
@@ -521,7 +548,7 @@ class RaceCoachWidget(QWidget):
                 border-radius: 3px;
             }
         """)
-        layout.addWidget(progress, 0, Qt.AlignCenter)
+        layout.addWidget(progress, 0, Qt.AlignmentFlag.AlignCenter)
         
         layout.addStretch()
         
@@ -555,6 +582,14 @@ class RaceCoachWidget(QWidget):
                 status_layout.insertWidget(placeholder_index, self.ai_coach_volume_widget)
                 logger.info("✅ AI Coach volume control loaded in background")
             
+        except ImportError as e:
+            if "elevenlabs" in str(e):
+                logger.warning(f"⚠️ AI Coach volume control disabled - elevenlabs not available: {e}")
+                self._volume_widget_placeholder.setText("🔊 Volume: N/A")
+                self._volume_widget_placeholder.setToolTip("AI Coach features not available")
+            else:
+                logger.error(f"❌ Failed to import volume control: {e}")
+                self._volume_widget_placeholder.setText("🔊 Volume: Error")
         except Exception as e:
             logger.error(f"❌ Failed to create volume control: {e}")
             # Keep placeholder with error message
@@ -713,7 +748,7 @@ class RaceCoachWidget(QWidget):
             error_layout.addStretch()
             
             error_label = QLabel(f"❌ Error loading {tab_text} tab:\n{str(e)}")
-            error_label.setAlignment(Qt.AlignCenter)
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             error_label.setStyleSheet("color: #FF6666; font-size: 14px; padding: 20px;")
             error_label.setWordWrap(True)
             error_layout.addWidget(error_label)
@@ -727,7 +762,7 @@ class RaceCoachWidget(QWidget):
                 font-weight: bold;
             """)
             retry_button.clicked.connect(lambda: self._create_actual_tab(index, tab_text))
-            error_layout.addWidget(retry_button, 0, Qt.AlignCenter)
+            error_layout.addWidget(retry_button, 0, Qt.AlignmentFlag.AlignCenter)
             
             error_layout.addStretch()
             
@@ -744,9 +779,9 @@ class RaceCoachWidget(QWidget):
         """Create a custom title for the SuperLap tab with an icon."""
         try:
             import os
-            from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel
-            from PyQt5.QtGui import QPixmap
-            from PyQt5.QtCore import Qt
+            from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
+            from PyQt6.QtGui import QPixmap
+            from PyQt6.QtCore import Qt
             
             # Create custom tab widget - SMALL container
             tab_title_widget = QWidget()
@@ -768,7 +803,7 @@ class RaceCoachWidget(QWidget):
             if os.path.exists(logo_path):
                 pixmap = QPixmap(logo_path)
                 # Make logo LARGE regardless of small container size
-                scaled_pixmap = pixmap.scaled(220, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                scaled_pixmap = pixmap.scaled(220, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 logo_label.setPixmap(scaled_pixmap)
             else:
                 # Fallback if logo file not found
@@ -777,17 +812,17 @@ class RaceCoachWidget(QWidget):
                 logo_label.setStyleSheet("color: #FF4500; font-size: 14px; background: transparent;")
             
             # Center the logo both horizontally and vertically
-            logo_label.setAlignment(Qt.AlignCenter)
+            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             # Add stretchers to center the logo in the layout
             tab_layout.addStretch()
-            tab_layout.addWidget(logo_label, 0, Qt.AlignCenter)
+            tab_layout.addWidget(logo_label, 0, Qt.AlignmentFlag.AlignCenter)
             tab_layout.addStretch()
             
             # Replace the tab text with empty string to avoid duplication
             self.tab_widget.setTabText(tab_index, "")
             
             # Set the custom widget as the tab content
-            self.tab_widget.tabBar().setTabButton(tab_index, self.tab_widget.tabBar().LeftSide, tab_title_widget)
+            self.tab_widget.tabBar().setTabButton(tab_index, QTabBar.ButtonPosition.LeftSide, tab_title_widget)
             
         except Exception as e:
             logger.error(f"Error creating SuperLap tab title with logo: {e}")
@@ -854,6 +889,7 @@ class RaceCoachWidget(QWidget):
         else:
             # Disconnected state
             self.connection_label.setText("iRacing: Disconnected")
+            self.connection_label.setStyleSheet("color: red; font-weight: bold;")
             self.driver_label.setText("No Driver")
             self.track_label.setText("No Track")
 
@@ -911,6 +947,20 @@ class RaceCoachWidget(QWidget):
 
     def toggle_ai_coaching(self):
         """Toggle AI coaching on/off."""
+        # Check if AI coach is available
+        if not self.telemetry_monitor_worker:
+            QMessageBox.warning(
+                self, 
+                "AI Coach Unavailable", 
+                "AI Coach features are not available.\n\n"
+                "This could be because:\n"
+                "• ElevenLabs package is not installed\n"
+                "• OpenAI API key is not set\n"
+                "• ElevenLabs API key is not set\n\n"
+                "Please install missing packages and set up API keys to use AI coaching."
+            )
+            return
+            
         if self.is_ai_coaching_active():
             # Stop coaching
             self.stop_ai_coaching()
@@ -966,7 +1016,7 @@ class RaceCoachWidget(QWidget):
         button_box.accepted.connect(dialog.accept)
         layout.addWidget(button_box)
 
-        dialog.exec_()
+        dialog.exec()
 
     def show_corner_detection_dialog(self):
         """Show the corner detection dialog for track analysis."""
@@ -974,7 +1024,7 @@ class RaceCoachWidget(QWidget):
             from .corner_detection_dialog import CornerDetectionDialog
             
             dialog = CornerDetectionDialog(self)
-            dialog.exec_()
+            dialog.exec()
             
         except ImportError as e:
             logger.error(f"Failed to import corner detection dialog: {e}")
@@ -1023,7 +1073,16 @@ class RaceCoachWidget(QWidget):
         
         if not self.telemetry_monitor_worker:
             logger.error("❌ Cannot start AI coaching: TelemetryMonitorWorker not available")
-            return
+            QMessageBox.warning(
+                self, 
+                "AI Coach Unavailable", 
+                "AI Coach features are not available.\n\n"
+                "This could be because:\n"
+                "• ElevenLabs package is not installed\n"
+                "• Required AI modules are missing\n\n"
+                "Please check the installation and try again."
+            )
+            return False
             
         # Check authentication for superlap data access
         from trackpro.database.supabase_client import get_supabase_client

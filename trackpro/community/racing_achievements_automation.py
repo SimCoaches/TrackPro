@@ -6,7 +6,7 @@ Monitors racing telemetry and automatically posts achievements to the social fee
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
-from PyQt5.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 import logging
 
 logger = logging.getLogger(__name__)

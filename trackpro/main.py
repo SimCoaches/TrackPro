@@ -1,9 +1,9 @@
 import sys
 import time
 import subprocess
-from PyQt5.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QLabel, QCheckBox, QProgressBar, QSplashScreen
-from PyQt5.QtCore import QTimer, QPointF, Qt
-from PyQt5.QtGui import QPixmap
+from PyQt6.QtWidgets import QApplication, QMessageBox, QTextEdit, QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QLabel, QCheckBox, QProgressBar, QSplashScreen
+from PyQt6.QtCore import QTimer, QPointF, Qt
+from PyQt6.QtGui import QPixmap
 import logging
 # Defer pygame import
 # import pygame
@@ -397,14 +397,14 @@ class TrackProApp:
     def create_startup_progress(self):
         """Create and show a startup progress dialog."""
         try:
-            from PyQt5.QtGui import QPixmap
+            from PyQt6.QtGui import QPixmap
             # Create the progress dialog
-            self.startup_dialog = QDialog(None, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+            self.startup_dialog = QDialog(None, Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)
             self.startup_dialog.setWindowTitle("TrackPro Starting")
             self.startup_dialog.setFixedSize(450, 250)
 
             # Center dialog on screen
-            screen_geometry = self.app.desktop().screenGeometry()
+            screen_geometry = self.app.primaryScreen().geometry()
             x = (screen_geometry.width() - self.startup_dialog.width()) // 2
             y = (screen_geometry.height() - self.startup_dialog.height()) // 2
             self.startup_dialog.move(x, y)
@@ -419,8 +419,8 @@ class TrackProApp:
             if os.path.exists(logo_path):
                 logo_pixmap = QPixmap(logo_path)
                 logo_label = QLabel()
-                logo_label.setPixmap(logo_pixmap.scaled(120, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                logo_label.setAlignment(Qt.AlignCenter)
+                logo_label.setPixmap(logo_pixmap.scaled(120, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 layout.addWidget(logo_label)
 
             # Main Title
@@ -431,7 +431,7 @@ class TrackProApp:
                 color: #f0f0f0;
                 text-shadow: 3px 3px 5px rgba(0,0,0,0.8);
             """)
-            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(title_label)
             
             # Subtitle
@@ -442,14 +442,14 @@ class TrackProApp:
                 color: #c0392b;
                 font-weight: bold;
             """)
-            version_label.setAlignment(Qt.AlignCenter)
+            version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(version_label)
 
             layout.addStretch(1)
 
             # Status Label
             self.status_label = QLabel("Starting TrackPro...")
-            self.status_label.setAlignment(Qt.AlignCenter)
+            self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.status_label.setWordWrap(True)
             self.status_label.setStyleSheet("""
                 font-size: 12px; 
@@ -581,7 +581,7 @@ class TrackProApp:
     def show_debug_window(self):
         """Show the debug window."""
         debug_window = DebugWindow(self.window)
-        debug_window.exec_()
+        debug_window.exec()
     
     def load_calibration(self):
         """Load calibration data into UI."""
@@ -837,7 +837,7 @@ class TrackProApp:
             dialog.profile_selected.connect(self.apply_profile)
             
             # Show dialog
-            dialog.exec_()
+            dialog.exec()
             
         except Exception as e:
             logger.error(f"Error showing profile manager: {e}")
@@ -959,7 +959,7 @@ class TrackProApp:
             self.oauth_port = None
             
             # Show a warning to the user that OAuth won't work
-            from PyQt5.QtCore import QTimer
+            from PyQt6.QtCore import QTimer
             QTimer.singleShot(2000, lambda: self.show_oauth_error(str(e)))
     
     def cleanup(self, force_unhide=True):
@@ -1020,7 +1020,7 @@ class TrackProApp:
                             if hasattr(widget, 'closeEvent'):
                                 logger.info("Calling Race Coach widget closeEvent...")
                                 try:
-                                    from PyQt5.QtGui import QCloseEvent
+                                    from PyQt6.QtGui import QCloseEvent
                                     widget.closeEvent(QCloseEvent())
                                 except Exception as e:
                                     logger.error(f"Error calling closeEvent: {e}")
@@ -1256,11 +1256,11 @@ class TrackProApp:
     def show_nonblocking_warning(self, title, message):
         """Show a non-blocking warning dialog."""
         warning = QMessageBox(self.window)
-        warning.setIcon(QMessageBox.Warning)
+        warning.setIcon(QMessageBox.Icon.Warning)
         warning.setWindowTitle(title)
         warning.setText(message)
-        warning.setStandardButtons(QMessageBox.Ok)
-        warning.setWindowModality(Qt.NonModal)
+        warning.setStandardButtons(QMessageBox.StandardButton.Ok)
+        warning.setWindowModality(Qt.WindowModality.NonModal)
         warning.show()
     
     def show_oauth_error(self, error_message):
@@ -1276,11 +1276,11 @@ class TrackProApp:
         )
         
         error_dialog = QMessageBox(self.window if hasattr(self, 'window') else None)
-        error_dialog.setIcon(QMessageBox.Warning)
+        error_dialog.setIcon(QMessageBox.Icon.Warning)
         error_dialog.setWindowTitle("OAuth Authentication Unavailable")
         error_dialog.setText(message)
-        error_dialog.setStandardButtons(QMessageBox.Ok)
-        error_dialog.setWindowModality(Qt.NonModal)
+        error_dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        error_dialog.setWindowModality(Qt.WindowModality.NonModal)
         error_dialog.show()
     
     def handle_auth_state_change(self, is_authenticated):
@@ -1345,7 +1345,7 @@ class TrackProApp:
             QApplication.processEvents()
             
             # Start the event loop
-            exit_code = self.app.exec_()
+            exit_code = self.app.exec()
             
             # Process any remaining events before we return
             QApplication.processEvents()
@@ -1500,12 +1500,12 @@ def main():
         # Attempt to show an error message box (might fail if QApplication isn't running)
         try:
             error_dialog = QMessageBox()
-            error_dialog.setIcon(QMessageBox.Critical)
+            error_dialog.setIcon(QMessageBox.Icon.Critical)
             error_dialog.setWindowTitle("TrackPro Critical Error")
             error_dialog.setText("A critical error occurred and TrackPro must exit.")
             error_dialog.setDetailedText(traceback.format_exc())
-            error_dialog.setStandardButtons(QMessageBox.Ok)
-            error_dialog.exec_()
+            error_dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+            error_dialog.exec()
         except Exception as msg_e:
             logger.error(f"Could not display the error message box: {msg_e}")
 

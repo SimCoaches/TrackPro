@@ -5,15 +5,15 @@ for racing education content.
 """
 
 import logging
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QComboBox, QFrame, QScrollArea, QGridLayout, QLineEdit,
     QProgressBar, QTableWidget, QTableWidgetItem, QTextEdit,
     QStackedWidget, QSplitter, QTabWidget
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ class VideosTab(QWidget):
                 text-decoration: underline;
             }
         """)
-        self.back_button.setCursor(Qt.PointingHandCursor)
+        self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.back_button.clicked.connect(self.show_course_browser)
         header_layout.addWidget(self.back_button)
         
@@ -205,7 +205,7 @@ class VideosTab(QWidget):
         layout.addWidget(header)
 
         # Main content area
-        content_splitter = QSplitter(Qt.Horizontal)
+        content_splitter = QSplitter(Qt.Orientation.Horizontal)
         
         # Left side - Video player and details
         left_panel = QWidget()
@@ -1087,7 +1087,7 @@ class EnhancedCourseCard(QFrame):
             }
         """)
         
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1123,7 +1123,7 @@ class EnhancedCourseCard(QFrame):
             font-size: 10px;
             font-weight: bold;
         """)
-        level_badge.setAlignment(Qt.AlignCenter)
+        level_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         level_badge.setMaximumWidth(80)
         
         thumbnail_layout.addWidget(level_badge)
@@ -1138,10 +1138,10 @@ class EnhancedCourseCard(QFrame):
             border-radius: 25px;
             padding: 10px;
         """)
-        play_icon.setAlignment(Qt.AlignCenter)
+        play_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         play_icon.setFixedSize(50, 50)
         
-        thumbnail_layout.addWidget(play_icon, 0, Qt.AlignCenter)
+        thumbnail_layout.addWidget(play_icon, 0, Qt.AlignmentFlag.AlignCenter)
         thumbnail_layout.addStretch()
         
         layout.addWidget(thumbnail)
@@ -1224,7 +1224,7 @@ class VideoModuleCard(QFrame):
             }
         """)
         
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 12, 15, 12)

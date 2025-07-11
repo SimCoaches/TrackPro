@@ -9,10 +9,10 @@ Displays live sector timing information including:
 """
 
 import logging
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QProgressBar, QFrame, QGridLayout, QScrollArea, QPushButton)
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QPalette
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont, QPalette
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class SectorTimingWidget(QWidget):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(title_label)
         
         # Current sector progress
@@ -93,12 +93,12 @@ class SectorTimingWidget(QWidget):
     def create_current_sector_section(self, parent_layout):
         """Create the current sector progress section."""
         frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(frame)
         
         # Section title
         title = QLabel("Current Sector")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         title.setStyleSheet("color: #00ff88;")
         layout.addWidget(title)
         
@@ -106,7 +106,7 @@ class SectorTimingWidget(QWidget):
         info_layout = QHBoxLayout()
         
         self.current_sector_label = QLabel("Sector: --")
-        self.current_sector_label.setFont(QFont("Arial", 14, QFont.Bold))
+        self.current_sector_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         info_layout.addWidget(self.current_sector_label)
         
         self.current_time_label = QLabel("Time: --.---")
@@ -128,12 +128,12 @@ class SectorTimingWidget(QWidget):
     def create_best_times_section(self, parent_layout):
         """Create the best sector times section."""
         frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(frame)
         
         # Section title
         title = QLabel("Best Sector Times")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         title.setStyleSheet("color: #00ff88;")
         layout.addWidget(title)
         
@@ -144,7 +144,7 @@ class SectorTimingWidget(QWidget):
         # Create labels for up to 6 sectors (most tracks have 3-4)
         for i in range(6):
             sector_label = QLabel(f"S{i+1}:")
-            sector_label.setFont(QFont("Arial", 10, QFont.Bold))
+            sector_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
             time_label = QLabel("---.---")
             time_label.setFont(QFont("Arial", 10))
             time_label.setStyleSheet("color: #ffff00;")  # Yellow for best times
@@ -160,12 +160,12 @@ class SectorTimingWidget(QWidget):
     def create_recent_laps_section(self, parent_layout):
         """Create the recent laps section."""
         frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(frame)
         
         # Section title
         title = QLabel("Recent Laps")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         title.setStyleSheet("color: #00ff88;")
         layout.addWidget(title)
         
@@ -187,18 +187,18 @@ class SectorTimingWidget(QWidget):
     def create_status_section(self, parent_layout):
         """Create the status section."""
         frame = QFrame()
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(frame)
         
         # Section title
         title = QLabel("Status")
-        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         title.setStyleSheet("color: #00ff88;")
         layout.addWidget(title)
         
         # Status label
         self.status_label = QLabel("Waiting for sector data...")
-        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("color: #888888; font-style: italic;")
         layout.addWidget(self.status_label)
         
@@ -298,7 +298,7 @@ class SectorTimingWidget(QWidget):
     def create_lap_widget(self, lap_data):
         """Create a widget for displaying a single lap's sector times."""
         widget = QFrame()
-        widget.setFrameStyle(QFrame.Box)
+        widget.setFrameStyle(QFrame.Shape.Box)
         widget.setStyleSheet("""
             QFrame {
                 background-color: #333333;
@@ -326,7 +326,7 @@ class SectorTimingWidget(QWidget):
         
         # Lap number
         lap_label = QLabel(f"Lap {lap_number}")
-        lap_label.setFont(QFont("Arial", 9, QFont.Bold))
+        lap_label.setFont(QFont("Arial", 9, QFont.Weight.Bold))
         lap_label.setStyleSheet("color: #00ff88;")
         layout.addWidget(lap_label)
         
@@ -348,7 +348,7 @@ class SectorTimingWidget(QWidget):
         
         # Total time
         total_label = QLabel(f"Total: {total_time:.3f}")
-        total_label.setFont(QFont("Arial", 9, QFont.Bold))
+        total_label.setFont(QFont("Arial", 9, QFont.Weight.Bold))
         total_label.setStyleSheet("color: #ff8800;")  # Orange for total time
         layout.addWidget(total_label)
         

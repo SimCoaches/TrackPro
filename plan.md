@@ -108,7 +108,7 @@ You are tasked with building an advanced sim racing AI coach, called TrackPro, t
   - Corner name
   - Real-time coaching alerts
   - Delta vs best lap
-- Use PyQt5, Pyglet, or Pygame for GUI rendering.
+- Use PyQt6, Pyglet, or Pygame for GUI rendering.
 
 **✅ Test:**
 - Confirm overlays are synchronized with driving.
@@ -278,7 +278,7 @@ You are tasked with building an advanced sim racing AI coach, called TrackPro, t
 ### 📈 Phase 12 — Full Analysis Dashboard
 
 #### Task 12.1 — Full GUI Build
-- Create desktop analysis UI using Dash (Plotly) or PyQt5.
+- Create desktop analysis UI using Dash (Plotly) or PyQt6.
 - Show:
   - Lap comparison
   - Corner analysis

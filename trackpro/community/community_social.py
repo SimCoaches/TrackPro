@@ -3,9 +3,9 @@ Community Social Components
 Contains all social-related widgets and functionality for the TrackPro Community.
 """
 
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from datetime import datetime
 from .community_theme import CommunityTheme
 
@@ -142,19 +142,19 @@ class CommunitySocialMixin:
                 else:
                     # No activities found - show empty state
                     empty_label = QLabel("No achievements yet. Complete some laps in iRacing to see automated achievements appear here!")
-                    empty_label.setAlignment(Qt.AlignCenter)
+                    empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
                     empty_label.setWordWrap(True)
                     feed_layout.addWidget(empty_label)
             except Exception as e:
                 error_label = QLabel(f"Could not load activities: {str(e)}")
-                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 error_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']}; padding: 40px;")
                 feed_layout.addWidget(error_label)
         else:
             # NO FAKE DATA - show empty state only
             empty_label = QLabel("No recent activity yet. Complete some laps to see achievements here!")
-            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
             empty_label.setWordWrap(True)
             feed_layout.addWidget(empty_label)
@@ -234,19 +234,19 @@ class CommunitySocialMixin:
                 else:
                     # No friends found - show empty state
                     empty_label = QLabel("No friends yet. Use the 'Add Friend' button to connect with other racers!")
-                    empty_label.setAlignment(Qt.AlignCenter)
+                    empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
                     empty_label.setWordWrap(True)
                     friends_layout.addWidget(empty_label)
             except Exception as e:
                 error_label = QLabel(f"Could not load friends: {str(e)}")
-                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 error_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']}; padding: 40px;")
                 friends_layout.addWidget(error_label)
         else:
             # NO FAKE DATA - show empty state only
             empty_label = QLabel("No friends yet. Add real racing friends to see their activity!")
-            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 40px;")
             empty_label.setWordWrap(True)
             friends_layout.addWidget(empty_label)
@@ -435,7 +435,7 @@ class CommunitySocialMixin:
         icon_label = QLabel(icon)
         icon_label.setStyleSheet("font-size: 24px;")
         icon_label.setFixedSize(40, 40)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Content
         content_layout = QVBoxLayout()
@@ -486,7 +486,7 @@ class CommunitySocialMixin:
         status_label = QLabel(status_icon)
         status_label.setStyleSheet("font-size: 20px;")
         status_label.setFixedSize(30, 30)
-        status_label.setAlignment(Qt.AlignCenter)
+        status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Friend info
         info_layout = QVBoxLayout()
@@ -626,7 +626,7 @@ class CommunitySocialMixin:
             self, 
             "Add Friend", 
             "Enter friend's username:",
-            QLineEdit.Normal
+            QLineEdit.EchoMode.Normal
         )
         
         if ok and username:
@@ -720,7 +720,7 @@ class CommunitySocialMixin:
                     else:
                         # No activities placeholder
                         no_activity_label = QLabel("No achievements yet. Complete some laps in iRacing to see automated achievements!")
-                        no_activity_label.setAlignment(Qt.AlignCenter)
+                        no_activity_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         no_activity_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']}; padding: 20px;")
                         no_activity_label.setWordWrap(True)
                         layout.addWidget(no_activity_label)

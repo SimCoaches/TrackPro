@@ -6,9 +6,9 @@ import logging
 import traceback
 
 from .shared_imports import *
-from PyQt5.QtWidgets import QGraphicsOpacityEffect
-from PyQt5.QtCore import QPropertyAnimation, QEasingCurve, QTimer, QPointF
-from PyQt5.QtGui import QHideEvent, QShowEvent
+from PyQt6.QtWidgets import QGraphicsOpacityEffect
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, QPointF, QMargins
+from PyQt6.QtGui import QHideEvent, QShowEvent
 from .chart_widgets import IntegratedCalibrationChart
 from .auth_dialogs import PasswordDialog
 from .theme import setup_dark_theme
@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
             }
         """)
         self.update_notification.setVisible(False)
-        layout.addWidget(self.update_notification, 0, Qt.AlignLeft)
+        layout.addWidget(self.update_notification, 0, Qt.AlignmentFlag.AlignLeft)
         
         # Create enhanced status bar with login info
         self.statusBar = QStatusBar()
@@ -214,8 +214,13 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event."""
         try:
-            # Stop any running processes
-            self.stop_all_processes()
+            # Check if this should minimize to tray instead of closing
+            from ..config import config
+            if config.minimize_to_tray and hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
+                logger.info("Minimizing to tray instead of closing")
+                self.hide()
+                event.ignore()
+                return
             
             # Cleanup track map overlay
             if hasattr(self, 'track_map_overlay_manager') and self.track_map_overlay_manager:
@@ -223,11 +228,33 @@ class MainWindow(QMainWindow):
                 logger.info("🗺️ Track map overlay manager cleaned up")
             
             # Save settings
-            self.save_settings()
+            if hasattr(self, 'save_settings'):
+                self.save_settings()
             
             # Cleanup database connections
             if hasattr(self, 'db_manager') and self.db_manager:
                 self.db_manager.cleanup()
+            
+            # Hide tray icon
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                self.tray_icon.hide()
+            
+            # Signal the main application to cleanup and exit
+            # Find the main app instance and call its cleanup method
+            app = QApplication.instance()
+            if app:
+                # Try to find the TrackPro app instance
+                for obj in app.findChildren(QObject):
+                    if hasattr(obj, 'cleanup') and hasattr(obj, 'hardware') and hasattr(obj, 'window'):
+                        logger.info("Found TrackPro app instance, calling cleanup")
+                        try:
+                            obj.cleanup()
+                        except Exception as cleanup_e:
+                            logger.error(f"Error during app cleanup: {cleanup_e}")
+                        break
+                
+                # Force application exit
+                QTimer.singleShot(100, lambda: app.exit(0))
             
             # Accept the close event
             event.accept()
@@ -537,8 +564,14 @@ class MainWindow(QMainWindow):
         # Size settings - strictly enforce the height with fixed size policy
         curve_selector.setMinimumWidth(130)  # Reduced from 180 to 130
         curve_selector.setMaximumWidth(140)  # Add maximum width constraint
+        try:
+            curve_selector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # Fixed in both directions
+        except AttributeError:
+            try:
+                curve_selector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # Fixed in both directions
+            except AttributeError:
+                pass  # Skip if not available
         curve_selector.setFixedHeight(27)
-        curve_selector.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # Fixed in both directions
         
         # Style with precise height control
         curve_selector.setStyleSheet("""
@@ -612,10 +645,10 @@ class MainWindow(QMainWindow):
         reset_btn.setFixedHeight(27)
         
         # Fix alignments
-        min_label.setAlignment(Qt.AlignCenter)
-        max_label.setAlignment(Qt.AlignCenter)
-        reset_label.setAlignment(Qt.AlignCenter)
-        curve_label.setAlignment(Qt.AlignCenter)
+        min_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        max_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        reset_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        curve_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Add the controls layout to the main layout
         cal_layout.addLayout(controls_layout)
@@ -1018,16 +1051,16 @@ class MainWindow(QMainWindow):
             return
         
         # Confirm deletion
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
         reply = QMessageBox.question(
             self, 
             "Delete Curve", 
             f"Are you sure you want to delete the curve '{current_curve}' for {pedal}?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Delete the curve
             self.delete_custom_curve(pedal, current_curve)
     
@@ -1455,7 +1488,7 @@ class MainWindow(QMainWindow):
         try:
             from ..auth import LoginDialog
             dialog = LoginDialog(self, self.oauth_handler)
-            dialog.exec_()
+            dialog.exec()
             # Update auth state after dialog closes
             QTimer.singleShot(100, self.update_auth_state)
         except Exception as e:
@@ -1467,7 +1500,7 @@ class MainWindow(QMainWindow):
         try:
             from ..auth import SignupDialog
             dialog = SignupDialog(self, self.oauth_handler)
-            dialog.exec_()
+            dialog.exec()
             # Update auth state after dialog closes
             QTimer.singleShot(100, self.update_auth_state)
         except Exception as e:
@@ -1579,17 +1612,17 @@ class MainWindow(QMainWindow):
                 "   • Performance tracking\n\n"
                 "Please log in to continue."
             )
-            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setIcon(QMessageBox.Icon.Information)
             
             # Add buttons
-            login_button = msg_box.addButton("🔑 Login Now", QMessageBox.ActionRole)
-            signup_button = msg_box.addButton("📝 Sign Up", QMessageBox.ActionRole)
-            cancel_button = msg_box.addButton("❌ Cancel", QMessageBox.RejectRole)
+            login_button = msg_box.addButton("🔑 Login Now", QMessageBox.ButtonRole.ActionRole)
+            signup_button = msg_box.addButton("📝 Sign Up", QMessageBox.ButtonRole.ActionRole)
+            cancel_button = msg_box.addButton("❌ Cancel", QMessageBox.ButtonRole.RejectRole)
             
             # Set default button
             msg_box.setDefaultButton(login_button)
             
-            result = msg_box.exec_()
+            result = msg_box.exec()
             
             # Check which button was clicked
             if msg_box.clickedButton() == login_button:
@@ -1757,13 +1790,13 @@ class MainWindow(QMainWindow):
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Login Required")
             msg_box.setText("You need to be logged in to access the Race Pass feature.")
-            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setIcon(QMessageBox.Icon.Information)
             
             # Add a button to open login dialog
-            login_button = msg_box.addButton("Login Now", QMessageBox.ActionRole)
-            cancel_button = msg_box.addButton(QMessageBox.Cancel)
+            login_button = msg_box.addButton("Login Now", QMessageBox.ButtonRole.ActionRole)
+            cancel_button = msg_box.addButton(QMessageBox.StandardButton.Cancel)
             
-            msg_box.exec_()
+            msg_box.exec()
             
             # Check which button was clicked
             if msg_box.clickedButton() == login_button:
@@ -2031,7 +2064,7 @@ class MainWindow(QMainWindow):
                     eye_tracking_manager = None
             
             dialog = EyeTrackingSettingsDialog(self, eye_tracking_manager)
-            dialog.exec_()
+            dialog.exec()
             
         except Exception as e:
             logger.error(f"Error showing eye tracking settings: {e}")
@@ -2052,7 +2085,7 @@ class MainWindow(QMainWindow):
             dialog = TrackMapOverlaySettingsDialog(self)
             # Replace the dialog's manager with our persistent one
             dialog.overlay_manager = self.track_map_overlay_manager
-            dialog.exec_()
+            dialog.exec()
             
         except Exception as e:
             logger.error(f"Error showing track map overlay settings: {e}")
@@ -2263,7 +2296,7 @@ class MainWindow(QMainWindow):
             # Loop to allow user to retry if they enter wrong number etc.
             while True:
                 dialog = PhoneVerificationDialog(self, user_id)
-                dialog.exec_()
+                dialog.exec()
                 
                 # Re-check the profile to see if verification was successful
                 profile = enhanced_user_manager.get_complete_user_profile(user_id)
@@ -2285,11 +2318,11 @@ class MainWindow(QMainWindow):
                     self, "Verification Required",
                     "You must verify your phone number to continue. Without verification, you will be logged out.\n\n"
                     "Do you want to try again?",
-                    QMessageBox.Retry | QMessageBox.Cancel,
-                    QMessageBox.Retry
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Retry
                 )
                 
-                if reply == QMessageBox.Cancel:
+                if reply == QMessageBox.StandardButton.Cancel:
                     logger.warning(f"User {user_id} cancelled the mandatory phone verification on startup. Will be logged out.")
                     return False # User chose to cancel, deny access.
                     
@@ -2319,7 +2352,7 @@ class MainWindow(QMainWindow):
             
             # Create and show the SMS verification dialog
             dialog = SMSVerificationDialog(self, phone_number)
-            result = dialog.exec_()
+            result = dialog.exec()
             
             # Return True if verification was successful
             return dialog.verification_successful
@@ -2339,7 +2372,7 @@ class MainWindow(QMainWindow):
         try:
             from ..pedals.calibration import CalibrationWizard
             wizard = CalibrationWizard(self)
-            if wizard.exec_() == QDialog.Accepted:
+            if wizard.exec() == QDialog.DialogCode.Accepted:
                 results = wizard.get_results()
                 self.on_calibration_wizard_completed(results)
         except ImportError:
@@ -2540,7 +2573,7 @@ class MainWindow(QMainWindow):
                 self.badge_animation.setDuration(800)
                 self.badge_animation.setStartValue(1.0)
                 self.badge_animation.setEndValue(0.6)
-                self.badge_animation.setEasingCurve(QEasingCurve.InOutQuad)
+                self.badge_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
                 
                 # Set up auto-reverse
                 self.badge_animation.finished.connect(lambda: self.badge_animation.setDirection(
@@ -2625,7 +2658,7 @@ class MainWindow(QMainWindow):
                 from ..race_coach.simple_iracing import SimpleIRacingAPI
                 self.global_iracing_api = SimpleIRacingAPI()
                 
-                # 🔧 SET UP TELEMETRY SAVING with the global connection
+                # �� SET UP TELEMETRY SAVING with the global connection
                 logger.info("🎯 Setting up telemetry saving for global iRacing connection...")
                 
                 # Get Supabase client for saving

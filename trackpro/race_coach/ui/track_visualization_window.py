@@ -8,10 +8,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QWidget, QGroupBox)
-from PyQt5.QtCore import pyqtSlot, QTimer
-from PyQt5.QtGui import QFont
+from PyQt6.QtCore import pyqtSlot, QTimer
+from PyQt6.QtGui import QFont
 import time
 
 
@@ -274,9 +274,9 @@ class TrackVisualizationWindow(QDialog):
 
 if __name__ == "__main__":
     import sys
-    from PyQt5.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication
     
     app = QApplication(sys.argv)
     window = TrackVisualizationWindow()
     window.show()
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 

@@ -734,4 +734,5 @@ class AchievementsManager(DatabaseManager):
             return []
 
 # Create a global instance
-achievements_manager = AchievementsManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.achievements_manager or trackpro.social.get_achievements_manager() instead 

@@ -6,337 +6,582 @@ security features, and database integration.
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from datetime import datetime, date
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+
+# Use shared imports instead of direct PyQt6 imports
+from .shared_imports import *
 
 logger = logging.getLogger(__name__)
+
+class ModernCard(QFrame):
+    """Modern card widget with Discord-like styling"""
+    
+    def __init__(self, title: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #36393f, stop:1 #2f3136);
+                border-radius: 12px;
+                border: 1px solid #40444b;
+                margin: 5px;
+            }
+        """)
+        self.setup_layout(title)
+        
+    def setup_layout(self, title):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+        
+        if title:
+            title_label = QLabel(title)
+            title_label.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 18px;
+                    font-weight: 600;
+                    margin-bottom: 8px;
+                    background: transparent;
+                    border: none;
+                }
+            """)
+            layout.addWidget(title_label)
+            
+        self.content_layout = QVBoxLayout()
+        self.content_layout.setSpacing(12)
+        layout.addLayout(self.content_layout)
+        
+    def add_content(self, widget):
+        self.content_layout.addWidget(widget)
+
+class ModernInput(QLineEdit):
+    """Modern input field with Discord-like styling"""
+    
+    def __init__(self, placeholder: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setPlaceholderText(placeholder)
+        self.setStyleSheet("""
+            QLineEdit {
+                background-color: #202225;
+                border: 1px solid #40444b;
+                border-radius: 6px;
+                padding: 12px 16px;
+                color: #dcddde;
+                font-size: 14px;
+                min-height: 20px;
+                selection-background-color: #5865f2;
+            }
+            QLineEdit:focus {
+                border: 2px solid #5865f2;
+                background-color: #1e2124;
+            }
+            QLineEdit:hover {
+                border-color: #5865f2;
+            }
+        """)
+
+class ModernButton(QPushButton):
+    """Modern button with Discord-like styling"""
+    
+    def __init__(self, text: str = "", button_type: str = "secondary", parent: Optional[QWidget] = None):
+        super().__init__(text, parent)
+        
+        if button_type == "primary":
+            self.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #5865f2, stop:1 #4752c4);
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 12px 24px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    min-height: 20px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #4752c4, stop:1 #3c45a3);
+                }
+                QPushButton:pressed {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3c45a3, stop:1 #2f3680);
+                }
+            """)
+        elif button_type == "danger":
+            self.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #ed4245, stop:1 #c73538);
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 12px 24px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    min-height: 20px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #c73538, stop:1 #a12d30);
+                }
+                QPushButton:pressed {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #a12d30, stop:1 #7d2427);
+                }
+            """)
+        else:  # secondary
+            self.setStyleSheet("""
+                QPushButton {
+                    background-color: #4f545c;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 12px 24px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    min-height: 20px;
+                }
+                QPushButton:hover {
+                    background-color: #5d6269;
+                }
+                QPushButton:pressed {
+                    background-color: #484c52;
+                }
+            """)
+
+class ProfileAvatar(QLabel):
+    """Modern profile avatar widget"""
+    
+    def __init__(self, size: int = 80, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.size = size
+        self.setFixedSize(size, size)
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: #5865f2;
+                border-radius: {size//2}px;
+                border: 3px solid #40444b;
+                color: white;
+                font-size: {size//3}px;
+                font-weight: bold;
+            }}
+        """)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setText("U")  # Default placeholder
+        
+    def set_initials(self, text):
+        """Set initials for the avatar"""
+        if text:
+            initials = ''.join([word[0].upper() for word in text.split()[:2]])
+            self.setText(initials)
 
 class AccountPage(QWidget):
     """Standalone Account Page for TrackPro - Complete profile and account management."""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.user_data = None
         self.is_oauth_user = False
         self.has_password = False
-        self.setup_ui()
-        # Remove the duplicate load_user_data() call from here
+        self.setup_modern_ui()
         
-    def setup_ui(self):
-        """Set up the complete account page UI."""
+    def setup_modern_ui(self):
+        """Set up the modern Discord-inspired UI."""
+        # Set main background
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #1e2124, stop:1 #2f3136);
+                color: #dcddde;
+            }
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #2f3136;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5865f2;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #4752c4;
+            }
+        """)
+        
         # Main layout
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # Page title - with better styling and visibility
-        title_label = QLabel("Account Settings")
-        title_label.setFont(QFont("Arial", 20, QFont.Bold))
-        title_label.setStyleSheet("""
-            QLabel {
-                color: #2E3440; 
-                background-color: transparent;
-                margin-bottom: 15px;
-                padding: 10px 0;
+        # Header section with gradient
+        header_widget = QWidget()
+        header_widget.setFixedHeight(120)
+        header_widget.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #5865f2, stop:0.5 #7289da, stop:1 #5865f2);
                 border: none;
             }
         """)
-        title_label.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(title_label)
         
-        # Create scrollable area for all sections
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.NoFrame)
-        scroll_area.setStyleSheet("QScrollArea { background-color: transparent; }")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(40, 20, 40, 20)
         
-        # Content widget for scroll area
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setSpacing(25)
-        content_layout.setContentsMargins(10, 10, 10, 10)
+        # Profile section in header
+        profile_section = QHBoxLayout()
         
-        # Add sections
-        content_layout.addWidget(self.create_profile_section())
-        content_layout.addWidget(self.create_security_section())
-        content_layout.addWidget(self.create_2fa_section())
-        content_layout.addWidget(self.create_actions_section())
+        # Avatar
+        self.header_avatar = ProfileAvatar(60)
+        profile_section.addWidget(self.header_avatar)
         
-        # Add stretch to push everything to the top
-        content_layout.addStretch()
+        # User info
+        user_info_layout = QVBoxLayout()
+        user_info_layout.setSpacing(4)
         
-        # Set the content widget to the scroll area
-        scroll_area.setWidget(content_widget)
-        main_layout.addWidget(scroll_area)
-        
-        # Load user data ONLY once and properly initialize UI
-        self.load_user_data()
-
-    def create_profile_section(self):
-        """Create the Profile Information section with all form fields."""
-        group_box = QGroupBox("Profile Information")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
-        group_box.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #D8DEE9;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
+        self.header_name = QLabel("Loading...")
+        self.header_name.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-size: 20px;
+                font-weight: 700;
+                background: transparent;
             }
         """)
         
-        layout = QFormLayout(group_box)
-        layout.setSpacing(15)
+        self.header_email = QLabel("Loading...")
+        self.header_email.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.8);
+                font-size: 14px;
+                background: transparent;
+            }
+        """)
         
-        # First Name (Required)
-        self.first_name_input = QLineEdit()
+        user_info_layout.addWidget(self.header_name)
+        user_info_layout.addWidget(self.header_email)
+        user_info_layout.addStretch()
+        
+        profile_section.addLayout(user_info_layout)
+        profile_section.addStretch()
+        
+        header_layout.addLayout(profile_section)
+        
+        # Settings title
+        title_label = QLabel("User Settings")
+        title_label.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-size: 28px;
+                font-weight: 700;
+                background: transparent;
+            }
+        """)
+        header_layout.addWidget(title_label)
+        
+        main_layout.addWidget(header_widget)
+        
+        # Scrollable content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(40, 30, 40, 30)
+        content_layout.setSpacing(20)
+        
+        # Add modern sections
+        content_layout.addWidget(self.create_modern_profile_section())
+        content_layout.addWidget(self.create_modern_security_section())
+        content_layout.addWidget(self.create_modern_2fa_section())
+        content_layout.addWidget(self.create_modern_actions_section())
+        
+        content_layout.addStretch()
+        
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+        
+        # Load user data
+        self.load_user_data()
+
+    def create_modern_profile_section(self):
+        """Create modern profile information section"""
+        card = ModernCard("My Account")
+        
+        # Profile form in grid layout
+        form_widget = QWidget()
+        form_layout = QGridLayout(form_widget)
+        form_layout.setSpacing(16)
+        form_layout.setColumnStretch(1, 1)
+        
+        # First Name
+        form_layout.addWidget(self.create_label("Display Name"), 0, 0)
+        self.first_name_input = ModernInput("Enter your display name")
         self.first_name_input.setMaxLength(50)
-        self.first_name_input.setStyleSheet(self.get_input_style())
-        layout.addRow("First Name *:", self.first_name_input)
+        form_layout.addWidget(self.first_name_input, 0, 1)
         
-        # Last Name (Required)
-        self.last_name_input = QLineEdit()
+        # Last Name  
+        form_layout.addWidget(self.create_label("Username"), 1, 0)
+        self.last_name_input = ModernInput("Enter your username")
         self.last_name_input.setMaxLength(50)
-        self.last_name_input.setStyleSheet(self.get_input_style())
-        layout.addRow("Last Name *:", self.last_name_input)
+        form_layout.addWidget(self.last_name_input, 1, 1)
         
-        # Username (Required)
-        self.username_input = QLineEdit()
+        # Username
+        form_layout.addWidget(self.create_label("Email"), 2, 0)
+        self.username_input = ModernInput("Enter your username")
         self.username_input.setMaxLength(100)
-        self.username_input.setStyleSheet(self.get_input_style())
-        layout.addRow("Username *:", self.username_input)
+        form_layout.addWidget(self.username_input, 2, 1)
         
-        # Email (Required, Read-only for existing users)
-        self.email_input = QLineEdit()
-        self.email_input.setStyleSheet(self.get_input_style())
-        layout.addRow("Email *:", self.email_input)
+        # Email
+        form_layout.addWidget(self.create_label("Phone Number"), 3, 0)
+        self.email_input = ModernInput("Enter your email")
+        form_layout.addWidget(self.email_input, 3, 1)
         
         # Date of Birth
+        form_layout.addWidget(self.create_label("Date of Birth"), 4, 0)
         self.dob_input = QDateEdit()
         self.dob_input.setDate(QDate.currentDate().addYears(-18))
         self.dob_input.setMaximumDate(QDate.currentDate())
         self.dob_input.setMinimumDate(QDate(1900, 1, 1))
         self.dob_input.setCalendarPopup(True)
-        self.dob_input.setStyleSheet(self.get_input_style())
-        layout.addRow("Date of Birth:", self.dob_input)
-        
-        # Gender
-        self.gender_combo = QComboBox()
-        self.gender_combo.addItems(["Select...", "Male", "Female", "Other", "Prefer not to say"])
-        self.gender_combo.setStyleSheet(self.get_input_style())
-        layout.addRow("Gender:", self.gender_combo)
-        
-        # Bio (Optional)
-        self.bio_input = QTextEdit()
-        self.bio_input.setMaximumHeight(100)
-        self.bio_input.setPlaceholderText("Tell us about yourself...")
-        self.bio_input.setStyleSheet(self.get_input_style())
-        layout.addRow("Bio (optional):", self.bio_input)
-        
-        # Profile Picture Upload (Optional)
-        profile_pic_layout = QHBoxLayout()
-        self.profile_pic_label = QLabel("No image selected")
-        self.profile_pic_label.setStyleSheet("border: 1px solid #D8DEE9; padding: 5px; background: #ECEFF4;")
-        self.profile_pic_button = QPushButton("Choose Image")
-        self.profile_pic_button.setStyleSheet(self.get_button_style())
-        self.profile_pic_button.clicked.connect(self.choose_profile_picture)
-        
-        profile_pic_layout.addWidget(self.profile_pic_label)
-        profile_pic_layout.addWidget(self.profile_pic_button)
-        layout.addRow("Profile Picture:", profile_pic_layout)
-        
-        # Save Changes Button
-        self.save_profile_btn = QPushButton("Save Changes")
-        self.save_profile_btn.setStyleSheet(self.get_button_style(primary=True))
-        self.save_profile_btn.clicked.connect(self.save_profile_changes)
-        layout.addRow("", self.save_profile_btn)
-        
-        return group_box
-
-    def create_security_section(self):
-        """Create the Account Security section for password management."""
-        group_box = QGroupBox("Account Security")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
-        group_box.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #D8DEE9;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-        
-        layout = QVBoxLayout(group_box)
-        
-        # Password change section (conditional visibility)
-        self.security_content = QWidget()
-        security_layout = QFormLayout(self.security_content)
-        
-        # Current Password (for existing password users)
-        self.current_password_input = QLineEdit()
-        self.current_password_input.setEchoMode(QLineEdit.Password)
-        self.current_password_input.setStyleSheet(self.get_input_style())
-        security_layout.addRow("Current Password:", self.current_password_input)
-        
-        # New Password
-        self.new_password_input = QLineEdit()
-        self.new_password_input.setEchoMode(QLineEdit.Password)
-        self.new_password_input.setStyleSheet(self.get_input_style())
-        security_layout.addRow("New Password:", self.new_password_input)
-        
-        # Confirm New Password
-        self.confirm_password_input = QLineEdit()
-        self.confirm_password_input.setEchoMode(QLineEdit.Password)
-        self.confirm_password_input.setStyleSheet(self.get_input_style())
-        security_layout.addRow("Confirm New Password:", self.confirm_password_input)
-        
-        # Change Password Button
-        self.change_password_btn = QPushButton("Update Password")
-        self.change_password_btn.setStyleSheet(self.get_button_style())
-        self.change_password_btn.clicked.connect(self.change_password)
-        security_layout.addRow("", self.change_password_btn)
-        
-        # OAuth users message (conditional visibility)
-        self.oauth_message = QLabel("")
-        self.oauth_message.setStyleSheet("color: #5E81AC; font-style: italic; margin: 10px;")
-        self.oauth_message.setWordWrap(True)
-        self.oauth_message.hide()  # Hide by default
-        
-        layout.addWidget(self.oauth_message)
-        layout.addWidget(self.security_content)
-        
-        return group_box
-
-    def create_2fa_section(self):
-        """Create the Two-Factor Authentication section with improved UI."""
-        group_box = QGroupBox("Two-Factor Authentication")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
-        group_box.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #D8DEE9;
-                border-radius: 8px;
-                margin-top: 15px;
-                padding-top: 15px;
-                background-color: #FDFDFD;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 15px;
-                padding: 0 10px 0 10px;
-                background-color: #FDFDFD;
-                color: #2E3440;
-            }
-        """)
-        
-        # Main layout with proper spacing
-        main_layout = QVBoxLayout(group_box)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 25, 20, 20)
-        
-        # 2FA Status Display - Fixed height and styling
-        self.twofa_status_label = QLabel("🔐 Set up 2FA for enhanced security")
-        self.twofa_status_label.setStyleSheet("""
-            QLabel {
-                color: #5E81AC; 
-                font-weight: bold; 
-                font-size: 14px;
-                padding: 10px 15px;
-                background-color: #E5E9F0;
+        self.dob_input.setStyleSheet("""
+            QDateEdit {
+                background-color: #202225;
+                border: 1px solid #40444b;
                 border-radius: 6px;
-                border: 1px solid #D8DEE9;
-            }
-        """)
-        self.twofa_status_label.setWordWrap(True)
-        self.twofa_status_label.setMinimumHeight(50)
-        main_layout.addWidget(self.twofa_status_label)
-        
-        # Phone number section with better layout
-        phone_section = QFrame()
-        phone_section.setStyleSheet("""
-            QFrame {
-                background-color: #F8F9FA;
-                border: 1px solid #E1E5E9;
-                border-radius: 6px;
-                padding: 15px;
-            }
-        """)
-        phone_layout = QVBoxLayout(phone_section)
-        phone_layout.setSpacing(12)
-        
-        # Phone number label
-        phone_label = QLabel("Phone Number:")
-        phone_label.setStyleSheet("""
-            QLabel {
-                color: #2E3440;
-                font-weight: bold;
-                font-size: 13px;
-                margin-bottom: 5px;
-            }
-        """)
-        phone_layout.addWidget(phone_label)
-        
-        # Phone input with country code
-        phone_input_layout = QHBoxLayout()
-        phone_input_layout.setSpacing(8)
-        
-        # Country code prefix (read-only)
-        self.country_code_label = QLabel("+1")
-        self.country_code_label.setStyleSheet("""
-            QLabel {
-                background-color: #ECEFF4;
-                color: #2E3440;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 12px 15px;
-                border: 1px solid #D8DEE9;
-                border-radius: 4px;
-                min-width: 30px;
-            }
-        """)
-        self.country_code_label.setAlignment(Qt.AlignCenter)
-        phone_input_layout.addWidget(self.country_code_label)
-        
-        # Phone number input (without country code)
-        self.phone_input = QLineEdit()
-        self.phone_input.setPlaceholderText("Enter phone number (e.g., 2345678901)")
-        self.phone_input.setStyleSheet("""
-            QLineEdit {
-                border: 1px solid #D8DEE9;
-                border-radius: 4px;
-                padding: 12px 15px;
-                background-color: white;
-                color: #2E3440;
+                padding: 12px 16px;
+                color: #dcddde;
                 font-size: 14px;
                 min-height: 20px;
             }
-            QLineEdit:focus {
-                border: 2px solid #5E81AC;
-                background-color: #FFFFFF;
+            QDateEdit:focus {
+                border: 2px solid #5865f2;
+            }
+            QDateEdit::drop-down {
+                border: none;
+                background: #4f545c;
+                border-radius: 3px;
+                width: 20px;
             }
         """)
-        # Add input validation for phone numbers
-        self.phone_input.setMaxLength(10)  # US phone numbers are 10 digits
+        form_layout.addWidget(self.dob_input, 4, 1)
         
-        # Add input filter to only allow digits
-        from PyQt5.QtGui import QRegExpValidator
-        from PyQt5.QtCore import QRegExp
-        digit_validator = QRegExpValidator(QRegExp(r'^\d{0,10}$'))
+        # Gender
+        form_layout.addWidget(self.create_label("Gender"), 5, 0)
+        self.gender_combo = QComboBox()
+        self.gender_combo.addItems(["Select...", "Male", "Female", "Other", "Prefer not to say"])
+        self.gender_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #202225;
+                border: 1px solid #40444b;
+                border-radius: 6px;
+                padding: 12px 16px;
+                color: #dcddde;
+                font-size: 14px;
+                min-height: 20px;
+            }
+            QComboBox:focus {
+                border: 2px solid #5865f2;
+            }
+            QComboBox::drop-down {
+                border: none;
+                background: #4f545c;
+                border-radius: 3px;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #dcddde;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #36393f;
+                border: 1px solid #40444b;
+                border-radius: 6px;
+                color: #dcddde;
+                selection-background-color: #5865f2;
+            }
+        """)
+        form_layout.addWidget(self.gender_combo, 5, 1)
+        
+        # Bio
+        form_layout.addWidget(self.create_label("About Me"), 6, 0, Qt.AlignmentFlag.AlignTop)
+        self.bio_input = QTextEdit()
+        self.bio_input.setMaximumHeight(100)
+        self.bio_input.setPlaceholderText("Tell us about yourself...")
+        self.bio_input.setStyleSheet("""
+            QTextEdit {
+                background-color: #202225;
+                border: 1px solid #40444b;
+                border-radius: 6px;
+                padding: 12px 16px;
+                color: #dcddde;
+                font-size: 14px;
+                selection-background-color: #5865f2;
+            }
+            QTextEdit:focus {
+                border: 2px solid #5865f2;
+            }
+        """)
+        form_layout.addWidget(self.bio_input, 6, 1)
+        
+        card.add_content(form_widget)
+        
+        # Profile picture section
+        pic_section = QWidget()
+        pic_layout = QHBoxLayout(pic_section)
+        pic_layout.setContentsMargins(0, 16, 0, 0)
+        
+        pic_layout.addWidget(self.create_label("Profile Picture"))
+        
+        self.profile_pic_label = QLabel("No image selected")
+        self.profile_pic_label.setStyleSheet("""
+            QLabel {
+                background-color: #202225;
+                border: 1px solid #40444b;
+                border-radius: 6px;
+                padding: 12px 16px;
+                color: #72767d;
+                min-height: 20px;
+            }
+        """)
+        pic_layout.addWidget(self.profile_pic_label, 1)
+        
+        self.profile_pic_button = ModernButton("Choose Image", "secondary")
+        self.profile_pic_button.clicked.connect(self.choose_profile_picture)
+        pic_layout.addWidget(self.profile_pic_button)
+        
+        card.add_content(pic_section)
+        
+        # Save button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        self.save_profile_btn = ModernButton("Save Changes", "primary")
+        self.save_profile_btn.clicked.connect(self.save_profile_changes)
+        button_layout.addWidget(self.save_profile_btn)
+        
+        button_widget = QWidget()
+        button_widget.setLayout(button_layout)
+        card.add_content(button_widget)
+        
+        return card
+
+    def create_modern_security_section(self):
+        """Create modern security section"""
+        card = ModernCard("Password and Authentication")
+        
+        # Security form
+        self.security_content = QWidget()
+        security_layout = QGridLayout(self.security_content)
+        security_layout.setSpacing(16)
+        security_layout.setColumnStretch(1, 1)
+        
+        # Current Password
+        security_layout.addWidget(self.create_label("Current Password"), 0, 0)
+        self.current_password_input = ModernInput("Enter current password")
+        self.current_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        security_layout.addWidget(self.current_password_input, 0, 1)
+        
+        # New Password
+        security_layout.addWidget(self.create_label("New Password"), 1, 0)
+        self.new_password_input = ModernInput("Enter new password")
+        self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        security_layout.addWidget(self.new_password_input, 1, 1)
+        
+        # Confirm Password
+        security_layout.addWidget(self.create_label("Confirm Password"), 2, 0)
+        self.confirm_password_input = ModernInput("Confirm new password")
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        security_layout.addWidget(self.confirm_password_input, 2, 1)
+        
+        card.add_content(self.security_content)
+        
+        # OAuth message
+        self.oauth_message = QLabel("")
+        self.oauth_message.setStyleSheet("""
+            QLabel {
+                color: #faa61a;
+                background-color: rgba(250, 166, 26, 0.1);
+                border: 1px solid #faa61a;
+                border-radius: 6px;
+                padding: 12px 16px;
+                font-style: italic;
+            }
+        """)
+        self.oauth_message.setWordWrap(True)
+        self.oauth_message.hide()
+        card.add_content(self.oauth_message)
+        
+        # Change password button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        self.change_password_btn = ModernButton("Update Password", "primary")
+        self.change_password_btn.clicked.connect(self.change_password)
+        button_layout.addWidget(self.change_password_btn)
+        
+        button_widget = QWidget()
+        button_widget.setLayout(button_layout)
+        card.add_content(button_widget)
+        
+        return card
+
+    def create_modern_2fa_section(self):
+        """Create modern 2FA section"""
+        card = ModernCard("Two-Factor Authentication")
+        
+        # Status label
+        self.twofa_status_label = QLabel("🔐 Set up 2FA for enhanced security")
+        self.twofa_status_label.setStyleSheet("""
+            QLabel {
+                color: #00d166;
+                background-color: rgba(0, 209, 102, 0.1);
+                border: 1px solid #00d166;
+                border-radius: 6px;
+                padding: 12px 16px;
+                font-weight: 600;
+            }
+        """)
+        self.twofa_status_label.setWordWrap(True)
+        card.add_content(self.twofa_status_label)
+        
+        # Phone section
+        phone_widget = QWidget()
+        phone_layout = QGridLayout(phone_widget)
+        phone_layout.setSpacing(16)
+        phone_layout.setColumnStretch(1, 1)
+        
+        phone_layout.addWidget(self.create_label("Phone Number"), 0, 0)
+        
+        phone_input_layout = QHBoxLayout()
+        self.country_code_label = QLabel("+1")
+        self.country_code_label.setStyleSheet("""
+            QLabel {
+                background-color: #4f545c;
+                color: #dcddde;
+                border: 1px solid #40444b;
+                border-radius: 6px;
+                padding: 12px 16px;
+                font-weight: 600;
+                min-width: 40px;
+            }
+        """)
+        self.country_code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        phone_input_layout.addWidget(self.country_code_label)
+        
+        self.phone_input = ModernInput("Enter phone number")
+        self.phone_input.setMaxLength(10)
+        
+        # Add input validator for phone numbers (Qt6 syntax)
+        digit_validator = QRegularExpressionValidator(QRegularExpression(r'^\d{0,10}$'))
         self.phone_input.setValidator(digit_validator)
         
         # Add real-time formatting feedback
@@ -344,266 +589,152 @@ class AccountPage(QWidget):
         
         phone_input_layout.addWidget(self.phone_input, 1)
         
-        phone_layout.addLayout(phone_input_layout)
+        phone_input_widget = QWidget()
+        phone_input_widget.setLayout(phone_input_layout)
+        phone_layout.addWidget(phone_input_widget, 0, 1)
         
-        # Send verification button
-        self.setup_phone_btn = QPushButton("Send Verification Code")
-        self.setup_phone_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #5E81AC;
-                color: white;
-                border: none;
-                padding: 12px 20px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 13px;
-                min-height: 20px;
-            }
-            QPushButton:hover {
-                background-color: #81A1C1;
-            }
-            QPushButton:pressed {
-                background-color: #4C566A;
-            }
-            QPushButton:disabled {
-                background-color: #D8DEE9;
-                color: #88C0D0;
-            }
-        """)
+        self.setup_phone_btn = ModernButton("Send Verification Code", "primary")
         self.setup_phone_btn.clicked.connect(self.send_2fa_verification)
-        phone_layout.addWidget(self.setup_phone_btn)
+        phone_layout.addWidget(self.setup_phone_btn, 1, 1)
         
-        main_layout.addWidget(phone_section)
+        card.add_content(phone_widget)
         
-        # Verification code section (initially hidden)
-        self.verification_section = QFrame()
-        self.verification_section.setStyleSheet("""
-            QFrame {
-                background-color: #FFF9E5;
-                border: 1px solid #E8D975;
-                border-radius: 6px;
-                padding: 15px;
-            }
-        """)
-        verification_layout = QVBoxLayout(self.verification_section)
-        verification_layout.setSpacing(12)
+        # Verification section
+        self.verification_section = QWidget()
+        verification_layout = QGridLayout(self.verification_section)
+        verification_layout.setSpacing(16)
+        verification_layout.setColumnStretch(1, 1)
         
-        # Verification label
-        verification_label = QLabel("Verification Code:")
-        verification_label.setStyleSheet("""
-            QLabel {
-                color: #2E3440;
-                font-weight: bold;
-                font-size: 13px;
-                margin-bottom: 5px;
-            }
-        """)
-        verification_layout.addWidget(verification_label)
-        
-        # Verification code input
-        self.verification_code_input = QLineEdit()
+        verification_layout.addWidget(self.create_label("Verification Code"), 0, 0)
+        self.verification_code_input = ModernInput("Enter 6-digit code")
         self.verification_code_input.setMaxLength(6)
-        self.verification_code_input.setPlaceholderText("Enter 6-digit verification code")
-        self.verification_code_input.setStyleSheet("""
-            QLineEdit {
-                border: 1px solid #D8DEE9;
-                border-radius: 4px;
-                padding: 12px 15px;
-                background-color: white;
-                color: #2E3440;
-                font-size: 16px;
-                font-family: monospace;
-                text-align: center;
-                letter-spacing: 3px;
-                min-height: 20px;
-            }
-            QLineEdit:focus {
-                border: 2px solid #EBCB8B;
-                background-color: #FFFFFF;
-            }
-        """)
-        verification_layout.addWidget(self.verification_code_input)
+        verification_layout.addWidget(self.verification_code_input, 0, 1)
         
-        # Verify button
-        self.verify_code_btn = QPushButton("Verify Code")
-        self.verify_code_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #EBCB8B;
-                color: #2E3440;
-                border: none;
-                padding: 12px 20px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 13px;
-                min-height: 20px;
-            }
-            QPushButton:hover {
-                background-color: #E8D975;
-            }
-            QPushButton:pressed {
-                background-color: #D4C068;
-            }
-        """)
+        self.verify_code_btn = ModernButton("Verify Code", "primary")
         self.verify_code_btn.clicked.connect(self.verify_2fa_code)
-        verification_layout.addWidget(self.verify_code_btn)
+        verification_layout.addWidget(self.verify_code_btn, 1, 1)
         
-        # Hide verification section initially
         self.verification_section.hide()
-        main_layout.addWidget(self.verification_section)
+        card.add_content(self.verification_section)
         
-        # 2FA control section
-        control_section = QFrame()
-        control_section.setStyleSheet("""
-            QFrame {
-                background-color: #F0F4F8;
-                border: 1px solid #D8DEE9;
-                border-radius: 6px;
-                padding: 15px;
-            }
-        """)
-        control_layout = QVBoxLayout(control_section)
-        control_layout.setSpacing(15)
+        # 2FA Toggle
+        toggle_widget = QWidget()
+        toggle_layout = QHBoxLayout(toggle_widget)
         
-        # 2FA Toggle with better styling
         self.twofa_toggle = QCheckBox("Enable Two-Factor Authentication")
         self.twofa_toggle.setStyleSheet("""
             QCheckBox {
-                color: #2E3440;
-                font-weight: bold;
+                color: #dcddde;
+                font-weight: 600;
                 font-size: 14px;
                 spacing: 10px;
             }
             QCheckBox::indicator {
                 width: 20px;
                 height: 20px;
-                border: 2px solid #D8DEE9;
+                border: 2px solid #40444b;
                 border-radius: 4px;
-                background-color: white;
+                background-color: #202225;
             }
             QCheckBox::indicator:checked {
-                background-color: #A3BE8C;
-                border: 2px solid #A3BE8C;
-                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAiIGhlaWdodD0iMTAiIHZpZXdCb3g9IjAgMCAxMCAxMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTggMkw0IDZMMiA0IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
-            }
-            QCheckBox::indicator:disabled {
-                background-color: #F0F0F0;
-                border: 2px solid #D8DEE9;
+                background-color: #5865f2;
+                border: 2px solid #5865f2;
             }
         """)
         self.twofa_toggle.stateChanged.connect(self.toggle_2fa)
-        self.twofa_toggle.setEnabled(False)  # Disabled until phone is verified
-        control_layout.addWidget(self.twofa_toggle)
-        
-        # Disable 2FA Button
-        self.disable_2fa_btn = QPushButton("Disable Two-Factor Authentication")
-        self.disable_2fa_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #BF616A;
-                color: white;
-                border: none;
-                padding: 12px 20px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 13px;
-                min-height: 20px;
-            }
-            QPushButton:hover {
-                background-color: #D08770;
-            }
-            QPushButton:pressed {
-                background-color: #A54E56;
-            }
-        """)
-        self.disable_2fa_btn.clicked.connect(self.disable_2fa)
-        self.disable_2fa_btn.hide()  # Hidden initially
-        control_layout.addWidget(self.disable_2fa_btn)
-        
-        main_layout.addWidget(control_section)
-        
-        # Set initial state
-        self.twofa_toggle.setChecked(False)
         self.twofa_toggle.setEnabled(False)
+        toggle_layout.addWidget(self.twofa_toggle)
+        toggle_layout.addStretch()
+        
+        self.disable_2fa_btn = ModernButton("Disable 2FA", "danger")
+        self.disable_2fa_btn.clicked.connect(self.disable_2fa)
         self.disable_2fa_btn.hide()
+        toggle_layout.addWidget(self.disable_2fa_btn)
         
-        return group_box
+        card.add_content(toggle_widget)
+        
+        return card
 
-    def create_actions_section(self):
-        """Create the Account Actions section for logout and deletion."""
-        group_box = QGroupBox("Account Actions")
-        group_box.setFont(QFont("Arial", 14, QFont.Bold))
-        group_box.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #D8DEE9;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
+    def create_modern_actions_section(self):
+        """Create modern actions section"""
+        card = ModernCard("Account Management")
+        
+        # Logout section
+        logout_widget = QWidget()
+        logout_layout = QHBoxLayout(logout_widget)
+        
+        logout_info = QVBoxLayout()
+        logout_title = QLabel("Logout")
+        logout_title.setStyleSheet("""
+            QLabel {
+                color: #dcddde;
+                font-size: 16px;
+                font-weight: 600;
             }
         """)
+        logout_desc = QLabel("Sign out of your TrackPro account")
+        logout_desc.setStyleSheet("""
+            QLabel {
+                color: #72767d;
+                font-size: 14px;
+            }
+        """)
+        logout_info.addWidget(logout_title)
+        logout_info.addWidget(logout_desc)
+        logout_layout.addLayout(logout_info, 1)
         
-        # Change to horizontal layout for side-by-side sections
-        layout = QHBoxLayout(group_box)
-        layout.setSpacing(15)
+        logout_btn = ModernButton("Logout", "secondary")
+        logout_btn.clicked.connect(self.logout)
+        logout_layout.addWidget(logout_btn)
         
-        # Delete Account Section
-        delete_section = QFrame()
-        delete_section.setStyleSheet("border: 1px solid #BF616A; border-radius: 5px; padding: 10px; background: #FDFDFD;")
-        delete_layout = QVBoxLayout(delete_section)
+        card.add_content(logout_widget)
         
+        # Delete account section
+        delete_widget = QWidget()
+        delete_layout = QHBoxLayout(delete_widget)
+        
+        delete_info = QVBoxLayout()
         delete_title = QLabel("Delete Account")
-        delete_title.setFont(QFont("Arial", 12, QFont.Bold))
-        delete_title.setStyleSheet("color: #BF616A; border: none; background: transparent;")
-        
-        delete_description = QLabel("Permanently delete your TrackPro account and all associated data. This action cannot be undone.")
-        delete_description.setStyleSheet("color: #5E81AC; margin: 5px 0; border: none; background: transparent;")
-        delete_description.setWordWrap(True)
-        
-        self.delete_account_btn = QPushButton("Delete Account")
-        self.delete_account_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #BF616A;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #D08770;
+        delete_title.setStyleSheet("""
+            QLabel {
+                color: #ed4245;
+                font-size: 16px;
+                font-weight: 600;
             }
         """)
-        self.delete_account_btn.clicked.connect(self.delete_account)
+        delete_desc = QLabel("Permanently delete your account and all data")
+        delete_desc.setStyleSheet("""
+            QLabel {
+                color: #72767d;
+                font-size: 14px;
+            }
+        """)
+        delete_info.addWidget(delete_title)
+        delete_info.addWidget(delete_desc)
+        delete_layout.addLayout(delete_info, 1)
         
-        delete_layout.addWidget(delete_title)
-        delete_layout.addWidget(delete_description)
-        delete_layout.addWidget(self.delete_account_btn)
+        delete_btn = ModernButton("Delete Account", "danger")
+        delete_btn.clicked.connect(self.delete_account)
+        delete_layout.addWidget(delete_btn)
         
-        # Logout Section
-        logout_section = QFrame()
-        logout_section.setStyleSheet("border: 1px solid #88C0D0; border-radius: 5px; padding: 10px; background: #FDFDFD;")
-        logout_layout = QVBoxLayout(logout_section)
+        card.add_content(delete_widget)
         
-        logout_title = QLabel("Sign Out")
-        logout_title.setFont(QFont("Arial", 12, QFont.Bold))
-        logout_title.setStyleSheet("color: #5E81AC; border: none; background: transparent;")
-        
-        self.logout_btn = QPushButton("Sign Out")
-        self.logout_btn.setStyleSheet(self.get_button_style())
-        self.logout_btn.clicked.connect(self.logout)
-        
-        logout_layout.addWidget(logout_title)
-        logout_layout.addWidget(self.logout_btn)
-        
-        # Add both sections to horizontal layout
-        layout.addWidget(delete_section)
-        layout.addWidget(logout_section)
-        
-        return group_box
+        return card
+
+    def create_label(self, text):
+        """Create styled label"""
+        label = QLabel(text)
+        label.setStyleSheet("""
+            QLabel {
+                color: #b9bbbe;
+                font-size: 12px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 4px;
+            }
+        """)
+        return label
 
     def load_user_data(self):
         """Load user data from database with enhanced security validation."""
@@ -742,6 +873,15 @@ class AccountPage(QWidget):
         if not self.user_data:
             return
             
+        # Update header with user info
+        display_name = f"{self.user_data.get('first_name', '')} {self.user_data.get('last_name', '')}".strip()
+        if not display_name:
+            display_name = self.user_data.get('username', 'User')
+        
+        self.header_name.setText(display_name)
+        self.header_email.setText(self.user_data.get('email', 'No email'))
+        self.header_avatar.set_initials(display_name)
+        
         # Basic fields
         self.first_name_input.setText(self.user_data.get('first_name', ''))
         self.last_name_input.setText(self.user_data.get('last_name', ''))
@@ -947,7 +1087,7 @@ class AccountPage(QWidget):
             try:
                 from ..auth.login_dialog import LoginDialog
                 login_dialog = LoginDialog(self)
-                if login_dialog.exec_() == QDialog.Accepted:
+                if login_dialog.exec() == QDialog.DialogCode.Accepted:
                     # Reload user data after successful login
                     self.load_user_data()
             except ImportError:
@@ -957,136 +1097,169 @@ class AccountPage(QWidget):
             logger.error(f"Error showing login required dialog: {e}")
     
     def show_error(self, message):
-        """Show error message to user with improved styling."""
+        """Show error message with modern Discord styling."""
         try:
             msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Critical)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
             msg_box.setWindowTitle("Error")
             msg_box.setText(message)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            
+            # Apply modern Discord-style dark theme
             msg_box.setStyleSheet("""
                 QMessageBox {
-                    background-color: #FDFDFD;
-                    color: #2E3440;
+                    background-color: #36393f;
+                    color: #dcddde;
+                    border-radius: 8px;
+                }
+                QMessageBox QLabel {
+                    color: #dcddde;
+                    font-size: 14px;
+                    background: transparent;
+                    border: none;
                 }
                 QMessageBox QPushButton {
-                    background-color: #BF616A;
+                    background-color: #ed4245;
                     color: white;
                     border: none;
+                    border-radius: 6px;
                     padding: 8px 16px;
-                    border-radius: 4px;
-                    font-weight: bold;
+                    font-weight: 600;
                     min-width: 80px;
                 }
                 QMessageBox QPushButton:hover {
-                    background-color: #D08770;
+                    background-color: #c73538;
+                }
+                QMessageBox QPushButton:pressed {
+                    background-color: #a12d30;
                 }
             """)
-            msg_box.exec_()
+            msg_box.exec()
         except Exception as e:
             logger.error(f"Error showing error dialog: {e}")
     
     def show_success(self, message):
-        """Show success message to user with improved styling."""
+        """Show success message with modern Discord styling."""
         try:
             msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setIcon(QMessageBox.Icon.Information)
             msg_box.setWindowTitle("Success")
             msg_box.setText(message)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            
+            # Apply modern Discord-style dark theme
             msg_box.setStyleSheet("""
                 QMessageBox {
-                    background-color: #FDFDFD;
-                    color: #2E3440;
+                    background-color: #36393f;
+                    color: #dcddde;
+                    border-radius: 8px;
+                }
+                QMessageBox QLabel {
+                    color: #dcddde;
+                    font-size: 14px;
+                    background: transparent;
+                    border: none;
                 }
                 QMessageBox QPushButton {
-                    background-color: #A3BE8C;
+                    background-color: #00d166;
                     color: white;
                     border: none;
+                    border-radius: 6px;
                     padding: 8px 16px;
-                    border-radius: 4px;
-                    font-weight: bold;
+                    font-weight: 600;
                     min-width: 80px;
                 }
                 QMessageBox QPushButton:hover {
-                    background-color: #9FB584;
+                    background-color: #00b04f;
+                }
+                QMessageBox QPushButton:pressed {
+                    background-color: #008f3f;
                 }
             """)
-            msg_box.exec_()
+            msg_box.exec()
         except Exception as e:
             logger.error(f"Error showing success dialog: {e}")
     
     def format_phone_input(self):
-        """Provide real-time feedback on phone number formatting."""
+        """Provide real-time feedback on phone number formatting with modern styling."""
         try:
             text = self.phone_input.text()
             
             if not text:
-                # Reset to default styling
+                # Reset to default modern styling
                 self.phone_input.setStyleSheet("""
                     QLineEdit {
-                        border: 1px solid #D8DEE9;
-                        border-radius: 4px;
-                        padding: 12px 15px;
-                        background-color: white;
-                        color: #2E3440;
+                        background-color: #202225;
+                        border: 1px solid #40444b;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        color: #dcddde;
                         font-size: 14px;
                         min-height: 20px;
+                        selection-background-color: #5865f2;
                     }
                     QLineEdit:focus {
-                        border: 2px solid #5E81AC;
-                        background-color: #FFFFFF;
+                        border: 2px solid #5865f2;
+                        background-color: #1e2124;
+                    }
+                    QLineEdit:hover {
+                        border-color: #5865f2;
                     }
                 """)
                 return
             
             if len(text) == 10 and text.isdigit():
-                # Valid phone number - green styling
+                # Valid phone number - green accent
                 self.phone_input.setStyleSheet("""
                     QLineEdit {
-                        border: 2px solid #A3BE8C;
-                        border-radius: 4px;
-                        padding: 12px 15px;
-                        background-color: #F8FFF8;
-                        color: #2E3440;
+                        background-color: #202225;
+                        border: 2px solid #00d166;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        color: #dcddde;
                         font-size: 14px;
                         min-height: 20px;
+                        selection-background-color: #5865f2;
                     }
                     QLineEdit:focus {
-                        border: 2px solid #9FB584;
-                        background-color: #F8FFF8;
+                        border: 2px solid #00d166;
+                        background-color: #1e2124;
                     }
                 """)
             elif len(text) < 10:
-                # Incomplete phone number - yellow styling
+                # Incomplete phone number - yellow accent
                 self.phone_input.setStyleSheet("""
                     QLineEdit {
-                        border: 2px solid #EBCB8B;
-                        border-radius: 4px;
-                        padding: 12px 15px;
-                        background-color: #FFFEF8;
-                        color: #2E3440;
+                        background-color: #202225;
+                        border: 2px solid #faa61a;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        color: #dcddde;
                         font-size: 14px;
                         min-height: 20px;
+                        selection-background-color: #5865f2;
                     }
                     QLineEdit:focus {
-                        border: 2px solid #E8D975;
-                        background-color: #FFFEF8;
+                        border: 2px solid #faa61a;
+                        background-color: #1e2124;
                     }
                 """)
             else:
-                # Invalid format - red styling
+                # Invalid format - red accent
                 self.phone_input.setStyleSheet("""
                     QLineEdit {
-                        border: 2px solid #BF616A;
-                        border-radius: 4px;
-                        padding: 12px 15px;
-                        background-color: #FFF8F8;
-                        color: #2E3440;
+                        background-color: #202225;
+                        border: 2px solid #ed4245;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        color: #dcddde;
                         font-size: 14px;
                         min-height: 20px;
+                        selection-background-color: #5865f2;
                     }
                     QLineEdit:focus {
-                        border: 2px solid #D08770;
-                        background-color: #FFF8F8;
+                        border: 2px solid #ed4245;
+                        background-color: #1e2124;
                     }
                 """)
         except Exception as e:
@@ -1226,27 +1399,60 @@ class AccountPage(QWidget):
             self.show_error("An error occurred while changing your password.")
     
     def delete_account(self):
-        """Handle account deletion with confirmation."""
+        """Handle account deletion with confirmation and modern styling."""
         try:
-            # Show confirmation dialog
-            reply = QMessageBox.question(
-                self,
-                "Delete Account",
-                "⚠️ WARNING: This action cannot be undone!\n\n"
+            # Show confirmation dialog with modern styling
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Delete Account")
+            msg_box.setText("⚠️ WARNING: This action cannot be undone!\n\n"
                 "Deleting your account will permanently remove:\n"
                 "• All your profile data\n"
                 "• Telemetry and session history\n"
                 "• Achievements and progress\n"
                 "• Community posts and interactions\n\n"
-                "Are you absolutely sure you want to delete your account?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
+                "Are you absolutely sure you want to delete your account?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.No)
             
-            if reply != QMessageBox.Yes:
+            # Apply modern Discord-style dark theme
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #36393f;
+                    color: #dcddde;
+                    border-radius: 8px;
+                }
+                QMessageBox QLabel {
+                    color: #dcddde;
+                    font-size: 14px;
+                    background: transparent;
+                    border: none;
+                }
+                QMessageBox QPushButton {
+                    background-color: #4f545c;
+                    color: #dcddde;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 16px;
+                    font-weight: 600;
+                    min-width: 80px;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #5d6269;
+                }
+                QMessageBox QPushButton[text="&Yes"] {
+                    background-color: #ed4245;
+                    color: white;
+                }
+                QMessageBox QPushButton[text="&Yes"]:hover {
+                    background-color: #c73538;
+                }
+            """)
+            
+            if msg_box.exec() != QMessageBox.StandardButton.Yes:
                 return
             
-            # Second confirmation
+            # Second confirmation with modern input dialog
             text, ok = QInputDialog.getText(
                 self,
                 "Final Confirmation",
@@ -1282,13 +1488,40 @@ class AccountPage(QWidget):
                 # Note: This requires admin privileges in Supabase
                 logger.warning("Account deletion requested - manual admin action may be required")
                 
-                QMessageBox.information(
-                    self,
-                    "Account Deletion Requested",
-                    "Your account deletion request has been processed.\n\n"
+                # Show modern success dialog
+                success_box = QMessageBox(self)
+                success_box.setIcon(QMessageBox.Icon.Information)
+                success_box.setWindowTitle("Account Deleted")
+                success_box.setText("Your account deletion request has been processed.\n\n"
                     "You will be logged out now. If you have any issues, "
-                    "please contact support."
-                )
+                    "please contact support.")
+                success_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                success_box.setStyleSheet("""
+                    QMessageBox {
+                        background-color: #36393f;
+                        color: #dcddde;
+                        border-radius: 8px;
+                    }
+                    QMessageBox QLabel {
+                        color: #dcddde;
+                        font-size: 14px;
+                        background: transparent;
+                        border: none;
+                    }
+                    QMessageBox QPushButton {
+                        background-color: #00d166;
+                        color: white;
+                        border: none;
+                        border-radius: 6px;
+                        padding: 8px 16px;
+                        font-weight: 600;
+                        min-width: 80px;
+                    }
+                    QMessageBox QPushButton:hover {
+                        background-color: #00b04f;
+                    }
+                """)
+                success_box.exec()
                 
                 # Logout user
                 self.logout()
@@ -1300,9 +1533,9 @@ class AccountPage(QWidget):
         except Exception as e:
             logger.error(f"Error in delete account process: {e}")
             self.show_error("An error occurred during account deletion.")
-    
+
     def logout(self):
-        """Handle user logout."""
+        """Handle user logout with modern styling."""
         try:
             from ..database import supabase
             
@@ -1333,143 +1566,167 @@ class AccountPage(QWidget):
                 if hasattr(main_window, 'open_pedal_config'):
                     main_window.open_pedal_config()
                 
-                # Show logout confirmation
-                QMessageBox.information(
-                    self,
-                    "Logged Out",
-                    "You have been logged out successfully."
-                )
+                # Show logout confirmation with modern styling
+                success_box = QMessageBox(self)
+                success_box.setIcon(QMessageBox.Icon.Information)
+                success_box.setWindowTitle("Logged Out")
+                success_box.setText("You have been logged out successfully.")
+                success_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                success_box.setStyleSheet("""
+                    QMessageBox {
+                        background-color: #36393f;
+                        color: #dcddde;
+                        border-radius: 8px;
+                    }
+                    QMessageBox QLabel {
+                        color: #dcddde;
+                        font-size: 14px;
+                        background: transparent;
+                        border: none;
+                    }
+                    QMessageBox QPushButton {
+                        background-color: #5865f2;
+                        color: white;
+                        border: none;
+                        border-radius: 6px;
+                        padding: 8px 16px;
+                        font-weight: 600;
+                        min-width: 80px;
+                    }
+                    QMessageBox QPushButton:hover {
+                        background-color: #4752c4;
+                    }
+                """)
+                success_box.exec()
             else:
                 # Fallback if we can't find the main window
-                QMessageBox.information(
-                    self,
-                    "Logged Out",
-                    "You have been logged out successfully.\n\n"
-                    "Please restart the application to log in again."
-                )
+                self.show_success("You have been logged out successfully.\n\n"
+                    "Please restart the application to log in again.")
                 
         except Exception as e:
             logger.error(f"Error during logout: {e}")
             self.show_error("An error occurred during logout.")
 
     def update_2fa_ui(self):
-        """Update 2FA UI based on current status."""
-        if not self.user_data:
-            # Initialize UI with default state if no user data
-            self.phone_input.clear()
-            self.twofa_status_label.setText("🔐 Set up 2FA for enhanced security")
-            self.twofa_status_label.setStyleSheet("""
-                QLabel {
-                    color: #5E81AC; 
-                    font-weight: bold; 
-                    font-size: 14px;
-                    padding: 10px 15px;
-                    background-color: #E5E9F0;
-                    border-radius: 6px;
-                    border: 1px solid #D8DEE9;
-                }
-            """)
-            self.twofa_toggle.setEnabled(False)
-            self.twofa_toggle.setChecked(False)
-            self.setup_phone_btn.setText("Send Verification Code")
-            self.setup_phone_btn.setEnabled(True)
-            self.disable_2fa_btn.hide()
-            # Hide verification UI
+        """Update 2FA UI based on current status with modern Discord styling."""
+        # Temporarily block signals to prevent unwanted popups during UI updates
+        self.twofa_toggle.blockSignals(True)
+        
+        try:
+            if not self.user_data:
+                # Initialize UI with default state if no user data
+                self.phone_input.clear()
+                self.twofa_status_label.setText("🔐 Set up 2FA for enhanced security")
+                self.twofa_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #00d166;
+                        background-color: rgba(0, 209, 102, 0.1);
+                        border: 1px solid #00d166;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        font-weight: 600;
+                    }
+                """)
+                self.twofa_toggle.setEnabled(False)
+                self.twofa_toggle.setChecked(False)
+                self.setup_phone_btn.setText("Send Verification Code")
+                self.setup_phone_btn.setEnabled(True)
+                self.disable_2fa_btn.hide()
+                # Hide verification UI
+                self.verification_section.hide()
+                return
+            
+            phone_number = self.user_data.get('phone_number', '')
+            twilio_verified = self.user_data.get('twilio_verified', False)
+            is_2fa_enabled = self.user_data.get('is_2fa_enabled', False)
+            
+            # Update phone input (remove +1 prefix if present)
+            if phone_number.startswith('+1'):
+                display_phone = phone_number[2:]
+            else:
+                display_phone = phone_number
+            self.phone_input.setText(display_phone)
+            
+            # Hide verification section by default
             self.verification_section.hide()
-            return
-        
-        phone_number = self.user_data.get('phone_number', '')
-        twilio_verified = self.user_data.get('twilio_verified', False)
-        is_2fa_enabled = self.user_data.get('is_2fa_enabled', False)
-        
-        # Update phone input (remove +1 prefix if present)
-        if phone_number.startswith('+1'):
-            display_phone = phone_number[2:]
-        else:
-            display_phone = phone_number
-        self.phone_input.setText(display_phone)
-        
-        # Hide verification section by default
-        self.verification_section.hide()
-        
-        # Reset button states
-        self.setup_phone_btn.setEnabled(True)
-        
-        if is_2fa_enabled and twilio_verified:
-            # 2FA is fully enabled and working
-            self.twofa_status_label.setText("✅ Two-Factor Authentication is ENABLED")
-            self.twofa_status_label.setStyleSheet("""
-                QLabel {
-                    color: #FFFFFF; 
-                    font-weight: bold; 
-                    font-size: 14px;
-                    padding: 10px 15px;
-                    background-color: #A3BE8C;
-                    border-radius: 6px;
-                    border: 1px solid #9FB584;
-                }
-            """)
-            self.twofa_toggle.setChecked(True)
-            self.twofa_toggle.setEnabled(False)  # Don't allow toggle when enabled
-            self.setup_phone_btn.setText("Re-verify Phone")
-            self.disable_2fa_btn.show()
             
-        elif twilio_verified:
-            # Phone verified but 2FA not enabled
-            self.twofa_status_label.setText("📱 Phone verified - You can enable 2FA")
-            self.twofa_status_label.setStyleSheet("""
-                QLabel {
-                    color: #2E3440; 
-                    font-weight: bold; 
-                    font-size: 14px;
-                    padding: 10px 15px;
-                    background-color: #EBCB8B;
-                    border-radius: 6px;
-                    border: 1px solid #E8D975;
-                }
-            """)
-            self.twofa_toggle.setEnabled(True)
-            self.twofa_toggle.setChecked(False)
-            self.setup_phone_btn.setText("Re-verify Phone")
-            self.disable_2fa_btn.hide()
+            # Reset button states
+            self.setup_phone_btn.setEnabled(True)
             
-        elif phone_number:
-            # Phone number set but not verified
-            self.twofa_status_label.setText("⚠️ Phone number needs verification")
-            self.twofa_status_label.setStyleSheet("""
-                QLabel {
-                    color: #2E3440; 
-                    font-weight: bold; 
-                    font-size: 14px;
-                    padding: 10px 15px;
-                    background-color: #D08770;
-                    border-radius: 6px;
-                    border: 1px solid #C77A62;
-                }
-            """)
-            self.twofa_toggle.setEnabled(False)
-            self.twofa_toggle.setChecked(False)
-            self.setup_phone_btn.setText("Send Verification Code")
-            self.disable_2fa_btn.hide()
-            
-        else:
-            # No phone number set
-            self.twofa_status_label.setText("🔐 Set up 2FA for enhanced security")
-            self.twofa_status_label.setStyleSheet("""
-                QLabel {
-                    color: #5E81AC; 
-                    font-weight: bold; 
-                    font-size: 14px;
-                    padding: 10px 15px;
-                    background-color: #E5E9F0;
-                    border-radius: 6px;
-                    border: 1px solid #D8DEE9;
-                }
-            """)
-            self.twofa_toggle.setEnabled(False)
-            self.twofa_toggle.setChecked(False)
-            self.setup_phone_btn.setText("Send Verification Code")
-            self.disable_2fa_btn.hide()
+            if is_2fa_enabled and twilio_verified:
+                # 2FA is fully enabled and working - green success
+                self.twofa_status_label.setText("✅ Two-Factor Authentication is ENABLED")
+                self.twofa_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #ffffff;
+                        background-color: #00d166;
+                        border: 1px solid #00d166;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        font-weight: 600;
+                    }
+                """)
+                self.twofa_toggle.setChecked(True)
+                self.twofa_toggle.setEnabled(False)  # Don't allow toggle when enabled
+                self.setup_phone_btn.setText("Re-verify Phone")
+                self.disable_2fa_btn.show()
+                
+            elif twilio_verified:
+                # Phone verified but 2FA not enabled - blue info
+                self.twofa_status_label.setText("📱 Phone verified - You can enable 2FA")
+                self.twofa_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #ffffff;
+                        background-color: #5865f2;
+                        border: 1px solid #5865f2;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        font-weight: 600;
+                    }
+                """)
+                self.twofa_toggle.setEnabled(True)
+                self.twofa_toggle.setChecked(False)
+                self.setup_phone_btn.setText("Re-verify Phone")
+                self.disable_2fa_btn.hide()
+                
+            elif phone_number:
+                # Phone number set but not verified - yellow warning
+                self.twofa_status_label.setText("⚠️ Phone number needs verification")
+                self.twofa_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #2c2f33;
+                        background-color: #faa61a;
+                        border: 1px solid #faa61a;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        font-weight: 600;
+                    }
+                """)
+                self.twofa_toggle.setEnabled(False)
+                self.twofa_toggle.setChecked(False)
+                self.setup_phone_btn.setText("Send Verification Code")
+                self.disable_2fa_btn.hide()
+                
+            else:
+                # No phone number set - neutral info
+                self.twofa_status_label.setText("🔐 Set up 2FA for enhanced security")
+                self.twofa_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #00d166;
+                        background-color: rgba(0, 209, 102, 0.1);
+                        border: 1px solid #00d166;
+                        border-radius: 6px;
+                        padding: 12px 16px;
+                        font-weight: 600;
+                    }
+                """)
+                self.twofa_toggle.setEnabled(False)
+                self.twofa_toggle.setChecked(False)
+                self.setup_phone_btn.setText("Send Verification Code")
+                self.disable_2fa_btn.hide()
+        finally:
+            # Always re-enable signals
+            self.twofa_toggle.blockSignals(False)
     
     def send_2fa_verification(self):
         """Send SMS verification code for 2FA setup."""
@@ -1512,7 +1769,6 @@ class AccountPage(QWidget):
                 self.setup_phone_btn.setText("Code Sent")
                 
                 # Re-enable after 30 seconds
-                from PyQt5.QtCore import QTimer
                 QTimer.singleShot(30000, lambda: (
                     self.setup_phone_btn.setEnabled(True),
                     self.setup_phone_btn.setText("Resend Code")
@@ -1644,48 +1900,83 @@ class AccountPage(QWidget):
             self.show_error("Failed to update 2FA status.")
     
     def disable_2fa(self):
-        """Disable 2FA after confirmation."""
-        reply = QMessageBox.question(
-            self, "Disable Two-Factor Authentication",
-            "Are you sure you want to disable Two-Factor Authentication?\n\n"
-            "This will make your account less secure.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        """Disable 2FA with confirmation and modern styling."""
+        # Show confirmation dialog with modern styling
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle("Disable Two-Factor Authentication")
+        msg_box.setText("⚠️ Warning: Disabling 2FA will make your account less secure.\n\n"
+            "Are you sure you want to disable Two-Factor Authentication?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
         
-        if reply == QMessageBox.Yes:
+        # Apply modern Discord-style dark theme
+        msg_box.setStyleSheet("""
+            QMessageBox {
+                background-color: #36393f;
+                color: #dcddde;
+                border-radius: 8px;
+            }
+            QMessageBox QLabel {
+                color: #dcddde;
+                font-size: 14px;
+                background: transparent;
+                border: none;
+            }
+            QMessageBox QPushButton {
+                background-color: #4f545c;
+                color: #dcddde;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 600;
+                min-width: 80px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #5d6269;
+            }
+            QMessageBox QPushButton[text="&Yes"] {
+                background-color: #faa61a;
+                color: #2c2f33;
+            }
+            QMessageBox QPushButton[text="&Yes"]:hover {
+                background-color: #e8940f;
+            }
+        """)
+        
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
             try:
                 from ..database import supabase
                 
                 if not supabase.is_authenticated():
-                    self.show_error("You must be logged in to disable 2FA.")
+                    self.show_error("You must be logged in to modify 2FA settings.")
                     return
                 
-                user_response = supabase.get_user()
-                if not user_response or not user_response.user:
-                    self.show_error("User authentication error.")
+                user = supabase.get_user()
+                if not user or not user.user:
+                    self.show_error("User authentication failed.")
                     return
                 
-                user_id = user_response.user.id
+                user_id = user.user.id
                 
-                # Disable 2FA in database but keep phone verification
-                details_response = supabase.client.from_("user_details").upsert({
-                    'user_id': user_id,
+                # Update database to disable 2FA
+                response = supabase.client.from_("user_details").update({
                     'is_2fa_enabled': False
-                    # Keep phone_number and twilio_verified so user can re-enable easily
-                }).execute()
+                }).eq("user_id", user_id).execute()
                 
-                if details_response.data:
+                if response.data:
                     # Update local user data
-                    self.user_data['is_2fa_enabled'] = False
+                    if self.user_data:
+                        self.user_data['is_2fa_enabled'] = False
+                    
+                    self.show_success("Two-Factor Authentication has been disabled.")
                     
                     # Update UI
                     self.update_2fa_ui()
-                    
-                    self.show_success("Two-Factor Authentication has been disabled.")
+                    logger.info("2FA disabled successfully")
                 else:
-                    self.show_error("Failed to disable 2FA.")
+                    self.show_error("Failed to disable 2FA. Please try again.")
                     
             except Exception as e:
                 logger.error(f"Error disabling 2FA: {e}")
-                self.show_error("Failed to disable 2FA.") 
+                self.show_error("An error occurred while disabling 2FA.") 

@@ -6,7 +6,7 @@ import os
 # Get all submodules for critical packages to prevent import errors
 pygame_submodules = collect_submodules('pygame')
 numpy_submodules = collect_submodules('numpy')
-pyqt5_submodules = collect_submodules('PyQt5')
+pyqt6_submodules = collect_submodules('PyQt6')
 supabase_submodules = collect_submodules('supabase')
 
 # Build binaries list dynamically to avoid None values
@@ -51,7 +51,7 @@ a = Analysis(
         *collect_data_files('matplotlib'),
         *collect_data_files('scipy'),
         *collect_data_files('numpy'),
-        *collect_data_files('PyQt5', include_py_files=True),
+        *collect_data_files('PyQt6', include_py_files=True),
         *collect_data_files('supabase'),
         *collect_data_files('gotrue'),
         *collect_data_files('postgrest'),
@@ -80,14 +80,14 @@ a = Analysis(
         'trackpro.community',
         'trackpro.gamification',
         
-        # PyQt5 modules
-        'PyQt5.QtChart',
-        'PyQt5.QtWebEngineWidgets',
-        'PyQt5.QtWebEngine',
-        'PyQt5.QtCore',
-        'PyQt5.QtGui',
-        'PyQt5.QtWidgets',
-        'PyQt5.sip',
+                 # PyQt6 modules
+                     'PyQt6.QtChart',
+             'PyQt6.QtWebEngineWidgets',
+             'PyQt6.QtWebEngine',
+             'PyQt6.QtCore',
+             'PyQt6.QtGui',
+             'PyQt6.QtWidgets',
+             'PyQt6.sip',
         
         # Game/input modules
         'pygame',
@@ -130,6 +130,10 @@ a = Analysis(
         'h2',
         'websockets',
         
+        # Data parsing
+        'yaml',
+        'json',
+        
         # Supabase and authentication
         'supabase',
         'gotrue',
@@ -148,7 +152,7 @@ a = Analysis(
         # Add all discovered submodules
         *pygame_submodules,
         *numpy_submodules,
-        *pyqt5_submodules,
+        *pyqt6_submodules,
         *supabase_submodules,
     ],
     hookspath=[],
@@ -185,12 +189,12 @@ exe = EXE(
     upx=False,  # Disable UPX to prevent corruption issues
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,  # Enable console for debugging startup issues
+    console=False,  # Disable console for GUI application
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    uac_admin=True,
+    uac_admin=False,
     manifest='trackpro.manifest',
 )

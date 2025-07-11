@@ -1,10 +1,10 @@
 """Base authentication dialog."""
 
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QHBoxLayout, 
-    QLineEdit, QPushButton, QLabel, QMessageBox
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QFrame, QGraphicsDropShadowEffect, QMessageBox, QLineEdit, QFormLayout
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from ..database.supabase_client import supabase
 import logging
@@ -62,7 +62,7 @@ class BaseAuthDialog(QDialog):
         
         # Password field
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         form_layout.addRow("Password:", self.password_input)
     
     def setup_buttons(self, button_layout):
@@ -90,14 +90,14 @@ class BaseAuthDialog(QDialog):
     def continue_offline(self):
         """Continue in offline mode."""
         msgBox = QMessageBox()
-        msgBox.setIcon(QMessageBox.Information)
+        msgBox.setIcon(QMessageBox.Icon.Information)
         msgBox.setText("You will continue in offline mode.")
         msgBox.setInformativeText("You can sync your data later when you have a connection.")
         msgBox.setWindowTitle("Offline Mode")
-        msgBox.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-        result = msgBox.exec_()
+        msgBox.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        result = msgBox.exec()
         
-        if result == QMessageBox.Ok:
+        if result == QMessageBox.StandardButton.Ok:
             # Disable Supabase client
             supabase.disable()
             self.auth_completed.emit(False, None)
@@ -154,11 +154,11 @@ class BaseAuthDialog(QDialog):
             bool: True if user clicked "Continue Offline", False if "Retry"
         """
         box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
+        box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Network Error")
         box.setText(message)
-        retry_button = box.addButton("Retry", QMessageBox.RejectRole)
-        offline_button = box.addButton("Continue Offline", QMessageBox.AcceptRole)
-        box.exec_()
+        retry_button = box.addButton("Retry", QMessageBox.ButtonRole.RejectRole)
+        offline_button = box.addButton("Continue Offline", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
         
         return box.clickedButton() == offline_button 

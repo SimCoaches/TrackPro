@@ -4,9 +4,9 @@ Essential widgets and components copied from the existing UI system.
 """
 
 import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from datetime import datetime, timedelta
 import json
 from typing import Dict, List, Optional, Any
@@ -37,7 +37,7 @@ class TeamCard(QWidget):
     def setup_ui(self):
         """Setup the team card UI"""
         self.setFixedHeight(200)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -58,7 +58,7 @@ class TeamCard(QWidget):
                 font-weight: bold;
             }}
         """)
-        logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Use first letter of team name as logo if no image
         team_name = self.team_data.get('name', 'Team')
@@ -122,7 +122,7 @@ class TeamCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.team_clicked.emit(self.team_data)
 
 
@@ -148,7 +148,7 @@ class ClubCard(QWidget):
     def setup_ui(self):
         """Setup the club card UI"""
         self.setFixedHeight(180)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -171,7 +171,7 @@ class ClubCard(QWidget):
         icon_label = QLabel(category_icons.get(category, '🏆'))
         icon_label.setFont(QFont('Segoe UI Emoji', 24))
         icon_label.setFixedSize(40, 40)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Club info
         info_layout = QVBoxLayout()
@@ -230,7 +230,7 @@ class ClubCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.club_clicked.emit(self.club_data)
 
 
@@ -256,7 +256,7 @@ class EventCard(QWidget):
     def setup_ui(self):
         """Setup the event card UI"""
         self.setFixedHeight(220)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -278,7 +278,7 @@ class EventCard(QWidget):
         icon_label = QLabel(type_icons.get(event_type, '🏁'))
         icon_label.setFont(QFont('Segoe UI Emoji', 20))
         icon_label.setFixedSize(32, 32)
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Event info
         info_layout = QVBoxLayout()
@@ -347,5 +347,5 @@ class EventCard(QWidget):
         
     def mousePressEvent(self, event):
         """Handle card click"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.event_clicked.emit(self.event_data) 

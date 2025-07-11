@@ -1,8 +1,8 @@
 """Calibration chart widget for visualizing and editing pedal response curves."""
 
-from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene
-from PyQt5.QtCore import Qt, QPointF, pyqtSignal, QRectF
-from PyQt5.QtGui import QPen, QBrush, QColor, QPainterPath
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene
+from PyQt6.QtCore import Qt, QPointF, pyqtSignal, QRectF
+from PyQt6.QtGui import QPen, QBrush, QColor, QPainterPath
 
 class CalibrationChart:
     """Chart for visualizing and editing pedal calibration curves."""

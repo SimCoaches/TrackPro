@@ -964,4 +964,5 @@ class CommunityManager(DatabaseManager):
             logger.error(f"Error creating event activity: {e}")
 
 # Create a global instance
-community_manager = CommunityManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.community_manager or trackpro.social.get_community_manager() instead 

@@ -8,9 +8,9 @@ import math
 import time
 import threading
 from typing import Dict, List, Optional, Tuple, Any
-from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
-from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
+from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 
 from .simple_iracing import SimpleIRacingAPI
 from ..database.supabase_client import get_supabase_client
@@ -176,7 +176,7 @@ class TrackMapGamingOverlay(QWidget):
     def _load_settings(self):
         """Load overlay settings from persistent storage."""
         try:
-            from PyQt5.QtCore import QSettings
+            from PyQt6.QtCore import QSettings
             settings = QSettings('TrackPro', 'TrackMapOverlay')
             
             # Load overlay scale
@@ -204,7 +204,7 @@ class TrackMapGamingOverlay(QWidget):
     def _save_settings(self):
         """Save overlay settings to persistent storage."""
         try:
-            from PyQt5.QtCore import QSettings
+            from PyQt6.QtCore import QSettings
             settings = QSettings('TrackPro', 'TrackMapOverlay')
             
             # Save overlay scale
@@ -233,7 +233,7 @@ class TrackMapGamingOverlay(QWidget):
             logger.info("🐛 DEBUG: Setting up overlay window...")
             
         # Window flags for floating transparent window
-        flags = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
         self.setWindowFlags(flags)
         
         if self.debug_mode:
@@ -249,7 +249,7 @@ class TrackMapGamingOverlay(QWidget):
             logger.info("🐛 DEBUG: Window attributes set - TranslucentBackground=True, TransparentForMouseEvents=False")
             
         # Set focus policy to accept keyboard input
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
         if self.debug_mode:
             logger.info("🐛 DEBUG: Focus policy set to StrongFocus")
@@ -435,7 +435,7 @@ class TrackMapGamingOverlay(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setCompositionMode(QPainter.CompositionMode_Clear)
         p.fillRect(self.rect(), Qt.transparent)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
@@ -523,7 +523,7 @@ class TrackMapGamingOverlay(QWidget):
             logger.info(f"🐛 DEBUG: mousePressEvent - Button: {event.button()}, Pos: ({event.x()}, {event.y()}), Global: ({event.globalX()}, {event.globalY()})")
             logger.info(f"🐛 DEBUG: Current lock state: {'LOCKED' if self.is_locked else 'UNLOCKED'}")
             
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             if self.debug_mode:
                 logger.info("🐛 DEBUG: Left mouse button pressed")
                 
@@ -550,7 +550,7 @@ class TrackMapGamingOverlay(QWidget):
                 if self.debug_mode:
                     logger.info("🐛 DEBUG: Starting drag operation...")
                 self.drag_start_pos = event.globalPos() - self.frameGeometry().topLeft()
-                self.setCursor(Qt.ClosedHandCursor)
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 if self.debug_mode:
                     logger.info(f"🐛 DEBUG: Drag start pos: {self.drag_start_pos}")
                 event.accept()
@@ -591,7 +591,7 @@ class TrackMapGamingOverlay(QWidget):
             logger.info(f"🐛 DEBUG: Button hover states - Lock: {self.hover_lock_button}, Close: {self.hover_close_button}")
         
         # Handle window dragging
-        if not self.is_locked and event.buttons() == Qt.LeftButton and self.drag_start_pos:
+        if not self.is_locked and event.buttons() == Qt.MouseButton.LeftButton and self.drag_start_pos:
             if self.debug_mode:
                 logger.info(f"🐛 DEBUG: Dragging window to: {event.globalPos() - self.drag_start_pos}")
             self.move(event.globalPos() - self.drag_start_pos)
@@ -601,11 +601,11 @@ class TrackMapGamingOverlay(QWidget):
             
         # Update cursor based on state
         if self.hover_lock_button or self.hover_close_button:
-            self.setCursor(Qt.PointingHandCursor)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         elif not self.is_locked:
-            self.setCursor(Qt.OpenHandCursor)
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
         
         self.update()  # Update to show hover effects
 
@@ -613,10 +613,10 @@ class TrackMapGamingOverlay(QWidget):
         if self.debug_mode:
             logger.info(f"🐛 DEBUG: mouseReleaseEvent - Button: {event.button()}")
             
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             if self.debug_mode:
                 logger.info("🐛 DEBUG: Ending drag operation")
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             self.drag_start_pos = None
             event.accept()
         else:
@@ -630,12 +630,12 @@ class TrackMapGamingOverlay(QWidget):
             logger.info(f"🐛 DEBUG: Window has focus: {self.hasFocus()}")
             logger.info(f"🐛 DEBUG: Window is active: {self.isActiveWindow()}")
             
-        if event.key() == Qt.Key_L:
+        if event.key() == Qt.Key.Key_L:
             if self.debug_mode:
                 logger.info("🐛 DEBUG: L key pressed - toggling lock!")
             self._toggle_lock()
             event.accept()
-        elif event.key() == Qt.Key_Q:
+        elif event.key() == Qt.Key.Key_Q:
             if self.debug_mode:
                 logger.info("🐛 DEBUG: Q key pressed - closing overlay!")
             self.close()
@@ -670,7 +670,7 @@ class TrackMapGamingOverlay(QWidget):
             logger.info("🐛 DEBUG: leaveEvent - Mouse left window")
         if self.show_hover_controls:
             self.hover_controls_timer.start(500)  # Hide controls after 500ms
-        self.setCursor(Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         super().leaveEvent(event)
 
     # --- HELPER METHODS WITH DEBUGGING ---
@@ -684,7 +684,7 @@ class TrackMapGamingOverlay(QWidget):
         # Reset cursor and dragging state
         if self.is_locked:
             self.drag_start_pos = None
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
         
         self.update()
         
@@ -771,10 +771,10 @@ class TrackMapGamingOverlay(QWidget):
         
         # Lock icon
         lock_symbol = "🔒" if self.is_locked else "🔓"
-        painter.setFont(QFont("Arial", 16, QFont.Bold))
+        painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         painter.setPen(QPen(QColor(255, 255, 255, 255)))
-        text_rect = painter.boundingRect(lock_x, lock_y, lock_w, lock_h, Qt.AlignCenter, lock_symbol)
-        painter.drawText(text_rect, Qt.AlignCenter, lock_symbol)
+        text_rect = painter.boundingRect(lock_x, lock_y, lock_w, lock_h, Qt.AlignmentFlag.AlignCenter, lock_symbol)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, lock_symbol)
         
         # Draw close button
         close_x, close_y, close_w, close_h = self.close_button_rect
@@ -786,10 +786,10 @@ class TrackMapGamingOverlay(QWidget):
         painter.drawRoundedRect(close_x, close_y, close_w, close_h, 5, 5)
         
         # Close icon (X)
-        painter.setFont(QFont("Arial", 18, QFont.Bold))
+        painter.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         painter.setPen(QPen(QColor(255, 255, 255, 255)))
-        text_rect = painter.boundingRect(close_x, close_y, close_w, close_h, Qt.AlignCenter, "✕")
-        painter.drawText(text_rect, Qt.AlignCenter, "✕")
+        text_rect = painter.boundingRect(close_x, close_y, close_w, close_h, Qt.AlignmentFlag.AlignCenter, "✕")
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, "✕")
         
         if self.debug_mode:
             logger.info(f"🐛 DEBUG: Drew hover controls - Lock: {lock_symbol}, Hover states: Lock={self.hover_lock_button}, Close={self.hover_close_button}")
@@ -804,7 +804,7 @@ class TrackMapGamingOverlay(QWidget):
         self.activateWindow()
         
         # Force focus to ensure keyboard events work
-        self.setFocus(Qt.OtherFocusReason)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
         
         if self.debug_mode:
             logger.info(f"🐛 DEBUG: Window shown - Visible: {self.isVisible()}, Active: {self.isActiveWindow()}, Focus: {self.hasFocus()}")

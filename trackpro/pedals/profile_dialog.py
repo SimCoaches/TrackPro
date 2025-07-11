@@ -1,12 +1,12 @@
 """Dialog for managing pedal profiles."""
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QLineEdit, QTextEdit,
     QFormLayout, QMessageBox, QInputDialog, QFrame
 )
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 import logging
 from ..database.pedal_profiles import PedalProfileManager
 from ..database.supabase_client import supabase
@@ -69,19 +69,19 @@ class PedalProfileDialog(QDialog):
         
         # Profiles label
         profiles_label = QLabel("Your Profiles")
-        profiles_label.setFont(QFont(profiles_label.font().family(), 12, QFont.Bold))
+        profiles_label.setFont(QFont(profiles_label.font().family(), 12, QFont.Weight.Bold))
         main_layout.addWidget(profiles_label)
         
         # Profiles list
         self.profiles_list_widget = QListWidget()
-        self.profiles_list_widget.setSelectionMode(QListWidget.SingleSelection)
+        self.profiles_list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.profiles_list_widget.itemSelectionChanged.connect(self.on_profile_selection_changed)
         main_layout.addWidget(self.profiles_list_widget)
         
         # Horizontal line
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
         main_layout.addWidget(line)
         
         # Profile details form
@@ -166,7 +166,7 @@ class PedalProfileDialog(QDialog):
             
             # Create and show the login dialog
             dialog = LoginDialog(self)
-            result = dialog.exec_()
+            result = dialog.exec()
             
             # Update auth state
             self.update_auth_state()
@@ -192,7 +192,7 @@ class PedalProfileDialog(QDialog):
             # Add to list widget
             for profile in profiles:
                 item = QListWidgetItem(profile.get('name', 'Unnamed Profile'))
-                item.setData(Qt.UserRole, profile.get('id'))
+                item.setData(Qt.ItemDataRole.UserRole, profile.get('id'))
                 self.profiles_list_widget.addItem(item)
             
             # Update UI
@@ -214,7 +214,7 @@ class PedalProfileDialog(QDialog):
             self.delete_button.setEnabled(True)
             
             # Get profile ID
-            profile_id = selected_items[0].data(Qt.UserRole)
+            profile_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
             
             # Find profile in list
             for profile in self.profile_list:
@@ -269,12 +269,12 @@ class PedalProfileDialog(QDialog):
                     self,
                     "Update Profile",
                     f"Do you want to update the selected profile '{selected_items[0].text()}'?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
                 )
                 
-                if choice == QMessageBox.Yes:
-                    profile_id = selected_items[0].data(Qt.UserRole)
+                if choice == QMessageBox.StandardButton.Yes:
+                    profile_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
             
             # Save profile
             profile = PedalProfileManager.save_profile(
@@ -309,7 +309,7 @@ class PedalProfileDialog(QDialog):
                 return
             
             # Get profile ID
-            profile_id = selected_items[0].data(Qt.UserRole)
+            profile_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
             
             # Find profile in list
             for profile in self.profile_list:
@@ -349,15 +349,15 @@ class PedalProfileDialog(QDialog):
                 self,
                 "Confirm Deletion",
                 f"Are you sure you want to delete the profile '{profile_name}'?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
             
-            if choice != QMessageBox.Yes:
+            if choice != QMessageBox.StandardButton.Yes:
                 return
             
             # Get profile ID
-            profile_id = selected_items[0].data(Qt.UserRole)
+            profile_id = selected_items[0].data(Qt.ItemDataRole.UserRole)
             
             # Delete profile
             success = PedalProfileManager.delete_profile(profile_id)

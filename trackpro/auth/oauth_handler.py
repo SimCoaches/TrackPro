@@ -10,8 +10,8 @@ import threading
 import webbrowser
 import re
 from urllib.parse import urlparse, parse_qs
-from PyQt5.QtWidgets import QMessageBox
-from PyQt5.QtCore import QObject, QUrl, pyqtSignal, QTimer
+from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import QObject, QUrl, pyqtSignal, QTimer
 from ..database.supabase_client import supabase
 # Import User model and setter function
 from ..auth.user_manager import User, set_current_user 
@@ -26,6 +26,9 @@ class OAuthHandler(QObject):
     
     # Signal emitted when a user needs to complete their profile
     profile_completion_required = pyqtSignal(object)
+    
+    # Signal emitted when password reset is required
+    password_reset_required = pyqtSignal(str, str)  # access_token, refresh_token
     
     def __init__(self, parent=None):
         """Initialize the OAuth handler."""
@@ -291,6 +294,16 @@ class OAuthHandler(QObject):
                             self.wfile.write(self.parent.create_email_confirmation_page().encode('utf-8'))
                         return
 
+                    # Handle password reset route
+                    if parsed_path.path == '/auth/reset-password':
+                        logger.info("Password reset callback received")
+                        if hasattr(self, 'wfile') and self.wfile is not None:
+                            self.send_response(200)
+                            self.send_header('Content-type', 'text/html')
+                            self.end_headers()
+                            self.wfile.write(self.parent.create_password_reset_page().encode('utf-8'))
+                        return
+
                     # Send HTML response that will extract tokens from URL fragment
                     if hasattr(self, 'wfile') and self.wfile is not None:
                         self.send_response(200)
@@ -315,8 +328,19 @@ class OAuthHandler(QObject):
                                 if (params.has('access_token')) {
                                     console.log('Found access token in fragment');
                                     
-                                    // Send token data to our callback endpoint
-                                    fetch('/process_tokens', {
+                                    // Check if this is a password reset flow
+                                    const isPasswordReset = params.get('type') === 'recovery' || 
+                                                           window.location.search.includes('type=recovery') ||
+                                                           document.referrer.includes('recovery') ||
+                                                           params.has('recovery');
+                                    
+                                    console.log('Is password reset flow:', isPasswordReset);
+                                    
+                                    const endpoint = isPasswordReset ? '/process_password_reset' : '/process_tokens';
+                                    console.log('Using endpoint:', endpoint);
+                                    
+                                    // Send token data to appropriate endpoint
+                                    fetch(endpoint, {
                                         method: 'POST',
                                         headers: {
                                             'Content-Type': 'application/json',
@@ -326,12 +350,17 @@ class OAuthHandler(QObject):
                                             refresh_token: params.get('refresh_token'),
                                             expires_in: params.get('expires_in'),
                                             token_type: params.get('token_type'),
-                                            type: params.get('type')
+                                            type: params.get('type'),
+                                            is_password_reset: isPasswordReset
                                         })
                                     }).then(response => {
                                         console.log('Token processing response:', response.status);
                                         if (response.ok) {
-                                            document.body.innerHTML = '<h1>Authentication successful!</h1><p>You can close this window now.</p>';
+                                            if (isPasswordReset) {
+                                                document.body.innerHTML = '<h1>Password Reset Ready!</h1><p>Please return to TrackPro to set your new password. You can close this window now.</p>';
+                                            } else {
+                                                document.body.innerHTML = '<h1>Authentication successful!</h1><p>You can close this window now.</p>';
+                                            }
                                             setTimeout(() => window.close(), 2000);
                                         } else {
                                             document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
@@ -403,6 +432,22 @@ class OAuthHandler(QObject):
                         
                         # Process the tokens in a separate thread
                         threading.Thread(target=self.process_tokens, args=(token_data,)).start()
+                    elif self.path == '/process_password_reset':
+                        content_length = int(self.headers['Content-Length'])
+                        post_data = self.rfile.read(content_length)
+                        token_data = json.loads(post_data.decode('utf-8'))
+                        
+                        logger.info("✓ SUCCESS: Received password reset tokens from JavaScript")
+                        logger.info(f"Access token: {token_data.get('access_token', '')[:20]}...")
+                        
+                        # Send success response
+                        self.send_response(200)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(b'{"status": "success"}')
+                        
+                        # Process the password reset tokens in a separate thread
+                        threading.Thread(target=self.parent.process_password_reset_tokens, args=(token_data,)).start()
                     else:
                         self.send_response(404)
                         self.end_headers()
@@ -419,13 +464,21 @@ class OAuthHandler(QObject):
                 try:
                     access_token = token_data.get('access_token')
                     refresh_token = token_data.get('refresh_token')
+                    token_type = token_data.get('type')
+                    is_password_reset = token_data.get('is_password_reset', False)
+                    
+                    # Check if this should be routed to password reset handler
+                    if token_type == 'recovery' or is_password_reset:
+                        logger.info(f"Detected password reset tokens in regular flow, routing to password reset handler")
+                        self.process_password_reset_tokens(token_data)
+                        return
                     
                     if not access_token:
                         logger.error("No access token provided")
                         self.parent.auth_completed.emit(False, None)
                         return
                     
-                    logger.info(f"Processing tokens for implicit flow")
+                    logger.info(f"Processing tokens for implicit flow (OAuth login)")
                     
                     # Create a mock response object for compatibility
                     class MockAuthResponse:
@@ -630,7 +683,7 @@ class OAuthHandler(QObject):
                         supabase._save_session(user_response, remember_me=True) # Always remember OAuth sessions
 
                         # Find the main window by looking through top-level widgets
-                        from PyQt5.QtWidgets import QApplication, QMessageBox
+                        from PyQt6.QtWidgets import QApplication, QMessageBox
                         from ..ui import MainWindow
                         
                         # Force reload of auth state to ensure cache is cleared
@@ -701,6 +754,83 @@ class OAuthHandler(QObject):
             logger.error(f"Failed to start callback server on port {port}: {e}")
             return None
     
+    def create_password_reset_page(self):
+        """Create an HTML page to handle password reset tokens from URL fragment."""
+        return """
+        <html>
+        <head><title>Password Reset - TrackPro</title></head>
+        <body>
+            <h1>Completing Password Reset...</h1>
+            <p>Please wait while we process your password reset request.</p>
+            <script>
+                // Extract tokens from URL fragment (for password reset)
+                const fragment = window.location.hash.slice(1);
+                const params = new URLSearchParams(fragment);
+                
+                console.log('URL fragment:', fragment);
+                console.log('Fragment params:', params);
+                
+                if (params.has('access_token')) {
+                    console.log('Found access token in fragment for password reset');
+                    
+                    // Send token data to our password reset endpoint
+                    fetch('/process_password_reset', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            access_token: params.get('access_token'),
+                            refresh_token: params.get('refresh_token'),
+                            expires_in: params.get('expires_in'),
+                            token_type: params.get('token_type'),
+                            type: params.get('type')
+                        })
+                    }).then(response => {
+                        console.log('Password reset token processing response:', response.status);
+                        if (response.ok) {
+                            document.body.innerHTML = '<h1>Password Reset Ready!</h1><p>Please return to TrackPro to set your new password. You can close this window now.</p>';
+                        } else {
+                            document.body.innerHTML = '<h1>Password Reset Link Processed</h1><p>Please return to TrackPro to complete your password reset.</p>';
+                        }
+                    }).catch(err => {
+                        console.error('Error processing password reset tokens:', err);
+                        document.body.innerHTML = '<h1>Password Reset Link Processed</h1><p>Please return to TrackPro to complete your password reset.</p>';
+                    });
+                } else {
+                    console.log('No access token found in fragment for password reset');
+                    document.body.innerHTML = '<h1>Invalid Reset Link</h1><p>This password reset link appears to be invalid or expired. Please request a new password reset email.</p>';
+                }
+            </script>
+        </body>
+        </html>
+        """
+
+    def process_password_reset_tokens(self, token_data):
+        """Process password reset tokens and emit signal."""
+        try:
+            access_token = token_data.get('access_token')
+            refresh_token = token_data.get('refresh_token')
+            token_type = token_data.get('type')
+            is_password_reset = token_data.get('is_password_reset', False)
+            
+            logger.info(f"Processing password reset tokens - Type: {token_type}, Is Password Reset: {is_password_reset}")
+            logger.info(f"Token data keys: {list(token_data.keys())}")
+            
+            if not access_token:
+                logger.error("No access token found in password reset data")
+                return
+            
+            logger.info(f"Processing password reset for token: {access_token[:20]}...")
+            
+            # Emit the password reset signal - this follows the same pattern as auth_completed
+            logger.info("Emitting password_reset_required signal...")
+            self.password_reset_required.emit(access_token, refresh_token or "")
+            logger.info("✓ Password reset signal emitted successfully")
+            
+        except Exception as e:
+            logger.error(f"Error processing password reset tokens: {e}", exc_info=True)
+
     def shutdown_callback_server(self, server):
         """
         Shutdown the callback server.

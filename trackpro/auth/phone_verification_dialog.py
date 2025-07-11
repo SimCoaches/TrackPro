@@ -1,13 +1,12 @@
 """Phone verification dialog for 2FA setup."""
 
 import logging
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QMessageBox, QWidget
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QRegExpValidator
-from PyQt5.QtCore import QRegExp
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont, QRegularExpressionValidator
+from PyQt6.QtCore import QRegularExpression
 from .twilio_service import twilio_service, TWILIO_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -35,19 +34,19 @@ class PhoneVerificationDialog(QDialog):
         
         # Title
         title = QLabel("Verify your phone number")
-        title.setFont(QFont("Arial", 14, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Description
         description = QLabel("We'll send a 6-digit code to verify your number")
-        description.setAlignment(Qt.AlignCenter)
+        description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         description.setWordWrap(True)
         layout.addWidget(description)
         
         # Phone section
         phone_label = QLabel("Phone Number:")
-        phone_label.setFont(QFont("Arial", 10, QFont.Bold))
+        phone_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         layout.addWidget(phone_label)
         
         # Phone input container
@@ -57,7 +56,7 @@ class PhoneVerificationDialog(QDialog):
         country_code = QLabel("+1")
         country_code.setFixedWidth(40)
         country_code.setMinimumHeight(35)  # Match phone input height
-        country_code.setAlignment(Qt.AlignCenter)
+        country_code.setAlignment(Qt.AlignmentFlag.AlignCenter)
         country_code.setFont(QFont("Arial", 12))  # Match phone input font
         country_code.setStyleSheet("""
             QLabel {
@@ -75,7 +74,7 @@ class PhoneVerificationDialog(QDialog):
         self.phone_input.setMaxLength(10)
         self.phone_input.setMinimumHeight(35)  # Make it bigger
         self.phone_input.setFont(QFont("Arial", 12))  # Bigger font
-        digit_validator = QRegExpValidator(QRegExp(r'^\d{0,10}$'))
+        digit_validator = QRegularExpressionValidator(QRegularExpression(r'^\d{0,10}$'))
         self.phone_input.setValidator(digit_validator)
         self.phone_input.textChanged.connect(self.validate_phone_input)
         phone_container.addWidget(self.phone_input)
@@ -85,7 +84,7 @@ class PhoneVerificationDialog(QDialog):
         # Send code button
         self.send_code_btn = QPushButton("Send Code")
         self.send_code_btn.setMinimumHeight(40)  # Make it bigger
-        self.send_code_btn.setFont(QFont("Arial", 12, QFont.Bold))  # Bold font
+        self.send_code_btn.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # Bold font
         self.send_code_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -107,20 +106,20 @@ class PhoneVerificationDialog(QDialog):
         layout.addWidget(self.send_code_btn)
         
         # Verification section (initially hidden)
-        self.verification_widget = QWidget()
+        self.verification_widget = QFrame() # Changed from QWidget to QFrame
         verification_layout = QVBoxLayout(self.verification_widget)
         verification_layout.setContentsMargins(0, 10, 0, 0)
         
         # Code label
         code_label = QLabel("Verification Code:")
-        code_label.setFont(QFont("Arial", 10, QFont.Bold))
+        code_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         verification_layout.addWidget(code_label)
         
         # Code input
         self.code_input = QLineEdit()
         self.code_input.setPlaceholderText("6-digit code")
         self.code_input.setMaxLength(6)
-        self.code_input.setAlignment(Qt.AlignCenter)
+        self.code_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.code_input.setMinimumHeight(40)  # Make it bigger
         self.code_input.setFont(QFont("Arial", 14))  # Bigger font
         self.code_input.setStyleSheet("""
@@ -135,7 +134,7 @@ class PhoneVerificationDialog(QDialog):
                 border-color: #0066cc;
             }
         """)
-        code_validator = QRegExpValidator(QRegExp(r'^\d{0,6}$'))
+        code_validator = QRegularExpressionValidator(QRegularExpression(r'^\d{0,6}$'))
         self.code_input.setValidator(code_validator)
         self.code_input.textChanged.connect(self.validate_code_input)
         self.code_input.returnPressed.connect(self.verify_code)
@@ -144,7 +143,7 @@ class PhoneVerificationDialog(QDialog):
         # Verify button
         self.verify_btn = QPushButton("Verify & Enable 2FA")
         self.verify_btn.setMinimumHeight(45)  # Make it bigger
-        self.verify_btn.setFont(QFont("Arial", 12, QFont.Bold))  # Bold font
+        self.verify_btn.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # Bold font
         self.verify_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -211,7 +210,7 @@ class PhoneVerificationDialog(QDialog):
         self.send_code_btn.setEnabled(False)
         
         error_label = QLabel("SMS verification unavailable")
-        error_label.setAlignment(Qt.AlignCenter)
+        error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout().insertWidget(2, error_label)
     
     def send_verification_code(self):
@@ -300,8 +299,8 @@ class PhoneVerificationDialog(QDialog):
                 supabase.table('user_details').upsert({
                     'user_id': self.user_id,
                     'phone_number': self.phone_number,
-                    'phone_verified': True,
-                    'two_factor_enabled': True
+                    'twilio_verified': True,
+                    'is_2fa_enabled': True
                 }).execute()
                 
                 logger.info(f"2FA enabled successfully for user {self.user_id}")

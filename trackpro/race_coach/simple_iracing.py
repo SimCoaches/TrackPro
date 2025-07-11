@@ -8,7 +8,7 @@ from collections import deque
 from .telemetry_saver import TelemetrySaver
 # from .integrate_simple_timing import SimpleSectorTimingIntegration  # REMOVED: Use main sector timing instead
 from .sector_timing import SectorTimingCollector
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 import queue
 
 logger = logging.getLogger(__name__)
@@ -308,7 +308,9 @@ class SimpleIRacingAPI(QObject):
             essential_fields = [
                 'SessionTime', 'LapDistPct', 'Lap', 'LapCompleted', 'Speed', 'RPM', 'Gear',
                 'Throttle', 'Brake', 'Clutch', 'SteeringWheelAngle', 'LongAccel', 'LatAccel', 'YawRate',
-                'VelocityX', 'VelocityY'  # Added for real track shape calculation
+                'VelocityX', 'VelocityY',  # Added for real track shape calculation
+                # 🔧 BUGFIX: Add missing fields needed by LapIndexer
+                'LapLastLapTime', 'LapInvalidated', 'OnPitRoad', 'PlayerCarIdx', 'CarIdxLastLapTime'
             ]
             
             for field in essential_fields:

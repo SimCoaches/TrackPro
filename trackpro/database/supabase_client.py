@@ -177,10 +177,11 @@ class SupabaseManager:
             else:
                 return True  # Unknown format, assume expired
             
-            # Add a 5-minute buffer to avoid using tokens that are about to expire
+            # Add a 2-minute buffer to avoid using tokens that are about to expire
+            # Reduced from 5 minutes to 2 minutes to be less aggressive
             import time
             current_time = datetime.fromtimestamp(time.time())
-            buffer_seconds = 300  # 5 minutes
+            buffer_seconds = 120  # 2 minutes instead of 5
             
             return (expiry_time.timestamp() - current_time.timestamp()) < buffer_seconds
             
@@ -241,16 +242,23 @@ class SupabaseManager:
                 logger.info("Access token appears to be expired")
             
             # If we reach here, either the token is expired or direct restoration failed
-            # Try to handle refresh by clearing and requiring re-authentication
+            # Try to refresh the session using the refresh token
             if refresh_token:
-                logger.info("Access token expired or invalid, clearing session for fresh authentication")
+                logger.info("Access token expired or invalid, attempting to refresh session")
                 try:
-                    # Instead of trying to refresh (which consumes the token), 
-                    # we'll clear the session and let the user re-authenticate
-                    # This prevents the "already used" refresh token error
+                    # Try the standard refresh method first
+                    if hasattr(self._client.auth, 'refresh_session'):
+                        logger.info("Attempting to refresh session using auth.refresh_session method")
+                        response = self._client.auth.refresh_session()
+                        if response and hasattr(response, 'session') and response.session:
+                            logger.info("Session refreshed successfully using refresh_session method")
+                            remember_me = self._saved_auth.get('remember_me', True)
+                            self._save_session(response, remember_me)
+                            # Sync auth state with other modules after successful restoration
+                            self._sync_auth_state_with_modules()
+                            return True
                     
-                    # First check if we can use the refresh token with a fresh login approach
-                    # Some Supabase clients support refreshing differently
+                    # Try the older refresh method
                     if hasattr(self._client.auth, 'refresh'):
                         logger.info("Attempting to refresh session using auth.refresh method")
                         response = self._client.auth.refresh()
@@ -262,27 +270,58 @@ class SupabaseManager:
                             self._sync_auth_state_with_modules()
                             return True
                     
-                    # If refresh method doesn't exist or fails, clear the session
-                    logger.info("Refresh token handling failed, clearing session to prevent future errors")
-                    self._clear_session()
+                    # Try using the refresh token directly with set_session
+                    logger.info("Attempting manual refresh using refresh token")
+                    try:
+                        # Create a temporary session with the refresh token to trigger refresh
+                        temp_session = {
+                            'access_token': access_token,
+                            'refresh_token': refresh_token
+                        }
+                        self._client.auth.set_session(access_token, refresh_token)
+                        
+                        # Now try to get the session which should refresh automatically
+                        refreshed_session = self._client.auth.get_session()
+                        if refreshed_session and hasattr(refreshed_session, 'access_token'):
+                            logger.info("Session refreshed successfully using manual refresh")
+                            # Create a mock response for saving
+                            class MockResponse:
+                                def __init__(self, session):
+                                    self.session = session
+                            
+                            remember_me = self._saved_auth.get('remember_me', True)
+                            self._save_session(MockResponse(refreshed_session), remember_me)
+                            # Sync auth state with other modules after successful restoration
+                            self._sync_auth_state_with_modules()
+                            return True
+                    except Exception as manual_e:
+                        logger.warning(f"Manual refresh failed: {manual_e}")
+                    
+                    # If all refresh attempts fail, clear the session conditionally
+                    logger.info("All refresh attempts failed, clearing session conditionally based on remember_me")
+                    self._clear_session_conditionally()
                     
                 except Exception as e:
                     logger.warning(f"Session refresh handling failed: {e}")
-                    # If refresh fails, clear the saved session to prevent future errors
+                    # If refresh fails, clear the saved session conditionally to respect remember_me
                     if "already used" in str(e).lower() or "invalid" in str(e).lower():
-                        logger.info("Refresh token is invalid, clearing saved session")
-                        self._clear_session()
+                        logger.info("Refresh token is invalid, clearing saved session conditionally")
+                        self._clear_session_conditionally()
+                    else:
+                        # For other errors, keep the session if remember_me is true
+                        logger.info("Refresh failed but keeping session due to remember_me preference")
+                        # Don't clear the session, let the user try to log in again later
             else:
                 logger.warning("No refresh token available for session restoration")
-                # Clear invalid session without refresh token
-                self._clear_session()
+                # Clear invalid session conditionally
+                self._clear_session_conditionally()
             
             return False
             
         except Exception as e:
             logger.error(f"Error during safe session restoration: {e}")
-            # Clear problematic session data on any error
-            self._clear_session()
+            # Clear problematic session data conditionally on any error
+            self._clear_session_conditionally()
             return False
     
     def _save_session(self, response, remember_me=True):
@@ -329,6 +368,43 @@ class SupabaseManager:
             return True
         except Exception as e:
             logger.error(f"Error clearing authentication session: {e}")
+            return False
+    
+    def _clear_session_conditionally(self, respect_remember_me=True):
+        """Clear the saved session conditionally based on remember_me preference.
+        
+        Args:
+            respect_remember_me: If True, only clear if remember_me is False. If False, always clear.
+            
+        Returns:
+            bool: True if session was cleared, False if kept due to remember_me
+        """
+        try:
+            # If not respecting remember_me, always clear
+            if not respect_remember_me:
+                return self._clear_session()
+            
+            # Check remember_me preference
+            if self._saved_auth and 'remember_me' in self._saved_auth:
+                remember_me = self._saved_auth.get('remember_me', False)
+                if remember_me:
+                    logger.info("Session has remember_me=True, keeping session data for future restoration")
+                    # Don't clear the session file, but clear the in-memory tokens to force re-auth on next attempt
+                    if self._saved_auth:
+                        # Only clear the sensitive token data but keep the file with remember_me preference
+                        logger.info("Clearing in-memory tokens but preserving remember_me preference")
+                    return False  # Session kept
+                else:
+                    logger.info("Session has remember_me=False, clearing session data")
+                    return self._clear_session()
+            else:
+                # No remember_me preference found, default to clearing
+                logger.info("No remember_me preference found, clearing session data")
+                return self._clear_session()
+                
+        except Exception as e:
+            logger.error(f"Error in conditional session clearing: {e}")
+            # On error, default to keeping session to be safe
             return False
     
     def initialize(self):
@@ -412,12 +488,12 @@ class SupabaseManager:
                             self._sync_auth_state_with_modules()
                         else:
                             logger.info("Session restoration failed, user will need to sign in again")
-                            # Clear the invalid session data
-                            self._clear_session()
+                            # Clear the invalid session data conditionally
+                            self._clear_session_conditionally()
                     except Exception as e:
                         logger.warning(f"Failed to restore session: {e}")
-                        # Clear the problematic session data to prevent future errors
-                        self._clear_session()
+                        # Clear the problematic session data conditionally to respect remember_me
+                        self._clear_session_conditionally()
                 
                 # Test connection with a simple operation
                 try:
@@ -904,6 +980,93 @@ class SupabaseManager:
             logger.error(f"Error during sign out: {e}")
             # Force clear session on sign out errors to prevent inconsistent state
             self._clear_session()
+
+    def reset_password_for_email(self, email: str, redirect_to: str = None):
+        """Send a password reset email to the user.
+        
+        Args:
+            email: The user's email address
+            redirect_to: Optional URL to redirect to after password reset
+        
+        Returns:
+            dict: Response from Supabase containing success/error information
+        """
+        if self._offline_mode or not self._client:
+            logger.warning("Cannot send password reset email - Supabase is not connected")
+            return {"error": "Service unavailable - please try again later"}
+        
+        logger.info(f"Sending password reset email to {email}")
+        
+        def reset_password_func():
+            try:
+                # Import config for fallback API call
+                from ..config import config
+                
+                # Build options dict for redirect
+                options = {}
+                if redirect_to:
+                    options["redirect_to"] = redirect_to
+                
+                # Call the reset password method - try different possible method names
+                if hasattr(self._client.auth, 'reset_password_for_email'):
+                    # Standard method name
+                    response = self._client.auth.reset_password_for_email(email, options)
+                elif hasattr(self._client.auth, 'resetPasswordForEmail'):
+                    # Camel case method name
+                    response = self._client.auth.resetPasswordForEmail(email, options)
+                elif hasattr(self._client.auth, 'send_password_reset_email'):
+                    # Alternative method name
+                    response = self._client.auth.send_password_reset_email(email, options)
+                else:
+                    # Try to use the underlying API directly
+                    logger.warning("Direct auth method not found, trying API call")
+                    # Make a direct API call to the Supabase recovery endpoint
+                    headers = {
+                        'apikey': config.supabase_key,
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    payload = {
+                        'email': email
+                    }
+                    if redirect_to:
+                        payload['redirect_to'] = redirect_to
+                    
+                    import requests
+                    recovery_url = f"{config.supabase_url}/auth/v1/recover"
+                    response = requests.post(recovery_url, json=payload, headers=headers)
+                    
+                    if response.status_code == 200:
+                        logger.info(f"Password reset email sent successfully to {email}")
+                        return {"success": True, "message": "Password reset email sent successfully"}
+                    else:
+                        error_data = response.json() if response.content else {}
+                        error_msg = error_data.get('error_description', error_data.get('message', f'HTTP {response.status_code}'))
+                        logger.error(f"API call failed: {error_msg}")
+                        return {"error": f"Failed to send password reset email: {error_msg}"}
+                
+                logger.info(f"Password reset email sent successfully to {email}")
+                return {"success": True, "message": "Password reset email sent successfully"}
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error sending password reset email: {error_msg}")
+                
+                # Handle common error cases
+                if "user not found" in error_msg.lower():
+                    return {"error": "No account found with this email address"}
+                elif "email not confirmed" in error_msg.lower():
+                    return {"error": "Email address not confirmed. Please check your inbox for a confirmation email first."}
+                elif "rate limit" in error_msg.lower():
+                    return {"error": "Too many reset attempts. Please wait before trying again."}
+                else:
+                    return {"error": f"Failed to send password reset email: {error_msg}"}
+        
+        try:
+            return self._execute_with_retry(reset_password_func) or {"error": "Failed to send password reset email"}
+        except Exception as e:
+            logger.error(f"Error in reset_password_for_email: {e}")
+            return {"error": "An unexpected error occurred. Please try again later."}
     
     def enable(self) -> bool:
         """Enable Supabase integration.

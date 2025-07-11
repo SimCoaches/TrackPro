@@ -1,11 +1,11 @@
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QGroupBox, QButtonGroup, QRadioButton,
     QProgressBar, QMessageBox, QWidget, QWizard, QWizardPage,
     QSizePolicy, QSpacerItem, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtGui import QFont, QPixmap
 import pygame
 import logging
 from ..database import supabase
@@ -30,7 +30,7 @@ class IntroPage(QWizardPage):
         title_font.setPointSize(16)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
         info_label = QLabel("""This wizard will guide you through calibrating your throttle, brake, and clutch pedals.
@@ -41,7 +41,7 @@ Follow the instructions on each page carefully.
 
 Click 'Next' to begin.""")
         info_label.setWordWrap(True)
-        info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         info_label.setStyleSheet("font-size: 11pt;")  # Color already set in wizard stylesheet
         layout.addWidget(info_label)
 
@@ -309,21 +309,21 @@ class CalibrationWizard(QWizard):
         self.calibration_results = {}
         
         # Set a more modern style with reduced padding
-        self.setWizardStyle(QWizard.ModernStyle)
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         
         # Customize wizard options to reduce padding and improve layout
-        self.setOption(QWizard.IndependentPages, True)
-        self.setOption(QWizard.NoBackButtonOnStartPage, True)
-        self.setOption(QWizard.HaveFinishButtonOnEarlyPages, False)
-        self.setOption(QWizard.NoCancelButton, False)
-        self.setOption(QWizard.NoDefaultButton, False)
+        self.setOption(QWizard.WizardOption.IndependentPages, True)
+        self.setOption(QWizard.WizardOption.NoBackButtonOnStartPage, True)
+        self.setOption(QWizard.WizardOption.HaveFinishButtonOnEarlyPages, False)
+        self.setOption(QWizard.WizardOption.NoCancelButton, False)
+        self.setOption(QWizard.WizardOption.NoDefaultButton, False)
         
         # Remove the header/banner area entirely
-        self.setPixmap(QWizard.BannerPixmap, QPixmap())
-        self.setPixmap(QWizard.LogoPixmap, QPixmap())
-        self.setPixmap(QWizard.WatermarkPixmap, QPixmap())
-        self.setTitleFormat(Qt.PlainText)
-        self.setSubTitleFormat(Qt.PlainText)
+        self.setPixmap(QWizard.WizardPixmap.BannerPixmap, QPixmap())
+        self.setPixmap(QWizard.WizardPixmap.LogoPixmap, QPixmap())
+        self.setPixmap(QWizard.WizardPixmap.WatermarkPixmap, QPixmap())
+        self.setTitleFormat(Qt.TextFormat.PlainText)
+        self.setSubTitleFormat(Qt.TextFormat.PlainText)
         
         # Set a dark background for the wizard
         self.setStyleSheet("""
@@ -400,11 +400,11 @@ class CalibrationWizard(QWizard):
         # Set initial window properties
         self.resize(520, 340)  # Smaller, more compact size
         self.setMinimumSize(400, 300)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
     def handle_finish(self, result):
         """Handle wizard completion."""
-        if result == QWizard.Accepted:
+        if result == QWizard.DialogCode.Accepted:
             logger.info("Calibration wizard finished by user.")
             # Extract results from fields
             try:

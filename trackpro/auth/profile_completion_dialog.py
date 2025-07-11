@@ -1,8 +1,11 @@
 """Profile completion dialog for new users after authentication."""
 
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+    QMessageBox, QFrame, QComboBox, QCheckBox, QFormLayout, QWidget
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QPixmap, QIcon
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 from ..config import config
@@ -62,12 +65,12 @@ class ProfileCompletionDialog(BaseAuthDialog):
         
         # Header
         title_label = QLabel("Welcome to TrackPro!")
-        title_label.setFont(QFont("Arial", 16, QFont.Bold))
-        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         subtitle_label = QLabel("Complete your profile to get started")
-        subtitle_label.setAlignment(Qt.AlignCenter)
+        subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle_label)
         
         # Form

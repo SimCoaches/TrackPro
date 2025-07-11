@@ -879,4 +879,5 @@ class ContentManager(DatabaseManager):
             logger.error(f"Error creating content activity: {e}")
 
 # Create a global instance
-content_manager = ContentManager()
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.content_manager or trackpro.social.get_content_manager() instead

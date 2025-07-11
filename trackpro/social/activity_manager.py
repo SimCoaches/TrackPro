@@ -774,4 +774,5 @@ class ActivityManager(DatabaseManager):
         logger.info(f"Notification: User {actor_id} {interaction_type.value}d activity {activity_id} of user {recipient_id}")
 
 # Create a global instance
-activity_manager = ActivityManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.activity_manager or trackpro.social.get_activity_manager() instead 

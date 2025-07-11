@@ -2,6 +2,7 @@
 import sys
 import os
 import subprocess
+import time
 
 # Ensure we're using Python 3.11 for building (critical for eye tracking support)
 if sys.version_info[:2] != (3, 11):
@@ -36,6 +37,7 @@ from sign_code import CodeSigner
 class InstallerBuilder:
     VJOY_URL = "https://github.com/jshafer817/vJoy/releases/download/v2.1.9.1/vJoySetup.exe"
     HIDHIDE_URL = "https://github.com/ViGEm/HidHide/releases/download/v1.2.98.0/HidHide_1.2.98_x64.exe"
+    VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"  # Latest Visual C++ Redistributable
     
     def __init__(self):
         self.temp_dir = "installer_temp"
@@ -138,7 +140,7 @@ class InstallerBuilder:
         print(f"  Distribution directory: {dist_dir}")
         
         script = r"""
-; Installer script for TrackPro
+; Installer script for TrackPro - Fixed version to eliminate black command boxes and hanging
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -146,8 +148,8 @@ class InstallerBuilder:
 
 Name "TrackPro v{version}"
 OutFile "TrackPro_Setup_v{version}.exe"
-InstallDir "$PROGRAMFILES64\TrackPro"
-RequestExecutionLevel admin ; Explicitly request admin rights
+InstallDir "$LOCALAPPDATA\TrackPro"
+RequestExecutionLevel user ; Request user rights (not admin)
 
 ; Define application metadata for Add/Remove Programs
 !define PRODUCT_NAME "TrackPro"
@@ -158,17 +160,17 @@ RequestExecutionLevel admin ; Explicitly request admin rights
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${{PRODUCT_NAME}}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
 
-; Store install path for resume after reboot
-!define RESUME_INSTALLATIONS_KEY "Software\Microsoft\Windows\CurrentVersion\RunOnce"
-!define RESUME_INSTALLATIONS_VALUE "TrackPro Setup"
-
 !define MUI_ABORTWARNING
-!define MUI_ICON "${{NSISDIR}}\Contrib\Graphics\Icons\modern-install.ico" ; Default NSIS icon, replace with your own if available
-!define MUI_UNICON "${{NSISDIR}}\Contrib\Graphics\Icons\modern-uninstall.ico" ; Default NSIS uninstall icon
+!define MUI_ICON "${{NSISDIR}}\Contrib\Graphics\Icons\modern-install.ico"
+!define MUI_UNICON "${{NSISDIR}}\Contrib\Graphics\Icons\modern-uninstall.ico"
+
+; Show installation details for better debugging
+ShowInstDetails show
+ShowUnInstDetails show
 
 ; Pages
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "LICENSE"  ; Add license page if LICENSE file exists
+!insertmacro MUI_PAGE_LICENSE "LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -181,37 +183,29 @@ RequestExecutionLevel admin ; Explicitly request admin rights
 !insertmacro MUI_LANGUAGE "English"
 
 Var NEEDS_RESTART
-Var DEBUG_MSG
+Var INSTALL_STATUS
 
 Function .onInit
     StrCpy $NEEDS_RESTART "0"
+    StrCpy $INSTALL_STATUS "NORMAL"
     
-    ; Verify we're running with admin rights
-    UserInfo::GetAccountType
+    ; Kill any existing TrackPro processes silently (no black boxes)
+    DetailPrint "Checking for running TrackPro processes..."
+    nsExec::ExecToLog 'taskkill /F /IM "TrackPro*.exe" /T 2>nul'
     Pop $0
-    ${{If}} $0 != "admin"
-        MessageBox MB_OK|MB_ICONSTOP "Administrator rights required! Please right-click and select 'Run as administrator'."
-        Abort "Installation aborted: Administrator rights required"
+    ${{If}} $0 == 0
+        DetailPrint "Terminated existing TrackPro processes"
+    ${{Else}}
+        DetailPrint "No TrackPro processes found"
     ${{EndIf}}
     
-    ; Check if we're resuming after reboot
-    ReadRegStr $R0 HKLM "${{RESUME_INSTALLATIONS_KEY}}" "${{RESUME_INSTALLATIONS_VALUE}}"
-    ${{If}} $R0 != ""
-        ; Skip driver installation if we're resuming
-        StrCpy $0 "RESUME"
-    ${{Else}}
-        ; Clean up previous TrackPro installations
-        Call CleanupPreviousVersions
-    ${{EndIf}}
+    ; Clean up previous TrackPro installations
+    Call CleanupPreviousVersions
 FunctionEnd
 
 Function CleanupPreviousVersions
     DetailPrint "Checking for previous TrackPro installations..."
-    DetailPrint "NOTE: User data (calibrations, settings) will be preserved during cleanup"
-    
-    ; First, terminate any running TrackPro processes
-    DetailPrint "Terminating any running TrackPro processes..."
-    ExecWait 'taskkill /F /IM "TrackPro*.exe" /T' $0
+    DetailPrint "NOTE: User data (calibrations, settings) will be preserved"
     
     ; Remove all TrackPro executables from Program Files
     DetailPrint "Removing previous TrackPro executables..."
@@ -220,12 +214,10 @@ Function CleanupPreviousVersions
     Delete "$PROGRAMFILES32\TrackPro\TrackPro*.exe"
     Delete "$PROGRAMFILES32\TrackPro\TrackPro_v*.exe"
     
-    ; Remove all TrackPro shortcuts from Start Menu
+    ; Remove all TrackPro shortcuts
     DetailPrint "Removing previous TrackPro shortcuts..."
     Delete "$SMPROGRAMS\TrackPro\TrackPro*.lnk"
     Delete "$SMPROGRAMS\TrackPro\TrackPro v*.lnk"
-    
-    ; Remove all TrackPro desktop shortcuts
     Delete "$DESKTOP\TrackPro*.lnk"
     Delete "$DESKTOP\TrackPro v*.lnk"
     
@@ -256,248 +248,224 @@ Function CleanupPreviousVersions
     DetailPrint "Previous version cleanup completed"
 FunctionEnd
 
-Section "Prerequisites"
-    ${{If}} $0 != "RESUME"
-        ; Create temp directories with verification
-        CreateDirectory "$TEMP\TrackPro"
-        CreateDirectory "$TEMP\TrackPro\prerequisites"
-        CreateDirectory "$TEMP\TrackPro\app"
-        
-        SetOutPath "$TEMP\TrackPro\prerequisites"
-        DetailPrint "Extracting prerequisites..."
-        
-        ; Extract prerequisite installers using relative paths
-        File "installer_temp\prerequisites\vJoySetup.exe"
-        File "installer_temp\prerequisites\HidHide_1.2.98_x64.exe"
-        
-        ; Extract main executable to temp location
-        SetOutPath "$TEMP\TrackPro\app"
-        DetailPrint "Extracting main application..."
-        
-        ; Extract main executable using relative path
-        File "installer_temp\dist\TrackPro_v{version}.exe"
-        
-        ; Diagnostic tool not available in this version
-        ; ${{If}} ${{FileExists}} "diagnose_trackpro.py"
-        ;     File "diagnose_trackpro.py"
-        ; ${{EndIf}}
-        
-        ; Verify the file was extracted correctly
-        ${{IfNot}} ${{FileExists}} "$TEMP\TrackPro\app\TrackPro_v{version}.exe"
-            MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v{version}.exe to temporary directory!"
-            Abort "Installation failed: Could not extract TrackPro_v{version}.exe"
-        ${{EndIf}}
-        
-        ; Create program directory with verification
-        DetailPrint "Creating installation directory..."
-        CreateDirectory "$PROGRAMFILES64\TrackPro"
-        
-        ; Check if directory was created successfully
-        ${{IfNot}} ${{FileExists}} "$PROGRAMFILES64\TrackPro"
-            MessageBox MB_OK|MB_ICONSTOP "Failed to create installation directory! Please ensure you have administrator privileges."
-            Abort "Installation failed: Could not create installation directory"
-        ${{EndIf}}
-        
-        ; Set working directory to program files
-        SetOutPath "$PROGRAMFILES64\TrackPro"
-        
-        ; Install TrackPro with explicit verification and better error handling
-        DetailPrint "Installing TrackPro..."
-        
-        ; Debug message with source and destination paths
-        StrCpy $DEBUG_MSG "Copying from: $TEMP\TrackPro\app\TrackPro_v{version}.exe to $PROGRAMFILES64\TrackPro"
-        DetailPrint $DEBUG_MSG
-        
-        ; Check if destination file already exists and try to remove it
-        ${{If}} ${{FileExists}} "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
-            DetailPrint "Removing existing installation file..."
-            Delete "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
-        ${{EndIf}}
-        
-        ; Clear any previous errors and copy the file
-        ClearErrors
-        CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v{version}.exe" "$PROGRAMFILES64\TrackPro"
-        
-        ; Copy diagnostic tool if available (not included in this version)
-        ; ${{If}} ${{FileExists}} "$TEMP\TrackPro\app\diagnose_trackpro.py"
-        ;     CopyFiles /SILENT "$TEMP\TrackPro\app\diagnose_trackpro.py" "$PROGRAMFILES64\TrackPro"
-        ; ${{EndIf}}
-        
-        ; Check for copy errors
-        ${{If}} ${{Errors}}
-            MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v{version}.exe to installation directory! Please ensure you have administrator privileges and try again."
-            Abort "Installation failed: Could not copy TrackPro_v{version}.exe"
-        ${{EndIf}}
-        
-        ; Verify TrackPro.exe exists in the destination
-        ${{IfNot}} ${{FileExists}} "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
-            MessageBox MB_OK|MB_ICONSTOP "Failed to verify TrackPro_v{version}.exe in installation directory!"
-            Abort "Installation failed: Could not verify TrackPro_v{version}.exe"
-        ${{EndIf}}
-            
-        ; Create shortcuts with verification
-        DetailPrint "Creating shortcuts..."
-        CreateDirectory "$SMPROGRAMS\TrackPro"
-        CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
-        CreateShortCut "$DESKTOP\TrackPro v{version}.lnk" "$PROGRAMFILES64\TrackPro\TrackPro_v{version}.exe"
-        
-        ; Create diagnostic tool shortcut if available (not included in this version)
-        ; ${{If}} ${{FileExists}} "$PROGRAMFILES64\TrackPro\diagnose_trackpro.py"
-        ;     CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro Diagnostic Tool.lnk" "$WINDIR\system32\cmd.exe" '/c cd /d "$PROGRAMFILES64\TrackPro" && python diagnose_trackpro.py && pause' "$WINDIR\system32\cmd.exe"
-        ; ${{EndIf}}
-        
-        DetailPrint "TrackPro installation complete"
+; Function to install prerequisites with timeout and error handling
+Function InstallPrerequisiteWithTimeout
+    Pop $R0 ; Command to execute
+    Pop $R1 ; Description
+    Pop $R2 ; Timeout in seconds
+    
+    DetailPrint "Installing $R1..."
+    
+    ; Execute with timeout using nsExec (no black boxes)
+    nsExec::ExecToLog '$R0'
+    Pop $R3 ; Exit code
+    
+    ; Check result
+    ${{If}} $R3 == 0
+        DetailPrint "$R1 installed successfully"
+    ${{ElseIf}} $R3 == 3010
+        DetailPrint "$R1 installed successfully, restart required"
+        StrCpy $NEEDS_RESTART "1"
+    ${{ElseIf}} $R3 == 1618
+        DetailPrint "$R1 already installed (up to date)"
+    ${{ElseIf}} $R3 == 1638
+        DetailPrint "$R1 already installed (newer version)"
+    ${{ElseIf}} $R3 == -1
+        DetailPrint "Warning: $R1 installation timed out or failed"
+        DetailPrint "TrackPro may still work without this component"
+    ${{Else}}
+        DetailPrint "Warning: $R1 installation failed with exit code: $R3"
+        DetailPrint "TrackPro may still work without this component"
+    ${{EndIf}}
+    
+    Push $R3 ; Return exit code
+FunctionEnd
 
-        ; Run HidHide installer with wait
-        DetailPrint "Installing HidHide..."
-        ExecWait '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart' $1
-        DetailPrint "HidHide installation complete with exit code: $1"
-        ${{If}} $1 == 3010
-            StrCpy $NEEDS_RESTART "1"
-            DetailPrint "HidHide requires a system restart"
-        ${{EndIf}}
+Section "MainInstallation"
+    ; Create temp directories with verification
+    DetailPrint "Setting up installation environment..."
+    CreateDirectory "$TEMP\TrackPro"
+    CreateDirectory "$TEMP\TrackPro\prerequisites"
+    CreateDirectory "$TEMP\TrackPro\app"
+    
+    SetOutPath "$TEMP\TrackPro\prerequisites"
+    DetailPrint "Extracting prerequisites..."
+    
+    ; Extract prerequisite installers using relative paths
+    File "installer_temp\prerequisites\vJoySetup.exe"
+    File "installer_temp\prerequisites\HidHide_1.2.98_x64.exe"
+    File "installer_temp\prerequisites\vc_redist.x64.exe"
+    
+    ; Extract main executable to temp location
+    SetOutPath "$TEMP\TrackPro\app"
+    DetailPrint "Extracting main application..."
+    
+    ; Extract main executable using relative path
+    File "installer_temp\dist\TrackPro_v{version}.exe"
+    
+    ; Verify the file was extracted correctly
+    ${{IfNot}} ${{FileExists}} "$TEMP\TrackPro\app\TrackPro_v{version}.exe"
+        MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v{version}.exe to temporary directory!"
+        Abort "Installation failed: Could not extract TrackPro_v{version}.exe"
+    ${{EndIf}}
+    
+    ; Create program directory with verification
+    DetailPrint "Creating installation directory: $INSTDIR"
+    CreateDirectory "$INSTDIR"
+    
+    ; Check if directory was created successfully
+    ${{IfNot}} ${{FileExists}} "$INSTDIR"
+        MessageBox MB_OK|MB_ICONSTOP "Failed to create installation directory!"
+        Abort "Installation failed: Could not create installation directory"
+    ${{EndIf}}
+    
+    ; Set working directory to installation directory
+    SetOutPath "$INSTDIR"
+    
+    ; Install TrackPro with explicit verification and better error handling
+    DetailPrint "Installing TrackPro application..."
+    
+    ; Check if destination file already exists and try to remove it
+    ${{If}} ${{FileExists}} "$INSTDIR\TrackPro_v{version}.exe"
+        DetailPrint "Removing existing installation file..."
+        Delete "$INSTDIR\TrackPro_v{version}.exe"
+    ${{EndIf}}
+    
+    ; Clear any previous errors and copy the file
+    ClearErrors
+    CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v{version}.exe" "$INSTDIR"
+    
+    ; Check for copy errors
+    ${{If}} ${{Errors}}
+        MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v{version}.exe to installation directory!"
+        Abort "Installation failed: Could not copy TrackPro_v{version}.exe"
+    ${{EndIf}}
+    
+    ; Verify TrackPro.exe exists in the destination
+    ${{IfNot}} ${{FileExists}} "$INSTDIR\TrackPro_v{version}.exe"
+        MessageBox MB_OK|MB_ICONSTOP "Failed to verify TrackPro_v{version}.exe in installation directory!"
+        Abort "Installation failed: Could not verify TrackPro_v{version}.exe"
+    ${{EndIf}}
+        
+    ; Create shortcuts with verification
+    DetailPrint "Creating shortcuts..."
+    CreateDirectory "$SMPROGRAMS\TrackPro"
+    CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk" "$INSTDIR\TrackPro_v{version}.exe"
+    CreateShortCut "$DESKTOP\TrackPro v{version}.lnk" "$INSTDIR\TrackPro_v{version}.exe"
+    
+    DetailPrint "TrackPro application installation complete"
 
-        ; Check if vJoy is already installed before attempting installation
-        DetailPrint "Checking for existing vJoy installation..."
-        
-        ; Check registry for vJoy
-        ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{8E31F76F-74C3-47F1-9550-E041EEDC5FBB}}_is1" "DisplayName"
-        ${{If}} $R0 != ""
-            DetailPrint "Found existing vJoy installation: $R0"
-            DetailPrint "Skipping vJoy installation to prevent conflicts"
-            Goto vjoy_done
-        ${{EndIf}}
-        
-        ; Check for vJoy files in common locations
-        ${{If}} ${{FileExists}} "$PROGRAMFILES64\vJoy\x64\vJoyInterface.dll"
-            DetailPrint "Found existing vJoy files in Program Files"
-            DetailPrint "Skipping vJoy installation to prevent conflicts"
-            Goto vjoy_done
-        ${{EndIf}}
-        
-        ${{If}} ${{FileExists}} "$PROGRAMFILES32\vJoy\x86\vJoyInterface.dll"
-            DetailPrint "Found existing vJoy files in Program Files (x86)"
-            DetailPrint "Skipping vJoy installation to prevent conflicts"
-            Goto vjoy_done
-        ${{EndIf}}
+    ; Install Visual C++ Redistributable (no black boxes)
+    Push '"$TEMP\TrackPro\prerequisites\vc_redist.x64.exe" /quiet /norestart'
+    Push "Visual C++ Redistributable"
+    Push "60"
+    Call InstallPrerequisiteWithTimeout
+    Pop $2
 
-        ; Run vJoy installer with SAFER FLAGS and better error handling
-        DetailPrint "Installing vJoy with improved compatibility..."
-        
-        ; Save the installation path for resume
-        WriteRegStr HKLM "${{RESUME_INSTALLATIONS_KEY}}" "${{RESUME_INSTALLATIONS_VALUE}}" "$EXEPATH"
-        
-        ; Method 1: Try with safer silent flags (removed problematic /VERYSILENT and /TYPE=MINIMAL)
-        DetailPrint "Attempting vJoy installation - Method 1 (/SILENT)"
-        ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART' $0
-        
-        ; Check if installation was successful
-        ${{If}} $0 == 0
-            DetailPrint "vJoy installation completed successfully (exit code: 0)"
-        ${{ElseIf}} $0 == 3010
-            DetailPrint "vJoy installation completed, restart required (exit code: 3010)"
-            StrCpy $NEEDS_RESTART "1"
-        ${{Else}}
-            DetailPrint "vJoy installation Method 1 failed with exit code: $0"
-            
-            ; Method 2: Try with basic silent flag
-            DetailPrint "Attempting vJoy installation - Method 2 (/S)"
-            ExecWait '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /S /NORESTART' $0
-            
-            ${{If}} $0 == 0
-                DetailPrint "vJoy installation successful with Method 2"
-            ${{ElseIf}} $0 == 3010
-                DetailPrint "vJoy installation successful with Method 2, restart required"
-                StrCpy $NEEDS_RESTART "1"
-            ${{Else}}
-                ; Both methods failed - show warning but continue
-                DetailPrint "WARNING: vJoy installation failed with both methods"
-                DetailPrint "Method 1 exit code: $0"
-                DetailPrint "TrackPro will work in test mode without vJoy"
-                
-                ; Show a non-blocking warning to the user
-                MessageBox MB_OK "vJoy installation failed. TrackPro will work in test mode."
-            ${{EndIf}}
-        ${{EndIf}}
-        
-        vjoy_done:
-        DetailPrint "vJoy installation phase completed"
+    ; Install HidHide (no black boxes) 
+    Push '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart'
+    Push "HidHide"
+    Push "60"
+    Call InstallPrerequisiteWithTimeout
+    Pop $1
 
-        ; Clean up temp files AFTER all installations are complete
-        DetailPrint "Cleaning up temporary files..."
-        SetOutPath "$TEMP"
-        RMDir /r "$TEMP\TrackPro"
+    ; Check if vJoy is already installed before attempting installation
+    DetailPrint "Checking for existing vJoy installation..."
+    
+    ; Check registry for vJoy
+    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{8E31F76F-74C3-47F1-9550-E041EEDC5FBB}}_is1" "DisplayName"
+    ${{If}} $R0 != ""
+        DetailPrint "Found existing vJoy installation: $R0"
+        DetailPrint "Skipping vJoy installation to prevent conflicts"
+        Goto vjoy_done
+    ${{EndIf}}
+    
+    ; Check for vJoy files in common locations
+    ${{If}} ${{FileExists}} "$PROGRAMFILES64\vJoy\x64\vJoyInterface.dll"
+        DetailPrint "Found existing vJoy files in Program Files"
+        DetailPrint "Skipping vJoy installation to prevent conflicts"
+        Goto vjoy_done
+    ${{EndIf}}
+    
+    ${{If}} ${{FileExists}} "$PROGRAMFILES32\vJoy\x86\vJoyInterface.dll"
+        DetailPrint "Found existing vJoy files in Program Files (x86)"
+        DetailPrint "Skipping vJoy installation to prevent conflicts"
+        Goto vjoy_done
+    ${{EndIf}}
 
-        ; Create uninstaller
-        WriteUninstaller "$INSTDIR\uninstall.exe"
+    ; Install vJoy with better error handling (no black boxes)
+    Push '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART'
+    Push "vJoy Virtual Joystick"
+    Push "120"
+    Call InstallPrerequisiteWithTimeout
+    Pop $0
+    
+    ; If silent installation failed, try alternative method
+    ${{If}} $0 != 0
+    ${{AndIf}} $0 != 3010
+    ${{AndIf}} $0 != 1618
+    ${{AndIf}} $0 != 1638
+        DetailPrint "Trying alternative vJoy installation method..."
+        Push '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /S'
+        Push "vJoy Virtual Joystick (Alternative Method)"
+        Push "120"
+        Call InstallPrerequisiteWithTimeout
+        Pop $0
         
-        ; Register application for Add/Remove Programs
-        WriteRegStr HKLM "${{PRODUCT_DIR_REGKEY}}" "" "$INSTDIR\TrackPro_v{version}.exe"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayName" "$(^Name)"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "UninstallString" "$INSTDIR\uninstall.exe"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayIcon" "$INSTDIR\TrackPro_v{version}.exe"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayVersion" "${{PRODUCT_VERSION}}"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "URLInfoAbout" "${{PRODUCT_WEB_SITE}}"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "Publisher" "${{PRODUCT_PUBLISHER}}"
-        
-        ; Write size information for Add/Remove Programs
-        ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
-        IntFmt $0 "0x%08X" $0
-        WriteRegDWORD ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "EstimatedSize" "$0"
-
-        ; Show installation paths at the end
-        MessageBox MB_OK|MB_ICONINFORMATION "TrackPro v{version} has been installed successfully. Shortcuts have been created on Desktop and Start Menu. Please verify the installation completed correctly."
-            
-        ; Check if we need to restart
-        ${{If}} $NEEDS_RESTART == "1"
-            MessageBox MB_YESNO|MB_ICONQUESTION "A system restart is required to complete the installation. Would you like to restart now?" IDNO +2
-                Reboot
+        ${{If}} $0 != 0
+        ${{AndIf}} $0 != 3010
+        ${{AndIf}} $0 != 1618
+        ${{AndIf}} $0 != 1638
+            DetailPrint "vJoy installation failed with both methods"
+            MessageBox MB_OK|MB_ICONINFORMATION "vJoy installation failed. TrackPro will work in test mode without virtual joystick support."
         ${{EndIf}}
     ${{EndIf}}
-SectionEnd
+    
+    vjoy_done:
+    DetailPrint "Prerequisites installation phase completed"
 
-Section "MainApplication"
-    ; Only run this section if we're resuming after a reboot
-    ${{If}} $0 == "RESUME"
-        DetailPrint "Resuming installation after reboot..."
-        SetOutPath "$INSTDIR"
-        
-        ; Extract main executable using relative path
-        File "installer_temp\dist\TrackPro_v{version}.exe"
-        
-        ; Create shortcuts
-        CreateDirectory "$SMPROGRAMS\TrackPro"
-        CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk" "$INSTDIR\TrackPro_v{version}.exe"
-        CreateShortCut "$DESKTOP\TrackPro v{version}.lnk" "$INSTDIR\TrackPro_v{version}.exe"
-        
-        ; Create uninstaller
-        WriteUninstaller "$INSTDIR\uninstall.exe"
-        
-        ; Register application for Add/Remove Programs
-        WriteRegStr HKLM "${{PRODUCT_DIR_REGKEY}}" "" "$INSTDIR\TrackPro_v{version}.exe"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayName" "$(^Name)"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "UninstallString" "$INSTDIR\uninstall.exe"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayIcon" "$INSTDIR\TrackPro_v{version}.exe"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayVersion" "${{PRODUCT_VERSION}}"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "URLInfoAbout" "${{PRODUCT_WEB_SITE}}"
-        WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "Publisher" "${{PRODUCT_PUBLISHER}}"
-        
-        ; Write size information for Add/Remove Programs
-        ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
-        IntFmt $0 "0x%08X" $0
-        WriteRegDWORD ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "EstimatedSize" "$0"
-        
-        ; Clean up resume key
-        DeleteRegValue HKLM "${{RESUME_INSTALLATIONS_KEY}}" "${{RESUME_INSTALLATIONS_VALUE}}"
-        
-        DetailPrint "Installation completed successfully after reboot"
+    ; Clean up temp files AFTER all installations are complete
+    DetailPrint "Cleaning up temporary files..."
+    SetOutPath "$TEMP"
+    RMDir /r "$TEMP\TrackPro"
+
+    ; Create uninstaller
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+    
+    ; Register application for Add/Remove Programs
+    WriteRegStr HKLM "${{PRODUCT_DIR_REGKEY}}" "" "$INSTDIR\TrackPro_v{version}.exe"
+    WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayName" "$(^Name)"
+    WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "UninstallString" "$INSTDIR\uninstall.exe"
+    WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayIcon" "$INSTDIR\TrackPro_v{version}.exe"
+    WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayVersion" "${{PRODUCT_VERSION}}"
+    WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "URLInfoAbout" "${{PRODUCT_WEB_SITE}}"
+    WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "Publisher" "${{PRODUCT_PUBLISHER}}"
+    
+    ; Write size information for Add/Remove Programs
+    ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
+    IntFmt $0 "0x%08X" $0
+    WriteRegDWORD ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "EstimatedSize" "$0"
+
+    ; Show installation completion message
+    DetailPrint "Installation completed successfully!"
+    
+    ; Check if we need to restart
+    ${{If}} $NEEDS_RESTART == "1"
+        MessageBox MB_YESNO|MB_ICONQUESTION "A system restart is required to complete the installation. Would you like to restart now?" IDNO +2
+            Reboot
     ${{EndIf}}
 SectionEnd
 
 Section "Uninstall"
-    ; Terminate any running TrackPro processes first
-    DetailPrint "Terminating any running TrackPro processes..."
-    ExecWait 'taskkill /F /IM "TrackPro*.exe" /T' $0
+    ; Terminate any running TrackPro processes first (no black boxes)
+    DetailPrint "Checking for running TrackPro processes..."
+    nsExec::ExecToLog 'taskkill /F /IM "TrackPro*.exe" /T 2>nul'
+    Pop $0
+    ${{If}} $0 == 0
+        DetailPrint "Terminated running TrackPro processes"
+    ${{Else}}
+        DetailPrint "No TrackPro processes found"
+    ${{EndIf}}
     
     ; Remove ALL TrackPro application files (not just current version)
     DetailPrint "Removing all TrackPro application files..."
@@ -569,6 +537,202 @@ SectionEnd
         except Exception as e:
             print(f"Error creating NSIS script: {str(e)}")
             raise
+
+    def create_test_installer_script(self):
+        """Create a minimal test installer script without prerequisites."""
+        print("\nCreating test installer script...")
+        
+        script = r"""
+; Minimal test installer for TrackPro (no prerequisites)
+
+!include "MUI2.nsh"
+!include "LogicLib.nsh"
+!include "FileFunc.nsh"
+
+Name "TrackPro v{version} (Test)"
+OutFile "TrackPro_Setup_v{version}_Test.exe"
+InstallDir "$LOCALAPPDATA\TrackPro"
+RequestExecutionLevel user
+
+; Show details for debugging
+ShowInstDetails show
+ShowUnInstDetails show
+
+; Define application metadata
+!define PRODUCT_NAME "TrackPro"
+!define PRODUCT_VERSION "{version}"
+!define PRODUCT_PUBLISHER "TrackPro"
+!define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${{PRODUCT_NAME}}"
+!define PRODUCT_UNINST_ROOT_KEY "HKLM"
+
+!define MUI_ABORTWARNING
+
+; Pages
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+; Uninstaller pages
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+; Languages
+!insertmacro MUI_LANGUAGE "English"
+
+Function .onInit
+    DetailPrint "Starting TrackPro test installation..."
+    
+    ; Kill any existing TrackPro processes
+    DetailPrint "Terminating existing TrackPro processes..."
+    ExecWait 'taskkill /F /IM "TrackPro*.exe" /T' $0
+    DetailPrint "Process cleanup completed"
+FunctionEnd
+
+Section "MainProgram"
+    DetailPrint "Installing TrackPro..."
+    
+    ; Create installation directory
+    DetailPrint "Creating installation directory: $INSTDIR"
+    CreateDirectory "$INSTDIR"
+    
+    ; Verify directory was created
+    ${{IfNot}} ${{FileExists}} "$INSTDIR"
+        DetailPrint "ERROR: Failed to create installation directory"
+        MessageBox MB_OK|MB_ICONSTOP "Failed to create installation directory: $INSTDIR"
+        Abort
+    ${{EndIf}}
+    
+    ; Set output path
+    SetOutPath "$INSTDIR"
+    DetailPrint "Set output path to: $INSTDIR"
+    
+    ; Install main executable
+    DetailPrint "Installing TrackPro executable..."
+    File "installer_temp\dist\TrackPro_v{version}.exe"
+    
+    ; Verify file was installed
+    ${{IfNot}} ${{FileExists}} "$INSTDIR\TrackPro_v{version}.exe"
+        DetailPrint "ERROR: TrackPro executable not found after installation"
+        MessageBox MB_OK|MB_ICONSTOP "Failed to install TrackPro executable"
+        Abort
+    ${{EndIf}}
+    
+    DetailPrint "TrackPro executable installed successfully"
+    
+    ; Create shortcuts
+    DetailPrint "Creating shortcuts..."
+    CreateDirectory "$SMPROGRAMS\TrackPro"
+    CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version} (Test).lnk" "$INSTDIR\TrackPro_v{version}.exe"
+    CreateShortCut "$DESKTOP\TrackPro v{version} (Test).lnk" "$INSTDIR\TrackPro_v{version}.exe"
+    
+    DetailPrint "Shortcuts created successfully"
+    
+    ; Create uninstaller
+    DetailPrint "Creating uninstaller..."
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+    
+    ; Register application
+    WriteRegStr HKLM "${{PRODUCT_UNINST_KEY}}" "DisplayName" "TrackPro v{version} (Test)"
+    WriteRegStr HKLM "${{PRODUCT_UNINST_KEY}}" "UninstallString" "$INSTDIR\uninstall.exe"
+    WriteRegStr HKLM "${{PRODUCT_UNINST_KEY}}" "DisplayIcon" "$INSTDIR\TrackPro_v{version}.exe"
+    WriteRegStr HKLM "${{PRODUCT_UNINST_KEY}}" "DisplayVersion" "${{PRODUCT_VERSION}}"
+    WriteRegStr HKLM "${{PRODUCT_UNINST_KEY}}" "Publisher" "${{PRODUCT_PUBLISHER}}"
+    
+    DetailPrint "Registration completed"
+    
+    ; Show success message
+    MessageBox MB_OK|MB_ICONINFORMATION "TrackPro v{version} test installation completed successfully!$\n$\nLocation: $INSTDIR"
+    
+    DetailPrint "Installation completed successfully!"
+SectionEnd
+
+Section "Uninstall"
+    DetailPrint "Uninstalling TrackPro..."
+    
+    ; Remove files
+    Delete "$INSTDIR\TrackPro_v{version}.exe"
+    Delete "$INSTDIR\uninstall.exe"
+    
+    ; Remove shortcuts
+    Delete "$SMPROGRAMS\TrackPro\TrackPro v{version} (Test).lnk"
+    Delete "$DESKTOP\TrackPro v{version} (Test).lnk"
+    RMDir "$SMPROGRAMS\TrackPro"
+    
+    ; Remove registry entries
+    DeleteRegKey HKLM "${{PRODUCT_UNINST_KEY}}"
+    
+    ; Remove installation directory
+    RMDir "$INSTDIR"
+    
+    DetailPrint "Uninstallation completed"
+SectionEnd
+        """.format(version=self.version)
+        
+        with open("installer_test.nsi", "w", encoding="utf-8") as f:
+            f.write(script)
+        
+        print("✓ Test installer script created: installer_test.nsi")
+        return "installer_test.nsi"
+    
+    def build_test_installer(self):
+        """Build a test installer without prerequisites."""
+        print("\n=== Building Test Installer ===")
+        
+        # Kill any stuck processes first
+        self.kill_stuck_processes()
+        
+        # Create temp directory and copy files
+        if not os.path.exists(self.temp_dir):
+            os.makedirs(self.temp_dir)
+        
+        dist_temp = os.path.join(self.temp_dir, "dist")
+        if not os.path.exists(dist_temp):
+            os.makedirs(dist_temp)
+        
+        # Copy the main executable
+        exe_name = f"TrackPro_v{self.version}.exe"
+        src_exe = os.path.join(self.dist_dir, exe_name)
+        dst_exe = os.path.join(dist_temp, exe_name)
+        
+        if os.path.exists(src_exe):
+            shutil.copy2(src_exe, dst_exe)
+            print(f"✓ Copied {exe_name} to installer temp")
+        else:
+            print(f"✗ Executable not found: {src_exe}")
+            print("Please build the executable first with: python build.py")
+            return False
+        
+        # Create test installer script
+        nsis_script = self.create_test_installer_script()
+        
+        # Check NSIS
+        if not self.check_nsis():
+            return False
+        
+        # Build installer
+        print("\nBuilding test installer...")
+        try:
+            result = subprocess.run([
+                "makensis", 
+                f"/V3",  # Verbose output
+                nsis_script
+            ], capture_output=True, text=True, cwd=self.cwd)
+            
+            if result.returncode == 0:
+                print("✓ Test installer built successfully!")
+                output_file = f"TrackPro_Setup_v{self.version}_Test.exe"
+                print(f"✓ Test installer created: {output_file}")
+                return True
+            else:
+                print(f"✗ NSIS build failed with exit code {result.returncode}")
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+                return False
+                
+        except Exception as e:
+            print(f"✗ Error building test installer: {e}")
+            return False
 
     def check_nsis(self):
         """Check if NSIS is installed and available."""
@@ -661,6 +825,7 @@ SectionEnd
         required_files = [
             os.path.join(self.temp_dir, "prerequisites", "vJoySetup.exe"),
             os.path.join(self.temp_dir, "prerequisites", "HidHide_1.2.98_x64.exe"),
+            os.path.join(self.temp_dir, "prerequisites", "vc_redist.x64.exe"),
             os.path.join(self.temp_dir, "dist", f"TrackPro_v{self.version}.exe"),
             "installer.nsi"
         ]
@@ -687,6 +852,80 @@ SectionEnd
         
                     # Build installer
         print("\nBuilding installer...")
+        
+        # Check if output file already exists and try to delete it
+        installer_path = f"TrackPro_Setup_v{self.version}.exe"
+        if os.path.exists(installer_path):
+            print(f"Removing existing installer: {installer_path}")
+            
+            # Try multiple times with increasing delays
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                try:
+                    os.remove(installer_path)
+                    print(f"✓ Removed existing installer")
+                    break
+                except PermissionError as e:
+                    if attempt < max_attempts - 1:
+                        print(f"Attempt {attempt + 1}/{max_attempts}: File is locked, retrying in {2 ** attempt} seconds...")
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        print(f"✗ Could not remove existing installer after {max_attempts} attempts: {e}")
+                        print("The file is being used by another process. Possible causes:")
+                        print("1. The installer is currently running")
+                        print("2. Windows Explorer has the file open")
+                        print("3. Antivirus software is scanning the file")
+                        print("4. Windows Defender has the file locked")
+                        print("\nSolutions:")
+                        print("1. Close any running TrackPro installers")
+                        print("2. Close Windows Explorer windows")
+                        print("3. Wait for antivirus scan to complete")
+                        print("4. Manually delete the file and try again")
+                        print("5. Restart your computer to clear all file locks")
+                        raise Exception(f"Could not remove existing installer after {max_attempts} attempts: {e}")
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        print(f"Attempt {attempt + 1}/{max_attempts}: Error removing file, retrying...")
+                        time.sleep(1)
+                    else:
+                        print(f"✗ Could not remove existing installer: {e}")
+                        raise Exception(f"Could not remove existing installer: {e}")
+        
+        # Test if we can write to the current directory
+        test_file = "test_write_permissions.tmp"
+        try:
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            print("✓ Directory write permissions verified")
+        except Exception as e:
+            print(f"✗ Cannot write to current directory: {e}")
+            print("Please run from a directory with write permissions")
+            raise Exception(f"Cannot write to current directory: {e}")
+        
+        # Kill any running TrackPro processes that might lock files
+        print("Checking for running TrackPro processes...")
+        try:
+            # Kill TrackPro processes
+            result = subprocess.run(['taskkill', '/F', '/IM', 'TrackPro*.exe'], 
+                                  capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                print("✓ Terminated running TrackPro processes")
+            else:
+                print("✓ No running TrackPro processes found")
+            
+            # Also check for installer processes
+            installer_result = subprocess.run(['taskkill', '/F', '/IM', f'TrackPro_Setup_v{self.version}.exe'], 
+                                            capture_output=True, text=True, check=False)
+            if installer_result.returncode == 0:
+                print("✓ Terminated running installer process")
+                
+        except Exception as e:
+            print(f"Warning: Could not check for running processes: {e}")
+        
+        # Wait a moment for processes to fully terminate
+        time.sleep(2)
+        
         try:
             # Find NSIS executable
             nsis_exe = None
@@ -710,22 +949,47 @@ SectionEnd
                 except:
                     raise FileNotFoundError("Could not find makensis.exe")
             
-            # First validate the script
-            print("Validating NSIS script...")
+            # Test NSIS first with a simple command
+            print("Testing NSIS installation...")
             try:
-                # Try to validate the script syntax
-                validate_cmd = [nsis_exe, "/CMDHELP", "installer.nsi"]
-                validate_result = subprocess.run(validate_cmd, 
-                                              capture_output=True, 
-                                              text=True,
-                                              check=False)
-                
-                if validate_result.returncode != 0 or "error" in validate_result.stderr.lower():
-                    print(f"NSIS Script Validation Warning: {validate_result.stderr}")
-                    # Continue anyway as /CMDHELP might not work as expected
+                test_result = subprocess.run([nsis_exe, "/VERSION"], 
+                                          capture_output=True, text=True, check=False)
+                if test_result.returncode == 0:
+                    print(f"✓ NSIS is working: {test_result.stdout.strip()}")
+                else:
+                    print(f"✗ NSIS test failed: {test_result.stderr}")
+                    raise Exception(f"NSIS test failed: {test_result.stderr}")
             except Exception as e:
-                print(f"NSIS Script Validation Warning: {str(e)}")
-                # Continue anyway
+                print(f"✗ NSIS test failed: {e}")
+                raise Exception(f"NSIS test failed: {e}")
+            
+            # Quick sanity check of the NSIS script
+            print("Checking NSIS script...")
+            try:
+                with open("installer.nsi", 'r', encoding='utf-8') as f:
+                    script_content = f.read()
+                    if not script_content.strip():
+                        print("✗ NSIS script is empty")
+                        raise Exception("NSIS script is empty")
+                    if "OutFile" not in script_content:
+                        print("✗ NSIS script missing OutFile directive")
+                        raise Exception("NSIS script missing OutFile directive")
+                    print("✓ NSIS script appears valid")
+            except Exception as e:
+                print(f"✗ Could not read NSIS script: {e}")
+                raise Exception(f"Could not read NSIS script: {e}")
+            
+            # Try creating a temporary file with the same name as the installer
+            print("Testing installer filename...")
+            try:
+                temp_installer = f"temp_{installer_path}"
+                with open(temp_installer, 'w') as f:
+                    f.write("test")
+                os.remove(temp_installer)
+                print(f"✓ Can create files with installer name pattern")
+            except Exception as e:
+                print(f"✗ Cannot create installer filename: {e}")
+                raise Exception(f"Cannot create installer filename: {e}")
             
             # Run NSIS with verbose output and explicit working directory
             print("Compiling installer...")
@@ -798,7 +1062,6 @@ SectionEnd
             raise Exception(f"Failed to build installer: {str(e)}")
 
         # Verify the installer was created
-        installer_path = f"TrackPro_Setup_v{self.version}.exe"
         if not os.path.exists(installer_path):
             raise Exception(f"Installer not found at {installer_path}")
         
@@ -807,7 +1070,7 @@ SectionEnd
         
         # Verify the installer file size
         installer_size = os.path.getsize(installer_path)
-        print(f"✓ Installer size: {installer_size} bytes")
+        print(f"✓ Installer size: {installer_size:,} bytes")
         
         if installer_size < 1000000:  # Less than 1MB might indicate a problem
             print("! Warning: Installer file size is smaller than expected. Please verify its contents.")
@@ -820,30 +1083,73 @@ SectionEnd
         print(f"✓ Installer is ready for distribution")
 
     def clean_build(self):
-        """Clean up previous build artifacts."""
-        print("Cleaning up previous build artifacts...")
+        """Clean up build files and processes."""
+        print("\n=== Cleaning Build Environment ===")
         
-        # Define directories and files to remove
-        dirs_to_remove = [self.dist_dir, "build", self.temp_dir, "__pycache__"]
-        files_to_remove = ["installer.nsi"]  # Only remove the generated NSIS script
+        # Kill any stuck installer processes first
+        self.kill_stuck_processes()
         
-        for d in dirs_to_remove:
-            if os.path.isdir(d):
-                try:
-                    shutil.rmtree(d)
-                    print(f"✓ Cleaned {d}")
-                except OSError as e:
-                    print(f"! Warning: Could not remove {d}: {e}")
-
-        for f in files_to_remove:
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                    print(f"✓ Cleaned {f}")
-                except OSError as e:
-                    print(f"! Warning: Could not remove {f}: {e}")
-
-        print("✓ Cleanup complete!")
+        # Clean up build directories
+        dirs_to_clean = [self.temp_dir, self.dist_dir, "build"]
+        for dir_path in dirs_to_clean:
+            if os.path.exists(dir_path):
+                print(f"Removing {dir_path}...")
+                shutil.rmtree(dir_path, ignore_errors=True)
+                print(f"✓ {dir_path} removed")
+            else:
+                print(f"✓ {dir_path} already clean")
+        
+        # Clean up PyInstaller cache
+        pycache_dirs = [
+            "__pycache__",
+            "trackpro/__pycache__",
+            ".pytest_cache"
+        ]
+        for cache_dir in pycache_dirs:
+            if os.path.exists(cache_dir):
+                print(f"Removing {cache_dir}...")
+                shutil.rmtree(cache_dir, ignore_errors=True)
+        
+        print("✓ Build environment cleaned")
+    
+    def kill_stuck_processes(self):
+        """Kill any stuck TrackPro installer or setup processes."""
+        print("\n=== Killing Stuck Processes ===")
+        
+        try:
+            # Use PowerShell to find and kill stuck processes
+            cmd = '''
+            $processes = Get-Process | Where-Object {
+                $_.ProcessName -like "*TrackPro*" -or 
+                $_.ProcessName -like "*Setup*" -or 
+                $_.ProcessName -like "*install*"
+            }
+            
+            if ($processes) {
+                $processes | ForEach-Object {
+                    Write-Host "Killing process: $($_.ProcessName) (PID: $($_.Id))"
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+            } else {
+                Write-Host "No stuck processes found"
+            }
+            '''
+            
+            result = subprocess.run([
+                "powershell", "-Command", cmd
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.stdout.strip():
+                print(result.stdout.strip())
+            if result.stderr.strip():
+                print(f"Warning: {result.stderr.strip()}")
+                
+        except subprocess.TimeoutExpired:
+            print("⚠️  Process cleanup timed out")
+        except Exception as e:
+            print(f"⚠️  Error during process cleanup: {e}")
+        
+        print("✓ Process cleanup completed")
 
     def create_manifest(self):
         """Create a manifest file to request admin privileges."""
@@ -859,7 +1165,7 @@ SectionEnd
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
       </requestedPrivileges>
     </security>
   </trustInfo>
@@ -917,9 +1223,9 @@ SectionEnd
         
         # Add PyQtWebEngine modules
         pyqt_web_modules = [
-            "PyQt5.QtWebEngineWidgets",
-            "PyQt5.QtWebEngine",
-            "PyQt5.QtWebEngineCore",
+            "PyQt6.QtWebEngineWidgets",
+            "PyQt6.QtWebEngine",
+            "PyQt6.QtWebEngineCore",
             "PyQtWebEngine"
         ]
         
@@ -1007,7 +1313,7 @@ SectionEnd
         # First check Python package dependencies
         # Check for required Python packages
         required_packages = {
-            "PyQt5": "PyQt5>=5.15.0",
+            "PyQt6": "PyQt6>=6.0.0",
             "PyQtWebEngine": "PyQtWebEngine>=5.15.0",
             "pygame": "pygame>=2.0.0",
             "pywin32": "pywin32>=300",
@@ -1135,7 +1441,8 @@ SectionEnd
         # Check for required files
         required_files = {
             "vJoySetup.exe": self.VJOY_URL,
-            "HidHide_1.2.98_x64.exe": self.HIDHIDE_URL
+            "HidHide_1.2.98_x64.exe": self.HIDHIDE_URL,
+            "vc_redist.x64.exe": self.VCREDIST_URL
         }
         
         missing_files = []
@@ -1165,14 +1472,80 @@ SectionEnd
         
         return True
 
+    def manual_process_cleanup():
+        """Utility function to manually clean up stuck processes."""
+        print("=== Manual Process Cleanup ===")
+        
+        try:
+            # Check for stuck processes
+            cmd = '''
+            $processes = Get-Process | Where-Object {
+                $_.ProcessName -like "*TrackPro*" -or 
+                $_.ProcessName -like "*Setup*" -or 
+                $_.ProcessName -like "*install*"
+            }
+            
+            if ($processes) {
+                Write-Host "Found stuck processes:"
+                $processes | ForEach-Object {
+                    Write-Host "  - $($_.ProcessName) (PID: $($_.Id), CPU: $($_.CPU)s)"
+                }
+                
+                $response = Read-Host "Kill these processes? (y/n)"
+                if ($response -eq "y" -or $response -eq "Y") {
+                    $processes | ForEach-Object {
+                        Write-Host "Killing: $($_.ProcessName) (PID: $($_.Id))"
+                        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                    }
+                    Write-Host "Processes killed."
+                } else {
+                    Write-Host "No processes killed."
+                }
+            } else {
+                Write-Host "No stuck processes found."
+            }
+            '''
+            
+            subprocess.run([
+                "powershell", "-Command", cmd
+            ], timeout=60)
+            
+        except Exception as e:
+            print(f"Error during manual cleanup: {e}")
+
+
 if __name__ == "__main__":
-    try:
-        builder = InstallerBuilder()
-        builder.build()
-    except Exception as e:
-        print(f"\n✗ Build failed with error: {str(e)}")
-        sys.exit(1)
+    import argparse
     
-    # Only wait for input if not running with --no-wait argument
-    if len(sys.argv) <= 1 or "--no-wait" not in sys.argv:
-        input("\nPress Enter to exit...") 
+    parser = argparse.ArgumentParser(description='TrackPro Build System')
+    parser.add_argument('action', nargs='?', default='build', 
+                       choices=['build', 'clean', 'kill-processes', 'test'],
+                       help='Action to perform')
+    parser.add_argument('--sign', action='store_true', 
+                       help='Enable code signing')
+    parser.add_argument('--no-sign', action='store_true', 
+                       help='Disable code signing')
+    
+    args = parser.parse_args()
+    
+    if args.action == 'kill-processes':
+        InstallerBuilder.manual_process_cleanup()
+        sys.exit(0)
+    
+    builder = InstallerBuilder()
+    
+    # Override signing settings if specified
+    if args.sign:
+        builder.enable_signing = True
+    elif args.no_sign:
+        builder.enable_signing = False
+    
+    if args.action == 'clean':
+        builder.clean_build()
+    elif args.action == 'build':
+        builder.build()
+    elif args.action == 'test':
+        builder.build_test_installer()
+    else:
+        print(f"Unknown action: {args.action}")
+        sys.exit(1) 

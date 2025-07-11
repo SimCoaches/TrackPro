@@ -121,9 +121,9 @@ CREATE TABLE user_profiles (
 
 ```python
 # These should already be available in TrackPro
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from ..database import supabase_client  # Your existing Supabase client
 ```
 

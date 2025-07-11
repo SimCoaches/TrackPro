@@ -679,4 +679,5 @@ class FriendsManager(DatabaseManager):
         return descriptions.get(activity_type, "")
 
 # Create a global instance
-friends_manager = FriendsManager() 
+# Note: Global instance creation removed to prevent import-time initialization
+# Use trackpro.social.friends_manager or trackpro.social.get_friends_manager() instead 

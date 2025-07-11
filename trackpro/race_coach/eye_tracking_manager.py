@@ -16,8 +16,8 @@ import threading
 import cv2
 import numpy as np
 from pathlib import Path
-from PyQt5.QtCore import QObject, pyqtSignal, QTimer
-from PyQt5.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
 
 # Import configuration
 from trackpro.config import config
@@ -229,7 +229,7 @@ class EyeTrackingManager(QObject):
         
         # Show calibration dialog
         dialog = EyeTrackingCalibrationDialog(parent_widget)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         
         try:
@@ -248,13 +248,17 @@ class EyeTrackingManager(QObject):
         """Run the calibration process in a separate thread."""
         try:
             # Get screen dimensions
-            from PyQt5.QtWidgets import QApplication, QDesktopWidget
+            from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
             if app:
-                desktop = app.desktop()
-                screen_rect = desktop.screenGeometry()
-                self.screen_width = screen_rect.width()
-                self.screen_height = screen_rect.height()
+                screen_list = app.screens()
+                if screen_list:
+                    screen_rect = screen_list[0].geometry()
+                    self.screen_width = screen_rect.width()
+                    self.screen_height = screen_rect.height()
+                else:
+                    self.screen_width = 1920
+                    self.screen_height = 1080
             
             # Run high-precision white background calibration
             logger.info("🎯 Starting HIGH-PRECISION 17-point calibration with white background lighting...")
@@ -1102,13 +1106,17 @@ class EyeTrackingManager(QObject):
         cap.set(cv2.CAP_PROP_FPS, 30)
         
         # Get screen dimensions for overlay
-        from PyQt5.QtWidgets import QApplication, QDesktopWidget
+        from PyQt6.QtWidgets import QApplication
         app = QApplication.instance()
         if app:
-            desktop = app.desktop()
-            screen_rect = desktop.screenGeometry()
-            screen_width = screen_rect.width()
-            screen_height = screen_rect.height()
+            screen_list = app.screens()
+            if screen_list:
+                screen_rect = screen_list[0].geometry()
+                screen_width = screen_rect.width()
+                screen_height = screen_rect.height()
+            else:
+                screen_width = 1920
+                screen_height = 1080
         else:
             screen_width = 1920
             screen_height = 1080
@@ -1272,13 +1280,17 @@ class EyeTrackingManager(QObject):
         cap.set(cv2.CAP_PROP_FPS, 30)
         
         # Get screen dimensions
-        from PyQt5.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         app = QApplication.instance()
         if app:
-            desktop = app.desktop()
-            screen_rect = desktop.screenGeometry()
-            screen_width = screen_rect.width()
-            screen_height = screen_rect.height()
+            screen_list = app.screens()
+            if screen_list:
+                screen_rect = screen_list[0].geometry()
+                screen_width = screen_rect.width()
+                screen_height = screen_rect.height()
+            else:
+                screen_width = 1920
+                screen_height = 1080
         else:
             screen_width = 1920
             screen_height = 1080

@@ -4,9 +4,9 @@ Unified interface combining all community features with the main application
 """
 
 import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from datetime import datetime
 import json
 from typing import Dict, List, Optional, Any
@@ -105,7 +105,7 @@ class CommunityNavigationWidget(QWidget):
         """Create a navigation button"""
         button = QPushButton()
         button.setFixedHeight(80)
-        button.setCursor(Qt.PointingHandCursor)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(lambda: self.select_section(section_id))
         
         # Create custom widget for button content
@@ -244,7 +244,7 @@ class CommunityStatusBar(QWidget):
         self.notifications_label = QLabel("🔔 3 new notifications")
         self.notifications_label.setFont(QFont(*CommunityTheme.FONTS['caption']))
         self.notifications_label.setStyleSheet(f"color: {CommunityTheme.COLORS['warning']};")
-        self.notifications_label.setCursor(Qt.PointingHandCursor)
+        self.notifications_label.setCursor(Qt.CursorShape.PointingHandCursor)
         
         # Last sync time
         self.sync_label = QLabel("Last sync: Just now")
@@ -397,16 +397,16 @@ class CommunityMainInterface(QWidget):
         """Create a placeholder widget with a message"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         icon_label = QLabel("🚧")
         icon_label.setFont(QFont('Segoe UI Emoji', 48))
-        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_muted']};")
         
         message_label = QLabel(message)
         message_label.setFont(QFont(*CommunityTheme.FONTS['subheading']))
-        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']};")
         message_label.setWordWrap(True)
         
@@ -505,7 +505,7 @@ def open_community_dialog(parent, managers: Dict[str, Any], user_id: str, sectio
     """Open the community dialog"""
     dialog = CommunityIntegrationDialog(managers, user_id, parent)
     dialog.show_section(section)
-    dialog.exec_()
+    dialog.exec()
 
 def create_community_widget(managers: Dict[str, Any], user_id: str, parent=None) -> CommunityMainInterface:
     """Create a community widget for embedding in the main application"""
@@ -553,4 +553,4 @@ if __name__ == "__main__":
     dialog = CommunityIntegrationDialog(mock_managers, 'test_user')
     dialog.show()
     
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec()) 
