@@ -86,13 +86,14 @@ class CodeSigner:
         try:
             # List available certificates
             cmd = [self.signtool_path, "sign", "/?"]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            CREATE_NO_WINDOW = 0x08000000
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
             
             # Try to find certificates in the personal store
             store_cmd = ["powershell", "-Command", 
                         "Get-ChildItem -Path Cert:\\CurrentUser\\My | Where-Object {$_.HasPrivateKey -eq $true -and $_.NotAfter -gt (Get-Date)} | Select-Object Subject, Thumbprint, NotAfter"]
             
-            cert_result = subprocess.run(store_cmd, capture_output=True, text=True)
+            cert_result = subprocess.run(store_cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
             
             if cert_result.returncode == 0 and cert_result.stdout.strip():
                 print("Available certificates:")
@@ -113,7 +114,7 @@ class CodeSigner:
                 machine_cmd = ["powershell", "-Command", 
                               "Get-ChildItem -Path Cert:\\LocalMachine\\My | Where-Object {$_.HasPrivateKey -eq $true -and $_.NotAfter -gt (Get-Date)} | Select-Object Subject, Thumbprint, NotAfter"]
                 
-                machine_result = subprocess.run(machine_cmd, capture_output=True, text=True)
+                machine_result = subprocess.run(machine_cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
                 if machine_result.returncode == 0 and machine_result.stdout.strip():
                     print("Certificates in LocalMachine store:")
                     print(machine_result.stdout)
@@ -164,7 +165,8 @@ class CodeSigner:
         
         try:
             print(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            CREATE_NO_WINDOW = 0x08000000
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
             
             if result.returncode == 0:
                 print("✓ File signed successfully!")
@@ -190,7 +192,7 @@ class CodeSigner:
                 
                 try:
                     print(f"Running: {' '.join(cmd_no_timestamp)}")
-                    result2 = subprocess.run(cmd_no_timestamp, capture_output=True, text=True, check=False)
+                    result2 = subprocess.run(cmd_no_timestamp, capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
                     
                     if result2.returncode == 0:
                         print("✓ File signed successfully (without timestamp)!")
@@ -231,7 +233,8 @@ class CodeSigner:
         
         try:
             print(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            CREATE_NO_WINDOW = 0x08000000
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
             
             if result.returncode == 0:
                 print("✓ File signed successfully with subject name!")
@@ -306,7 +309,8 @@ class CodeSigner:
             print(f"\n🔄 Trying: {method['name']}")
             try:
                 print(f"Running: {' '.join(method['cmd'])}")
-                result = subprocess.run(method['cmd'], capture_output=True, text=True, check=False)
+                CREATE_NO_WINDOW = 0x08000000
+                result = subprocess.run(method['cmd'], capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
                 
                 if result.returncode == 0:
                     print(f"✓ File signed successfully with {method['name']}!")
@@ -385,7 +389,8 @@ class CodeSigner:
                 print(f"Running: {' '.join(method['cmd'])}")
                 print("⏳ Please wait... Windows may prompt for USB token PIN")
                 
-                result = subprocess.run(method['cmd'], capture_output=True, text=True, check=False)
+                CREATE_NO_WINDOW = 0x08000000
+                result = subprocess.run(method['cmd'], capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
                 
                 if result.returncode == 0:
                     print(f"✓ File signed successfully with {method['name']}!")
@@ -450,7 +455,8 @@ class CodeSigner:
             safe_cmd[safe_cmd.index("/p") + 1] = "***"
             print(f"Running: {' '.join(safe_cmd)}")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            CREATE_NO_WINDOW = 0x08000000
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
             
             if result.returncode == 0:
                 print("✓ File signed successfully with PFX!")
@@ -481,7 +487,8 @@ class CodeSigner:
         cmd = [self.signtool_path, "verify", "/pa", "/v", file_path]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            CREATE_NO_WINDOW = 0x08000000
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
             
             if result.returncode == 0:
                 print("✓ Signature verified successfully!")

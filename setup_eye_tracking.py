@@ -30,7 +30,12 @@ def install_package(package_name, pip_name=None):
         try:
             # Use py instead of python on Windows
             python_cmd = "py" if sys.platform == "win32" else "python"
-            subprocess.check_call([python_cmd, "-m", "pip", "install", pip_name])
+            # Add CREATE_NO_WINDOW flag to hide command window on Windows
+            if sys.platform == "win32":
+                CREATE_NO_WINDOW = 0x08000000
+                subprocess.check_call([python_cmd, "-m", "pip", "install", pip_name], creationflags=CREATE_NO_WINDOW)
+            else:
+                subprocess.check_call([python_cmd, "-m", "pip", "install", pip_name])
             logger.info(f"✓ Successfully installed {pip_name}")
             return True
         except subprocess.CalledProcessError as e:

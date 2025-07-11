@@ -907,8 +907,9 @@ SectionEnd
         print("Checking for running TrackPro processes...")
         try:
             # Kill TrackPro processes
+            CREATE_NO_WINDOW = 0x08000000
             result = subprocess.run(['taskkill', '/F', '/IM', 'TrackPro*.exe'], 
-                                  capture_output=True, text=True, check=False)
+                                  capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
             if result.returncode == 0:
                 print("✓ Terminated running TrackPro processes")
             else:
@@ -916,7 +917,7 @@ SectionEnd
             
             # Also check for installer processes
             installer_result = subprocess.run(['taskkill', '/F', '/IM', f'TrackPro_Setup_v{self.version}.exe'], 
-                                            capture_output=True, text=True, check=False)
+                                            capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
             if installer_result.returncode == 0:
                 print("✓ Terminated running installer process")
                 
@@ -1001,10 +1002,12 @@ SectionEnd
             print(f"Using script path: {script_path}")
             
             # Run NSIS with maximum verbosity
+            CREATE_NO_WINDOW = 0x08000000
             result = subprocess.run([nsis_exe, "/V4", script_path], 
                                   capture_output=True, 
                                   text=True,
-                                  check=False)  # Don't raise exception yet
+                                  check=False,  # Don't raise exception yet
+                                  creationflags=CREATE_NO_WINDOW)
             
             # Print full output for debugging
             print("\nNSIS Output:")
@@ -1135,9 +1138,10 @@ SectionEnd
             }
             '''
             
+            CREATE_NO_WINDOW = 0x08000000
             result = subprocess.run([
                 "powershell", "-Command", cmd
-            ], capture_output=True, text=True, timeout=30)
+            ], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
             
             if result.stdout.strip():
                 print(result.stdout.strip())
@@ -1506,9 +1510,10 @@ SectionEnd
             }
             '''
             
+            CREATE_NO_WINDOW = 0x08000000
             subprocess.run([
                 "powershell", "-Command", cmd
-            ], timeout=60)
+            ], timeout=60, creationflags=CREATE_NO_WINDOW)
             
         except Exception as e:
             print(f"Error during manual cleanup: {e}")

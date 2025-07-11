@@ -527,6 +527,7 @@ if not "%FOUND_EXE%"=="" (
             cmd_command = f'start "TrackPro Update Process" cmd /k "{batch_path}"'
             
             logger.info(f"Executing command: {cmd_command}")
+            # Note: We intentionally don't use CREATE_NO_WINDOW here because we want the user to see the update progress
             subprocess.Popen(cmd_command, shell=True)
             
             # Wait a moment to ensure the process starts

@@ -32,9 +32,13 @@ elif not is_frozen and sys.version_info[:2] != (3, 11):
         print("Attempting to restart with Python 3.11...")
         try:
             # Use py -3.11 to explicitly run with Python 3.11
+            # Add CREATE_NO_WINDOW flag to hide command window
+            CREATE_NO_WINDOW = 0x08000000
             result = subprocess.run([
                 "py", "-3.11", __file__
-            ] + [arg for arg in sys.argv[1:] if arg != "--use-python-311"], check=True)
+            ] + [arg for arg in sys.argv[1:] if arg != "--use-python-311"], 
+            check=True, 
+            creationflags=CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
             sys.exit(result.returncode)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"❌ Failed to start with Python 3.11: {e}")
@@ -582,10 +586,11 @@ def update_trackpro(update_path):
         logger.info(f"Created update batch file: {temp_batch}")
         
         # Run the batch file with hidden window
+        CREATE_NO_WINDOW = 0x08000000
         subprocess.Popen(
             ["cmd", "/c", temp_batch],
             shell=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
+            creationflags=CREATE_NO_WINDOW
         )
         
         logger.info("Update batch file launched successfully")

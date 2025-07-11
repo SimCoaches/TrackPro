@@ -10,8 +10,24 @@ import tempfile
 import json
 import struct
 from typing import Optional, Generator
-from elevenlabs.client import ElevenLabs
-from elevenlabs import VoiceSettings
+try:
+    # Try new API structure first (v1.0+)
+    from elevenlabs import ElevenLabsAPI as ElevenLabs
+except ImportError:
+    try:
+        # Try direct import (v0.2.x)
+        from elevenlabs import API as ElevenLabs
+    except ImportError:
+        # Fallback to old structure
+        from elevenlabs.client import ElevenLabs
+
+try:
+    from elevenlabs import VoiceSettings
+except ImportError:
+    # Create a dummy VoiceSettings if not available
+    class VoiceSettings:
+        def __init__(self, **kwargs):
+            pass
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +294,8 @@ class AudioManager:
             
             # Play with system default
             if os.name == 'nt':  # Windows
-                subprocess.Popen(['start', '', temp_file_path], shell=True)
+                CREATE_NO_WINDOW = 0x08000000
+                subprocess.Popen(['start', '', temp_file_path], shell=True, creationflags=CREATE_NO_WINDOW)
             else:  # Unix-like systems
                 subprocess.Popen(['xdg-open', temp_file_path])
             

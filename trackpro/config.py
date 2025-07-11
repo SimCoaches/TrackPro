@@ -4,14 +4,18 @@ import os
 import json
 from pathlib import Path
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     'supabase': {
         'enabled': True,  # Start with cloud sync enabled by default
-        'url': 'https://xbfotxwpntqplvvsffrr.supabase.co',
-        'key': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhiZm90eHdwbnRxcGx2dnNmZnJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzMTM5NjUsImV4cCI6MjA1OTg4OTk2NX0.AwLUhaxQQn9xnpTwgOrRIdWQYsVI9-ikC2Qb-6SR2h8',
+        'url': '',  # Now loaded from environment variables
+        'key': '',  # Now loaded from environment variables
         'debug_mode': False  # Set to True for additional diagnostic logging
     },
     'ui': {

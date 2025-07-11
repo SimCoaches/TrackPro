@@ -79,6 +79,8 @@ a = Analysis(
         'trackpro.pedals.hidhide',
         'trackpro.community',
         'trackpro.gamification',
+        'trackpro.utils',
+        'trackpro.utils.subprocess_utils',
         
                  # PyQt6 modules
                      'PyQt6.QtChart',

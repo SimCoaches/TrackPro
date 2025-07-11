@@ -12,6 +12,14 @@ from gotrue import AuthResponse
 from ..config import config  # Import the global config instance
 import logging
 
+# Import secure session manager
+try:
+    from ..auth.secure_session import SecureSessionManager
+    SECURE_SESSION_AVAILABLE = True
+except ImportError:
+    SECURE_SESSION_AVAILABLE = False
+    SecureSessionManager = None
+
 logger = logging.getLogger(__name__)
 
 # Global instance of SupabaseManager
@@ -125,22 +133,92 @@ class SupabaseManager:
         self._cached_ip = None
         self._auth_file = os.path.join(os.path.expanduser("~"), ".trackpro", "auth.json")
         
+        # Initialize secure session manager
+        self._secure_session = None
+        if SECURE_SESSION_AVAILABLE:
+            try:
+                self._secure_session = SecureSessionManager("TrackPro")
+                logger.info("Secure session manager initialized")
+                # Migrate existing plaintext sessions to encrypted storage
+                self._migrate_plaintext_sessions()
+            except Exception as e:
+                logger.error(f"Failed to initialize secure session manager: {e}")
+                self._secure_session = None
+        
         # Try to restore session from file
         self._restore_session()
         
         # Initialize the client
         self.initialize()
     
+    def _migrate_plaintext_sessions(self):
+        """Migrate existing plaintext sessions to encrypted storage."""
+        if not self._secure_session:
+            return
+        
+        try:
+            from pathlib import Path
+            plaintext_file = Path(self._auth_file)
+            if plaintext_file.exists():
+                logger.info("Found plaintext session file, migrating to encrypted storage")
+                success = self._secure_session.migrate_from_plaintext(plaintext_file)
+                if success:
+                    logger.info("Successfully migrated session to encrypted storage")
+                else:
+                    logger.warning("Failed to migrate session to encrypted storage")
+        except Exception as e:
+            logger.error(f"Error during session migration: {e}")
+    
+    def get_session_security_info(self):
+        """Get information about session security status.
+        
+        Returns:
+            Dictionary with security information
+        """
+        info = {
+            'secure_session_available': SECURE_SESSION_AVAILABLE,
+            'secure_session_active': self._secure_session is not None,
+            'encryption_enabled': False,
+            'integrity_verification': False,
+            'secure_permissions': False,
+            'session_exists': False,
+            'migration_completed': False
+        }
+        
+        if self._secure_session:
+            session_info = self._secure_session.get_session_info()
+            info.update({
+                'encryption_enabled': session_info.get('encryption_enabled', False),
+                'integrity_verification': session_info.get('integrity_verification', False),
+                'secure_permissions': session_info.get('secure_permissions', False),
+                'session_exists': session_info.get('session_exists', False),
+                'session_file': session_info.get('session_file', ''),
+                'session_dir': session_info.get('session_dir', ''),
+                'platform': session_info.get('platform', ''),
+                'migration_completed': not os.path.exists(self._auth_file)
+            })
+        
+        return info
+    
     def _restore_session(self):
         """Restore session from file if available."""
         try:
+            # Try secure session first
+            if self._secure_session:
+                auth_data = self._secure_session.load_session()
+                if auth_data and auth_data.get('access_token'):
+                    logger.info("Found saved authentication session (encrypted)")
+                    self._saved_auth = auth_data
+                    return True
+            
+            # Fallback to plaintext session
             if os.path.exists(self._auth_file):
                 with open(self._auth_file, 'r') as f:
                     auth_data = json.load(f)
                 
                 # Check if we have the minimum required data
                 if auth_data.get('access_token'):
-                    logger.info("Found saved authentication session")
+                    logger.info("Found saved authentication session (plaintext)")
                     self._saved_auth = auth_data
                     return True
             
@@ -335,9 +413,6 @@ class SupabaseManager:
             if not response:
                 return
             
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(self._auth_file), exist_ok=True)
-            
             # Extract tokens from response
             session = response.session if hasattr(response, 'session') else response
             auth_data = {
@@ -347,11 +422,22 @@ class SupabaseManager:
                 'remember_me': remember_me  # Store the remember_me preference
             }
             
-            # Save to file
+            # Try secure session first
+            if self._secure_session:
+                success = self._secure_session.save_session(auth_data)
+                if success:
+                    logger.info(f"Authentication session saved securely with remember_me={remember_me}")
+                    self._saved_auth = auth_data
+                    return True
+                else:
+                    logger.warning("Failed to save session securely, falling back to plaintext")
+            
+            # Fallback to plaintext session
+            os.makedirs(os.path.dirname(self._auth_file), exist_ok=True)
             with open(self._auth_file, 'w') as f:
                 json.dump(auth_data, f)
             
-            logger.info(f"Authentication session saved with remember_me={remember_me}")
+            logger.info(f"Authentication session saved (plaintext) with remember_me={remember_me}")
             self._saved_auth = auth_data
             return True
         except Exception as e:
@@ -361,11 +447,23 @@ class SupabaseManager:
     def _clear_session(self):
         """Clear the saved session."""
         try:
+            success = True
+            
+            # Clear secure session
+            if self._secure_session:
+                if not self._secure_session.clear_session():
+                    success = False
+                    logger.warning("Failed to clear secure session")
+                else:
+                    logger.info("Secure authentication session cleared")
+            
+            # Clear plaintext session
             if os.path.exists(self._auth_file):
                 os.remove(self._auth_file)
-                logger.info("Authentication session cleared")
+                logger.info("Plaintext authentication session cleared")
+            
             self._saved_auth = None
-            return True
+            return success
         except Exception as e:
             logger.error(f"Error clearing authentication session: {e}")
             return False
