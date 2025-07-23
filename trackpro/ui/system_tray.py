@@ -117,8 +117,9 @@ def toggle_minimize_to_tray(main_window, checked):
 
 
 def exit_application(main_window):
-    """Exit the application completely."""
-    logger.info("Exit requested from system tray")
+    """Exit the application completely - FORCE KILL ALL PROCESSES."""
+    logger.info("FORCE EXIT requested from system tray")
+    
     # Hide tray icon first
     if hasattr(main_window, 'tray_icon'):
         main_window.tray_icon.hide()
@@ -127,28 +128,39 @@ def exit_application(main_window):
     original_setting = config.minimize_to_tray
     config.set('ui.minimize_to_tray', False)
     
-    # Find the main app instance and call its cleanup method
-    app = QApplication.instance()
-    if app:
-        # Try to find the TrackPro app instance
-        for obj in app.findChildren(QObject):
-            if hasattr(obj, 'cleanup') and hasattr(obj, 'hardware') and hasattr(obj, 'window'):
-                logger.info("Found TrackPro app instance from system tray, calling cleanup")
-                try:
-                    obj.cleanup()
-                except Exception as cleanup_e:
-                    logger.error(f"Error during app cleanup from system tray: {cleanup_e}")
-                break
-        
-        # Force application exit
-        logger.info("Forcing application exit from system tray")
-        QTimer.singleShot(100, lambda: app.exit(0))
-    
-    # Close the main window as a backup
+    # Force kill all TrackPro processes immediately
     try:
-        main_window.close()
+        logger.info("🔫 System tray force killing all TrackPro processes...")
+        import subprocess
+        
+        kill_commands = [
+            ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
+            ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.3.exe'],
+            ['powershell', '-Command', "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Stop-Process -Force"],
+        ]
+        
+        for cmd in kill_commands:
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=3)
+            except:
+                pass
+                
     except Exception as e:
-        logger.error(f"Error closing main window: {e}")
+        logger.warning(f"Error during system tray force kill: {e}")
     
-    # Restore the original setting (though the app will be closed)
-    config.set('ui.minimize_to_tray', original_setting) 
+    # Clean up lock file
+    try:
+        import tempfile
+        import os
+        lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+    except:
+        pass
+    
+    # Force quit application
+    try:
+        QApplication.instance().quit()
+    except:
+        import sys
+        sys.exit(0) 

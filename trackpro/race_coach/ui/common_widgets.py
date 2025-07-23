@@ -388,7 +388,7 @@ class SteeringWheelWidget(GaugeBase):
 
             # Create new pixmap cache for the wheel at current size and angle
             self._cached_wheel = QPixmap(width, height)
-            self._cached_wheel.fill(Qt.transparent)
+            self._cached_wheel.fill(Qt.GlobalColor.transparent)
 
             # Create a painter for the cached wheel
             cache_painter = QPainter(self._cached_wheel)
@@ -631,7 +631,7 @@ class InputTraceWidget(QWidget):
         title_font.setPointSize(10)
         title_font.setBold(True)
         painter.setFont(title_font)
-        painter.setPen(QPen(Qt.white))
+        painter.setPen(QPen(Qt.GlobalColor.white))
         painter.drawText(int(width / 2 - 75), 15, "Input Trace")
 
         # Draw axis labels

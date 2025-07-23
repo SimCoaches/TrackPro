@@ -15,6 +15,8 @@ import socket
 import webbrowser
 import os
 
+from .terms_handler import check_and_prompt_for_terms
+
 # Add Twilio import for 2FA
 try:
     from twilio.rest import Client as TwilioClient
@@ -919,7 +921,7 @@ class LoginDialog(BaseAuthDialog):
     
     def check_and_handle_2fa(self, user_id, user_email="User"):
         """Check if user has 2FA enabled and handle the verification process.
-        This is now a mandatory check.
+        This includes fallback behavior when SMS service is unavailable.
         
         Args:
             user_id: The user's ID
@@ -929,15 +931,20 @@ class LoginDialog(BaseAuthDialog):
             bool: True if 2FA passed or not required, False if 2FA failed and user should be logged out.
         """
         try:
-            # MANDATORY: Check if Twilio is available - if not, block login
+            # Check if Twilio is available - if not, use fallback mode
             if not TWILIO_AVAILABLE or not twilio_service or not twilio_service.is_available():
-                QMessageBox.critical(self, "2FA Service Required", 
-                    "TrackPro requires SMS verification for security.\n\n"
-                    "The SMS service is currently not configured or unavailable.\n"
-                    "Please contact support to enable SMS verification.\n\n"
-                    "Login is not allowed without phone verification capability.")
-                logger.error(f"Login blocked for user {user_email} - Twilio service not available")
-                return False  # Block login entirely
+                # FALLBACK MODE: Allow login but warn user about limited 2FA features
+                logger.warning(f"Twilio service unavailable for user {user_email} - proceeding with fallback mode")
+                
+                # Show informational message about limited features (not blocking)
+                QMessageBox.information(self, "2FA Service Limited", 
+                    "SMS verification service is temporarily unavailable.\n\n"
+                    "You can still log in, but 2FA features will be limited.\n"
+                    "Please contact support if this issue persists.\n\n"
+                    "Login will proceed without SMS verification.")
+                
+                # Allow login to proceed - skip all 2FA checks
+                return True
             
             profile_res = enhanced_user_manager.get_complete_user_profile(user_id)
             
@@ -968,7 +975,7 @@ class LoginDialog(BaseAuthDialog):
             return False # Fail safe: if check fails, don't allow login.
 
     def force_phone_verification(self, user_id, user_email="User"):
-        """Forces the user to complete phone verification. This is not optional.
+        """Forces the user to complete phone verification with fallback for unavailable service.
         
         Args:
             user_id: The user's ID
@@ -977,11 +984,22 @@ class LoginDialog(BaseAuthDialog):
         Returns:
             bool: True if verification is successful, False otherwise.
         """
+        # Check if Twilio service is available for phone verification
+        if not TWILIO_AVAILABLE or not twilio_service or not twilio_service.is_available():
+            logger.warning(f"Phone verification skipped for user {user_email} - Twilio service unavailable")
+            QMessageBox.information(self, 
+                "Phone Verification Unavailable",
+                "Phone verification is currently unavailable due to SMS service issues.\n\n"
+                "You can log in for now, but we recommend trying again later when the service is restored.\n"
+                "Contact support if this issue persists.")
+            # Allow login to proceed without phone verification
+            return True
+        
         from .phone_verification_dialog import PhoneVerificationDialog
 
         QMessageBox.information(self, 
             "Account Security Update",
-            "To enhance account security, all users are now required to verify a phone number.\\n\\n"
+            "To enhance account security, all users are now required to verify a phone number.\n\n"
             "You will now be guided through the verification process. This is a one-time requirement."
         )
         
@@ -1102,6 +1120,15 @@ class LoginDialog(BaseAuthDialog):
             if response and response.user:
                 logger.info(f"User {email} signed in successfully")
                 
+                # Check for terms of service acceptance
+                if not check_and_prompt_for_terms(response.user.id, self):
+                    # User declined terms, so abort the login.
+                    try:
+                        supabase.client.auth.sign_out()
+                    except:
+                        pass
+                    return
+
                 # Check 2FA before proceeding
                 if not self.check_and_handle_2fa(response.user.id, email):
                     # 2FA failed, logout and return

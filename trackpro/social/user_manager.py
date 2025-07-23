@@ -36,9 +36,47 @@ class EnhancedUserManager(DatabaseManager):
                     return None
                 user_id = user.id
             
-            # Use the view for complete profile data
-            response = self.client.from_("user_profile_complete").select("*").eq("user_id", user_id).single().execute()
-            return response.data
+            # First try to get from the view for complete profile data
+            response = self.client.from_("user_profile_complete").select("*").eq("user_id", user_id).limit(1).execute()
+            
+            if response.data:
+                return response.data[0]
+            
+            # If view returns empty (user not in user_profiles), try to get from user_details as fallback
+            logger.info(f"User {user_id} not found in user_profile_complete view, checking user_details table")
+            
+            details_response = self.client.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
+            
+            if details_response.data:
+                # Return minimal profile data with 2FA info from user_details
+                user_details = details_response.data[0]
+                logger.info(f"Found user {user_id} in user_details with twilio_verified={user_details.get('twilio_verified')}")
+                
+                # Create minimal profile data compatible with existing code
+                return {
+                    'user_id': user_id,
+                    'phone_number': user_details.get('phone_number'),
+                    'twilio_verified': user_details.get('twilio_verified', False),
+                    'is_2fa_enabled': user_details.get('is_2fa_enabled', False),
+                    # Add default values for fields that might be accessed
+                    'username': None,
+                    'display_name': None,
+                    'email': None,
+                    'level': 1,
+                    'reputation_score': 0,
+                    'total_laps': 0,
+                    'total_distance_km': 0,
+                    'total_time_seconds': 0,
+                    'best_lap_time': None,
+                    'consistency_rating': 0,
+                    'improvement_rate': 0,
+                    'last_active': None
+                }
+            
+            # If user not found in either place, return None
+            logger.warning(f"User {user_id} not found in either user_profile_complete view or user_details table")
+            return None
+            
         except Exception as e:
             logger.error(f"Error getting complete user profile: {e}")
             return None

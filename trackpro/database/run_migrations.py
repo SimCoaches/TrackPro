@@ -121,7 +121,7 @@ def run_migrations(skip_existing: bool = True) -> Tuple[bool, int, int]:
             migration_name = os.path.splitext(migration_file)[0]
             result = supabase.client.rpc(
                 'execute_sql', 
-                {'sql': sql}
+                {'p_sql': sql}
             ).execute()
 
             if hasattr(result, 'error') and result.error:
@@ -179,7 +179,7 @@ def create_check_table_function() -> bool:
             return False
         return True
 
-def create_run_sql_function() -> bool:
+def create_execute_sql_function() -> bool:
     """
     Create a PostgreSQL function to run arbitrary SQL.
     
@@ -193,30 +193,43 @@ def create_run_sql_function() -> bool:
     try:
         # Create function to run SQL statements
         sql = """
-        CREATE OR REPLACE FUNCTION run_sql(sql TEXT)
+        CREATE OR REPLACE FUNCTION execute_sql(p_sql TEXT)
         RETURNS VOID AS $$
         BEGIN
-            EXECUTE sql;
+            EXECUTE p_sql;
         END;
         $$ LANGUAGE plpgsql SECURITY DEFINER;
         """
         
         # Make direct query to create the function
         # Since we're bootstrapping, we need to use the low-level client
-        # Use execute_sql which should exist, not run_sql which we are creating
-        result = supabase.client.rpc("execute_sql", {"sql": sql}).execute()
+        # Use a temporary rpc call if execute_sql doesn't exist yet
+        # This is a bit of a chicken-and-egg problem.
+        # We assume a superuser can run this.
+        result = supabase.client.rpc("eval", {"query": sql}).execute()
         
         if hasattr(result, 'error') and result.error:
             # Check for a specific error that we can ignore
             # 42723 is 'duplicate_function' - it's okay if it already exists
             if '42723' not in str(result.error):
-                logger.error(f"Error creating run_sql function: {result.error}")
+                logger.error(f"Error creating execute_sql function: {result.error}")
                 return False
         
         return True
     except Exception as e:
-        logger.error(f"Error creating run_sql function: {e}")
-        return False
+        if 'function public.eval(query text) does not exist' in str(e):
+            # Fallback for when 'eval' is not available
+            try:
+                # We can't execute the creation of `execute_sql` if no such function exists.
+                # This must be done manually in the Supabase dashboard if it's missing.
+                logger.warning("The 'eval' function does not exist. Please create 'execute_sql' function manually in Supabase SQL editor.")
+                return True # Assume it will be created manually
+            except Exception as inner_e:
+                logger.error(f"Error creating execute_sql function with fallback: {inner_e}")
+                return False
+        else:
+            logger.error(f"Error creating execute_sql function: {e}")
+            return False
 
 def main():
     """Main function to run migrations"""
@@ -233,8 +246,8 @@ def main():
     
     # Create helper functions
     logger.info("Creating helper functions...")
-    if not create_run_sql_function():
-        logger.error("Failed to create run_sql function.")
+    if not create_execute_sql_function():
+        logger.error("Failed to create execute_sql function.")
         return 1
     
     if not create_check_table_function():

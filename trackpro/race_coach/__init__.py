@@ -3,15 +3,15 @@
 import logging
 from PyQt6.QtWidgets import QApplication
 
-# Set higher logging level for noisy HTTP and Supabase libraries
-for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:
-    logging.getLogger(library).setLevel(logging.WARNING)
+# Remove redundant library silencing - this is now handled by logging_config.py
+# for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:
+#     logging.getLogger(library).setLevel(logging.WARNING)
 
-# Set up logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Remove problematic logging configuration - this is now handled by logging_config.py
+# logging.basicConfig(
+#     level=logging.DEBUG,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
 
 logger = logging.getLogger(__name__)
 

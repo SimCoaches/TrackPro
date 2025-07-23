@@ -96,6 +96,36 @@ def from_double_null_terminated_string(buffer):
     except:
         return []
 
+def safe_device_io_control(handle, ioctl_code, input_buffer=None, output_buffer_size=0):
+    """Safely perform DeviceIoControl operations with proper error handling."""
+    try:
+        if output_buffer_size > 0:
+            output_buffer = bytearray(output_buffer_size)
+        else:
+            output_buffer = None
+        
+        # Use win32file.DeviceIoControl with proper parameter handling
+        if input_buffer is None:
+            result = win32file.DeviceIoControl(
+                handle,
+                ioctl_code,
+                None,
+                output_buffer
+            )
+        else:
+            result = win32file.DeviceIoControl(
+                handle,
+                ioctl_code,
+                input_buffer,
+                output_buffer
+            )
+        
+        return True, output_buffer
+        
+    except Exception as e:
+        logger.warning(f"DeviceIoControl failed for IOCTL {hex(ioctl_code)}: {e}")
+        return False, None
+
 class HidHideClient:
     """Interface to HidHide using the CLI tool."""
     
@@ -110,6 +140,8 @@ class HidHideClient:
         self.error_context = None
         self.functioning = True
         self.fail_silently = fail_silently
+        self.config_file = Path.home() / "AppData" / "Local" / "TrackPro" / "hidhide_config.json"
+        self.config = None
         
         try:
             # Check if HidHide is installed
@@ -183,6 +215,14 @@ class HidHideClient:
                 )
                 return
             
+            # Load configuration
+            try:
+                self.load_config()
+            except Exception as e:
+                logger.warning(f"Failed to load HidHide configuration: {e}")
+                # Create default configuration
+                self.config = {'hidden_devices': []}
+
             # Clean up old temporary registrations
             try:
                 self.cleanup_temp_registrations()
@@ -190,11 +230,11 @@ class HidHideClient:
                 logger.warning(f"Failed to clean up temporary registrations: {e}")
                 # Continue anyway, this is not critical
             
-            # Register our application
+            # Register our application - use CLI method which is more reliable
             app_path = os.path.abspath(sys.argv[0])
             logger.info(f"Registering application path: {app_path}")
             try:
-                if not self.register_application(app_path):
+                if not self.register_application_cli(app_path):
                     self._handle_error(
                         "Failed to register application with HidHide. "
                         "Please try running the application as administrator.",
@@ -365,8 +405,8 @@ class HidHideClient:
         logger.error(f"Command failed after {original_retry + 1} attempts")
         return None if check_output else False
     
-    def register_application(self, app_path):
-        """Register application with HidHide."""
+    def register_application_cli(self, app_path):
+        """Register application with HidHide using CLI method only."""
         if not self.functioning:
             logger.warning("HidHide not functioning, skipping application registration")
             return False
@@ -382,72 +422,19 @@ class HidHideClient:
             logger.info("Application already registered")
             return True
         
-        # Try direct API registration if available
-        try:
-            # Try to register via whitelist API
-            device_path = r"\\.\HidHide"
-            handle = win32file.CreateFile(
-                device_path,
-                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
-                None,
-                win32con.OPEN_EXISTING,
-                0,
-                None
-            )
-            
-            if handle == win32file.INVALID_HANDLE_VALUE:
-                logger.warning("Failed to open HidHide device for whitelist update")
-            else:
-                try:
-                    # Get current whitelist
-                    whitelist = []
-                    try:
-                        # Get the current whitelist from the driver
-                        outbuffer = bytearray(65536)  # 64KB buffer
-                        bytes_returned = wintypes.DWORD(0)
-                        
-                        result = win32file.DeviceIoControl(
-                            handle,
-                            IOCTL_GET_WHITELIST,
-                            None,
-                            outbuffer,
-                            bytes_returned
-                        )
-                        
-                        # Convert buffer to list of strings
-                        whitelist = from_double_null_terminated_string(outbuffer)
-                    except Exception as e:
-                        logger.error(f"Error getting whitelist: {e}")
-                        whitelist = []
-                    
-                    # Add our application if not already in the list
-                    if app_path not in whitelist:
-                        whitelist.append(app_path)
-                        
-                        # Convert list of strings to input buffer
-                        input_buffer = to_double_null_terminated_string(whitelist)
-                        
-                        # Update the whitelist in the driver
-                        result = win32file.DeviceIoControl(
-                            handle,
-                            IOCTL_SET_WHITELIST,
-                            input_buffer,
-                            None,
-                            None
-                        )
-                        
-                        logger.info(f"Added application to whitelist via API: {result}")
-                        return True
-                except Exception as e:
-                    logger.error(f"Error updating whitelist via API: {e}")
-                finally:
-                    win32file.CloseHandle(handle)
-        except Exception as e:
-            logger.error(f"Error with direct API registration: {e}")
-        
-        # Fall back to CLI registration
-        return self._run_cli(["--app-reg", app_path])
+        # Register using CLI
+        result = self._run_cli(["--app-reg", app_path])
+        if result:
+            logger.info("Successfully registered application with HidHide")
+            return True
+        else:
+            logger.error("Failed to register application with HidHide")
+            return False
+    
+    def register_application(self, app_path):
+        """Register application with HidHide."""
+        # Use the CLI-only method which is more reliable
+        return self.register_application_cli(app_path)
     
     def is_device_hidden(self, device_name_or_path):
         """Check if a device is hidden by name or path."""
@@ -736,6 +723,9 @@ class HidHideClient:
     
     def load_config(self):
         """Load HidHide configuration from file."""
+        # Ensure the directory exists
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        
         if self.config_file.exists():
             try:
                 with open(self.config_file) as f:
@@ -754,6 +744,8 @@ class HidHideClient:
     def save_config(self):
         """Save HidHide configuration to file."""
         try:
+            # Ensure the directory exists
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.config_file, 'w') as f:
                 json.dump(self.config, f)
             logger.info("Saved HidHide configuration")
@@ -935,70 +927,11 @@ class HidHideClient:
             
         logger.info(f"Setting HidHide cloak state to: {'active' if active else 'inactive'}")
         
-        # Try CLI method first (most reliable)
-        cli_result = self._run_cli(["--cloak-on" if active else "--cloak-off"], retry_count=1)
+        # Use CLI method only (most reliable)
+        cli_result = self._run_cli(["--cloak-on" if active else "--cloak-off"], retry_count=2)
         if cli_result:
             logger.info(f"Set cloak state via CLI: {active}")
             return True
-            
-        # Try the direct DeviceIoControl method as fallback
-        try:
-            # Open the HidHide device
-            device_path = r"\\.\HidHide"
-            handle = win32file.CreateFile(
-                device_path,
-                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
-                None,
-                win32con.OPEN_EXISTING,
-                0,
-                None
-            )
-            
-            if handle == win32file.INVALID_HANDLE_VALUE:
-                error = win32api.GetLastError()
-                logger.error(f"Failed to open HidHide device: error {error}")
-                return False
-            
-            try:
-                # Prepare the input buffer (1 byte boolean)
-                input_buffer = bytearray(1)
-                input_buffer[0] = 1 if active else 0
-                
-                # Send the IOCTL
-                try:
-                    # Try with old approach
-                    result = win32file.DeviceIoControl(
-                        handle,
-                        IOCTL_SET_ACTIVE,
-                        input_buffer,
-                        None,
-                        None
-                    )
-                    logger.info(f"Set cloak state result: {result}")
-                    return True
-                except Exception as e1:
-                    # If old approach fails, try alternative approach
-                    logger.warning(f"First cloak attempt failed: {e1}")
-                    try:
-                        result = win32file.DeviceIoControl(
-                            handle,
-                            IOCTL_SET_ACTIVE,
-                            input_buffer,
-                            bytearray(4),  # Use a small output buffer
-                            None
-                        )
-                        logger.info(f"Alternative cloak method succeeded: {result}")
-                        return True
-                    except Exception as e2:
-                        logger.error(f"Alternative cloak method also failed: {e2}")
-                        return False
-            except Exception as e:
-                logger.error(f"Error setting cloak state: {e}")
-                return False
-            finally:
-                # Always close the handle
-                win32file.CloseHandle(handle)
-        except Exception as e:
-            logger.error(f"Exception in set_cloak_state: {e}")
+        else:
+            logger.warning(f"Failed to set cloak state via CLI: {active}")
             return False 

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Get the GitHub repository from environment variable or use a default
 GITHUB_REPO = "SimCoaches/TrackPro"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CURRENT_VERSION = "1.5.2"
+CURRENT_VERSION = "1.5.3"
 UPDATE_URL = "https://trackpro.app/api/updates"
 
 class UpdateChecker(QThread):

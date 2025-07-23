@@ -12,6 +12,10 @@ import traceback
 import re
 import socket
 
+# CRITICAL: Import and setup proper logging configuration FIRST
+from .logging_config import setup_logging
+setup_logging()
+
 # Defer local imports until needed in __init__ or other methods
 # from .pedals.hardware_input import HardwareInput
 # from .pedals.output import VirtualJoystick
@@ -21,12 +25,8 @@ from .ui import MainWindow # Needed early for window creation
 from .database import supabase # Potentially needed early depending on auth flow
 from .auth import LoginDialog, oauth_handler # Needed early for auth handler
 
-# Configure logging
+# Configure logging - this is now redundant since we use setup_logging() above
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 
 # Create a custom handler that will store log messages for the debug window
 class DebugLogHandler(logging.Handler):
@@ -1200,6 +1200,55 @@ class TrackProApp:
         
         # Process any remaining events to avoid threading issues on exit
         QApplication.processEvents()
+        
+        # Final cleanup of single instance locks
+        self._cleanup_single_instance_locks()
+    
+    def _cleanup_single_instance_locks(self):
+        """Clean up single instance locks and mutexes."""
+        try:
+            import tempfile
+            import os
+            
+            logger.info("Cleaning up single instance locks...")
+            
+            # Remove lock file
+            lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                    logger.info("Removed single instance lock file")
+                except Exception as e:
+                    logger.warning(f"Could not remove lock file: {e}")
+            
+            # The mutex should be automatically released by the atexit handler
+            # but we can try to force release it here as well
+            try:
+                import win32event
+                import win32api
+                import winerror
+                
+                # Try to open the existing mutex
+                import win32con
+                mutex_name = "TrackProSingleInstanceMutex"
+                try:
+                    mutex = win32event.OpenMutex(win32con.MUTEX_ALL_ACCESS, False, mutex_name)
+                    if mutex:
+                        win32event.ReleaseMutex(mutex)
+                        win32api.CloseHandle(mutex)
+                        logger.info("Force released single instance mutex")
+                except Exception:
+                    # Mutex doesn't exist or already released, which is fine
+                    pass
+                    
+            except ImportError:
+                # win32 modules not available, skip mutex cleanup
+                pass
+            except Exception as e:
+                logger.warning(f"Error during mutex cleanup: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error during single instance cleanup: {e}")
     
     def on_calibration_wizard_completed(self, results):
         """Handle calibration wizard results."""

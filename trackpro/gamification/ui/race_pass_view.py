@@ -1329,7 +1329,7 @@ if __name__ == '__main__':
     app.setStyle("Fusion")
     dark_palette = QPalette()
     dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.WindowText, Qt.white)
+    dark_palette.setColor(QPalette.WindowText, Qt.GlobalColor.white)
     dark_palette.setColor(QPalette.Base, QColor(42, 42, 42))
     dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
     app.setPalette(dark_palette)

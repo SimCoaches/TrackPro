@@ -6,10 +6,44 @@ from pathlib import Path
 import logging
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
 logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file with proper path resolution
+def _load_env_file():
+    """Load .env file from the correct location for both dev and built executable."""
+    import sys
+    
+    # Possible locations for .env file
+    possible_env_paths = []
+    
+    # For development: relative to this file's parent directory (project root)
+    possible_env_paths.append(Path(__file__).parent.parent / ".env")
+    
+    # For built executable: relative to executable directory
+    if getattr(sys, 'frozen', False):
+        # Running as built executable
+        exe_dir = Path(sys.executable).parent
+        possible_env_paths.append(exe_dir / ".env")
+        possible_env_paths.append(exe_dir.parent / ".env")
+    
+    # Current working directory
+    possible_env_paths.append(Path.cwd() / ".env")
+    
+    # Try to load .env from each possible location
+    for env_path in possible_env_paths:
+        if env_path.exists():
+            logger.info(f"Loading environment variables from: {env_path}")
+            load_dotenv(env_path)
+            return True
+    
+    logger.warning("No .env file found - using system environment variables only")
+    return False
+
+_load_env_file()
+
+# Version for the current terms of service.
+# This should be incremented when terms_of_service.txt is updated.
+CURRENT_TERMS_VERSION = 1
 
 DEFAULT_CONFIG = {
     'supabase': {
@@ -58,6 +92,7 @@ class Config:
         self.config_dir = Path.home() / ".trackpro"
         self.config_file = self.config_dir / "config.json"
         self.config = self._load_config()
+        self._setup_fallback_environment()
     
     def _load_config(self) -> dict:
         """Load configuration from file or create default."""
@@ -95,6 +130,33 @@ class Config:
         except Exception as e:
             logger.error(f"Error loading config: {e}")
             return DEFAULT_CONFIG.copy()  # Return defaults instead of empty dict
+    
+    def _setup_fallback_environment(self):
+        """Set up fallback environment for built executables when external config is missing."""
+        import sys
+        
+        # Check if we're running as a built executable
+        is_frozen = getattr(sys, 'frozen', False)
+        
+        # Only enable fallback mode if ALL credential sources are completely missing
+        has_any_credentials = (
+            self.twilio_account_sid or 
+            self.twilio_auth_token or 
+            self.twilio_verify_service_sid or
+            os.getenv('TWILIO_ACCOUNT_SID') or
+            os.getenv('TWILIO_AUTH_TOKEN') or 
+            os.getenv('TWILIO_VERIFY_SERVICE_SID')
+        )
+        
+        if (is_frozen and 
+            not has_any_credentials and
+            not os.getenv('TRACKPRO_DEV_MODE')):
+            
+            logger.warning("Built executable detected with no Twilio configuration anywhere - enabling fallback mode")
+            logger.info("To enable real 2FA, ensure .env file is present with Twilio credentials")
+            os.environ['TRACKPRO_DEV_MODE'] = 'true'
+        elif has_any_credentials:
+            logger.info("Twilio credentials detected - 2FA will use real SMS verification")
     
     def save(self):
         """Save current configuration to file."""
@@ -228,18 +290,40 @@ class Config:
         if sid:
             return sid
             
-        # Then check config.ini file
+        # Then check config.ini file (with proper path resolution for both dev and built exe)
         try:
             import configparser
-            config_ini_path = Path(__file__).parent.parent / "config.ini"
-            if config_ini_path.exists():
-                config_parser = configparser.ConfigParser()
-                config_parser.read(config_ini_path)
-                if 'twilio' in config_parser and 'account_sid' in config_parser['twilio']:
-                    sid = config_parser['twilio']['account_sid'].strip()
-                    if sid:
-                        logger.info("Found Twilio Account SID in config.ini")
-                        return sid
+            import sys
+            
+            # Check multiple possible locations for config.ini
+            possible_paths = []
+            
+            # For development: relative to this file
+            possible_paths.append(Path(__file__).parent.parent / "config.ini")
+            
+            # For built executable: relative to executable directory
+            if getattr(sys, 'frozen', False):
+                # Running as built executable
+                exe_dir = Path(sys.executable).parent
+                possible_paths.append(exe_dir / "config.ini")
+                possible_paths.append(exe_dir.parent / "config.ini")
+            
+            # Current working directory
+            possible_paths.append(Path.cwd() / "config.ini")
+            
+            # Search for config.ini in all possible locations
+            for config_ini_path in possible_paths:
+                if config_ini_path.exists():
+                    logger.info(f"Found config.ini at: {config_ini_path}")
+                    config_parser = configparser.ConfigParser()
+                    config_parser.read(config_ini_path)
+                    if 'twilio' in config_parser and 'account_sid' in config_parser['twilio']:
+                        sid = config_parser['twilio']['account_sid'].strip()
+                        if sid:
+                            logger.info("Found Twilio Account SID in config.ini")
+                            return sid
+            
+            logger.info("config.ini not found or doesn't contain Twilio Account SID")
         except Exception as e:
             logger.warning(f"Error reading config.ini for Twilio Account SID: {e}")
             
@@ -257,18 +341,37 @@ class Config:
         if token:
             return token
             
-        # Then check config.ini file
+        # Then check config.ini file (with proper path resolution for both dev and built exe)
         try:
             import configparser
-            config_ini_path = Path(__file__).parent.parent / "config.ini"
-            if config_ini_path.exists():
-                config_parser = configparser.ConfigParser()
-                config_parser.read(config_ini_path)
-                if 'twilio' in config_parser and 'auth_token' in config_parser['twilio']:
-                    token = config_parser['twilio']['auth_token'].strip()
-                    if token:
-                        logger.info("Found Twilio Auth Token in config.ini")
-                        return token
+            import sys
+            
+            # Check multiple possible locations for config.ini
+            possible_paths = []
+            
+            # For development: relative to this file
+            possible_paths.append(Path(__file__).parent.parent / "config.ini")
+            
+            # For built executable: relative to executable directory
+            if getattr(sys, 'frozen', False):
+                # Running as built executable
+                exe_dir = Path(sys.executable).parent
+                possible_paths.append(exe_dir / "config.ini")
+                possible_paths.append(exe_dir.parent / "config.ini")
+            
+            # Current working directory
+            possible_paths.append(Path.cwd() / "config.ini")
+            
+            # Search for config.ini in all possible locations
+            for config_ini_path in possible_paths:
+                if config_ini_path.exists():
+                    config_parser = configparser.ConfigParser()
+                    config_parser.read(config_ini_path)
+                    if 'twilio' in config_parser and 'auth_token' in config_parser['twilio']:
+                        token = config_parser['twilio']['auth_token'].strip()
+                        if token:
+                            logger.info("Found Twilio Auth Token in config.ini")
+                            return token
         except Exception as e:
             logger.warning(f"Error reading config.ini for Twilio Auth Token: {e}")
             
@@ -286,18 +389,37 @@ class Config:
         if service_sid:
             return service_sid
             
-        # Then check config.ini file
+        # Then check config.ini file (with proper path resolution for both dev and built exe)
         try:
             import configparser
-            config_ini_path = Path(__file__).parent.parent / "config.ini"
-            if config_ini_path.exists():
-                config_parser = configparser.ConfigParser()
-                config_parser.read(config_ini_path)
-                if 'twilio' in config_parser and 'verify_service_sid' in config_parser['twilio']:
-                    service_sid = config_parser['twilio']['verify_service_sid'].strip()
-                    if service_sid:
-                        logger.info("Found Twilio Verify Service SID in config.ini")
-                        return service_sid
+            import sys
+            
+            # Check multiple possible locations for config.ini
+            possible_paths = []
+            
+            # For development: relative to this file
+            possible_paths.append(Path(__file__).parent.parent / "config.ini")
+            
+            # For built executable: relative to executable directory
+            if getattr(sys, 'frozen', False):
+                # Running as built executable
+                exe_dir = Path(sys.executable).parent
+                possible_paths.append(exe_dir / "config.ini")
+                possible_paths.append(exe_dir.parent / "config.ini")
+            
+            # Current working directory
+            possible_paths.append(Path.cwd() / "config.ini")
+            
+            # Search for config.ini in all possible locations
+            for config_ini_path in possible_paths:
+                if config_ini_path.exists():
+                    config_parser = configparser.ConfigParser()
+                    config_parser.read(config_ini_path)
+                    if 'twilio' in config_parser and 'verify_service_sid' in config_parser['twilio']:
+                        service_sid = config_parser['twilio']['verify_service_sid'].strip()
+                        if service_sid:
+                            logger.info("Found Twilio Verify Service SID in config.ini")
+                            return service_sid
         except Exception as e:
             logger.warning(f"Error reading config.ini for Twilio Verify Service SID: {e}")
             

@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+"""
+TrackPro Build System with Enhanced Process Management
+
+This build system includes comprehensive cleanup of TrackPro processes and instance locks
+to prevent "another instance is running" errors. Key features:
+
+- Automatic process termination before building
+- Single instance lock cleanup (mutex + lock files)
+- Multiple process kill methods for stuck processes
+- Lock cleanup after successful builds
+
+Usage:
+  python build.py build              # Full build with cleanup
+  python build.py clean              # Clean build files and processes
+  python build.py kill-processes     # Manual process cleanup
+  python build.py fix-instance-lock  # Fix stuck instance locks only
+  python build.py test               # Build test installer
+"""
 import sys
 import os
 import subprocess
@@ -128,19 +146,19 @@ class InstallerBuilder:
         return signing_successful
 
     def create_installer_script(self):
-        """Create the NSIS installer script using relative paths with backslashes."""
+        """Create a simple, working NSIS installer script."""
         print("\nCreating installer script...")
         
         # Use only relative paths with backslashes for NSIS
-        prereq_dir = "installer_temp\\prerequisites"
-        dist_dir = "installer_temp\\dist"
+        prereq_dir = "installer_temp\\\\prerequisites"
+        dist_dir = "installer_temp\\\\dist"
         
         print(f"Using relative paths in NSIS script:")
         print(f"  Installer temp directory: {prereq_dir}")
         print(f"  Distribution directory: {dist_dir}")
         
         script = r"""
-; Installer script for TrackPro - Fixed version to eliminate black command boxes and hanging
+; TrackPro Installer - SIMPLE & WORKING VERSION
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -149,9 +167,9 @@ class InstallerBuilder:
 Name "TrackPro v{version}"
 OutFile "TrackPro_Setup_v{version}.exe"
 InstallDir "$LOCALAPPDATA\TrackPro"
-RequestExecutionLevel user ; Request user rights (not admin)
+RequestExecutionLevel user
 
-; Define application metadata for Add/Remove Programs
+; Define application metadata
 !define PRODUCT_NAME "TrackPro"
 !define PRODUCT_VERSION "{version}"
 !define PRODUCT_PUBLISHER "TrackPro"
@@ -164,7 +182,7 @@ RequestExecutionLevel user ; Request user rights (not admin)
 !define MUI_ICON "${{NSISDIR}}\Contrib\Graphics\Icons\modern-install.ico"
 !define MUI_UNICON "${{NSISDIR}}\Contrib\Graphics\Icons\modern-uninstall.ico"
 
-; Show installation details for better debugging
+; Show installation details
 ShowInstDetails show
 ShowUnInstDetails show
 
@@ -183,80 +201,53 @@ ShowUnInstDetails show
 !insertmacro MUI_LANGUAGE "English"
 
 Var NEEDS_RESTART
-Var INSTALL_STATUS
 
 Function .onInit
     StrCpy $NEEDS_RESTART "0"
-    StrCpy $INSTALL_STATUS "NORMAL"
     
-    ; Kill any existing TrackPro processes silently (no black boxes)
-    DetailPrint "Checking for running TrackPro processes..."
+    DetailPrint "TrackPro v{version} Installer Starting..."
+    DetailPrint "Installation directory: $INSTDIR"
+    
+    ; Kill any existing TrackPro processes
+    DetailPrint "Terminating existing TrackPro processes..."
     nsExec::ExecToLog 'taskkill /F /IM "TrackPro*.exe" /T 2>nul'
     Pop $0
-    ${{If}} $0 == 0
-        DetailPrint "Terminated existing TrackPro processes"
-    ${{Else}}
-        DetailPrint "No TrackPro processes found"
-    ${{EndIf}}
     
-    ; Clean up previous TrackPro installations
+    ; Clean up previous installations
     Call CleanupPreviousVersions
 FunctionEnd
 
 Function CleanupPreviousVersions
-    DetailPrint "Checking for previous TrackPro installations..."
-    DetailPrint "NOTE: User data (calibrations, settings) will be preserved"
+    DetailPrint "Cleaning up previous TrackPro installations..."
+    DetailPrint "NOTE: User data will be preserved"
     
-    ; Remove all TrackPro executables from Program Files
-    DetailPrint "Removing previous TrackPro executables..."
+    ; Remove old executables from common locations
     Delete "$PROGRAMFILES64\TrackPro\TrackPro*.exe"
-    Delete "$PROGRAMFILES64\TrackPro\TrackPro_v*.exe"
     Delete "$PROGRAMFILES32\TrackPro\TrackPro*.exe"
-    Delete "$PROGRAMFILES32\TrackPro\TrackPro_v*.exe"
+    Delete "$INSTDIR\TrackPro*.exe"
+    Delete "$INSTDIR\TrackPro_v*.exe"
     
-    ; Remove all TrackPro shortcuts
-    DetailPrint "Removing previous TrackPro shortcuts..."
+    ; Remove old shortcuts
     Delete "$SMPROGRAMS\TrackPro\TrackPro*.lnk"
     Delete "$SMPROGRAMS\TrackPro\TrackPro v*.lnk"
     Delete "$DESKTOP\TrackPro*.lnk"
     Delete "$DESKTOP\TrackPro v*.lnk"
     
-    ; Clean up registry entries for all previous versions
-    DetailPrint "Cleaning up previous version registry entries..."
+    ; Remove old directories (ignore errors)
+    RMDir /r "$PROGRAMFILES64\TrackPro"
+    RMDir /r "$PROGRAMFILES32\TrackPro"
     
-    ; Enumerate and remove old TrackPro uninstall entries
-    StrCpy $1 0
-    loop:
-        EnumRegKey $2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall" $1
-        StrCmp $2 "" done
-        
-        ; Check if this is a TrackPro entry
-        ReadRegStr $3 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2" "DisplayName"
-        StrCpy $4 $3 8  ; Get first 8 characters
-        StrCmp $4 "TrackPro" 0 next_key
-        
-        ; This is a TrackPro entry, remove it
-        DetailPrint "Removing registry entry: $3"
-        DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2"
-        Goto loop  ; Start over since we modified the registry
-        
-        next_key:
-        IntOp $1 $1 + 1
-        Goto loop
-    
-    done:
     DetailPrint "Previous version cleanup completed"
 FunctionEnd
 
-; Function to install prerequisites with timeout and error handling
 Function InstallPrerequisiteWithTimeout
     Pop $R0 ; Command to execute
     Pop $R1 ; Description
-    Pop $R2 ; Timeout in seconds
+    Pop $R2 ; Timeout (unused)
     
     DetailPrint "Installing $R1..."
     
-    ; Execute with timeout using nsExec (no black boxes)
+    ; Execute using nsExec
     nsExec::ExecToLog '$R0'
     Pop $R3 ; Exit code
     
@@ -270,144 +261,123 @@ Function InstallPrerequisiteWithTimeout
         DetailPrint "$R1 already installed (up to date)"
     ${{ElseIf}} $R3 == 1638
         DetailPrint "$R1 already installed (newer version)"
-    ${{ElseIf}} $R3 == -1
-        DetailPrint "Warning: $R1 installation timed out or failed"
-        DetailPrint "TrackPro may still work without this component"
     ${{Else}}
         DetailPrint "Warning: $R1 installation failed with exit code: $R3"
         DetailPrint "TrackPro may still work without this component"
     ${{EndIf}}
     
-    Push $R3 ; Return exit code
+    Push $R3
 FunctionEnd
 
 Section "MainInstallation"
-    ; Create temp directories with verification
-    DetailPrint "Setting up installation environment..."
-    CreateDirectory "$TEMP\TrackPro"
-    CreateDirectory "$TEMP\TrackPro\prerequisites"
-    CreateDirectory "$TEMP\TrackPro\app"
+    DetailPrint "Starting TrackPro installation..."
     
-    SetOutPath "$TEMP\TrackPro\prerequisites"
+    ; Create temp directory for prerequisites
+    DetailPrint "Setting up installation environment..."
+    CreateDirectory "$TEMP\TrackPro_Prerequisites"
+    
+    ; Extract prerequisites to temp
+    SetOutPath "$TEMP\TrackPro_Prerequisites"
     DetailPrint "Extracting prerequisites..."
     
-    ; Extract prerequisite installers using relative paths
     File "installer_temp\prerequisites\vJoySetup.exe"
     File "installer_temp\prerequisites\HidHide_1.2.98_x64.exe"
     File "installer_temp\prerequisites\vc_redist.x64.exe"
     
-    ; Extract main executable to temp location
-    SetOutPath "$TEMP\TrackPro\app"
-    DetailPrint "Extracting main application..."
-    
-    ; Extract main executable using relative path
-    File "installer_temp\dist\TrackPro_v{version}.exe"
-    
-    ; Verify the file was extracted correctly
-    ${{IfNot}} ${{FileExists}} "$TEMP\TrackPro\app\TrackPro_v{version}.exe"
-        MessageBox MB_OK|MB_ICONSTOP "Failed to extract TrackPro_v{version}.exe to temporary directory!"
-        Abort "Installation failed: Could not extract TrackPro_v{version}.exe"
-    ${{EndIf}}
-    
-    ; Create program directory with verification
+    ; Create installation directory
     DetailPrint "Creating installation directory: $INSTDIR"
     CreateDirectory "$INSTDIR"
     
-    ; Check if directory was created successfully
+    ; Verify directory was created
     ${{IfNot}} ${{FileExists}} "$INSTDIR"
-        MessageBox MB_OK|MB_ICONSTOP "Failed to create installation directory!"
-        Abort "Installation failed: Could not create installation directory"
+        MessageBox MB_OK|MB_ICONSTOP "Cannot create installation directory: $INSTDIR"
+        Abort "Installation failed: Cannot create target directory"
     ${{EndIf}}
     
-    ; Set working directory to installation directory
+    ; Simple write test
+    ClearErrors
+    FileOpen $0 "$INSTDIR\test_write.tmp" w
+    ${{If}} ${{Errors}}
+        MessageBox MB_OK|MB_ICONSTOP "Cannot write to installation directory: $INSTDIR$\n$\nPlease choose a different directory or run as administrator."
+        Abort "Installation failed: Cannot write to target directory"
+    ${{EndIf}}
+    FileClose $0
+    Delete "$INSTDIR\test_write.tmp"
+    
+    ; Install main executable - SIMPLE DIRECT APPROACH
     SetOutPath "$INSTDIR"
+    DetailPrint "Installing TrackPro v{version}..."
     
-    ; Install TrackPro with explicit verification and better error handling
-    DetailPrint "Installing TrackPro application..."
-    
-    ; Check if destination file already exists and try to remove it
+    ; Remove existing file if present
     ${{If}} ${{FileExists}} "$INSTDIR\TrackPro_v{version}.exe"
-        DetailPrint "Removing existing installation file..."
+        DetailPrint "Removing existing installation..."
         Delete "$INSTDIR\TrackPro_v{version}.exe"
     ${{EndIf}}
     
-    ; Clear any previous errors and copy the file
-    ClearErrors
-    CopyFiles /SILENT "$TEMP\TrackPro\app\TrackPro_v{version}.exe" "$INSTDIR"
+    ; Extract the executable directly
+    File "installer_temp\dist\TrackPro_v{version}.exe"
     
-    ; Check for copy errors
-    ${{If}} ${{Errors}}
-        MessageBox MB_OK|MB_ICONSTOP "Failed to copy TrackPro_v{version}.exe to installation directory!"
-        Abort "Installation failed: Could not copy TrackPro_v{version}.exe"
-    ${{EndIf}}
-    
-    ; Verify TrackPro.exe exists in the destination
+    ; Verify installation
     ${{IfNot}} ${{FileExists}} "$INSTDIR\TrackPro_v{version}.exe"
-        MessageBox MB_OK|MB_ICONSTOP "Failed to verify TrackPro_v{version}.exe in installation directory!"
-        Abort "Installation failed: Could not verify TrackPro_v{version}.exe"
+        MessageBox MB_OK|MB_ICONSTOP "Failed to install TrackPro executable!$\n$\nThis may be due to antivirus software blocking the installation."
+        Abort "Installation failed"
     ${{EndIf}}
-        
-    ; Create shortcuts with verification
+    
+    DetailPrint "TrackPro executable installed successfully!"
+    
+    ; Create shortcuts
     DetailPrint "Creating shortcuts..."
     CreateDirectory "$SMPROGRAMS\TrackPro"
     CreateShortCut "$SMPROGRAMS\TrackPro\TrackPro v{version}.lnk" "$INSTDIR\TrackPro_v{version}.exe"
     CreateShortCut "$DESKTOP\TrackPro v{version}.lnk" "$INSTDIR\TrackPro_v{version}.exe"
     
-    DetailPrint "TrackPro application installation complete"
-
-    ; Install Visual C++ Redistributable (no black boxes)
-    Push '"$TEMP\TrackPro\prerequisites\vc_redist.x64.exe" /quiet /norestart'
+    ; Install prerequisites
+    DetailPrint "Installing prerequisites..."
+    
+    ; Visual C++ Redistributable
+    Push '"$TEMP\TrackPro_Prerequisites\vc_redist.x64.exe" /quiet /norestart'
     Push "Visual C++ Redistributable"
     Push "60"
     Call InstallPrerequisiteWithTimeout
     Pop $2
 
-    ; Install HidHide (no black boxes) 
-    Push '"$TEMP\TrackPro\prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart'
+    ; HidHide
+    Push '"$TEMP\TrackPro_Prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart'
     Push "HidHide"
     Push "60"
     Call InstallPrerequisiteWithTimeout
     Pop $1
 
-    ; Check if vJoy is already installed before attempting installation
+    ; vJoy (check if already installed first)
     DetailPrint "Checking for existing vJoy installation..."
     
-    ; Check registry for vJoy
     ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{8E31F76F-74C3-47F1-9550-E041EEDC5FBB}}_is1" "DisplayName"
     ${{If}} $R0 != ""
         DetailPrint "Found existing vJoy installation: $R0"
-        DetailPrint "Skipping vJoy installation to prevent conflicts"
+        DetailPrint "Skipping vJoy installation"
         Goto vjoy_done
     ${{EndIf}}
     
-    ; Check for vJoy files in common locations
     ${{If}} ${{FileExists}} "$PROGRAMFILES64\vJoy\x64\vJoyInterface.dll"
-        DetailPrint "Found existing vJoy files in Program Files"
-        DetailPrint "Skipping vJoy installation to prevent conflicts"
-        Goto vjoy_done
-    ${{EndIf}}
-    
-    ${{If}} ${{FileExists}} "$PROGRAMFILES32\vJoy\x86\vJoyInterface.dll"
-        DetailPrint "Found existing vJoy files in Program Files (x86)"
-        DetailPrint "Skipping vJoy installation to prevent conflicts"
+        DetailPrint "Found existing vJoy files"
+        DetailPrint "Skipping vJoy installation"
         Goto vjoy_done
     ${{EndIf}}
 
-    ; Install vJoy with better error handling (no black boxes)
-    Push '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART'
+    ; Install vJoy
+    Push '"$TEMP\TrackPro_Prerequisites\vJoySetup.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART'
     Push "vJoy Virtual Joystick"
     Push "120"
     Call InstallPrerequisiteWithTimeout
     Pop $0
     
-    ; If silent installation failed, try alternative method
     ${{If}} $0 != 0
     ${{AndIf}} $0 != 3010
     ${{AndIf}} $0 != 1618
     ${{AndIf}} $0 != 1638
-        DetailPrint "Trying alternative vJoy installation method..."
-        Push '"$TEMP\TrackPro\prerequisites\vJoySetup.exe" /S'
-        Push "vJoy Virtual Joystick (Alternative Method)"
+        DetailPrint "Trying alternative vJoy installation..."
+        Push '"$TEMP\TrackPro_Prerequisites\vJoySetup.exe" /S'
+        Push "vJoy Virtual Joystick (Alternative)"
         Push "120"
         Call InstallPrerequisiteWithTimeout
         Pop $0
@@ -416,23 +386,22 @@ Section "MainInstallation"
         ${{AndIf}} $0 != 3010
         ${{AndIf}} $0 != 1618
         ${{AndIf}} $0 != 1638
-            DetailPrint "vJoy installation failed with both methods"
-            MessageBox MB_OK|MB_ICONINFORMATION "vJoy installation failed. TrackPro will work in test mode without virtual joystick support."
+            DetailPrint "vJoy installation failed"
+            MessageBox MB_OK|MB_ICONINFORMATION "vJoy installation failed. TrackPro will work without virtual joystick support."
         ${{EndIf}}
     ${{EndIf}}
     
     vjoy_done:
-    DetailPrint "Prerequisites installation phase completed"
-
-    ; Clean up temp files AFTER all installations are complete
+    
+    ; Clean up temp files
     DetailPrint "Cleaning up temporary files..."
     SetOutPath "$TEMP"
-    RMDir /r "$TEMP\TrackPro"
+    RMDir /r "$TEMP\TrackPro_Prerequisites"
 
     ; Create uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
     
-    ; Register application for Add/Remove Programs
+    ; Register application
     WriteRegStr HKLM "${{PRODUCT_DIR_REGKEY}}" "" "$INSTDIR\TrackPro_v{version}.exe"
     WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "DisplayName" "$(^Name)"
     WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "UninstallString" "$INSTDIR\uninstall.exe"
@@ -441,91 +410,69 @@ Section "MainInstallation"
     WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "URLInfoAbout" "${{PRODUCT_WEB_SITE}}"
     WriteRegStr ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "Publisher" "${{PRODUCT_PUBLISHER}}"
     
-    ; Write size information for Add/Remove Programs
+    ; Calculate and write size
     ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
     IntFmt $0 "0x%08X" $0
     WriteRegDWORD ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}" "EstimatedSize" "$0"
 
-    ; Show installation completion message
     DetailPrint "Installation completed successfully!"
     
-    ; Check if we need to restart
     ${{If}} $NEEDS_RESTART == "1"
-        MessageBox MB_YESNO|MB_ICONQUESTION "A system restart is required to complete the installation. Would you like to restart now?" IDNO +2
+        MessageBox MB_YESNO|MB_ICONQUESTION "A system restart is required for some components.$\n$\nRestart now?" IDNO +2
             Reboot
     ${{EndIf}}
+    
+    ; Final success message
+    MessageBox MB_OK|MB_ICONINFORMATION "TrackPro v{version} has been installed successfully!$\n$\nInstalled to: $INSTDIR$\n$\nYou can now launch TrackPro from the Start Menu or Desktop shortcut."
 SectionEnd
 
 Section "Uninstall"
-    ; Terminate any running TrackPro processes first (no black boxes)
-    DetailPrint "Checking for running TrackPro processes..."
+    DetailPrint "Uninstalling TrackPro..."
+    
+    ; Terminate running processes
     nsExec::ExecToLog 'taskkill /F /IM "TrackPro*.exe" /T 2>nul'
     Pop $0
-    ${{If}} $0 == 0
-        DetailPrint "Terminated running TrackPro processes"
-    ${{Else}}
-        DetailPrint "No TrackPro processes found"
-    ${{EndIf}}
     
-    ; Remove ALL TrackPro application files (not just current version)
-    DetailPrint "Removing all TrackPro application files..."
+    ; Remove files
     Delete "$INSTDIR\uninstall.exe"
     Delete "$INSTDIR\TrackPro*.exe"
     Delete "$INSTDIR\TrackPro_v*.exe"
     
-    ; NOTE: We deliberately DO NOT remove user data directories like:
-    ; - $LOCALAPPDATA\TrackPro (contains user calibrations, settings, etc.)
-    ; - $APPDATA\TrackPro (contains user configuration files)
-    ; This preserves user's calibrations and settings across updates
-    
-    ; Remove ALL TrackPro shortcuts and directories
-    DetailPrint "Removing all TrackPro shortcuts..."
+    ; Remove shortcuts
     Delete "$SMPROGRAMS\TrackPro\TrackPro*.lnk"
     Delete "$SMPROGRAMS\TrackPro\TrackPro v*.lnk"
     Delete "$DESKTOP\TrackPro*.lnk"
     Delete "$DESKTOP\TrackPro v*.lnk"
     RMDir "$SMPROGRAMS\TrackPro"
     
-    ; Remove installation directory and all contents
+    ; Remove directory
     RMDir /r "$INSTDIR"
     
-    ; Clean up ALL TrackPro registry entries (not just current version)
-    DetailPrint "Cleaning up all TrackPro registry entries..."
-    
-    ; Remove current version registry entries
+    ; Remove registry entries
     DeleteRegKey ${{PRODUCT_UNINST_ROOT_KEY}} "${{PRODUCT_UNINST_KEY}}"
     DeleteRegKey HKLM "${{PRODUCT_DIR_REGKEY}}"
     
-    ; Enumerate and remove any remaining TrackPro uninstall entries
+    ; Clean up any remaining TrackPro registry entries
     StrCpy $1 0
-    uninstall_loop:
+    cleanup_loop:
         EnumRegKey $2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall" $1
-        StrCmp $2 "" uninstall_done
+        StrCmp $2 "" cleanup_done
         
-        ; Check if this is a TrackPro entry
         ReadRegStr $3 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2" "DisplayName"
-        StrCpy $4 $3 8  ; Get first 8 characters
-        StrCmp $4 "TrackPro" 0 uninstall_next_key
+        StrCpy $4 $3 8
+        StrCmp $4 "TrackPro" 0 cleanup_next
         
-        ; This is a TrackPro entry, remove it
-        DetailPrint "Removing registry entry: $3"
         DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$2"
-        Goto uninstall_loop  ; Start over since we modified the registry
+        Goto cleanup_loop
         
-        uninstall_next_key:
+        cleanup_next:
         IntOp $1 $1 + 1
-        Goto uninstall_loop
+        Goto cleanup_loop
     
-    uninstall_done:
+    cleanup_done:
     
-    ; Clean up App Paths registry entries
-    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\TrackPro.exe"
-    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\TrackPro_v{version}.exe"
-    
-    ; Display a confirmation message
-    MessageBox MB_ICONINFORMATION|MB_OK "All TrackPro versions have been successfully uninstalled from your computer."
-    
-    DetailPrint "Complete uninstallation finished"
+    MessageBox MB_ICONINFORMATION|MB_OK "TrackPro has been successfully uninstalled."
+    DetailPrint "Uninstallation completed"
 SectionEnd
 """
         # Format the script with the version
@@ -533,7 +480,11 @@ SectionEnd
             formatted_script = script.format(version=self.version)
             with open("installer.nsi", "w", encoding="utf-8") as f:
                 f.write(formatted_script)
-            print("✓ Created NSIS installer script with relative paths")
+            print("✓ Created SIMPLE & WORKING NSIS installer script")
+            print("  - Removed complex retry mechanism")
+            print("  - Fixed NSIS syntax errors")
+            print("  - Direct file extraction")
+            print("  - Simple error handling")
         except Exception as e:
             print(f"Error creating NSIS script: {str(e)}")
             raise
@@ -904,27 +855,11 @@ SectionEnd
             raise Exception(f"Cannot write to current directory: {e}")
         
         # Kill any running TrackPro processes that might lock files
-        print("Checking for running TrackPro processes...")
-        try:
-            # Kill TrackPro processes
-            CREATE_NO_WINDOW = 0x08000000
-            result = subprocess.run(['taskkill', '/F', '/IM', 'TrackPro*.exe'], 
-                                  capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
-            if result.returncode == 0:
-                print("✓ Terminated running TrackPro processes")
-            else:
-                print("✓ No running TrackPro processes found")
-            
-            # Also check for installer processes
-            installer_result = subprocess.run(['taskkill', '/F', '/IM', f'TrackPro_Setup_v{self.version}.exe'], 
-                                            capture_output=True, text=True, check=False, creationflags=CREATE_NO_WINDOW)
-            if installer_result.returncode == 0:
-                print("✓ Terminated running installer process")
-                
-        except Exception as e:
-            print(f"Warning: Could not check for running processes: {e}")
+        print("Comprehensive process and lock cleanup...")
+        self.kill_stuck_processes()
+        self.cleanup_single_instance_locks()
         
-        # Wait a moment for processes to fully terminate
+        # Additional wait for processes to fully terminate
         time.sleep(2)
         
         try:
@@ -1081,9 +1016,14 @@ SectionEnd
         # Sign the installer
         self.sign_files([installer_path])
         
+        # Final cleanup of any remaining locks or processes
+        print("\nPerforming final cleanup...")
+        self.cleanup_single_instance_locks()
+        
         print(f"\n✓ Build process completed!")
         print(f"✓ Signed installer available at: {os.path.abspath(installer_path)}")
         print(f"✓ Installer is ready for distribution")
+        print(f"✓ All processes and locks cleaned up")
 
     def clean_build(self):
         """Clean up build files and processes."""
@@ -1091,6 +1031,9 @@ SectionEnd
         
         # Kill any stuck installer processes first
         self.kill_stuck_processes()
+        
+        # Clean up TrackPro single instance locks
+        self.cleanup_single_instance_locks()
         
         # Clean up build directories
         dirs_to_clean = [self.temp_dir, self.dist_dir, "build"]
@@ -1116,44 +1059,247 @@ SectionEnd
         print("✓ Build environment cleaned")
     
     def kill_stuck_processes(self):
-        """Kill any stuck TrackPro installer or setup processes."""
-        print("\n=== Killing Stuck Processes ===")
+        """Kill any stuck TrackPro processes more aggressively."""
+        import subprocess
+        import time
         
+        print("=== Enhanced Process Cleanup ===")
+        
+        # First try to find any TrackPro processes
         try:
-            # Use PowerShell to find and kill stuck processes
-            cmd = '''
-            $processes = Get-Process | Where-Object {
-                $_.ProcessName -like "*TrackPro*" -or 
-                $_.ProcessName -like "*Setup*" -or 
-                $_.ProcessName -like "*install*"
-            }
-            
-            if ($processes) {
-                $processes | ForEach-Object {
-                    Write-Host "Killing process: $($_.ProcessName) (PID: $($_.Id))"
-                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                }
-            } else {
-                Write-Host "No stuck processes found"
-            }
-            '''
-            
-            CREATE_NO_WINDOW = 0x08000000
             result = subprocess.run([
-                "powershell", "-Command", cmd
-            ], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+                'powershell', '-Command', 
+                "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Select-Object ProcessName, Id"
+            ], capture_output=True, text=True, timeout=10)
             
             if result.stdout.strip():
-                print(result.stdout.strip())
-            if result.stderr.strip():
-                print(f"Warning: {result.stderr.strip()}")
-                
-        except subprocess.TimeoutExpired:
-            print("⚠️  Process cleanup timed out")
+                print("Found TrackPro processes:")
+                print(result.stdout)
+            else:
+                print("✓ No TrackPro processes found")
+                return
         except Exception as e:
-            print(f"⚠️  Error during process cleanup: {e}")
+            print(f"Could not check for processes: {e}")
         
-        print("✓ Process cleanup completed")
+        # Try multiple methods to kill stuck processes
+        kill_methods = [
+            # Method 1: Regular taskkill for current version
+            ['taskkill', '/F', '/IM', f'TrackPro_v{self.version}.exe'],
+            # Method 2: Regular taskkill for generic
+            ['taskkill', '/F', '/IM', 'TrackPro.exe'],
+            # Method 3: Kill installer processes
+            ['taskkill', '/F', '/IM', f'TrackPro_Setup_v{self.version}.exe'],
+            # Method 4: Kill by window title
+            ['taskkill', '/F', '/FI', 'WINDOWTITLE eq TrackPro*'],
+            # Method 5: PowerShell force kill TrackPro processes
+            ['powershell', '-Command', 
+             "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Stop-Process -Force"],
+            # Method 6: Kill Python processes running TrackPro
+            ['powershell', '-Command', 
+             "Get-Process python*, pythonw* | Where-Object {$_.CommandLine -like '*trackpro*' -or $_.CommandLine -like '*run_app*'} | Stop-Process -Force"],
+        ]
+        
+        for i, method in enumerate(kill_methods, 1):
+            try:
+                print(f"Trying kill method {i}: {' '.join(method[:3])}")
+                result = subprocess.run(method, capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    print(f"✓ Kill method {i} successful")
+                else:
+                    print(f"✗ Kill method {i} failed: {result.stderr.strip()}")
+            except Exception as e:
+                print(f"✗ Kill method {i} error: {e}")
+        
+        # Give processes time to terminate
+        time.sleep(2)
+        
+        # Final check
+        try:
+            result = subprocess.run([
+                'powershell', '-Command', 
+                "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Measure-Object | Select-Object Count"
+            ], capture_output=True, text=True, timeout=10)
+            if "0" in result.stdout:
+                print("✓ All TrackPro processes terminated")
+                
+                # Clean up locks after successful process termination
+                print("Cleaning up remaining locks after process termination...")
+                self.cleanup_single_instance_locks()
+            else:
+                print("⚠ Some TrackPro processes may still be running")
+                print("💡 If installation fails, restart your computer to clear stuck processes")
+        except Exception as e:
+            print(f"Could not verify process cleanup: {e}")
+
+    def cleanup_single_instance_locks(self):
+        """Clean up TrackPro single instance locks and mutexes with enhanced diagnostics."""
+        print("=== Enhanced Single Instance Lock Cleanup ===")
+        
+        try:
+            import tempfile
+            import psutil
+            
+            # First, check if any TrackPro processes are actually running
+            running_trackpro_pids = []
+            try:
+                for process in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                    try:
+                        process_info = process.info
+                        if not process_info['cmdline']:
+                            continue
+                        
+                        # Check for TrackPro processes
+                        is_trackpro = False
+                        
+                        # Check for TrackPro executable
+                        if any('trackpro' in str(cmd).lower() for cmd in process_info['cmdline']):
+                            is_trackpro = True
+                        
+                        # Check for Python processes running TrackPro
+                        if (process_info['name'] in ['python.exe', 'pythonw.exe'] and 
+                            any('trackpro' in str(cmd).lower() or 'run_app.py' in str(cmd).lower() 
+                                for cmd in process_info['cmdline'])):
+                            is_trackpro = True
+                        
+                        if is_trackpro:
+                            running_trackpro_pids.append({
+                                'pid': process_info['pid'],
+                                'name': process_info['name'],
+                                'cmdline': ' '.join(process_info['cmdline'][:3]),  # First 3 args
+                                'age': time.time() - process_info['create_time']
+                            })
+                            
+                    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                        continue
+            except Exception as e:
+                print(f"Warning: Could not scan for TrackPro processes: {e}")
+            
+            if running_trackpro_pids:
+                print("⚠️  Found running TrackPro processes:")
+                for proc in running_trackpro_pids:
+                    print(f"   PID {proc['pid']}: {proc['name']} (age: {proc['age']:.1f}s)")
+                    print(f"      Command: {proc['cmdline']}")
+                print("   These processes should be terminated before cleanup.")
+            else:
+                print("✓ No running TrackPro processes detected")
+            
+            # Clean up lock file with enhanced diagnostics
+            lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
+            if os.path.exists(lock_file):
+                try:
+                    # Get file info
+                    file_stat = os.stat(lock_file)
+                    file_age = time.time() - file_stat.st_mtime
+                    print(f"Found lock file (age: {file_age:.1f}s, size: {file_stat.st_size} bytes)")
+                    
+                    # Try to read the lock file to see what process created it
+                    try:
+                        with open(lock_file, 'r') as f:
+                            import json
+                            lock_data = json.load(f)
+                            lock_pid = lock_data.get('pid', 'unknown')
+                            lock_timestamp = lock_data.get('timestamp', 0)
+                            if lock_timestamp:
+                                lock_age = time.time() - lock_timestamp
+                                print(f"   Created by PID {lock_pid} ({lock_age:.1f}s ago)")
+                            else:
+                                print(f"   Created by PID {lock_pid}")
+                            
+                            # Check if the PID is still running
+                            if isinstance(lock_pid, int):
+                                try:
+                                    process = psutil.Process(lock_pid)
+                                    print(f"   ⚠️  Lock PID {lock_pid} is still running: {process.name()}")
+                                except psutil.NoSuchProcess:
+                                    print(f"   ✓ Lock PID {lock_pid} is no longer running (stale lock)")
+                                except Exception as e:
+                                    print(f"   ? Could not check PID {lock_pid}: {e}")
+                    except (json.JSONDecodeError, KeyError):
+                        print("   Lock file format is unreadable")
+                    except Exception as e:
+                        print(f"   Could not read lock file: {e}")
+                
+                    # Remove the lock file
+                    try:
+                        os.remove(lock_file)
+                        print("✓ Removed TrackPro lock file")
+                    except PermissionError:
+                        print("✗ Permission denied removing lock file (file may be in use)")
+                        # Try to force remove with different method
+                        try:
+                            import stat
+                            os.chmod(lock_file, stat.S_IWRITE)
+                            os.remove(lock_file)
+                            print("✓ Force removed TrackPro lock file")
+                        except Exception as e2:
+                            print(f"✗ Could not force remove lock file: {e2}")
+                    except Exception as e:
+                        print(f"✗ Could not remove lock file: {e}")
+                        
+                except Exception as e:
+                    print(f"Error processing lock file: {e}")
+            else:
+                print("✓ No TrackPro lock file found")
+            
+            # Try to clean up Windows mutex with enhanced diagnostics
+            try:
+                import win32event
+                import win32api
+                import winerror
+                import win32con
+                
+                mutex_name = "TrackProSingleInstanceMutex"
+                print(f"Checking Windows mutex: {mutex_name}")
+                
+                # Try to open the existing mutex
+                try:
+                    mutex = win32event.OpenMutex(win32con.MUTEX_ALL_ACCESS, False, mutex_name)
+                    if mutex:
+                        print("   Found existing mutex - attempting cleanup")
+                        # Try to release it multiple times to clear any stuck ownership
+                        release_count = 0
+                        for i in range(5):  # Try up to 5 times
+                            try:
+                                win32event.ReleaseMutex(mutex)
+                                release_count += 1
+                                print(f"   ✓ Released mutex (attempt {i+1})")
+                            except Exception as e:
+                                if "not owned" in str(e).lower():
+                                    print(f"   ✓ Mutex released after {release_count} attempts")
+                                    break
+                                else:
+                                    print(f"   Error releasing mutex: {e}")
+                                    break
+                        
+                        win32api.CloseHandle(mutex)
+                        print("✓ Closed mutex handle")
+                    else:
+                        print("✓ No mutex found")
+                except Exception as e:
+                    if "not found" in str(e).lower() or "does not exist" in str(e).lower():
+                        print("✓ No mutex found to clean up")
+                    else:
+                        print(f"⚠️  Error accessing mutex: {e}")
+                        
+            except ImportError:
+                print("⚠️  win32 modules not available - skipping mutex cleanup")
+                print("   Install pywin32 for complete lock cleanup: pip install pywin32")
+            except Exception as e:
+                print(f"⚠️  Error during mutex cleanup: {e}")
+                
+        except Exception as e:
+            print(f"Error during single instance cleanup: {e}")
+        
+        print("✓ Enhanced single instance lock cleanup completed")
+        
+        # Provide user guidance based on what we found
+        if 'running_trackpro_pids' in locals() and running_trackpro_pids:
+            print("\n💡 User Action Required:")
+            print("   Some TrackPro processes are still running.")
+            print("   Please close all TrackPro windows and try again.")
+            print("   If processes are stuck, use Task Manager to end them.")
+        else:
+            print("\n✓ System appears clean for TrackPro startup")
 
     def create_manifest(self):
         """Create a manifest file to request admin privileges."""
@@ -1192,90 +1338,7 @@ SectionEnd
         print(f"✓ Created manifest file at: {manifest_path}")
         return manifest_path
 
-    def collect_race_coach_modules(self):
-        """Collect all Race Coach modules and their dependencies."""
-        print("\nCollecting Race Coach modules and dependencies...")
-        
-        modules = []
-        data_files = []
-        
-        # Add Race Coach modules and submodules
-        race_coach_modules = [
-            "trackpro.race_coach",
-            "trackpro.race_coach.ui",
-            "trackpro.race_coach.model",
-            "trackpro.race_coach.data_manager",
-            "trackpro.race_coach.iracing_api",
-        # Add Race Coach modules and submodules
-        ]
-        
-        # Add numpy and its submodules - expanded list to ensure all parts are included
-        numpy_modules = [
-            "numpy",
-            "numpy.core",
-            "numpy.core.multiarray",
-            "numpy.core.numeric",
-            "numpy.core.umath",
-            "numpy.lib",
-            "numpy.linalg",
-            "numpy.fft",
-            "numpy.polynomial",
-            "numpy.random",
-            "numpy.distutils",
-            "numpy.ma"
-        ]
-        
-        # Add PyQtWebEngine modules
-        pyqt_web_modules = [
-            "PyQt6.QtWebEngineWidgets",
-            "PyQt6.QtWebEngine",
-            "PyQt6.QtWebEngineCore",
-            "PyQtWebEngine"
-        ]
-        
-        # Additional dependencies that might be required
-        additional_modules = [
-            "sqlite3",
-            "matplotlib.backends.backend_qt5agg",
-            "matplotlib",
-            "matplotlib.pyplot"
-        ]
-        
-        all_modules = race_coach_modules + numpy_modules + pyqt_web_modules + additional_modules
-        
-        for module in all_modules:
-            modules.append(f"--hidden-import={module}")
-            
-        # Add numpy as a direct copy to ensure all necessary files are included
-        try:
-            import numpy
-            numpy_path = os.path.dirname(numpy.__file__)
-            print(f"Adding numpy from path: {numpy_path}")
-            data_files.append(f"--add-data={numpy_path};numpy")
-            
-            # Try to import matplotlib and add it if available
-            try:
-                import matplotlib
-                matplotlib_path = os.path.dirname(matplotlib.__file__)
-                print(f"Adding matplotlib from path: {matplotlib_path}")
-                data_files.append(f"--add-data={matplotlib_path};matplotlib")
-            except ImportError:
-                print("! Warning: matplotlib not available. Some Race Coach features may not work properly.")
-            
-        except ImportError:
-            print("! Warning: numpy not available during build. Race Coach may not work properly.")
-            print("! Please ensure numpy is installed with: pip install numpy")
-        
-        # Add race_coach.db explicitly
-        if os.path.exists("race_coach.db"):
-            print("Adding race_coach.db to the package")
-            data_files.append("--add-data=race_coach.db;.")
-        else:
-            print("! Warning: race_coach.db not found in workspace")
-        
-        print(f"✓ Added {len(modules)} Race Coach related modules to PyInstaller imports")
-        print(f"✓ Added {len(data_files)} data file specifications")
-        return modules, data_files
+
         
     def build_exe(self):
         """Build the executable using PyInstaller."""
@@ -1476,47 +1539,66 @@ SectionEnd
         
         return True
 
+    @staticmethod
     def manual_process_cleanup():
         """Utility function to manually clean up stuck processes."""
         print("=== Manual Process Cleanup ===")
         
+        # Create a builder instance to access cleanup methods
+        builder = InstallerBuilder()
+        
         try:
-            # Check for stuck processes
-            cmd = '''
-            $processes = Get-Process | Where-Object {
-                $_.ProcessName -like "*TrackPro*" -or 
-                $_.ProcessName -like "*Setup*" -or 
-                $_.ProcessName -like "*install*"
-            }
+            # Use the enhanced cleanup methods
+            builder.kill_stuck_processes()
+            builder.cleanup_single_instance_locks()
             
-            if ($processes) {
-                Write-Host "Found stuck processes:"
-                $processes | ForEach-Object {
-                    Write-Host "  - $($_.ProcessName) (PID: $($_.Id), CPU: $($_.CPU)s)"
-                }
-                
-                $response = Read-Host "Kill these processes? (y/n)"
-                if ($response -eq "y" -or $response -eq "Y") {
-                    $processes | ForEach-Object {
-                        Write-Host "Killing: $($_.ProcessName) (PID: $($_.Id))"
-                        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                    }
-                    Write-Host "Processes killed."
-                } else {
-                    Write-Host "No processes killed."
-                }
-            } else {
-                Write-Host "No stuck processes found."
-            }
-            '''
-            
-            CREATE_NO_WINDOW = 0x08000000
-            subprocess.run([
-                "powershell", "-Command", cmd
-            ], timeout=60, creationflags=CREATE_NO_WINDOW)
+            print("\n✓ Enhanced cleanup completed")
+            print("💡 If you still get 'another instance running' errors:")
+            print("   1. Restart your computer")
+            print("   2. Run TrackPro with --force flag: python run_app.py --force")
+            print("   3. Use the kill_trackpro_processes.py script")
             
         except Exception as e:
             print(f"Error during manual cleanup: {e}")
+            
+            # Fallback to original PowerShell method
+            try:
+                # Check for stuck processes
+                cmd = '''
+                $processes = Get-Process | Where-Object {
+                    $_.ProcessName -like "*TrackPro*" -or 
+                    $_.ProcessName -like "*Setup*" -or 
+                    $_.ProcessName -like "*install*"
+                }
+                
+                if ($processes) {
+                    Write-Host "Found stuck processes:"
+                    $processes | ForEach-Object {
+                        Write-Host "  - $($_.ProcessName) (PID: $($_.Id), CPU: $($_.CPU)s)"
+                    }
+                    
+                    $response = Read-Host "Kill these processes? (y/n)"
+                    if ($response -eq "y" -or $response -eq "Y") {
+                        $processes | ForEach-Object {
+                            Write-Host "Killing: $($_.ProcessName) (PID: $($_.Id))"
+                            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                        }
+                        Write-Host "Processes killed."
+                    } else {
+                        Write-Host "No processes killed."
+                    }
+                } else {
+                    Write-Host "No stuck processes found."
+                }
+                '''
+                
+                CREATE_NO_WINDOW = 0x08000000
+                subprocess.run([
+                    "powershell", "-Command", cmd
+                ], timeout=60, creationflags=CREATE_NO_WINDOW)
+                
+            except Exception as e2:
+                print(f"Error during fallback cleanup: {e2}")
 
 
 if __name__ == "__main__":
@@ -1524,7 +1606,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='TrackPro Build System')
     parser.add_argument('action', nargs='?', default='build', 
-                       choices=['build', 'clean', 'kill-processes', 'test'],
+                       choices=['build', 'clean', 'kill-processes', 'test', 'fix-instance-lock'],
                        help='Action to perform')
     parser.add_argument('--sign', action='store_true', 
                        help='Enable code signing')
@@ -1535,6 +1617,13 @@ if __name__ == "__main__":
     
     if args.action == 'kill-processes':
         InstallerBuilder.manual_process_cleanup()
+        sys.exit(0)
+    elif args.action == 'fix-instance-lock':
+        print("=== TrackPro Instance Lock Fix ===")
+        builder = InstallerBuilder()
+        builder.cleanup_single_instance_locks()
+        print("✓ Lock cleanup completed")
+        print("You can now try running TrackPro again")
         sys.exit(0)
     
     builder = InstallerBuilder()

@@ -12,6 +12,18 @@ from PyQt6 import QtWebEngineWidgets
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
+# CRITICAL: Silence noisy libraries IMMEDIATELY before any other imports
+# This prevents massive log spam from matplotlib, HTTP libraries, etc.
+import logging
+logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.pyplot').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.backends').setLevel(logging.WARNING)
+
+# Silence other noisy libraries
+for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager', 'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 'supafunc']:
+    logging.getLogger(library).setLevel(logging.CRITICAL)
+
 # CRITICAL: Set Qt attributes BEFORE any QApplication instance can be created
 # This is required for QtWebEngine to work properly in PyQt6
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
@@ -47,9 +59,7 @@ elif is_frozen:
     print("Running from packaged executable - Python version switching disabled.")
     print("Eye tracking will use the packaged Python environment.")
 
-# Set higher logging level for noisy HTTP and Supabase libraries
-for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager', 'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 'supafunc']:
-    logging.getLogger(library).setLevel(logging.CRITICAL)
+# Set higher logging level for noisy HTTP and Supabase libraries (moved to top of file)
 
 # Disable any startup version dialogs or build information popups
 os.environ['TRACKPRO_DISABLE_VERSION_DIALOG'] = '1'
@@ -301,13 +311,25 @@ def check_environment():
         
         # List key files in trackpro directory
         try:
-            key_files = ['__init__.py', 'main.py', 'ui.py']
+            key_files = ['__init__.py', 'main.py']
             for file in key_files:
                 file_path = os.path.join(trackpro_dir, file)
                 if os.path.exists(file_path):
                     logger.info(f"  ✓ {file} found")
                 else:
                     logger.error(f"  ✗ {file} missing")
+            
+            # Check for ui module - can be either ui.py or ui/ directory with __init__.py
+            ui_file_path = os.path.join(trackpro_dir, "ui.py")
+            ui_dir_path = os.path.join(trackpro_dir, "ui", "__init__.py")
+            
+            if os.path.exists(ui_file_path):
+                logger.info(f"  ✓ ui.py found")
+            elif os.path.exists(ui_dir_path):
+                logger.info(f"  ✓ ui module found (ui/__init__.py)")
+            else:
+                logger.error(f"  ✗ ui module missing (neither ui.py nor ui/__init__.py found)")
+                
         except Exception as e:
             logger.error(f"Error checking trackpro files: {e}")
     else:
@@ -332,7 +354,7 @@ def check_environment():
     return True
 
 def check_single_instance():
-    """Check if another instance of TrackPro is already running.
+    """Check if another instance of TrackPro is already running with automatic cleanup of stale locks.
     
     Returns:
         bool: True if this is the only instance, False if another instance is running
@@ -347,64 +369,143 @@ def check_single_instance():
     import winerror
     import tempfile
     import atexit
+    import psutil
     
     # Use a named mutex for instance management
     mutex_name = "TrackProSingleInstanceMutex"
+    lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
     
-    try:
-        # Try to create a named mutex
-        mutex = win32event.CreateMutex(None, 1, mutex_name)
-        if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
-            # Another instance is already running
-            print("Another instance of TrackPro is already running!")
-            return False
-            
-        # Ensure mutex is released on exit
-        def release_mutex():
-            if mutex:
-                win32event.ReleaseMutex(mutex)
-        atexit.register(release_mutex)
+    def cleanup_stale_locks():
+        """Clean up stale locks and mutexes from crashed instances."""
+        logger.info("Cleaning up stale locks...")
         
-        # Create a lock file as a backup method
-        lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
-        
-        # Check if the lock file exists and is recent
-        if os.path.exists(lock_file):
-            # Check if the file is recent (less than 1 minute old)
-            if (os.path.getmtime(lock_file) > (time.time() - 60)):
-                # Try to find a TrackPro process
+        # Check for actual TrackPro processes
+        trackpro_processes = []
+        try:
+            for process in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
-                    import psutil
-                    for process in psutil.process_iter(['name']):
-                        if process.info['name'] == 'python.exe' or process.info['name'] == 'pythonw.exe':
-                            try:
-                                cmd_line = process.cmdline()
-                                if any('trackpro' in arg.lower() for arg in cmd_line) and process.pid != os.getpid():
-                                    print(f"Found existing TrackPro process (PID: {process.pid})")
-                                    return False
-                            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                                continue
-                except ImportError:
-                    # If psutil is not available, just use the lock file approach
-                    pass
+                    process_info = process.info
+                    if not process_info['cmdline']:
+                        continue
+                    
+                    # Check for TrackPro executable or Python running TrackPro
+                    is_trackpro = False
+                    
+                    # Check for TrackPro executable
+                    if any('trackpro' in str(cmd).lower() for cmd in process_info['cmdline']):
+                        is_trackpro = True
+                    
+                    # Check for Python processes running TrackPro
+                    if (process_info['name'] in ['python.exe', 'pythonw.exe'] and 
+                        any('trackpro' in str(cmd).lower() or 'run_app.py' in str(cmd).lower() 
+                            for cmd in process_info['cmdline'])):
+                        is_trackpro = True
+                    
+                    if is_trackpro and process_info['pid'] != os.getpid():
+                        trackpro_processes.append(process_info['pid'])
+                        
+                except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                    continue
+        except Exception as e:
+            logger.warning(f"Error checking for TrackPro processes: {e}")
         
-        # Create or update lock file
-        with open(lock_file, 'w') as f:
-            f.write(str(os.getpid()))
-            
-        # Clean up lock file on exit
-        def remove_lock_file():
+        # If no actual TrackPro processes found, clean up stale locks
+        if not trackpro_processes:
+            # Remove stale lock file
             if os.path.exists(lock_file):
                 try:
                     os.remove(lock_file)
-                except:
-                    pass
-        atexit.register(remove_lock_file)
+                    logger.info("Removed stale lock file")
+                except Exception as e:
+                    logger.warning(f"Could not remove stale lock file: {e}")
+            
+            return True
+        else:
+            logger.info(f"Found {len(trackpro_processes)} running TrackPro processes: {trackpro_processes}")
+            return False
+    
+    try:
+        # First attempt to create mutex
+        mutex = win32event.CreateMutex(None, 1, mutex_name)
+        last_error = win32api.GetLastError()
+        
+        if last_error == winerror.ERROR_ALREADY_EXISTS:
+            # Mutex exists - check if it's from a real process
+            logger.info("Mutex exists, checking for actual running processes...")
+            
+            if cleanup_stale_locks():
+                # No actual processes found, try to create mutex again
+                logger.info("No running processes found, attempting to acquire mutex...")
+                try:
+                    # Release the existing mutex handle
+                    win32api.CloseHandle(mutex)
+                    
+                    # Try to create a new mutex
+                    mutex = win32event.CreateMutex(None, 1, mutex_name)
+                    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+                        logger.warning("Mutex still exists after cleanup")
+                        return False
+                    
+                    logger.info("Successfully acquired mutex after cleanup")
+                except Exception as e:
+                    logger.error(f"Error acquiring mutex after cleanup: {e}")
+                    return False
+            else:
+                # Real processes found
+                logger.info("Another instance of TrackPro is already running!")
+                return False
+        
+        # Successfully created mutex or acquired it after cleanup
+        # Ensure mutex is released on exit
+        def release_mutex():
+            try:
+                if mutex:
+                    win32event.ReleaseMutex(mutex)
+                    win32api.CloseHandle(mutex)
+                    logger.info("Released mutex on exit")
+            except Exception as e:
+                logger.warning(f"Error releasing mutex: {e}")
+        
+        atexit.register(release_mutex)
+        
+        # Create lock file with process info
+        try:
+            lock_data = {
+                'pid': os.getpid(),
+                'timestamp': time.time(),
+                'executable': sys.executable,
+                'args': sys.argv
+            }
+            
+            with open(lock_file, 'w') as f:
+                import json
+                json.dump(lock_data, f, indent=2)
+            
+            logger.info(f"Created lock file with PID {os.getpid()}")
+            
+            # Clean up lock file on exit
+            def remove_lock_file():
+                if os.path.exists(lock_file):
+                    try:
+                        os.remove(lock_file)
+                        logger.info("Removed lock file on exit")
+                    except Exception as e:
+                        logger.warning(f"Error removing lock file: {e}")
+            
+            atexit.register(remove_lock_file)
+            
+        except Exception as e:
+            logger.warning(f"Could not create lock file: {e}")
         
         return True
+        
     except Exception as e:
-        print(f"Error in single instance check: {e}")
-        # If there's an error in the check, proceed anyway
+        logger.error(f"Error in single instance check: {e}")
+        # If there's an error in the check, try cleanup and proceed
+        try:
+            cleanup_stale_locks()
+        except:
+            pass
         return True
 
 def show_error_dialog(message):

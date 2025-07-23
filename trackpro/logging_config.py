@@ -42,27 +42,57 @@ def apply_config_logging_levels(config):
         except AttributeError:
             print(f"Invalid log level '{level_str}' for logger '{logger_name}'")
 
+def silence_noisy_libraries():
+    """Silence excessively verbose third-party libraries."""
+    # CRITICAL: Silence matplotlib font manager - this is the main culprit
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib.pyplot').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib.backends').setLevel(logging.WARNING)
+    
+    # Silence other noisy libraries
+    noisy_libraries = [
+        'urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 
+        'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager',
+        'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 
+        'supafunc', 'pyqtgraph', 'PIL', 'cv2', 'mediapipe'
+    ]
+    
+    for library in noisy_libraries:
+        logging.getLogger(library).setLevel(logging.WARNING)
+    
+    print("Silenced noisy third-party libraries")
+
 def setup_logging():
     """Configure logging for the application."""
+    # First, silence noisy libraries BEFORE any other configuration
+    silence_noisy_libraries()
+    
     # Get root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     
     # Create trackpro logger (this will be the parent for all our module loggers)
     trackpro_logger = logging.getLogger('trackpro')
-    trackpro_logger.setLevel(logging.DEBUG)  # Keep general debugging enabled
+    trackpro_logger.setLevel(logging.INFO)  # Changed from DEBUG to INFO to reduce spam
     
-    # Create specific module loggers with default levels
+    # Create specific module loggers with appropriate levels
     ui_logger = logging.getLogger('trackpro.race_coach.ui')
-    ui_logger.setLevel(logging.ERROR)  # Change from WARNING to ERROR to eliminate pedal input debug noise
+    ui_logger.setLevel(logging.ERROR)  # Only errors for UI
+    
+    # Set race coach modules to INFO instead of DEBUG
+    race_coach_logger = logging.getLogger('trackpro.race_coach')
+    race_coach_logger.setLevel(logging.INFO)  # Changed from DEBUG
+    
+    # Specific problematic modules that generate too much output
+    logging.getLogger('trackpro.race_coach.simple_iracing').setLevel(logging.WARNING)
+    logging.getLogger('trackpro.race_coach.lap_indexer').setLevel(logging.WARNING)
+    logging.getLogger('trackpro.race_coach.telemetry_saver').setLevel(logging.WARNING)
+    logging.getLogger('trackpro.race_coach.iracing_lap_saver').setLevel(logging.WARNING)
     
     # Add telemetry logger with even higher level to reduce noise
     telemetry_logger = logging.getLogger('trackpro.race_coach.telemetry')
     telemetry_logger.setLevel(logging.ERROR)  # Only log errors and above
-    
-    # ABS loggers removed
-    
-    # ABS controller logger removed - module deleted
     
     # Create console handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -87,15 +117,17 @@ def setup_logging():
         print("To enable debug logging, create config.ini and set:")
         print("  [logging]")
         print("  trackpro = DEBUG")
-        # ABS logging references removed
     
     return root_logger
 
 def configure_logging():
     """Configure logging for the application."""
+    # First, silence noisy libraries
+    silence_noisy_libraries()
+    
     # Create logger
     logger = logging.getLogger('trackpro')
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)  # Changed from DEBUG
     
     # Create formatters
     detailed_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -110,7 +142,8 @@ def configure_logging():
     logger.addHandler(console_handler)
     
     # Set specific module loggers to higher levels to reduce console spam
-    logging.getLogger('trackpro.race_coach.ui').setLevel(logging.ERROR)  # Change from WARNING to ERROR to eliminate pedal input noise
-    logging.getLogger('trackpro.race_coach.simple_iracing').setLevel(logging.ERROR)
+    logging.getLogger('trackpro.race_coach.ui').setLevel(logging.ERROR)
+    logging.getLogger('trackpro.race_coach.simple_iracing').setLevel(logging.WARNING)
+    logging.getLogger('trackpro.race_coach.lap_indexer').setLevel(logging.WARNING)
     
     return logger 

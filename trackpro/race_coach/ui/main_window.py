@@ -225,6 +225,12 @@ class RaceCoachWidget(QWidget):
             logger.debug("🏁 [BACKGROUND] Creating IRacingLapSaver...")
             from ..iracing_lap_saver import IRacingLapSaver
             self.iracing_lap_saver = IRacingLapSaver()
+            
+            # ENABLE AUTO TRACK BUILDING: Enable automatic track building when laps are detected
+            if self.iracing_lap_saver:
+                self.iracing_lap_saver.enable_auto_track_building()
+                logger.info("✅ [AUTO TRACK BUILD] Auto track building enabled for lap saver")
+            
             logger.info("✅ Data components initialized in background")
         except Exception as e:
             logger.error(f"❌ Error initializing data components: {e}")

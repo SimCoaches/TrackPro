@@ -24,7 +24,20 @@ from trackpro.config import config
 
 logger = logging.getLogger(__name__)
 
+# Eye tracking imports with comprehensive error handling
+EYETRAX_AVAILABLE = False
+ENHANCED_CALIBRATION = False
+GazeEstimator = None
+run_9_point_calibration = None
+run_13_point_calibration = None
+
 try:
+    # Check if we're in a built executable and eye tracking was excluded
+    import sys
+    if getattr(sys, 'frozen', False):
+        # Running as built executable - check if eye tracking modules were excluded
+        logger.info("Running as built executable - checking eye tracking availability...")
+    
     from eyetrax import GazeEstimator, run_9_point_calibration
     # Try to import additional calibration methods
     try:
@@ -36,13 +49,11 @@ try:
     EYETRAX_AVAILABLE = True
     logger.info("✅ EyeTrax imported successfully")
 except ImportError as e:
-    EYETRAX_AVAILABLE = False
-    ENHANCED_CALIBRATION = False
-    logger.warning(f"❌ EyeTrax import failed: {e}")
+    logger.info(f"Eye tracking not available: {e}")
+    logger.info("This is normal for built executables without eye tracking support")
 except Exception as e:
-    EYETRAX_AVAILABLE = False
-    ENHANCED_CALIBRATION = False
-    logger.error(f"❌ EyeTrax import error: {e}")
+    logger.warning(f"Eye tracking initialization failed: {e}")
+    logger.info("Eye tracking features will be disabled")
 
 
 class EyeTrackingCalibrationDialog(QDialog):
@@ -222,7 +233,21 @@ class EyeTrackingManager(QObject):
         return available
     
     def calibrate(self, parent_widget=None):
-        """Perform eye tracking calibration."""
+        """Perform eye tracking calibration - REQUIRES PASSWORD."""
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from PyQt6.QtWidgets import QDialog
+            from trackpro.ui.auth_dialogs import PasswordDialog
+            password_dialog = PasswordDialog(parent_widget, "Eye Tracking")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Eye tracking calibration access denied - incorrect password")
+                return False
+            logger.info("✅ Eye tracking calibration password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            self.error_occurred.emit(f"Could not verify password: {str(e)}")
+            return False
+        
         if not self.is_available():
             self.error_occurred.emit("Eye tracking not available")
             return False
@@ -717,7 +742,24 @@ class EyeTrackingManager(QObject):
             return 0.2  # Low default if test fails
     
     def start_recording(self, session_id, lap_id=None):
-        """Start recording eye tracking data for a session/lap."""
+        """Start recording eye tracking data for a session/lap - REQUIRES PASSWORD."""
+        # PASSWORD PROTECTION CHECK FIRST  
+        try:
+            from PyQt6.QtWidgets import QDialog
+            from trackpro.ui.auth_dialogs import PasswordDialog
+            # Use QApplication to get the main window as parent
+            from PyQt6.QtWidgets import QApplication
+            main_window = QApplication.instance().activeWindow()
+            password_dialog = PasswordDialog(main_window, "Eye Tracking")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Eye tracking recording access denied - incorrect password")
+                return False
+            logger.info("✅ Eye tracking recording password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            self.error_occurred.emit(f"Could not verify password: {str(e)}")
+            return False
+        
         # For recording, ensure eye tracking is enabled AND available AND calibrated
         if not self.enabled:
             self.error_occurred.emit("Eye tracking is disabled")
@@ -1207,7 +1249,23 @@ class EyeTrackingManager(QObject):
         return True
     
     def start_persistent_overlay(self):
-        """Start the gaming-style transparent overlay."""
+        """Start the gaming-style transparent overlay - REQUIRES PASSWORD."""
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from PyQt6.QtWidgets import QDialog
+            from trackpro.ui.auth_dialogs import PasswordDialog
+            # Use QApplication to get the main window as parent
+            from PyQt6.QtWidgets import QApplication
+            main_window = QApplication.instance().activeWindow()
+            password_dialog = PasswordDialog(main_window, "Eye Tracking")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Eye tracking overlay access denied - incorrect password")
+                return False
+            logger.info("✅ Eye tracking overlay password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            return False
+        
         if not self.is_available():
             logger.error("Eye tracking not available for gaming overlay")
             return False

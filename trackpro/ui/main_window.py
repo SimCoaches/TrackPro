@@ -39,7 +39,7 @@ class MainWindow(QMainWindow):
         # Main window setup with menu bar buttons - increased minimum size to prevent overlapping
         self.window_width = 1200
         self.window_height = 800
-        self.setWindowTitle("TrackPro Configuration v1.5.2")
+        self.setWindowTitle("TrackPro Configuration v1.5.3")
         self.setMinimumSize(1200, 850)  # Increased from 1000x700 to prevent overlapping
         self.setWindowIcon(QIcon(":/icons/trackpro_tray.ico"))
 
@@ -212,7 +212,7 @@ class MainWindow(QMainWindow):
     # setup_dark_theme, create_menu_bar, setup_system_tray methods are now in separate modules
     
     def closeEvent(self, event):
-        """Handle window close event."""
+        """Handle window close event - FORCE KILL ALL PROCESSES."""
         try:
             # Check if this should minimize to tray instead of closing
             from ..config import config
@@ -222,191 +222,84 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             
-            # Cleanup track map overlay
-            if hasattr(self, 'track_map_overlay_manager') and self.track_map_overlay_manager:
-                self.track_map_overlay_manager.cleanup()
-                logger.info("🗺️ Track map overlay manager cleaned up")
+            logger.info("FORCE CLOSING - Killing all TrackPro processes...")
             
-            # Save settings
-            if hasattr(self, 'save_settings'):
-                self.save_settings()
+            # STEP 1: Force kill ALL TrackPro processes immediately
+            self._force_kill_all_trackpro_processes()
             
-            # Cleanup database connections
-            if hasattr(self, 'db_manager') and self.db_manager:
-                self.db_manager.cleanup()
+            # STEP 2: Clean up single instance locks
+            self._cleanup_single_instance_locks_immediate()
             
-            # Hide tray icon
+            # STEP 3: Hide tray icon
             if hasattr(self, 'tray_icon') and self.tray_icon:
                 self.tray_icon.hide()
             
-            # Signal the main application to cleanup and exit
-            # Find the main app instance and call its cleanup method
-            app = QApplication.instance()
-            if app:
-                # Try to find the TrackPro app instance
-                for obj in app.findChildren(QObject):
-                    if hasattr(obj, 'cleanup') and hasattr(obj, 'hardware') and hasattr(obj, 'window'):
-                        logger.info("Found TrackPro app instance, calling cleanup")
-                        try:
-                            obj.cleanup()
-                        except Exception as cleanup_e:
-                            logger.error(f"Error during app cleanup: {cleanup_e}")
-                        break
-                
-                # Force application exit
-                QTimer.singleShot(100, lambda: app.exit(0))
-            
-            # Accept the close event
+            # STEP 4: Force quit application immediately
+            logger.info("Force quitting application...")
             event.accept()
-            logger.info("Main window closed")
+            QApplication.instance().quit()
             
         except Exception as e:
-            logger.error(f"Error during window close: {e}")
-            event.accept()  # Accept anyway to prevent hanging
+            logger.error(f"Error during force close: {e}")
+            # Force quit no matter what
+            event.accept()
+            try:
+                QApplication.instance().quit()
+            except:
+                import sys
+                sys.exit(0)
     
-    def _manual_cleanup(self):
-        """Perform manual cleanup if the main app instance isn't available."""
+
+    
+    def _force_kill_all_trackpro_processes(self):
+        """Force kill ALL TrackPro processes using taskkill."""
         try:
-            logger.info("Performing manual cleanup...")
+            logger.info("🔫 FORCE KILLING all TrackPro processes...")
+            import subprocess
             
-            # Clean up race coach threads if they exist
-            self._cleanup_race_coach_threads()
+            # Kill ALL TrackPro processes with extreme prejudice
+            kill_commands = [
+                ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
+                ['taskkill', '/F', '/IM', 'python.exe', '/FI', 'WINDOWTITLE eq TrackPro*'],
+                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.3.exe'],
+                ['powershell', '-Command', "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*' -or $_.MainWindowTitle -like '*TrackPro*'} | Stop-Process -Force"],
+            ]
             
-            # Stop any active timers
-            try:
-                qapp = QApplication.instance()
-                if qapp:
-                    # Find and stop all QTimer objects
-                    for obj in qapp.findChildren(QTimer):
-                        if obj.isActive():
-                            obj.stop()
-                            logger.info(f"Stopped active timer: {obj.objectName()}")
-            except Exception as e:
-                logger.warning(f"Could not stop timers: {e}")
-            
-            # Close database connections if available
-            try:
-                from ..database import supabase_client
-                if hasattr(supabase_client, 'close'):
-                    supabase_client.close()
-                    logger.info("Database connection closed")
-            except Exception as e:
-                logger.warning(f"Could not close database connection: {e}")
-            
-            # Clean up hardware connection if available
-            if hasattr(self, 'hardware') and self.hardware:
+            for cmd in kill_commands:
                 try:
-                    self.hardware.stop()
-                    logger.info("Hardware connection stopped")
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=5)
+                    if result.returncode == 0:
+                        logger.info(f"✅ Successfully killed processes with: {' '.join(cmd)}")
+                    else:
+                        logger.info(f"No processes found for: {' '.join(cmd)}")
                 except Exception as e:
-                    logger.warning(f"Could not stop hardware: {e}")
+                    logger.warning(f"Kill command failed {cmd}: {e}")
             
-            # Clean up OAuth handler if available
-            try:
-                if hasattr(self, 'oauth_handler') and self.oauth_handler:
-                    if hasattr(self.oauth_handler, 'shutdown_callback_server'):
-                        self.oauth_handler.shutdown_callback_server()
-                        logger.info("OAuth callback server shut down")
-            except Exception as e:
-                logger.warning(f"Could not shut down OAuth handler: {e}")
-            
-            # Clean up system tray
-            try:
-                if hasattr(self, 'tray_icon') and self.tray_icon:
-                    self.tray_icon.hide()
-                    logger.info("System tray icon hidden")
-            except Exception as e:
-                logger.warning(f"Could not hide system tray: {e}")
-            
-            logger.info("Manual cleanup completed")
+            logger.info("🔫 Force kill completed")
             
         except Exception as e:
-            logger.error(f"Error during manual cleanup: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Error during force kill: {e}")
     
-    def _cleanup_race_coach_threads(self):
-        """Clean up any race coach related threads."""
+    def _cleanup_single_instance_locks_immediate(self):
+        """Immediately clean up single instance locks."""
         try:
-            # Check if we have a race coach widget with threads to clean up
-            if hasattr(self, 'race_coach_widget') and self.race_coach_widget:
-                logger.info("Cleaning up race coach threads...")
-                
-                # Try to find the race coach widget and call its cleanup methods
-                race_coach = self.race_coach_widget
-                
-                # First, try to call any cleanup methods on the race coach widget
-                if hasattr(race_coach, '_cleanup_all_threads'):
-                    try:
-                        logger.info("Calling race coach _cleanup_all_threads method...")
-                        race_coach._cleanup_all_threads()
-                    except Exception as e:
-                        logger.warning(f"Error calling _cleanup_all_threads: {e}")
-                
-                if hasattr(race_coach, 'shutdown'):
-                    try:
-                        logger.info("Calling race coach shutdown method...")
-                        race_coach.shutdown()
-                    except Exception as e:
-                        logger.warning(f"Error calling shutdown: {e}")
-                
-                # Look for common thread attributes that might need cleaning up
-                thread_attrs = ['session_monitor_thread', 'data_thread', 'timer_thread', 'monitor_thread', 
-                               'iracing_api', 'lap_saver', 'initial_load_worker']
-                
-                for attr_name in thread_attrs:
-                    if hasattr(race_coach, attr_name):
-                        thread = getattr(race_coach, attr_name)
-                        if thread:
-                            try:
-                                logger.info(f"Cleaning up {attr_name}...")
-                                
-                                # For iRacing API
-                                if attr_name == 'iracing_api' and hasattr(thread, 'disconnect'):
-                                    thread.disconnect()
-                                    logger.info(f"Disconnected {attr_name}")
-                                
-                                # For lap saver
-                                elif attr_name == 'lap_saver' and hasattr(thread, 'shutdown'):
-                                    thread.shutdown()
-                                    logger.info(f"Shut down {attr_name}")
-                                
-                                # For workers
-                                elif attr_name == 'initial_load_worker' and hasattr(thread, 'cancel'):
-                                    thread.cancel()
-                                    logger.info(f"Cancelled {attr_name}")
-                                
-                                # For general threads
-                                elif hasattr(thread, 'stop'):
-                                    thread.stop()
-                                    logger.info(f"Stopped {attr_name}")
-                                
-                                # Wait for thread to finish
-                                if hasattr(thread, 'wait'):
-                                    thread.wait(1000)  # 1 second timeout
-                                    logger.info(f"Waited for {attr_name} to finish")
-                                    
-                            except Exception as e:
-                                logger.warning(f"Could not clean up {attr_name}: {e}")
-                
-                logger.info("Race coach thread cleanup completed")
+            logger.info("🔓 Cleaning up locks...")
+            import tempfile
+            import os
             
-            # Also check the stacked widget for any race coach widgets
-            if hasattr(self, 'stacked_widget'):
-                for i in range(self.stacked_widget.count()):
-                    widget = self.stacked_widget.widget(i)
-                    if widget and ('RaceCoach' in str(type(widget)) or hasattr(widget, 'iracing_api')):
-                        logger.info(f"Found race coach widget in stack at index {i}, cleaning up...")
-                        try:
-                            if hasattr(widget, '_cleanup_all_threads'):
-                                widget._cleanup_all_threads()
-                            if hasattr(widget, 'shutdown'):
-                                widget.shutdown()
-                        except Exception as e:
-                            logger.warning(f"Error cleaning up stacked race coach widget: {e}")
+            # Remove lock file
+            lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                    logger.info("✅ Removed lock file")
+                except Exception as e:
+                    logger.warning(f"Could not remove lock file: {e}")
+            
+            logger.info("🔓 Lock cleanup completed")
             
         except Exception as e:
-            logger.error(f"Error during race coach thread cleanup: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Error during lock cleanup: {e}")
     
     def _init_pedal_data(self):
         """Initialize pedal data storage."""
@@ -1593,8 +1486,21 @@ class MainWindow(QMainWindow):
         self.community_action.setChecked(False)
     
     def open_race_coach(self):
-        """Open the Race Coach screen - REQUIRES AUTHENTICATION."""
+        """Open the Race Coach screen - REQUIRES AUTHENTICATION AND PASSWORD."""
         logger.info("🏁 Race Coach access requested")
+        
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from .auth_dialogs import PasswordDialog
+            password_dialog = PasswordDialog(self, "Race Coach")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Race Coach access denied - incorrect password")
+                return
+            logger.info("✅ Race Coach password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            QMessageBox.critical(self, "Error", f"Could not verify password: {str(e)}")
+            return
         
         # STRICT AUTHENTICATION REQUIREMENT
         is_authenticated = self._check_authentication_required("Race Coach")
@@ -2031,7 +1937,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Show about dialog."""
         about_text = """
-                        <h2>TrackPro v1.5.2</h2>
+                        <h2>TrackPro v1.5.3</h2>
         <p>Racing Telemetry System</p>
         <p>© 2024 Sim Coaches</p>
         <p>A professional racing telemetry and pedal calibration system.</p>
@@ -2039,7 +1945,20 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, "About TrackPro", about_text)
     
     def show_eye_tracking_settings(self):
-        """Show eye tracking settings dialog."""
+        """Show eye tracking settings dialog - REQUIRES PASSWORD."""
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from .auth_dialogs import PasswordDialog
+            password_dialog = PasswordDialog(self, "Eye Tracking")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Eye tracking settings access denied - incorrect password")
+                return
+            logger.info("✅ Eye tracking password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            QMessageBox.critical(self, "Error", f"Could not verify password: {str(e)}")
+            return
+        
         try:
             from .eye_tracking_settings import EyeTrackingSettingsDialog
             

@@ -220,7 +220,18 @@ class EyeTrackingSettingsDialog(QDialog):
             QMessageBox.critical(self, "Camera Test", f"Camera test failed: {str(e)}")
     
     def calibrate_now(self):
-        """Start calibration process."""
+        """Start calibration process - REQUIRES PASSWORD."""
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from .auth_dialogs import PasswordDialog
+            from PyQt6.QtWidgets import QDialog
+            password_dialog = PasswordDialog(self, "Eye Tracking")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not verify password: {str(e)}")
+            return
+        
         if not self.eye_tracking_manager or not self.eye_tracking_manager.is_available():
             QMessageBox.warning(self, "Calibration", "Eye tracking not available for calibration.")
             return
@@ -245,7 +256,18 @@ class EyeTrackingSettingsDialog(QDialog):
             self.update_status()
     
     def test_gaze_tracking(self):
-        """Test gaze tracking."""
+        """Test gaze tracking - REQUIRES PASSWORD."""
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from .auth_dialogs import PasswordDialog
+            from PyQt6.QtWidgets import QDialog
+            password_dialog = PasswordDialog(self, "Eye Tracking")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not verify password: {str(e)}")
+            return
+        
         if not self.eye_tracking_manager or not self.eye_tracking_manager.is_available():
             QMessageBox.warning(self, "Test Failed", "Eye tracking not available for testing.")
             return

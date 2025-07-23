@@ -48,23 +48,43 @@ class TrackMapOverlayWorker(QThread):
         # Only register for telemetry if iRacing API is available
         if self.iracing_api:
             try:
-                # Register for telemetry updates
+                # Ensure we're working with the correct API object
+                if not hasattr(self.iracing_api, 'register_on_telemetry_data'):
+                    logger.error("🗺️ iRacing API missing required methods")
+                    self.connection_status.emit(False)
+                    return
+                
+                # Register for telemetry updates with proper error handling
+                logger.info("🗺️ Registering for telemetry callbacks...")
                 self.iracing_api.register_on_telemetry_data(self._on_telemetry_data)
                 self.iracing_api.register_on_connection_changed(self._on_connection_changed)
                 
-                # Connection is already handled by the main iRacing API
-                # Just emit the current connection status
-                self.connection_status.emit(self.iracing_api.is_connected())
-                logger.info("🗺️ Registered for iRacing telemetry updates")
+                # Check initial connection status
+                is_connected = False
+                if hasattr(self.iracing_api, 'is_connected'):
+                    is_connected = self.iracing_api.is_connected()
+                elif hasattr(self.iracing_api, '_is_connected'):
+                    is_connected = self.iracing_api._is_connected
+                
+                self.connection_status.emit(is_connected)
+                logger.info(f"🗺️ Registered for iRacing telemetry updates, initial connection: {is_connected}")
+                
             except Exception as e:
-                logger.warning(f"🗺️ Failed to register for iRacing updates: {e}")
+                logger.error(f"🗺️ Failed to register for iRacing updates: {e}")
+                import traceback
+                logger.error(f"🗺️ Full traceback: {traceback.format_exc()}")
                 self.iracing_api = None
+                self.connection_status.emit(False)
         else:
-            logger.info("🗺️ Running without iRacing connection - overlay will work but no live position updates")
+            logger.warning("🗺️ Running without iRacing connection - overlay will work but no live position updates")
             self.connection_status.emit(False)
         
-        while self.running:
-            self.msleep(100)  # Update every 100ms
+        # Main worker loop with proper exception handling
+        try:
+            while self.running:
+                self.msleep(100)  # Update every 100ms
+        except Exception as e:
+            logger.error(f"🗺️ Error in worker loop: {e}")
         
         logger.info("🗺️ Track map overlay worker stopped")
     
@@ -79,28 +99,59 @@ class TrackMapOverlayWorker(QThread):
         if not telemetry_data:
             return
         
+        # Add debug logging occasionally to help diagnose issues
+        if not hasattr(self, '_last_telemetry_debug_time') or (time.time() - self._last_telemetry_debug_time) > 10.0:
+            logger.debug(f"🗺️ Worker received telemetry data with keys: {list(telemetry_data.keys())}")
+            self._last_telemetry_debug_time = time.time()
+        
         try:
             track_position = telemetry_data.get('LapDistPct', telemetry_data.get('track_position'))
             if track_position is not None:
-                # Only log if position changed significantly (reduce spam)
+                # Validate track position value
+                if not isinstance(track_position, (int, float)):
+                    logger.warning(f"🗺️ Invalid track position type: {type(track_position)}")
+                    return
+                    
+                # Ensure position is in valid range
+                track_position = max(0.0, min(1.0, float(track_position)))
+                
+                # Only emit signal if position changed significantly (reduce spam and Qt overhead)
                 if not hasattr(self, '_last_logged_position') or abs(track_position - self._last_logged_position) > 0.01:
                     self._last_logged_position = track_position
-                self.position_updated.emit(track_position)
+                    logger.debug(f"🗺️ Emitting position update: {track_position:.3f}")
+                    
+                    # Emit signal with error handling for Qt6 thread safety
+                    try:
+                        self.position_updated.emit(track_position)
+                    except Exception as signal_error:
+                        logger.error(f"🗺️ Error emitting position signal: {signal_error}")
+                        
             else:
                 # Log if we're not getting track position data (but limit frequency)
                 if not hasattr(self, '_last_no_position_log') or (time.time() - self._last_no_position_log) > 5.0:
                     logger.debug(f"🗺️ No track position in telemetry data. Keys: {list(telemetry_data.keys())}")
                     self._last_no_position_log = time.time()
+                    
         except Exception as e:
-            logger.warning(f"🗺️ Error processing telemetry data: {e}")
+            logger.error(f"🗺️ Error processing telemetry data: {e}")
+            import traceback
+            logger.error(f"🗺️ Telemetry processing traceback: {traceback.format_exc()}")
     
     def _on_connection_changed(self, is_connected):
         """Handle iRacing connection status changes."""
         try:
             logger.info(f"🗺️ iRacing connection changed: {'CONNECTED' if is_connected else 'DISCONNECTED'}")
-            self.connection_status.emit(is_connected)
+            
+            # Emit signal with error handling for Qt6 thread safety
+            try:
+                self.connection_status.emit(is_connected)
+            except Exception as signal_error:
+                logger.error(f"🗺️ Error emitting connection status signal: {signal_error}")
+                
         except Exception as e:
-            logger.warning(f"🗺️ Error handling connection change: {e}")
+            logger.error(f"🗺️ Error handling connection change: {e}")
+            import traceback
+            logger.error(f"🗺️ Connection change traceback: {traceback.format_exc()}")
 
 
 class TrackMapGamingOverlay(QWidget):
@@ -240,10 +291,10 @@ class TrackMapGamingOverlay(QWidget):
             logger.info(f"🐛 DEBUG: Window flags set: {flags}")
             
         # Make window transparent
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         
         # CRITICAL: Make sure mouse events are NOT blocked
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         
         if self.debug_mode:
             logger.info("🐛 DEBUG: Window attributes set - TranslucentBackground=True, TransparentForMouseEvents=False")
@@ -368,14 +419,31 @@ class TrackMapGamingOverlay(QWidget):
         self.update()  # Trigger repaint
 
     def update_car_position(self, track_position: float):
+        # Ensure this method runs on the main thread for Qt6 compatibility
+        if not self.thread() == QApplication.instance().thread():
+            logger.warning("🗺️ update_car_position called from wrong thread - Qt6 may have issues")
+        
+        # Add debug logging occasionally to help diagnose issues
+        if not hasattr(self, '_last_position_debug_time') or (time.time() - self._last_position_debug_time) > 5.0:
+            logger.debug(f"🚗 Updating car position: track_position={track_position:.3f}, track_coordinates_loaded={len(self.track_coordinates) if self.track_coordinates else 0}")
+            self._last_position_debug_time = time.time()
+            
         # Only log position updates if they changed significantly to reduce spam
         if not hasattr(self, '_last_position_update') or abs(track_position - self._last_position_update) > 0.01:
             self._last_position_update = track_position
             
-        self.current_track_position = track_position
-        x, y = self._track_position_to_screen(track_position)
-        self.current_screen_x, self.current_screen_y = x, y
-        self.update()
+        try:
+            self.current_track_position = track_position
+            x, y = self._track_position_to_screen(track_position)
+            self.current_screen_x, self.current_screen_y = x, y
+            
+            # Trigger repaint safely for Qt6
+            self.update()
+            
+        except Exception as e:
+            logger.error(f"🗺️ Error updating car position: {e}")
+            import traceback
+            logger.error(f"🗺️ Position update traceback: {traceback.format_exc()}")
 
     def _track_position_to_screen(self, track_position: float) -> Tuple[int, int]:
         if not self.track_coordinates:
@@ -421,9 +489,7 @@ class TrackMapGamingOverlay(QWidget):
         pad = self.padding_fraction
         nx = pad + (1 - 2*pad) * nx
         ny = pad + (1 - 2*pad) * ny
-        # Apply scale factor during drawing
-        nx *= self.overlay_scale
-        ny *= self.overlay_scale
+        # Convert to screen coordinates (scale is already applied during window resize)
         screen_x = int(nx * self.width())
         screen_y = int((1 - ny) * self.height())
         return screen_x, screen_y
@@ -435,42 +501,60 @@ class TrackMapGamingOverlay(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setCompositionMode(QPainter.CompositionMode_Clear)
-        p.fillRect(self.rect(), Qt.transparent)
-        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        if self.track_coordinates:
-            self._draw_track(p)
-        if self.show_position_dot:
-            self._draw_position_dot(p)
-        if self.show_hover_controls:
-            self._draw_hover_controls(p)
+        try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            if self.track_coordinates:
+                self._draw_track(p)
+            if self.show_position_dot:
+                self._draw_position_dot(p)
+            if self.show_hover_controls:
+                self._draw_hover_controls(p)
+        finally:
+            p.end()
 
     def _draw_track(self, p):
+        if not self.track_coordinates or len(self.track_coordinates) < 2:
+            return
+            
         # Set up pen for track drawing
         track_pen = QPen(self.track_color, self.track_line_width)
         p.setPen(track_pen)
         
-        # Draw all the track segments
-        for i in range(len(self.track_coordinates)-1):
-            x1, y1 = self._world_to_screen(*self.track_coordinates[i])
-            x2, y2 = self._world_to_screen(*self.track_coordinates[i+1])
+        # Convert all world coordinates to screen coordinates first
+        screen_points = []
+        for coord in self.track_coordinates:
+            x, y = self._world_to_screen(*coord)
+            screen_points.append((x, y))
+        
+        # Remove duplicate consecutive points to prevent overlaps
+        filtered_points = [screen_points[0]]
+        for i in range(1, len(screen_points)):
+            curr_x, curr_y = screen_points[i]
+            prev_x, prev_y = filtered_points[-1]
+            distance = math.sqrt((curr_x - prev_x)**2 + (curr_y - prev_y)**2)
+            # Only add point if it's more than 1 pixel away from previous point
+            if distance > 1:
+                filtered_points.append((curr_x, curr_y))
+        
+        # Draw track segments
+        for i in range(len(filtered_points)-1):
+            x1, y1 = filtered_points[i]
+            x2, y2 = filtered_points[i+1]
             p.drawLine(x1, y1, x2, y2)
         
-        # Close the loop: connect last point back to first point
-        if len(self.track_coordinates) > 2:
-            # Get first and last points
-            first_x, first_y = self._world_to_screen(*self.track_coordinates[0])
-            last_x, last_y = self._world_to_screen(*self.track_coordinates[-1])
+        # Close the loop if needed
+        if len(filtered_points) > 2:
+            first_x, first_y = filtered_points[0]
+            last_x, last_y = filtered_points[-1]
             
             # Calculate distance between first and last points
             gap_distance = math.sqrt((first_x - last_x)**2 + (first_y - last_y)**2)
             
-            # Only draw closing line if there's a significant gap (more than 2 pixels)
-            # This prevents double-drawing when the track data already forms a complete loop
-            if gap_distance > 2:
-                # IMPORTANT: Use the same pen as the rest of the track to maintain color consistency
-                p.setPen(track_pen)
+            # Only draw closing line if there's a significant gap (more than 3 pixels)
+            if gap_distance > 3:
                 p.drawLine(last_x, last_y, first_x, first_y)
                 
                 # Optionally draw a start/finish line indicator
@@ -508,8 +592,15 @@ class TrackMapGamingOverlay(QWidget):
             p.drawLine(start_x, start_y, end_x, end_y)
 
     def _draw_position_dot(self, p):
-        if self.current_screen_x == 0 and self.current_screen_y == 0:
+        # Check if we have valid track coordinates and position data
+        if not self.track_coordinates or self.current_track_position < 0:
             return
+            
+        # Add debug logging occasionally to help diagnose issues
+        if not hasattr(self, '_last_dot_debug_time') or (time.time() - self._last_dot_debug_time) > 5.0:
+            logger.debug(f"🎯 Drawing position dot at screen ({self.current_screen_x}, {self.current_screen_y}) for track position {self.current_track_position:.3f}")
+            self._last_dot_debug_time = time.time()
+            
         pen = QPen(self.position_color, 2)
         p.setPen(pen)
         p.setBrush(QBrush(self.position_color))
@@ -520,47 +611,30 @@ class TrackMapGamingOverlay(QWidget):
 
     def mousePressEvent(self, event):
         if self.debug_mode:
-            logger.info(f"🐛 DEBUG: mousePressEvent - Button: {event.button()}, Pos: ({event.x()}, {event.y()}), Global: ({event.globalX()}, {event.globalY()})")
-            logger.info(f"🐛 DEBUG: Current lock state: {'LOCKED' if self.is_locked else 'UNLOCKED'}")
+            logger.debug(f"[OVERLAY] mousePressEvent - Button: {event.button()}, Pos: ({event.x()}, {event.y()})")
             
         if event.button() == Qt.MouseButton.LeftButton:
-            if self.debug_mode:
-                logger.info("🐛 DEBUG: Left mouse button pressed")
+
                 
             # Check if clicking on hover controls first
             if self.show_hover_controls:
-                if self.debug_mode:
-                    logger.info("🐛 DEBUG: Hover controls are visible, checking button clicks...")
-                    
                 if self._is_over_lock_button(event.pos()):
-                    if self.debug_mode:
-                        logger.info("🐛 DEBUG: Clicked on LOCK BUTTON!")
                     self._toggle_lock()
                     event.accept()
                     return
                 elif self._is_over_close_button(event.pos()):
-                    if self.debug_mode:
-                        logger.info("🐛 DEBUG: Clicked on CLOSE BUTTON!")
                     self.close()
                     event.accept()
                     return
             
             # Handle window dragging when unlocked
             if not self.is_locked:
-                if self.debug_mode:
-                    logger.info("🐛 DEBUG: Starting drag operation...")
                 self.drag_start_pos = event.globalPos() - self.frameGeometry().topLeft()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                if self.debug_mode:
-                    logger.info(f"🐛 DEBUG: Drag start pos: {self.drag_start_pos}")
                 event.accept()
             else:
-                if self.debug_mode:
-                    logger.info("🐛 DEBUG: Window is locked, ignoring drag attempt")
                 event.ignore()
         else:
-            if self.debug_mode:
-                logger.info(f"🐛 DEBUG: Non-left button pressed: {event.button()}")
             event.ignore()
 
     def mouseMoveEvent(self, event):
@@ -625,24 +699,13 @@ class TrackMapGamingOverlay(QWidget):
     # --- KEYBOARD EVENTS WITH DEBUGGING ---
 
     def keyPressEvent(self, event):
-        if self.debug_mode:
-            logger.info(f"🐛 DEBUG: keyPressEvent - Key: {event.key()}, Text: '{event.text()}', Modifiers: {event.modifiers()}")
-            logger.info(f"🐛 DEBUG: Window has focus: {self.hasFocus()}")
-            logger.info(f"🐛 DEBUG: Window is active: {self.isActiveWindow()}")
-            
         if event.key() == Qt.Key.Key_L:
-            if self.debug_mode:
-                logger.info("🐛 DEBUG: L key pressed - toggling lock!")
             self._toggle_lock()
             event.accept()
         elif event.key() == Qt.Key.Key_Q:
-            if self.debug_mode:
-                logger.info("🐛 DEBUG: Q key pressed - closing overlay!")
             self.close()
             event.accept()
         else:
-            if self.debug_mode:
-                logger.info(f"🐛 DEBUG: Unhandled key: {event.key()}")
             super().keyPressEvent(event)
 
     # --- FOCUS EVENTS WITH DEBUGGING ---
@@ -796,9 +859,6 @@ class TrackMapGamingOverlay(QWidget):
 
     def show_overlay(self):
         """Show the track map overlay."""
-        if self.debug_mode:
-            logger.info("🐛 DEBUG: show_overlay called")
-            
         self.show()
         self.raise_()
         self.activateWindow()
@@ -806,15 +866,10 @@ class TrackMapGamingOverlay(QWidget):
         # Force focus to ensure keyboard events work
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         
-        if self.debug_mode:
-            logger.info(f"🐛 DEBUG: Window shown - Visible: {self.isVisible()}, Active: {self.isActiveWindow()}, Focus: {self.hasFocus()}")
-            
         logger.info("🗺️ Track map overlay shown")
 
     def hide_overlay(self):
         """Hide the track map overlay."""
-        if self.debug_mode:
-            logger.info("🐛 DEBUG: hide_overlay called")
         self.hide()
         logger.info("🗺️ Track map overlay hidden")
 
@@ -957,15 +1012,44 @@ class TrackMapOverlayManager(QObject):
             
             # Create and start worker thread with shared iRacing API
             self.worker = TrackMapOverlayWorker(self.shared_iracing_api)
-            self.worker.position_updated.connect(self.overlay.update_car_position)
-            self.worker.connection_status.connect(self.on_connection_status)
-            self.worker.start()
+            
+            # Connect signals with explicit Qt6-compatible connection types for thread safety
+            try:
+                self.worker.position_updated.connect(
+                    self.overlay.update_car_position, Qt.ConnectionType.QueuedConnection
+                )
+                self.worker.connection_status.connect(
+                    self.on_connection_status, Qt.ConnectionType.QueuedConnection
+                )
+                logger.info("🗺️ Worker signals connected successfully")
+            except Exception as connection_error:
+                logger.error(f"🗺️ Error connecting worker signals: {connection_error}")
+                return False
+            
+            # Start worker thread
+            try:
+                self.worker.start()
+                logger.info("🗺️ Worker thread started successfully")
+            except Exception as worker_error:
+                logger.error(f"🗺️ Error starting worker thread: {worker_error}")
+                return False
             
             # Show overlay
-            self.overlay.show_overlay()
-            self.is_active = True
+            try:
+                self.overlay.show_overlay()
+                self.is_active = True
+                logger.info(f"🗺️ Track map overlay started successfully with {data_source}")
+            except Exception as show_error:
+                logger.error(f"🗺️ Error showing overlay: {show_error}")
+                # Clean up on error
+                if self.worker:
+                    self.worker.stop()
+                    self.worker = None
+                if self.overlay:
+                    self.overlay.close()
+                    self.overlay = None
+                return False
             
-            logger.info(f"🗺️ Track map overlay started with {data_source}")
             return True
             
         except Exception as e:
@@ -1104,3 +1188,48 @@ class TrackMapOverlayManager(QObject):
         """Clean up resources."""
         self.stop_overlay()
         logger.info("🗺️ Track map overlay manager cleaned up")
+
+    def test_connections(self):
+        """Test that all signal connections are working properly for Qt6."""
+        try:
+            logger.info("🧪 Testing track map overlay connections...")
+            
+            # Test 1: Check if overlay exists
+            if not self.overlay:
+                logger.error("🧪 TEST FAILED: No overlay created")
+                return False
+                
+            # Test 2: Check if worker exists and is running
+            if not self.worker or not self.worker.isRunning():
+                logger.error("🧪 TEST FAILED: Worker not running")
+                return False
+                
+            # Test 3: Check if signals are connected
+            if not self.worker.position_updated.receivers():
+                logger.error("🧪 TEST FAILED: position_updated signal not connected")
+                return False
+                
+            if not self.worker.connection_status.receivers():
+                logger.error("🧪 TEST FAILED: connection_status signal not connected")
+                return False
+                
+            # Test 4: Check if overlay has track data
+            if not self.overlay.track_coordinates:
+                logger.warning("🧪 TEST WARNING: No track coordinates loaded")
+            else:
+                logger.info(f"🧪 TEST SUCCESS: {len(self.overlay.track_coordinates)} track coordinates loaded")
+                
+            # Test 5: Try a test position update
+            try:
+                self.overlay.update_car_position(0.5)  # Test position at halfway point
+                logger.info("🧪 TEST SUCCESS: Test position update worked")
+            except Exception as position_error:
+                logger.error(f"🧪 TEST FAILED: Position update error: {position_error}")
+                return False
+                
+            logger.info("🧪 All track map overlay tests passed!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"🧪 TEST ERROR: {e}")
+            return False

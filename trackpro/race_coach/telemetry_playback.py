@@ -30,7 +30,8 @@ class TelemetryPlaybackEngine(QObject):
         
         # Set up telemetry directory
         if telemetry_directory is None:
-            self.telemetry_directory = Path(os.path.expanduser("~/Documents/TrackPro/Telemetry"))
+            from ..utils.resource_utils import get_telemetry_directory
+            self.telemetry_directory = Path(get_telemetry_directory())
         else:
             self.telemetry_directory = Path(telemetry_directory)
             

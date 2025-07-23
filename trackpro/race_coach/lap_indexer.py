@@ -24,23 +24,22 @@ Behaviour:
 """
 
 from __future__ import annotations
-from typing import Dict, List, Any
-from enum import Enum, auto
-import logging
 import time
-import threading
 import queue
-from typing import Optional, Callable
+import threading
+import logging
+from typing import List, Dict, Any, Optional, Callable
+from enum import Enum, auto
 
-# Setup logging
+# Configure logger with appropriate level
 logger = logging.getLogger(__name__)
 
 class LapState(Enum):
-    """Enum to track the type of lap."""
-    OUT = auto()
-    TIMED = auto()
-    IN = auto()
-    INCOMPLETE = auto()
+    INCOMPLETE = "INCOMPLETE" # Lap still being built
+    TIMED = "TIMED"           # Valid lap, on leaderboards
+    OUT = "OUT"               # Leaving pits, negative time (changed from OUTLAP)
+    IN = "IN"                 # Entering pits, positive time but not leaderboard (changed from INLAP)
+    INVALID = "INVALID"       # Invalid lap
 
 class LapIndexer:
     def __init__(self) -> None:
@@ -236,7 +235,7 @@ class LapIndexer:
                 
                 # Detect S/F line crossing: high value (>0.9) to low value (<0.1)
                 if prev_lap_dist > 0.9 and lap_dist_pct < 0.1:
-                    logger.info(f"[LAP BOUNDARY] 🎯 S/F crossing detected: {prev_lap_dist:.3f} → {lap_dist_pct:.3f}")
+                    logger.debug(f"[LAP BOUNDARY] 🎯 S/F crossing detected: {prev_lap_dist:.3f} → {lap_dist_pct:.3f}")
                     best_frame_idx = i
                     break
             
@@ -256,8 +255,8 @@ class LapIndexer:
         start_lap_dist = optimal_start_frame.get("LapDistPct", 0.0)
         current_lap_dist = current_frame.get("LapDistPct", 0.0)
         
-        logger.info(f"[LAP BOUNDARY] ✅ Optimal lap start found: LapDistPct={start_lap_dist:.3f} → {current_lap_dist:.3f}")
-        logger.info(f"[LAP BOUNDARY] 📊 Recovered {len(frames_from_start)} frames starting from optimal boundary")
+        logger.debug(f"[LAP BOUNDARY] ✅ Optimal lap start found: LapDistPct={start_lap_dist:.3f} → {current_lap_dist:.3f}")
+        logger.debug(f"[LAP BOUNDARY] 📊 Recovered {len(frames_from_start)} frames starting from optimal boundary")
         
         return frames_from_start, optimal_start_tick
 
@@ -292,8 +291,8 @@ class LapIndexer:
                 should_log_timing = not hasattr(self, '_last_timing_log_time') or (current_time - getattr(self, '_last_timing_log_time', 0) > 5.0)
                 
                 if should_log_timing:
-                    logger.info(f"[ACCURATE TIMING] 🎯 CarIdxLastLapTime[{player_car_idx}] = {our_car_lap_time:.3f}s")
-                    logger.info(f"[ACCURATE TIMING] 📊 Comparison: LapLastLapTime = {lap_last_lap_time_sdk:.3f}s")
+                    logger.debug(f"[ACCURATE TIMING] 🎯 CarIdxLastLapTime[{player_car_idx}] = {our_car_lap_time:.3f}s")
+                    logger.debug(f"[ACCURATE TIMING] 📊 Comparison: LapLastLapTime = {lap_last_lap_time_sdk:.3f}s")
                     self._last_timing_log_time = current_time
             else:
                 # Fallback to regular LapLastLapTime if CarIdx data not available
@@ -426,9 +425,9 @@ class LapIndexer:
                 # Clear pending completion
                 self._pending_lap_completion = None
             else:
-                # Still waiting for the 3-second delay - log progress occasionally
-                if not hasattr(self, '_last_delay_log_time') or (now_tick - getattr(self, '_last_delay_log_time', 0) > 1.0):
-                    logger.info(f"[TIMING FIX] ⏳ Waiting for timing delay: {time_elapsed:.1f}s / 3.0s for lap {self._pending_lap_completion['lap_number']}")
+                # Still waiting for the 3-second delay - log progress occasionally at debug level
+                if not hasattr(self, '_last_delay_log_time') or (now_tick - getattr(self, '_last_delay_log_time', 0) > 5.0):
+                    logger.debug(f"[TIMING FIX] ⏳ Waiting for timing delay: {time_elapsed:.1f}s / 3.0s for lap {self._pending_lap_completion['lap_number']}")
                     self._last_delay_log_time = now_tick
         
         # When LapCompleted increments, it means the lap we were tracking just finished
@@ -470,12 +469,12 @@ class LapIndexer:
         
         if current_lap_driving_sdk > 0 and expected_driving_lap is not None:
             if current_lap_driving_sdk != expected_driving_lap:
-                # Rate limit desync logging to prevent spam
+                # Rate limit desync logging to prevent spam - increased to 30 seconds
                 current_time = time.time()
-                should_log_desync = not hasattr(self, '_last_desync_log_time') or (current_time - getattr(self, '_last_desync_log_time', 0) > 10.0)
+                should_log_desync = not hasattr(self, '_last_desync_log_time') or (current_time - getattr(self, '_last_desync_log_time', 0) > 30.0)
                 
                 if should_log_desync:
-                    logger.warning(f"[LapIndexer] 🚨 LAP DESYNC: Tracking lap {expected_driving_lap}, "
+                    logger.debug(f"[LapIndexer] 🚨 LAP DESYNC: Tracking lap {expected_driving_lap}, "
                                   f"but iRacing driving lap {current_lap_driving_sdk} (completed: {current_lap_completed_sdk})")
                     self._last_desync_log_time = current_time
                 
@@ -499,8 +498,8 @@ class LapIndexer:
         if lap_completed_incremented:
             # TIMING FIX: Don't read CarIdxLastLapTime immediately - it might not be updated yet
             # But DO start tracking the new lap immediately to avoid sync issues
-            logger.info(f"[TIMING FIX] 🕐 LAP COMPLETION DETECTED: LapCompleted {self._last_lap_completed_sdk} → {current_lap_completed_sdk}")
-            logger.info(f"[TIMING FIX] 🕐 Delaying timing read for proper CarIdxLastLapTime update")
+            logger.debug(f"[TIMING FIX] 🕐 LAP COMPLETION DETECTED: LapCompleted {self._last_lap_completed_sdk} → {current_lap_completed_sdk}")
+            logger.debug(f"[TIMING FIX] 🕐 Delaying timing read for proper CarIdxLastLapTime update")
             
             if missed_increments == 1:
                 # NORMAL SINGLE LAP COMPLETION - Store completed lap data for delayed timing processing
@@ -523,7 +522,7 @@ class LapIndexer:
                 # Store for delayed timing processing
                 self._pending_lap_completion = completed_lap_data
                 
-                logger.info(f"[TIMING FIX] 📝 PENDING: Lap {lap_that_just_finished} data stored for 3-second delayed timing")
+                logger.debug(f"[TIMING FIX] 📝 PENDING: Lap {lap_that_just_finished} data stored for 3-second delayed timing")
                 
                 # LAP BOUNDARY FIX: Find optimal start point for new lap using frame buffer
                 optimal_frames, optimal_start_tick = self._find_optimal_lap_start(frame_copy)
@@ -748,66 +747,78 @@ class LapIndexer:
         # Calculate our timing for comparison
         calculated_duration = end_tick - start_tick
         
+        # 🔧 CRITICAL COORDINATION FIX: Look for sector timing data in telemetry frames
+        sector_times = None
+        sector_lap_found = False
+        
+        # Search recent frames for completed sector data, prioritizing frames with sector_lap_completed flag
+        for i, frame in enumerate(reversed(telemetry_frames[-10:])):  # Check last 10 frames
+            if isinstance(frame, dict):
+                # First priority: frames with sector_lap_completed flag
+                if frame.get('sector_lap_completed', False) and 'sector_times' in frame:
+                    completed_lap_num = frame.get('completed_lap_number', -1)
+                    if completed_lap_num == lap_number:  # Ensure it's for the correct lap
+                        sector_times = frame['sector_times']
+                        sector_lap_found = True
+                        logger.info(f"✅ [COORDINATION] Found sector data for lap {lap_number} with completion flag: {sector_times}")
+                        break
+                # Second priority: frames with sector_times but no flag (fallback)
+                elif 'sector_times' in frame and frame['sector_times']:
+                    if not sector_lap_found:  # Only use if we haven't found flagged data
+                        sector_times = frame['sector_times']
+                        logger.info(f"🔧 [COORDINATION] Found sector data for lap {lap_number} without flag (fallback): {sector_times}")
+        
+        if not sector_times:
+            # Third priority: Look for current_lap_sector_times that might represent completed sectors
+            for frame in reversed(telemetry_frames[-5:]):  # Check last 5 frames
+                if isinstance(frame, dict) and 'current_lap_sector_times' in frame:
+                    current_sectors = frame.get('current_lap_sector_times', [])
+                    total_sectors = frame.get('total_sectors', 0)
+                    if current_sectors and len(current_sectors) == total_sectors and total_sectors > 0:
+                        sector_times = current_sectors
+                        logger.info(f"🔧 [COORDINATION] Reconstructed complete sector data for lap {lap_number}: {sector_times}")
+                        break
+        
+        if sector_times:
+            logger.info(f"✅ [COORDINATION] Sector data found for lap {lap_number}: {sector_times}")
+        else:
+            logger.warning(f"❌ [COORDINATION] No sector data found for lap {lap_number}")
+        
         # Log comprehensive timing analysis
         logger.info(f"[RELIABLE TIMING] 🎯 LAP {lap_number} TIMING ANALYSIS:")
         logger.info(f"[RELIABLE TIMING]   📊 Calculated Duration: {calculated_duration:.3f}s")
         logger.info(f"[RELIABLE TIMING]   📊 CarIdxLastLapTime: {updated_lap_time:.3f}s (EXACT iRacing timing)")
         
-        # Use the same timing logic as the regular finalization
-        if abs(updated_lap_time) > 300:  # Extremely long times are usually session-related
+        # Timing decision logic with enhanced validation
+        timing_difference = abs(calculated_duration - updated_lap_time)
+        use_calculated_timing = False
+        
+        # Enhanced timing source selection with more lenient criteria
+        if updated_lap_time <= 0:
+            # Invalid iRacing timing
+            use_calculated_timing = True
             final_lap_duration = calculated_duration
-            logger.info(f"[RELIABLE TIMING] 🎯 Using calculated time - iRacing time appears to be session time ({updated_lap_time:.3f}s)")
-        elif updated_lap_time < 0:  # Negative times for OUT laps
-            final_lap_duration = updated_lap_time
-            logger.info(f"[RELIABLE TIMING] 🎯 Using iRacing negative time for OUT lap classification")
-        elif updated_lap_time == 0.0:  # Zero times are incomplete
+            logger.warning(f"[RELIABLE TIMING]   ⚠️ iRacing timing invalid ({updated_lap_time:.3f}s), using calculated: {final_lap_duration:.3f}s")
+        elif timing_difference > 10.0:
+            # Large difference - prefer calculated timing for very long differences
+            use_calculated_timing = True
             final_lap_duration = calculated_duration
-            logger.info(f"[RELIABLE TIMING] 🎯 Zero iRacing time - Using calculated time {calculated_duration:.3f}s")
-        elif calculated_duration < 5.0:  # Very short calculated laps are suspicious
-            final_lap_duration = updated_lap_time
-            logger.warning(f"[RELIABLE TIMING] ⚠️ Calculated time very short ({calculated_duration:.3f}s), using iRacing time as fallback")
+            logger.warning(f"[RELIABLE TIMING]   ⚠️ Large timing difference ({timing_difference:.3f}s), using calculated: {final_lap_duration:.3f}s")
         else:
-            # Normal case: Use iRacing's exact timing
+            # Use iRacing timing for normal cases
             final_lap_duration = updated_lap_time
-            logger.info(f"[RELIABLE TIMING] ✅ Using iRacing CarIdxLastLapTime - exact match to iRacing display")
+            logger.info(f"[RELIABLE TIMING]   ✅ Using iRacing timing: {final_lap_duration:.3f}s (diff: {timing_difference:.3f}s)")
         
-        logger.info(f"[LapIndexer] 🏁 LAP {lap_number}: Using RELIABLE time {final_lap_duration:.3f}s")
-        
-        # Apply the same classification logic as regular finalization
+        # Enhanced state determination with coordination
         current_lap_state = lap_state
-        
-        logger.info(f"[CLASSIFICATION] Lap {lap_number}: Initial classification = {lap_state.name}")
-        logger.info(f"[CLASSIFICATION] Lap {lap_number}: Started on pit road = {started_on_pit_road}")
-        logger.info(f"[CLASSIFICATION] Lap {lap_number}: CarIdxLastLapTime = {updated_lap_time:.3f}s")
-        
-        # PRIORITY 1: If lap started on pit road, it's ALWAYS an OUT lap
-        if started_on_pit_road:
-            current_lap_state = LapState.OUT
-            logger.info(f"[CLASSIFICATION] Lap {lap_number}: FORCED OUT - Started on pit road (overrides iRacing time)")
-        else:
-            # PRIORITY 2: Use iRacing's lap time for laps that didn't start on pit road
-            if updated_lap_time > 0:
-                current_lap_state = LapState.TIMED
-                logger.info(f"[CLASSIFICATION] Lap {lap_number}: Confirmed TIMED (iRacing positive time {updated_lap_time:.3f}s)")
-            elif updated_lap_time < 0:
-                current_lap_state = LapState.OUT
-                logger.info(f"[CLASSIFICATION] Lap {lap_number}: Confirmed OUT (iRacing negative time {updated_lap_time:.3f}s)")
-            else:
-                current_lap_state = LapState.INCOMPLETE
-                logger.info(f"[CLASSIFICATION] Lap {lap_number}: INCOMPLETE (iRacing zero time)")
-        
-        logger.info(f"[CLASSIFICATION DEBUG] 🔍 LAP {lap_number} PRIORITY-BASED CLASSIFICATION:")
-        logger.info(f"[CLASSIFICATION DEBUG]   📊 Initial Classification: {lap_state.name}")
-        logger.info(f"[CLASSIFICATION DEBUG]   📊 Started on Pit Road: {started_on_pit_road}")
-        logger.info(f"[CLASSIFICATION DEBUG]   📊 CarIdxLastLapTime: {updated_lap_time:.3f}s")
-        logger.info(f"[CLASSIFICATION DEBUG]   📊 Classification Priority: {'Pit road start' if started_on_pit_road else 'CarIdxLastLapTime'}")
-        logger.info(f"[CLASSIFICATION DEBUG]   📊 Final Classification: {current_lap_state.name}")
-        logger.info(f"[CLASSIFICATION DEBUG]   📊 Based on pit road priority: {started_on_pit_road}")
-        
-        logger.info(f"[LapIndexer] 🏁 Lap {lap_number} using final state: {current_lap_state.name}")
-        
-        # Create the lap dictionary
         is_lap_valid_according_to_sdk = not invalid_sdk
+        
+        # Enhanced lap validation: Check for extremely long times
+        if final_lap_duration > 600.0:  # More than 10 minutes
+            logger.warning(f"[RELIABLE TIMING]   ⚠️ Extremely long lap time ({final_lap_duration:.1f}s) - may include stationary time")
+            # Don't force invalid, but log for awareness
+        
+        # Determine leaderboard validity
         is_valid_for_leaderboard = (current_lap_state == LapState.TIMED and is_lap_valid_according_to_sdk)
         
         lap_dict = {
@@ -827,13 +838,22 @@ class LapIndexer:
             "frame_count": len(telemetry_frames),
         }
         
+        # 🔧 CRITICAL COORDINATION FIX: Add sector data if found
+        if sector_times:
+            lap_dict["sector_times"] = sector_times
+            lap_dict["has_sector_data"] = True
+            logger.info(f"✅ [COORDINATION] Added sector data to lap {lap_number}: {sector_times}")
+        else:
+            lap_dict["has_sector_data"] = False
+        
         # Save the lap immediately
         self._save_lap_immediately(lap_dict)
         
         # Also maintain local laps list for backward compatibility
         self.laps.append(lap_dict)
         
-        logger.info(f"[LapIndexer] ✅ LAP {lap_number} SAVED: {current_lap_state.name}, {final_lap_duration:.3f}s, {len(telemetry_frames)} frames")
+        logger.info(f"[LapIndexer] ✅ LAP {lap_number} SAVED: {current_lap_state.name}, {final_lap_duration:.3f}s, {len(telemetry_frames)} frames" + 
+                   (f", SECTOR DATA: {sector_times}" if sector_times else ", NO SECTOR DATA"))
 
     def _finalise_active_lap(
         self,
@@ -1086,6 +1106,7 @@ class LapIndexer:
         self._last_lap_completed_sdk = None
         self._previous_frame_ir_data = None
         self._pending_lap_completion = None  # Clear pending completion
+        
         logger.info("[LapIndexer] Internal state reset, but lap data preserved.")
 
     def get_laps(self) -> List[Dict[str, Any]]:

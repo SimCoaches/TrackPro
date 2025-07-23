@@ -19,6 +19,13 @@ from ..database.supabase_client import supabase
 # Import the new LapIndexer
 from .lap_indexer import LapIndexer
 
+# Import PyQt for signals
+try:
+    from PyQt6.QtCore import QObject, pyqtSignal
+    PYQT_AVAILABLE = True
+except ImportError:
+    PYQT_AVAILABLE = False
+
 # Setup logging
 logger = logging.getLogger(__name__)
 
@@ -402,9 +409,74 @@ class IRacingLapSaver:
         self._sector_data_buffer = {}  # lap_number -> sector_data
         self._max_buffer_size = 10  # Keep last 10 laps of sector data
         
+        # AUTO-START TRACK BUILDING: Initialize track building when laps are detected
+        self._track_builder_manager = None
+        self._track_building_enabled = False
+        self._auto_start_attempted = False
+        
         logger.info("🔌 IRacingLapSaver ready with immediate saving enabled")
         logger.info("✅ Immediate save callback registered")
         logger.info("✅ Immediate save worker thread started")
+        
+    def _auto_start_track_building(self):
+        """Auto-start track building when first valid lap is detected."""
+        if self._auto_start_attempted or not self._track_building_enabled:
+            return
+            
+        try:
+            self._auto_start_attempted = True
+            logger.info("🗺️ [AUTO TRACK BUILD] First valid lap detected - auto-starting track building...")
+            
+            # Import the track building system
+            from .integrated_track_builder import IntegratedTrackBuilderManager
+            
+            # Get the global iRacing connection
+            simple_iracing_api = None
+            if hasattr(self, 'simple_iracing_api'):
+                simple_iracing_api = self.simple_iracing_api
+            elif hasattr(self.lap_indexer, 'simple_iracing_api'):
+                simple_iracing_api = self.lap_indexer.simple_iracing_api
+            
+            # Create and start the track builder manager
+            self._track_builder_manager = IntegratedTrackBuilderManager(simple_iracing_api)
+            
+            # Connect signals for logging (if PyQt is available)
+            if PYQT_AVAILABLE:
+                self._track_builder_manager.status_update.connect(self._on_track_builder_status)
+                self._track_builder_manager.progress_update.connect(self._on_track_builder_progress)
+                self._track_builder_manager.completion_ready.connect(self._on_track_builder_complete)
+            
+            # Start the track building
+            self._track_builder_manager.start_building()
+            
+            logger.info("✅ [AUTO TRACK BUILD] Track building system started successfully!")
+            
+        except Exception as e:
+            logger.error(f"❌ [AUTO TRACK BUILD] Failed to start track building: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _on_track_builder_status(self, status):
+        """Handle track builder status updates."""
+        logger.info(f"🗺️ [TRACK BUILD] {status}")
+    
+    def _on_track_builder_progress(self, status, progress):
+        """Handle track builder progress updates."""
+        logger.info(f"🗺️ [TRACK BUILD] {status} (Progress: {progress})")
+    
+    def _on_track_builder_complete(self, centerline, corners):
+        """Handle track builder completion."""
+        logger.info(f"✅ [TRACK BUILD] Track map completed! {len(centerline)} centerline points, {len(corners)} corners")
+    
+    def enable_auto_track_building(self):
+        """Enable automatic track building when laps are detected."""
+        self._track_building_enabled = True
+        logger.info("✅ [AUTO TRACK BUILD] Auto track building enabled")
+    
+    def set_simple_iracing_api(self, simple_iracing_api):
+        """Set the SimpleIRacingAPI instance for track building."""
+        self.simple_iracing_api = simple_iracing_api
+        logger.info("✅ [AUTO TRACK BUILD] SimpleIRacingAPI reference set for track building")
         logger.info("🎯 IMMEDIATE SAVING ACTIVATED - Zero lag lap saving enabled!")
 
     # Immediate saving is now always enabled by default - no need for separate enable method
@@ -550,42 +622,48 @@ class IRacingLapSaver:
             sector_times = None
             sector_data_found_in_frames = False
             
-            # First, check if any frames already have sector data
-            logger.debug(f"🔍 [SECTOR DEBUG] Checking {len(lap_frames)} frames for sector data for lap {lap_number}")
-            
-            # CRITICAL FIX: Exhaustive search for complete sector data with multiple passes
-            # Pass 1: Look for COMPLETE sector data (10 sectors) with highest priority
-            # But prioritize frames that match the current lap to avoid cross-lap contamination
-            best_sector_data = None
-            best_frame_index = -1
-            
-            for i in reversed(range(len(lap_frames))):
-                frame = lap_frames[i]
-                if isinstance(frame, dict):
-                    # PRIORITY 1: Complete sector_times array with exactly 10 sectors
-                    if 'sector_times' in frame and frame['sector_times'] and len(frame['sector_times']) == 10:
-                        frame_lap = frame.get('Lap', 0)
-                        source_lap = frame.get('_source_lap', frame_lap)
+            # 🔧 CRITICAL COORDINATION FIX: First check if LapIndexer already found sector data
+            if "sector_times" in lap_data and lap_data.get("has_sector_data", False):
+                sector_times = lap_data["sector_times"]
+                sector_data_found_in_frames = True
+                logger.info(f"✅ [COORDINATION] Using sector data from LapIndexer for lap {lap_number}: {sector_times}")
+            else:
+                # Fallback: Search frames for sector data (legacy approach)
+                logger.debug(f"[SECTOR] Checking {len(lap_frames)} frames for sector data")
+                
+                # CRITICAL FIX: Exhaustive search for complete sector data with multiple passes
+                # Pass 1: Look for COMPLETE sector data (10 sectors) with highest priority
+                # But prioritize frames that match the current lap to avoid cross-lap contamination
+                best_sector_data = None
+                best_frame_index = -1
+                
+                for i in reversed(range(len(lap_frames))):
+                    frame = lap_frames[i]
+                    if isinstance(frame, dict):
+                        # PRIORITY 1: Complete sector_times array with exactly 10 sectors
+                        if 'sector_times' in frame and frame['sector_times'] and len(frame['sector_times']) == 10:
+                            frame_lap = frame.get('Lap', 0)
+                            source_lap = frame.get('_source_lap', frame_lap)
+                            
+                            # Prefer sector data that matches this lap number
+                            if source_lap == lap_number or frame_lap == lap_number:
+                                sector_times = frame['sector_times']
+                                sector_data_found_in_frames = True
+                                logger.info(f"✅ [SECTOR FIX] Found MATCHING lap {lap_number} sector data (10 sectors) in frame {i}: {sector_times}")
+                                break
+                            elif best_sector_data is None:
+                                # Store as fallback but keep looking for exact match
+                                best_sector_data = frame['sector_times']
+                                best_frame_index = i
                         
-                        # Prefer sector data that matches this lap number
-                        if source_lap == lap_number or frame_lap == lap_number:
-                            sector_times = frame['sector_times']
-                            sector_data_found_in_frames = True
-                            logger.info(f"✅ [SECTOR FIX] Found MATCHING lap {lap_number} sector data (10 sectors) in frame {i}: {sector_times}")
-                            break
-                        elif best_sector_data is None:
-                            # Store as fallback but keep looking for exact match
-                            best_sector_data = frame['sector_times']
-                            best_frame_index = i
-                    
-                    # PRIORITY 2: Complete individual sector fields (all 10 sectors present)
-                    elif all(f'sector{j+1}_time' in frame for j in range(10)):
-                        individual_sectors = [frame.get(f'sector{j+1}_time') for j in range(10)]
-                        if all(s is not None for s in individual_sectors):
-                            sector_times = individual_sectors
-                            sector_data_found_in_frames = True
-                            logger.info(f"✅ [SECTOR FIX] Found COMPLETE individual sector fields (10 sectors) in frame {i} for lap {lap_number}: {sector_times}")
-                            break
+                        # PRIORITY 2: Complete individual sector fields (all 10 sectors present)
+                        elif all(f'sector{j+1}_time' in frame for j in range(10)):
+                            individual_sectors = [frame.get(f'sector{j+1}_time') for j in range(10)]
+                            if all(s is not None for s in individual_sectors):
+                                sector_times = individual_sectors
+                                sector_data_found_in_frames = True
+                                logger.info(f"✅ [SECTOR FIX] Found COMPLETE individual sector fields (10 sectors) in frame {i} for lap {lap_number}: {sector_times}")
+                                break
             
             # If we didn't find an exact match, use the best fallback
             if not sector_data_found_in_frames and best_sector_data is not None:
@@ -775,6 +853,11 @@ class IRacingLapSaver:
                 # Update statistics
                 self._total_laps_saved += 1
                 self._mark_lap_as_processed(lap_number, success=True)
+                
+                # AUTO-START TRACK BUILDING: Start track building when first valid lap is detected
+                if lap_state == "TIMED" and is_valid_for_leaderboard:
+                    self._auto_start_track_building()
+                
                 return True
             else:
                 self._mark_lap_as_processed(lap_number, success=False)
@@ -1183,7 +1266,7 @@ class IRacingLapSaver:
             logger.info(f"[LAP VALIDATION] Lap {lap_number_for_validation} classified by LapIndexer as: {lap_state_from_indexer}")
         
         # Adjust coverage threshold based on lap type
-        effective_threshold = 0.5 # Default for TIMED laps
+        effective_threshold = 0.5
         if lap_state_from_indexer == "OUT":
             effective_threshold = 0.35
             logger.info(f"[LAP VALIDATION] Using reduced coverage threshold of {effective_threshold} for OUT lap {lap_number_for_validation}")
@@ -1482,7 +1565,18 @@ class IRacingLapSaver:
             
             # Additional debugging for lap number mismatch
             if ir_completed > 0 and ir_completed - 1 != lap_number:
-                logger.warning(f"[LAP SYNC] Potential lap number mismatch: saving lap {lap_number} but iRacing LapCompleted={ir_completed}")
+                # Check if this is a mid-session join or session reset scenario
+                is_mid_session_condition = (
+                    ir_completed > 5 or  # Likely joined a session in progress
+                    abs(ir_completed - 1 - lap_number) > 3  # Large gap suggests reset/rejoin
+                )
+                
+                if is_mid_session_condition:
+                    # This is expected for mid-session joins - log as info, not warning
+                    logger.info(f"[LAP SYNC] Mid-session condition detected: saving lap {lap_number}, iRacing LapCompleted={ir_completed} (expected for session joins)")
+                else:
+                    # Only warn for small mismatches that might indicate a real sync issue
+                    logger.warning(f"[LAP SYNC] Potential lap sync issue: saving lap {lap_number} but iRacing LapCompleted={ir_completed} (difference: {abs(ir_completed - 1 - lap_number)})")
         else:
             # Fallback if no frames (should not happen for a processed lap from LapIndexer)
             logger.warning(f"Lap {lap_number} has no telemetry frames for determining lap_type/leaderboard_validity in _save_lap_data. Defaulting type to TIMED, leaderboard to False.")
@@ -1490,6 +1584,36 @@ class IRacingLapSaver:
 
         # Log the determined type and leaderboard status
         logger.info(f"Lap {lap_number} final classification for DB: Type={lap_type}, ValidForLeaderboard={is_valid_for_leaderboard} (Validation result: {is_valid})")
+
+        # 🔧 ENHANCED LAP VALIDATION: Add comprehensive validation checks
+        validation_issues = []
+        
+        # Validate lap time is reasonable
+        if lap_time <= 0:
+            validation_issues.append(f"Invalid lap time: {lap_time}")
+        elif lap_time > 3600:  # More than 1 hour
+            validation_issues.append(f"Extremely long lap time: {lap_time}s")
+        
+        # Validate lap frames exist and have reasonable data
+        if not lap_frames_from_indexer:
+            validation_issues.append("No telemetry frames available")
+        elif len(lap_frames_from_indexer) < 10:
+            validation_issues.append(f"Very few telemetry frames: {len(lap_frames_from_indexer)}")
+        
+        # Validate session context
+        if not self._current_session_id:
+            validation_issues.append("No active session ID")
+        if not self._user_id:
+            validation_issues.append("No user ID set")
+        
+        # Log validation issues but don't necessarily fail the lap
+        if validation_issues:
+            logger.warning(f"[LAP VALIDATION] Lap {lap_number} has validation issues: {'; '.join(validation_issues)}")
+            # Update validation message to include these issues
+            if validation_message:
+                validation_message += f" | Issues: {'; '.join(validation_issues)}"
+            else:
+                validation_message = f"Issues: {'; '.join(validation_issues)}"
 
         # Prepare lap data
         is_personal_best = lap_time < self._best_lap_time
@@ -1578,6 +1702,34 @@ class IRacingLapSaver:
                     "message": "Lap already exists in database with this session_id and lap_number"
                 }
                 return None
+            # 🔧 ENHANCED ERROR HANDLING: Check for specific database constraint violations
+            elif "check constraint" in str(e).lower():
+                if "check_lap_type" in str(e):
+                    logger.error(f"[LAP VALIDATION] Invalid lap_type '{lap_type}' for lap {lap_number}. Must be OUT, TIMED, IN, or INCOMPLETE")
+                    # Try to save with corrected lap type
+                    corrected_lap_type = "TIMED" if lap_type not in ["OUT", "TIMED", "IN", "INCOMPLETE"] else lap_type
+                    if corrected_lap_type != lap_type:
+                        logger.info(f"[LAP VALIDATION] Retrying lap {lap_number} save with corrected lap_type: {corrected_lap_type}")
+                        lap_data["lap_type"] = corrected_lap_type
+                        try:
+                            response = self._supabase_client.table("laps").insert(lap_data).execute()
+                            if response.data and len(response.data) > 0:
+                                saved_lap_uuid = response.data[0].get('id', lap_uuid)
+                                logger.info(f"✅ [LAP VALIDATION] Successfully saved lap {lap_number} with corrected lap_type: {corrected_lap_type}")
+                                return saved_lap_uuid
+                        except Exception as retry_e:
+                            logger.error(f"[LAP VALIDATION] Retry with corrected lap_type also failed: {retry_e}")
+                else:
+                    logger.error(f"[LAP VALIDATION] Database constraint violation for lap {lap_number}: {e}")
+            elif "connection" in str(e).lower() or "timeout" in str(e).lower():
+                logger.error(f"[DATABASE] Connection/timeout error saving lap {lap_number}: {e}")
+                # Record for potential retry later
+                self._lap_recording_status[lap_number] = {
+                    "status": "connection_error",
+                    "message": str(e),
+                    "lap_data": lap_data,  # Store data for retry
+                    "telemetry_frames": lap_frames_from_indexer
+                }
             else:
                 logger.error(f"Error saving lap {lap_number}: {e}", exc_info=True)
                 return None
@@ -1710,23 +1862,22 @@ class IRacingLapSaver:
             sector_times = None
             sector_total_time = None
             
-            logger.info(f"🔍 [SECTOR DEBUG] Checking {len(lap_frames)} lap frames for sector data...")
+            logger.debug(f"[SECTOR] Checking {len(lap_frames)} lap frames for sector data")
             
-            # ENHANCED: Check the last few frames for completed sector data first
+            # Check the last few frames for completed sector data first
             frames_to_check = min(10, len(lap_frames))
             for i, frame in enumerate(reversed(lap_frames[-frames_to_check:])):
                 frame_index = len(lap_frames) - 1 - i
-                logger.debug(f"🔍 [SECTOR DEBUG] Frame {frame_index}: keys = {list(frame.keys()) if isinstance(frame, dict) else 'not dict'}")
                 
                 if isinstance(frame, dict) and 'sector_times' in frame and frame['sector_times']:
                     sector_times = frame['sector_times']
                     sector_total_time = frame.get('sector_total_time')
-                    logger.info(f"✅ [SECTOR DEBUG] Found completed sector data in frame {frame_index}: {sector_times}")
+                    logger.debug(f"[SECTOR] Found completed sector data in frame {frame_index}: {sector_times}")
                     break
             
-            # ENHANCED: If no completed sector data found, try to reconstruct from current lap progress
+            # If no completed sector data found, try to reconstruct from current lap progress
             if not sector_times:
-                logger.info(f"🔧 [SECTOR DEBUG] No completed sector data found, attempting reconstruction from lap progress...")
+                logger.debug(f"[SECTOR] No completed sector data found, attempting reconstruction from lap progress")
                 
                 # Look for frames with sector timing data
                 sector_progress_frames = []
@@ -1744,9 +1895,7 @@ class IRacingLapSaver:
                     current_sector_time = last_frame.get('current_sector_time', 0.0)
                     total_sectors = last_frame.get('total_sectors', 0)
                     
-                    logger.info(f"🔧 [SECTOR DEBUG] Found sector progress in frame {last_frame_index}: {completed_sectors}/{total_sectors} sectors completed")
-                    logger.info(f"🔧 [SECTOR DEBUG] Current lap splits: {current_lap_splits}")
-                    logger.info(f"🔧 [SECTOR DEBUG] Current sector time: {current_sector_time:.3f}s")
+                    logger.debug(f"[SECTOR] Found sector progress in frame {last_frame_index}: {completed_sectors}/{total_sectors} sectors completed")
                     
                     # If we have completed sectors, use them
                     if current_lap_splits and len(current_lap_splits) > 0:
@@ -1754,18 +1903,18 @@ class IRacingLapSaver:
                         if len(current_lap_splits) == total_sectors:
                             sector_times = current_lap_splits
                             sector_total_time = sum(sector_times)
-                            logger.info(f"✅ [SECTOR DEBUG] Reconstructed complete sector data: {sector_times} (total: {sector_total_time:.3f}s)")
+                            logger.debug(f"[SECTOR] Reconstructed complete sector data: {len(sector_times)} sectors")
                         else:
                             # Partial lap - include current sector time if significant
                             if current_sector_time > 0.1:  # Only if we've been in current sector for more than 0.1s
                                 reconstructed_times = current_lap_splits + [current_sector_time]
                                 sector_times = reconstructed_times
                                 sector_total_time = sum(sector_times)
-                                logger.info(f"✅ [SECTOR DEBUG] Reconstructed partial sector data: {sector_times} (total: {sector_total_time:.3f}s)")
+                                logger.debug(f"[SECTOR] Reconstructed partial sector data: {len(sector_times)} sectors")
                             else:
                                 sector_times = current_lap_splits
                                 sector_total_time = sum(sector_times) if sector_times else 0.0
-                                logger.info(f"✅ [SECTOR DEBUG] Using completed sectors only: {sector_times} (total: {sector_total_time:.3f}s)")
+                                logger.debug(f"[SECTOR] Using completed sectors only: {len(sector_times)} sectors")
                     else:
                         logger.warning(f"❌ [SECTOR DEBUG] No usable sector progress data found in frames")
                 else:

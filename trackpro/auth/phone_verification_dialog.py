@@ -141,9 +141,9 @@ class PhoneVerificationDialog(QDialog):
         verification_layout.addWidget(self.code_input)
         
         # Verify button
-        self.verify_btn = QPushButton("Verify & Enable 2FA")
+        self.verify_btn = QPushButton("Verify Phone Number")
         self.verify_btn.setMinimumHeight(45)  # Make it bigger
-        self.verify_btn.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # Bold font
+        self.verify_btn.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.verify_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -271,12 +271,12 @@ class PhoneVerificationDialog(QDialog):
             
             if result['success']:
                 self.save_2fa_settings()
-                QMessageBox.information(self, "Success", "Phone verification completed! Two-factor authentication is now enabled.")
+                QMessageBox.information(self, "Success", "Phone verification completed successfully! You can now log in without SMS verification.")
                 self.accept()
             else:
                 QMessageBox.warning(self, "Invalid Code", f"Verification failed: {result['message']}")
                 self.verify_btn.setEnabled(True)
-                self.verify_btn.setText("Verify & Enable 2FA")
+                self.verify_btn.setText("Verify Phone Number")
                 self.code_input.clear()
                 self.code_input.setFocus()
                 
@@ -284,7 +284,7 @@ class PhoneVerificationDialog(QDialog):
             logger.error(f"Error verifying code: {e}")
             QMessageBox.critical(self, "Error", "Verification failed. Please try again.")
             self.verify_btn.setEnabled(True)
-            self.verify_btn.setText("Verify & Enable 2FA")
+            self.verify_btn.setText("Verify Phone Number")
     
     def save_2fa_settings(self):
         """Save 2FA settings to database."""
@@ -300,10 +300,10 @@ class PhoneVerificationDialog(QDialog):
                     'user_id': self.user_id,
                     'phone_number': self.phone_number,
                     'twilio_verified': True,
-                    'is_2fa_enabled': True
+                    'is_2fa_enabled': False  # Changed from True to False - users only need to verify phone once
                 }).execute()
                 
-                logger.info(f"2FA enabled successfully for user {self.user_id}")
+                logger.info(f"Phone verification completed successfully for user {self.user_id}")
             else:
                 logger.warning("Supabase client not available for saving 2FA settings")
                 

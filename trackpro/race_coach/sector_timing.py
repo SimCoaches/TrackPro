@@ -29,7 +29,7 @@ class SectorInfo:
 
 @dataclass
 class SectorTime:
-    """A completed sector time."""
+    """Record of a completed sector time."""
     sector_num: int
     time: float
     lap_number: int
@@ -37,9 +37,9 @@ class SectorTime:
 
 @dataclass
 class LapSectorTimes:
-    """Complete sector times for a lap."""
+    """Complete sector timing data for a lap."""
     lap_number: int
-    sector_times: List[float]  # Times for each sector
+    sector_times: List[float]
     total_time: float
     timestamp: float
     is_valid: bool = True
@@ -200,17 +200,17 @@ class SectorTimingCollector:
             
             # ONLY reset timing state if sectors actually changed or we're not initialized
             if not self.is_initialized or sectors_changed:
-                logger.info("🔄 Sectors changed or first initialization - resetting timing state")
+                logger.debug("[SECTOR] Sectors changed or first initialization - resetting timing state")
                 self._reset_timing_state()
             else:
-                logger.info("🔄 Sectors unchanged - preserving current timing state")
+                logger.debug("[SECTOR] Sectors unchanged - preserving current timing state")
             
             # Mark as initialized and update hash
             self.is_initialized = True
             self.last_session_info_hash = session_hash
             
-            logger.info(f"✅ Sector timing updated from SessionInfo with {num_sectors} sectors")
-            logger.info(f"🏁 Final sector boundaries: {[f'S{i+1}: {pct:.3f}' for i, pct in enumerate(self.sector_starts[:-1])]}")
+            logger.info(f"[SECTOR] Sector timing updated from SessionInfo with {num_sectors} sectors")
+            logger.debug(f"[SECTOR] Final sector boundaries: {[f'S{i+1}: {pct:.3f}' for i, pct in enumerate(self.sector_starts[:-1])]}")
             
             return True
             
@@ -321,7 +321,7 @@ class SectorTimingCollector:
         self.sector_crossing_times = {}
         self.lap_start_time = 0.0
         self.sector_start_time = 0.0  # FIXED: Reset sector start time
-        logger.info("🔄 Sector timing state reset")
+        logger.debug("[SECTOR] Timing state reset")
     
     def _interpolate_crossing_time(self, prev_pct: float, now_pct: float, 
                                  prev_time: float, now_time: float, 
@@ -363,7 +363,7 @@ class SectorTimingCollector:
     
     def _finalize_incomplete_lap(self, timestamp: float) -> None:
         """
-        Finalize an incomplete lap when lap number changes unexpectedly.
+        Finalize an incomplete lap when session changes occur.
         
         This handles cases where a lap is interrupted (e.g., reset to pits)
         but we still want to record the partial sector data.
@@ -478,9 +478,9 @@ class SectorTimingCollector:
             self._process_telemetry_call_count = 0
         self._process_telemetry_call_count += 1
         
-        # Log every 60 calls (about once per second at 60Hz)
-        if self._process_telemetry_call_count % 60 == 0:
-            logger.info(f"🔧 [ENHANCED SECTOR DEBUG] process_telemetry called {self._process_telemetry_call_count} times, initialized: {self.is_initialized}")
+        # Log every 300 calls (about once per 5 seconds at 60Hz)
+        if self._process_telemetry_call_count % 300 == 0:
+            logger.debug(f"[SECTOR] process_telemetry called {self._process_telemetry_call_count} times, initialized: {self.is_initialized}")
         
         if not self.is_initialized:
             # Log occasionally that we're waiting for SessionInfo
@@ -555,10 +555,10 @@ class SectorTimingCollector:
                     self.prev_time = now_time
                     return None
                 
-                # Log the sector completion with fixed calculation
-                logger.info(f"🏁 FIXED S{self.current_sector_index + 1}: {sector_time:.3f}s (lap {self.current_lap_number}) - proper duration")
+                # Log the sector completion
+                logger.debug(f"[SECTOR] S{self.current_sector_index + 1}: {sector_time:.3f}s (lap {self.current_lap_number})")
                 if sector_time > 60.0:  # Log long sector times
-                    logger.warning(f"⏰ LONG SECTOR TIME: S{self.current_sector_index + 1} took {sector_time:.1f}s ({sector_time/60:.1f} minutes)")
+                    logger.warning(f"[SECTOR] Long sector time: S{self.current_sector_index + 1} took {sector_time:.1f}s ({sector_time/60:.1f} minutes)")
                 
                 # Store the completed sector time
                 self.current_lap_sector_times.append(sector_time)
@@ -582,14 +582,64 @@ class SectorTimingCollector:
                 self.current_sector_index = expected_sector_index
                 self.sector_start_time = now_time  # FIXED: Update sector start time
                 
-                # Check if we completed a lap (moved back to sector 0 and have all sectors)
+                # 🔧 ENHANCED LAP COMPLETION DETECTION: Check multiple conditions for lap completion
+                lap_completed = False
+                completion_reason = ""
+                
+                # Condition 1: Traditional - moved back to sector 0 and have all sectors
                 if self.current_sector_index == 0 and len(self.current_lap_sector_times) == len(self.sectors):
+                    lap_completed = True
+                    completion_reason = "returned to sector 0 with all sectors complete"
+                
+                # Condition 2: Enhanced - track position wrapped around (crossed start/finish line)
+                elif self.prev_pct > 0.9 and now_pct < 0.1 and len(self.current_lap_sector_times) >= len(self.sectors) - 1:
+                    # Track position wrapped from near 1.0 to near 0.0, indicating start/finish line crossing
+                    # and we have at least most sectors completed
+                    lap_completed = True
+                    completion_reason = "track position wrapped around with sufficient sectors"
+                    
+                    # If we're missing the final sector time (car finished in last sector), add it
+                    if len(self.current_lap_sector_times) == len(self.sectors) - 1:
+                        final_sector_time = now_time - self.sector_start_time
+                        if final_sector_time > 0:
+                            self.current_lap_sector_times.append(final_sector_time)
+                            logger.info(f"🔧 Added final sector time for wrap-around completion: S{len(self.sectors)} = {final_sector_time:.3f}s")
+                
+                # Condition 3: Fallback - Have all sectors and significant track position progress
+                elif len(self.current_lap_sector_times) == len(self.sectors) and now_pct > 0.8:
+                    # We have all sector times and are near the end of the track
+                    lap_completed = True
+                    completion_reason = "all sectors complete and near track end"
+                
+                if lap_completed:
+                    logger.debug(f"[SECTOR] Lap completion detected: {completion_reason}")
+                    logger.debug(f"[SECTOR] Lap data: sectors={len(self.current_lap_sector_times)}/{len(self.sectors)}, current_sector={self.current_sector_index}, track_pos={now_pct:.3f}")
                     return self._complete_lap(now_time)
                 
                 # Log sector transition
                 logger.debug(f"🔄 Moved to sector {self.current_sector_index + 1} at position {now_pct:.3f}")
             
-            return None
+            # 🔧 ADDITIONAL LAP COMPLETION CHECK: Monitor for lap completion even without sector changes
+            # This handles cases where the car might complete a lap while staying in the same sector
+            else:
+                # Check for track position wrap-around (start/finish line crossing) without sector change
+                if (self.prev_pct > 0.95 and now_pct < 0.05 and 
+                    len(self.current_lap_sector_times) > 0):  # Have at least some sector data
+                    
+                    # Calculate final sector time for the sector we just completed
+                    final_sector_time = now_time - self.sector_start_time
+                    if final_sector_time > 0:
+                        self.current_lap_sector_times.append(final_sector_time)
+                        logger.info(f"🔧 LAP COMPLETION: Added final sector time due to position wrap: S{len(self.current_lap_sector_times)} = {final_sector_time:.3f}s")
+                    
+                    logger.info(f"🏁 LAP COMPLETION: Track position wrapped (no sector change) - sectors: {len(self.current_lap_sector_times)}/{len(self.sectors)}")
+                    
+                    # Complete the lap regardless of sector count (partial laps are valid)
+                    if len(self.current_lap_sector_times) > 0:
+                        return self._complete_lap(now_time)
+                    
+            # Update previous values for next iteration
+            self.prev_pct = now_pct
             
         except Exception as e:
             logger.error(f"❌ Error processing sector timing telemetry: {e}")
