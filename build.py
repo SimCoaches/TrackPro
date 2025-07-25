@@ -53,8 +53,8 @@ import importlib
 from sign_code import CodeSigner
 
 class InstallerBuilder:
-    VJOY_URL = "https://github.com/jshafer817/vJoy/releases/download/v2.1.9.1/vJoySetup.exe"
-    HIDHIDE_URL = "https://github.com/ViGEm/HidHide/releases/download/v1.2.98.0/HidHide_1.2.98_x64.exe"
+    VJOY_URL = "https://github.com/jshafer817/vJoy/releases/download/v2.1.9.1/vJoySetup.exe"  # Fixed to working repo
+    HIDHIDE_URL = "https://github.com/nefarius/HidHide/releases/download/v1.5.230.0/HidHide_1.5.230_x64.exe"  # Corrected filename
     VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"  # Latest Visual C++ Redistributable
     
     def __init__(self):
@@ -281,7 +281,7 @@ Section "MainInstallation"
     DetailPrint "Extracting prerequisites..."
     
     File "installer_temp\prerequisites\vJoySetup.exe"
-    File "installer_temp\prerequisites\HidHide_1.2.98_x64.exe"
+            File "installer_temp\prerequisites\HidHide_1.5.230_x64.exe"
     File "installer_temp\prerequisites\vc_redist.x64.exe"
     
     ; Create installation directory
@@ -342,7 +342,7 @@ Section "MainInstallation"
     Pop $2
 
     ; HidHide
-    Push '"$TEMP\TrackPro_Prerequisites\HidHide_1.2.98_x64.exe" /quiet /norestart'
+            Push '"$TEMP\TrackPro_Prerequisites\HidHide_1.5.230_x64.exe" /quiet /norestart'
     Push "HidHide"
     Push "60"
     Call InstallPrerequisiteWithTimeout
@@ -775,7 +775,7 @@ SectionEnd
         print("\nVerifying all required files exist...")
         required_files = [
             os.path.join(self.temp_dir, "prerequisites", "vJoySetup.exe"),
-            os.path.join(self.temp_dir, "prerequisites", "HidHide_1.2.98_x64.exe"),
+            os.path.join(self.temp_dir, "prerequisites", "HidHide_1.5.230_x64.exe"),
             os.path.join(self.temp_dir, "prerequisites", "vc_redist.x64.exe"),
             os.path.join(self.temp_dir, "dist", f"TrackPro_v{self.version}.exe"),
             "installer.nsi"
@@ -1508,7 +1508,7 @@ SectionEnd
         # Check for required files
         required_files = {
             "vJoySetup.exe": self.VJOY_URL,
-            "HidHide_1.2.98_x64.exe": self.HIDHIDE_URL,
+            "HidHide_1.5.230_x64.exe": self.HIDHIDE_URL,
             "vc_redist.x64.exe": self.VCREDIST_URL
         }
         

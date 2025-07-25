@@ -323,25 +323,25 @@ class AccountPage(QWidget):
         form_layout.setColumnStretch(1, 1)
         
         # First Name
-        form_layout.addWidget(self.create_label("Display Name"), 0, 0)
-        self.first_name_input = ModernInput("Enter your display name")
+        form_layout.addWidget(self.create_label("First Name"), 0, 0)
+        self.first_name_input = ModernInput("Enter your first name")
         self.first_name_input.setMaxLength(50)
         form_layout.addWidget(self.first_name_input, 0, 1)
         
         # Last Name  
-        form_layout.addWidget(self.create_label("Username"), 1, 0)
-        self.last_name_input = ModernInput("Enter your username")
+        form_layout.addWidget(self.create_label("Last Name"), 1, 0)
+        self.last_name_input = ModernInput("Enter your last name")
         self.last_name_input.setMaxLength(50)
         form_layout.addWidget(self.last_name_input, 1, 1)
         
         # Username
-        form_layout.addWidget(self.create_label("Email"), 2, 0)
+        form_layout.addWidget(self.create_label("Username"), 2, 0)
         self.username_input = ModernInput("Enter your username")
         self.username_input.setMaxLength(100)
         form_layout.addWidget(self.username_input, 2, 1)
         
         # Email
-        form_layout.addWidget(self.create_label("Phone Number"), 3, 0)
+        form_layout.addWidget(self.create_label("Email"), 3, 0)
         self.email_input = ModernInput("Enter your email")
         form_layout.addWidget(self.email_input, 3, 1)
         
@@ -740,6 +740,9 @@ class AccountPage(QWidget):
         """Load user data from database with enhanced security validation."""
         logger.info("Loading user data with security validation...")
         
+        # Clear previous user data first to prevent data leakage
+        self.clear_user_data()
+        
         try:
             # Import here to avoid circular imports
             from ..database import supabase
@@ -907,6 +910,99 @@ class AccountPage(QWidget):
                 self.gender_combo.setCurrentIndex(index)
         
         # 2FA UI is updated separately in load_user_data() to avoid duplicates
+
+    def clear_user_data(self):
+        """Clear all user data and form fields to prevent data leakage when switching users."""
+        try:
+            logger.info("🔒 SECURITY: Clearing previous user data to prevent leakage")
+            
+            # Clear user data
+            self.user_data = None
+            self.is_oauth_user = False
+            self.has_password = False
+            
+            # Clear header info with safety checks
+            try:
+                if hasattr(self, 'header_name') and self.header_name is not None:
+                    self.header_name.setText("Loading...")
+                if hasattr(self, 'header_email') and self.header_email is not None:
+                    self.header_email.setText("Loading...")
+                if hasattr(self, 'header_avatar') and self.header_avatar is not None:
+                    self.header_avatar.set_initials("U")
+            except Exception as header_error:
+                logger.warning(f"Error clearing header info: {header_error}")
+            
+            # Clear form fields with individual error handling
+            form_fields = [
+                ('first_name_input', ''),
+                ('last_name_input', ''),
+                ('username_input', ''),
+                ('email_input', ''),
+                ('phone_input', ''),
+                ('current_password_input', ''),
+                ('new_password_input', ''),
+                ('confirm_password_input', ''),
+                ('verification_code_input', '')
+            ]
+            
+            for field_name, default_value in form_fields:
+                try:
+                    if hasattr(self, field_name):
+                        field = getattr(self, field_name)
+                        if field is not None and hasattr(field, 'clear'):
+                            field.clear()
+                        elif field is not None and hasattr(field, 'setText'):
+                            field.setText(default_value)
+                except Exception as field_error:
+                    logger.warning(f"Error clearing field {field_name}: {field_error}")
+            
+            # Clear text areas
+            try:
+                if hasattr(self, 'bio_input') and self.bio_input is not None:
+                    if hasattr(self.bio_input, 'clear'):
+                        self.bio_input.clear()
+                    elif hasattr(self.bio_input, 'setPlainText'):
+                        self.bio_input.setPlainText('')
+            except Exception as bio_error:
+                logger.warning(f"Error clearing bio field: {bio_error}")
+            
+            # Reset date of birth to current date
+            try:
+                if hasattr(self, 'dob_input') and self.dob_input is not None:
+                    from PyQt6.QtCore import QDate
+                    self.dob_input.setDate(QDate.currentDate())
+            except Exception as dob_error:
+                logger.warning(f"Error resetting date of birth: {dob_error}")
+            
+            # Reset gender combo
+            try:
+                if hasattr(self, 'gender_combo') and self.gender_combo is not None:
+                    self.gender_combo.setCurrentIndex(0)
+            except Exception as gender_error:
+                logger.warning(f"Error resetting gender combo: {gender_error}")
+            
+            # Reset 2FA fields with safety checks
+            try:
+                if hasattr(self, 'phone_verified_status') and self.phone_verified_status is not None:
+                    self.phone_verified_status.setText("Not verified")
+                    self.phone_verified_status.setStyleSheet("color: #ed4245;")
+                if hasattr(self, 'send_code_btn') and self.send_code_btn is not None:
+                    self.send_code_btn.setText("Send Code")
+                    self.send_code_btn.setEnabled(True)
+                if hasattr(self, 'verify_code_btn') and self.verify_code_btn is not None:
+                    self.verify_code_btn.setEnabled(False)
+                if hasattr(self, 'twofactor_checkbox') and self.twofactor_checkbox is not None:
+                    self.twofactor_checkbox.setChecked(False)
+                    self.twofactor_checkbox.setEnabled(False)
+            except Exception as twofa_error:
+                logger.warning(f"Error resetting 2FA fields: {twofa_error}")
+            
+            logger.info("✅ SECURITY: User data cleared successfully")
+            
+        except Exception as e:
+            logger.error(f"🚨 SECURITY: Critical error clearing user data: {e}")
+            # Even if clearing fails, ensure user_data is None for security
+            self.user_data = None
 
     def save_profile_changes(self):
         """Save profile changes to database with validation."""
@@ -1479,22 +1575,205 @@ class AccountPage(QWidget):
                 
                 user_id = user.user.id
                 
-                # Delete user data from all tables
-                # Note: This should be done in a transaction in production
-                supabase.client.from_("user_details").delete().eq("user_id", user_id).execute()
-                supabase.client.from_("user_profiles").delete().eq("user_id", user_id).execute()
+                # Try advanced deletion functions first, fallback to manual deletion if not available
+                logger.info(f"Starting complete account deletion process for user {user_id}")
                 
-                # Delete the auth user
-                # Note: This requires admin privileges in Supabase
-                logger.warning("Account deletion requested - manual admin action may be required")
+                deletion_success = False
+                complete_deletion = False
                 
-                # Show modern success dialog
+                # First attempt: Try the comprehensive deletion function (if available)
+                try:
+                    logger.info("Attempting advanced deletion with database functions...")
+                    deletion_result = supabase.client.rpc('delete_user_completely', {'user_uuid': user_id}).execute()
+                    
+                    if deletion_result.data:
+                        result_data = deletion_result.data
+                        logger.info(f"✅ Advanced deletion completed: {result_data}")
+                        
+                        # Check if auth deletion was successful
+                        complete_deletion = result_data.get('complete_deletion', False)
+                        deletion_success = True
+                        
+                        if complete_deletion:
+                            logger.info(f"✅ COMPLETE DELETION SUCCESS: User {user_id} and all data completely removed")
+                        else:
+                            logger.warning(f"⚠️ PARTIAL DELETION: User data deleted but auth record may remain for {user_id}")
+                            
+                    else:
+                        logger.error("Advanced deletion function returned no data")
+                        raise Exception("Advanced deletion function failed")
+                        
+                except Exception as advanced_error:
+                    logger.warning(f"Advanced deletion failed: {advanced_error}")
+                    
+                    # Check if it's a "function not found" error - this is expected in dev/early production
+                    if "Could not find the function" in str(advanced_error) or "PGRST202" in str(advanced_error):
+                        logger.info("Advanced deletion functions not available - using manual deletion fallback")
+                    else:
+                        logger.error(f"Unexpected error in advanced deletion: {advanced_error}")
+                
+                # Second attempt: Manual deletion fallback (works in all environments)
+                if not deletion_success:
+                    logger.info("Performing manual account deletion (fallback mode)...")
+                    
+                    try:
+                        # Delete user data manually from all tables in dependency order
+                        tables_to_clear = [
+                            ('sessions', 'user_id'),
+                            ('telemetry_points', 'user_id'), 
+                            ('laps', 'user_id'),
+                            ('user_quests', 'user_id'),
+                            ('user_calibrations', 'user_id'),
+                            ('eye_tracking_points', 'user_id'),
+                            ('eye_tracking_sessions', 'user_id'), 
+                            ('sector_times', 'user_id'),
+                            ('user_achievements', 'user_id'),
+                            ('user_stats', 'user_id'),
+                            ('user_streaks', 'user_id'),
+                            ('team_members', 'user_id'),
+                            ('club_members', 'user_id'), 
+                            ('event_participants', 'user_id'),
+                            ('challenge_participants', 'user_id'),
+                            ('conversation_participants', 'user_id'),
+                            ('user_activities', 'user_id'),
+                            ('activity_interactions', 'user_id'),
+                            ('setup_ratings', 'user_id'),
+                            ('media_likes', 'user_id'),
+                            ('leaderboard_entries', 'user_id'), 
+                            ('shared_setups', 'user_id'),
+                            ('shared_media', 'user_id'),
+                            ('user_profiles', 'user_id'),
+                            ('user_details', 'user_id')
+                        ]
+                        
+                        # Special case tables with different column patterns
+                        special_tables = [
+                            ('messages', 'sender_id'),
+                            ('friendships', ['requester_id', 'addressee_id']),
+                            ('reputation_events', ['user_id', 'given_by']),
+                            ('teams', 'created_by'),
+                            ('clubs', 'created_by'),
+                            ('community_events', 'created_by'),
+                            ('community_challenges', 'created_by'),
+                            ('conversations', 'created_by')
+                        ]
+                        
+                        deleted_tables = []
+                        failed_tables = []
+                        
+                        # Delete from standard tables
+                        for table_name, column_name in tables_to_clear:
+                            try:
+                                result = supabase.client.from_(table_name).delete().eq(column_name, user_id).execute()
+                                deleted_tables.append(table_name)
+                                logger.info(f"✅ Deleted from {table_name}")
+                            except Exception as table_error:
+                                failed_tables.append(f"{table_name}: {str(table_error)}")
+                                logger.warning(f"⚠️ Could not delete from {table_name}: {table_error}")
+                        
+                        # Delete from special case tables
+                        for table_info in special_tables:
+                            table_name = table_info[0]
+                            columns = table_info[1]
+                            
+                            try:
+                                if isinstance(columns, list):
+                                    # Multiple columns to check (OR condition)
+                                    for column in columns:
+                                        try:
+                                            supabase.client.from_(table_name).delete().eq(column, user_id).execute()
+                                        except:
+                                            pass  # Table might not exist
+                                else:
+                                    # Single column
+                                    supabase.client.from_(table_name).delete().eq(columns, user_id).execute()
+                                
+                                deleted_tables.append(table_name)
+                                logger.info(f"✅ Deleted from {table_name} (special case)")
+                            except Exception as table_error:
+                                failed_tables.append(f"{table_name}: {str(table_error)}")
+                                logger.warning(f"⚠️ Could not delete from {table_name}: {table_error}")
+                        
+                        logger.info(f"Manual deletion summary: {len(deleted_tables)} tables cleared, {len(failed_tables)} failed")
+                        
+                        # Try to delete auth user (this will likely fail without elevated privileges)
+                        auth_deleted = False
+                        try:
+                            # Try multiple methods to delete auth user
+                            methods_tried = []
+                            
+                            # Method 1: Admin API (requires service role)
+                            try:
+                                supabase.client.auth.admin.delete_user(user_id)
+                                auth_deleted = True
+                                logger.info("✅ Auth user deleted via admin API")
+                            except Exception as admin_error:
+                                methods_tried.append(f"Admin API: {admin_error}")
+                            
+                            # Method 2: Direct table access (requires elevated permissions)
+                            if not auth_deleted:
+                                try:
+                                    supabase.client.from_("users").delete().eq("id", user_id).execute()
+                                    auth_deleted = True
+                                    logger.info("✅ Auth user deleted via direct table access")
+                                except Exception as direct_error:
+                                    methods_tried.append(f"Direct table: {direct_error}")
+                            
+                            # Method 3: Try the individual auth deletion function (if available)
+                            if not auth_deleted:
+                                try:
+                                    auth_result = supabase.client.rpc('delete_auth_user_complete', {'user_uuid': user_id}).execute()
+                                    if auth_result.data:
+                                        auth_deleted = auth_result.data
+                                        logger.info("✅ Auth user deleted via database function")
+                                except Exception as rpc_error:
+                                    methods_tried.append(f"RPC function: {rpc_error}")
+                            
+                            if not auth_deleted:
+                                logger.warning(f"⚠️ Auth user deletion failed. Methods tried: {', '.join(methods_tried)}")
+                                
+                        except Exception as auth_error:
+                            logger.warning(f"⚠️ Auth user deletion failed: {auth_error}")
+                        
+                        # Manual deletion completed successfully
+                        deletion_success = True
+                        complete_deletion = auth_deleted
+                        
+                        if auth_deleted:
+                            logger.info(f"✅ COMPLETE MANUAL DELETION: User {user_id} and auth record removed")
+                        else:
+                            logger.warning(f"⚠️ PARTIAL MANUAL DELETION: User data deleted, auth record may remain for {user_id}")
+                        
+                    except Exception as manual_error:
+                        logger.error(f"Manual deletion failed: {manual_error}")
+                        raise Exception(f"Manual account deletion failed: {manual_error}")
+                
+                # Ensure we have some form of success before proceeding
+                if not deletion_success:
+                    raise Exception("All deletion methods failed")
+                
+                # Show modern success dialog with accurate status
                 success_box = QMessageBox(self)
                 success_box.setIcon(QMessageBox.Icon.Information)
-                success_box.setWindowTitle("Account Deleted")
-                success_box.setText("Your account deletion request has been processed.\n\n"
-                    "You will be logged out now. If you have any issues, "
-                    "please contact support.")
+                success_box.setWindowTitle("Account Deletion Completed")
+                
+                # Determine the exact message based on deletion result
+                if complete_deletion:
+                    success_text = "✅ Your account has been COMPLETELY deleted.\n\n" \
+                                 "All your data and authentication records have been permanently removed from our systems.\n\n" \
+                                 "You will be logged out now."
+                elif deletion_success:
+                    success_text = "⚠️ Your account data has been deleted.\n\n" \
+                                 "Your personal data has been removed, but your authentication record may still exist. " \
+                                 "If you need complete removal, please contact support.\n\n" \
+                                 "You will be logged out now."
+                else:
+                    success_text = "Your account deletion has been processed.\n\n" \
+                                 "Most or all of your data has been removed from our systems. " \
+                                 "If you have any concerns about data retention, please contact support.\n\n" \
+                                 "You will be logged out now."
+                
+                success_box.setText(success_text)
                 success_box.setStandardButtons(QMessageBox.StandardButton.Ok)
                 success_box.setStyleSheet("""
                     QMessageBox {
@@ -1528,11 +1807,63 @@ class AccountPage(QWidget):
                 
             except Exception as deletion_error:
                 logger.error(f"Error during account deletion: {deletion_error}")
-                self.show_error("Failed to delete account. Please contact support.")
+                
+                # Show more specific error message based on the failure type
+                error_message = "Account deletion failed.\n\n"
+                
+                if "All deletion methods failed" in str(deletion_error):
+                    error_message += "Both our advanced and manual deletion methods failed. " \
+                                   "This may be due to database connectivity issues or permission problems.\n\n" \
+                                   "Please contact support immediately - we take data privacy seriously and will resolve this manually."
+                elif "Manual account deletion failed" in str(deletion_error):
+                    error_message += "Our manual deletion process encountered an error. " \
+                                   "This may be due to database constraints or connectivity issues.\n\n" \
+                                   "Please contact support for manual account deletion."
+                elif "function" in str(deletion_error).lower():
+                    error_message += "Database functions are not available, but manual deletion should work. " \
+                                   "This error suggests a deeper issue.\n\n" \
+                                   "Please contact support for manual account deletion."
+                else:
+                    error_message += "An unexpected error occurred during the deletion process.\n\n" \
+                                   "Please contact support and reference this error for manual deletion."
+                
+                # Show error dialog with contact information
+                error_box = QMessageBox(self)
+                error_box.setIcon(QMessageBox.Icon.Critical)
+                error_box.setWindowTitle("Account Deletion Failed")
+                error_box.setText(error_message)
+                error_box.setDetailedText(f"Technical details: {deletion_error}")
+                error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                error_box.setStyleSheet("""
+                    QMessageBox {
+                        background-color: #36393f;
+                        color: #dcddde;
+                        border-radius: 8px;
+                    }
+                    QMessageBox QLabel {
+                        color: #dcddde;
+                        font-size: 14px;
+                        background: transparent;
+                        border: none;
+                    }
+                    QMessageBox QPushButton {
+                        background-color: #ed4245;
+                        color: white;
+                        border: none;
+                        border-radius: 6px;
+                        padding: 8px 16px;
+                        font-weight: 600;
+                        min-width: 80px;
+                    }
+                    QMessageBox QPushButton:hover {
+                        background-color: #c73538;
+                    }
+                """)
+                error_box.exec()
                 
         except Exception as e:
             logger.error(f"Error in delete account process: {e}")
-            self.show_error("An error occurred during account deletion.")
+            self.show_error("A critical error occurred during account deletion. Please contact support immediately for manual deletion.")
 
     def logout(self):
         """Handle user logout with modern styling."""

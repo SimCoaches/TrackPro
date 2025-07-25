@@ -585,7 +585,7 @@ class LoginDialog(BaseAuthDialog):
             
             # Check if the callback server is actually running
             if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
-                self.show_error("Google login is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password login instead.")
+                self._show_oauth_fallback_error("Google")
                 return
             
             # Make sure we're connected
@@ -636,7 +636,40 @@ class LoginDialog(BaseAuthDialog):
         except Exception as e:
             logger.error(f"Google login error: {e}")
             self.show_error(f"Error during Google login: {str(e)}")
-            
+    
+    def _show_oauth_fallback_error(self, provider_name):
+        """Show enhanced error message with fallback instructions for OAuth failures."""
+        error_message = f"""
+{provider_name} login is currently unavailable due to Windows security restrictions.
+
+🔒 This happens when Windows blocks the OAuth authentication server.
+
+✅ QUICK SOLUTIONS:
+
+1. Use Email/Password Login (recommended)
+   - Works reliably without security issues
+   - Provides the same features as {provider_name} login
+
+2. Run TrackPro as Administrator
+   - Close TrackPro completely
+   - Right-click TrackPro executable
+   - Select "Run as administrator"
+
+3. Add TrackPro to Windows Defender exclusions
+   - This prevents Windows from blocking the authentication
+
+💡 TIP: Email/password login is often more reliable for installed applications!
+        """
+        
+        # Create a more detailed message box
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(f"{provider_name} Login Unavailable")
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setText(f"{provider_name} login is currently unavailable.")
+        msg_box.setDetailedText(error_message)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
+    
     # Make sure to stop the timer when the dialog is closed or destroyed
     def closeEvent(self, event):
         """Override close event to clean up resources."""
@@ -738,7 +771,7 @@ class LoginDialog(BaseAuthDialog):
             # Check if the callback server is actually running
             if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
                 self.discord_button.setEnabled(True)
-                self.show_error("Discord login is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password login instead.")
+                self._show_oauth_fallback_error("Discord")
                 return
 
             # Make sure we're connected
@@ -1075,9 +1108,9 @@ class LoginDialog(BaseAuthDialog):
                 # No profile, needs to be created (will happen in main app)
                 return True
             
-            # Check required fields
-            username = profile_res.get('username', '').strip()
-            display_name = profile_res.get('display_name', '').strip()
+            # Check required fields - handle None values safely
+            username = (profile_res.get('username') or '').strip()
+            display_name = (profile_res.get('display_name') or '').strip()
             
             if not username:
                 # Profile incomplete, inform user

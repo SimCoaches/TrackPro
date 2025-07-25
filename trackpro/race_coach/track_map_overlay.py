@@ -325,8 +325,12 @@ class TrackMapGamingOverlay(QWidget):
     def load_centerline_track_data(self, file_path: str = None):
         try:
             import json, os
+            from ..utils.resource_utils import get_track_map_file_path
+            
             if not file_path:
-                file_path = 'centerline_track_map.json'
+                # Use production-safe track map file path
+                file_path = get_track_map_file_path()
+                
             if not os.path.exists(file_path):
                 logger.warning(f"Centerline file not found: {file_path}")
                 return False

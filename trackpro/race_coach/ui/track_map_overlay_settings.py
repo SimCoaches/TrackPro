@@ -13,6 +13,7 @@ from PyQt6.QtGui import QColor, QPalette, QFont
 
 from ..track_map_overlay import TrackMapOverlayManager
 from .track_visualization_window import TrackVisualizationWindow
+from ...utils.resource_utils import get_track_map_file_path
 import os
 import json
 import logging
@@ -130,43 +131,7 @@ class TrackBuilderThread(QThread):
         except Exception as e:
             logger.error(f"❌ Error forwarding progress: {e}")
 
-    def _on_completion_ready(self, centerline, corners):
-        """Handle completion of track building."""
-        try:
-            import numpy as np
-            import time
-            import json
-            
-            # Calculate track length
-            track_length = 0
-            if len(centerline) > 1:
-                for i in range(1, len(centerline)):
-                    dx = centerline[i][0] - centerline[i-1][0]
-                    dy = centerline[i][1] - centerline[i-1][1]
-                    track_length += np.sqrt(dx*dx + dy*dy)
-            
-            # Prepare track data for saving
-            track_data = {
-                'centerline_positions': [[point[0], point[1]] for point in centerline],
-                'length_meters': track_length,
-                'points_count': len(centerline),
-                'corners_count': len(corners),
-                'laps_used': 3,
-                'method': 'integrated_track_builder_3_lap_averaging',
-                'generation_timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # Save locally first with proper encoding
-            file_path = 'centerline_track_map.json'
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(track_data, f, indent=2, ensure_ascii=False)
-            
-            # Emit completion signals
-            self.centerline_generated.emit(file_path)
-            self.status_updated.emit(f"✅ Track map complete! ({len(centerline)} points, {len(corners)} corners, {track_length:.0f}m)")
-            
-        except Exception as e:
-            self.error_occurred.emit(f"Error saving track map: {str(e)}")
+
     
     def stop(self):
         """Stop the track builder thread."""
@@ -193,12 +158,12 @@ class TrackBuilderThread(QThread):
         self.status_updated.emit(f"🏁 Track map complete! {len(centerline)} points, {len(corners)} corners, {track_length:.0f}m")
         
         # Emit the centerline_generated signal for the thread (expected by existing code)
-        self.centerline_generated.emit("centerline_track_map.json")  # File path as expected
+        self.centerline_generated.emit(get_track_map_file_path())  # File path as expected
         
         # Store completion data for the UI (will be handled by the manager ready connection)
         self.completion_data = (centerline, corners)
         
-        logger.info(f"✅ Track map generation successful - saved to centerline_track_map.json")
+        logger.info(f"✅ Track map generation successful - saved to user data directory")
 
     # Note: Supabase saving is now handled automatically by the integrated track builder
 
@@ -1148,20 +1113,22 @@ The track map has been saved and is ready for use in:
     def refresh_current_track_info(self):
         """Refresh the current track map information."""
         # Check for the default centerline file
-        if os.path.exists('centerline_track_map.json'):
+        centerline_file_path = get_track_map_file_path()
+        
+        if os.path.exists(centerline_file_path):
             try:
                 # Load track data safely with null byte cleaning
-                track_data = self._load_json_file_safely('centerline_track_map.json')
+                track_data = self._load_json_file_safely(centerline_file_path)
                 
                 points = len(track_data.get('centerline_positions', []))
                 length = track_data.get('length_meters', 'Unknown')
                 method = track_data.get('method', 'Unknown')
                 
                 self.current_track_info.setText(
-                    f"📍 centerline_track_map.json - {points} points, {length}m ({method})"
+                    f"📍 Track map - {points} points, {length}m ({method})"
                 )
             except Exception as e:
-                self.current_track_info.setText(f"❌ Error reading centerline_track_map.json: {str(e)}")
+                self.current_track_info.setText(f"❌ Error reading track map file: {str(e)}")
         else:
             self.current_track_info.setText("No local track map found. Build one using the Track Builder above!")
         
@@ -1474,10 +1441,11 @@ The track map has been saved and is ready for use in:
                         logger.info(f"🗺️ Loaded track data from {data_source}")
             
             # If no database track data, try to load the centerline track map file
-            if not track_data_loaded and os.path.exists('centerline_track_map.json'):
+            centerline_file_path = get_track_map_file_path()
+            if not track_data_loaded and os.path.exists(centerline_file_path):
                 try:
                     # Load track data safely with null byte cleaning
-                    track_data = self._load_json_file_safely('centerline_track_map.json')
+                    track_data = self._load_json_file_safely(centerline_file_path)
                     
                     # Validate required fields
                     if 'centerline_positions' not in track_data:

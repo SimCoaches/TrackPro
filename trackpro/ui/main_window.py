@@ -255,7 +255,9 @@ class MainWindow(QMainWindow):
         """Force kill ALL TrackPro processes using taskkill."""
         try:
             logger.info("🔫 FORCE KILLING all TrackPro processes...")
-            import subprocess
+            
+            # Use subprocess utility to hide windows
+            from ..utils.subprocess_utils import run_subprocess
             
             # Kill ALL TrackPro processes with extreme prejudice
             kill_commands = [
@@ -267,7 +269,7 @@ class MainWindow(QMainWindow):
             
             for cmd in kill_commands:
                 try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=5)
+                    result = run_subprocess(cmd, hide_window=True, capture_output=True, text=True, check=False, timeout=5)
                     if result.returncode == 0:
                         logger.info(f"✅ Successfully killed processes with: {' '.join(cmd)}")
                     else:
@@ -1407,6 +1409,10 @@ class MainWindow(QMainWindow):
             supabase.sign_out()
             logger.info("User logged out")
             self.update_auth_state()
+            
+            # Navigate back to the main pedal configuration page
+            self.open_pedal_config()
+            
             QMessageBox.information(self, "Logout", "You have been logged out successfully")
         except Exception as e:
             logger.error(f"Error during logout: {e}")
@@ -1420,16 +1426,47 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Authentication Required", "Please log in to access account settings.")
                 return
             
+            # Get current user ID for tracking user changes
+            current_user = supabase.get_user()
+            if not current_user or not current_user.user:
+                QMessageBox.warning(self, "Authentication Error", "Unable to get user information.")
+                return
+            current_user_id = current_user.user.id
+            
             # Check if Account page already exists in stacked widget
             account_index = -1
+            existing_account_page = None
             for i in range(self.stacked_widget.count()):
                 widget = self.stacked_widget.widget(i)
                 if hasattr(widget, '__class__') and 'AccountPage' in widget.__class__.__name__:
                     account_index = i
+                    existing_account_page = widget
                     break
             
-            if account_index >= 0:
-                logger.info(f"Account page already exists at index {account_index}, switching to it")
+            if account_index >= 0 and existing_account_page:
+                # Check if the user has changed since the account page was created
+                should_refresh = True
+                if hasattr(existing_account_page, 'user_data') and existing_account_page.user_data:
+                    existing_user_id = existing_account_page.user_data.get('user_id')
+                    if existing_user_id == current_user_id:
+                        should_refresh = False  # Same user, no need to refresh
+                
+                if should_refresh:
+                    logger.info(f"User changed, refreshing account page data (previous: {existing_account_page.user_data.get('user_id') if existing_account_page.user_data else 'None'}, current: {current_user_id})")
+                    # Force refresh the user data for the new user
+                    try:
+                        existing_account_page.load_user_data()
+                    except Exception as refresh_error:
+                        logger.error(f"Error refreshing account page data: {refresh_error}")
+                        # If refresh fails, recreate the account page for safety
+                        logger.info("Recreating account page due to refresh failure")
+                        self.stacked_widget.removeWidget(existing_account_page)
+                        existing_account_page.deleteLater()
+                        # Clear account_index to force recreation below
+                        account_index = -1
+                else:
+                    logger.info(f"Same user, reusing existing account page at index {account_index}")
+                
                 self.stacked_widget.setCurrentIndex(account_index)
                 # Update menu action states
                 self.pedal_config_action.setChecked(False)
@@ -1472,10 +1509,35 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error opening account settings: {e}")
             QMessageBox.critical(self, "Error", f"Failed to open account settings: {str(e)}")
-
+    
     def check_for_updates(self):
         """Check for application updates."""
-        QMessageBox.information(self, "Updates", "Update check functionality would run here")
+        try:
+            # Get the updater from the app instance
+            if hasattr(self, 'app_instance') and self.app_instance and hasattr(self.app_instance, 'updater'):
+                updater = self.app_instance.updater
+                if updater:
+                    # Perform a manual update check (not silent, so user sees feedback)
+                    updater.check_for_updates(silent=False, manual_check=True)
+                else:
+                    QMessageBox.warning(self, "Update Check", "Update checker is not available.")
+            else:
+                QMessageBox.warning(self, "Update Check", "Update functionality is not initialized.")
+        except Exception as e:
+            logger.error(f"Error checking for updates: {e}")
+            QMessageBox.critical(self, "Update Check Failed", f"An error occurred while checking for updates:\n{str(e)}")
+    
+    def show_update_notification(self, version):
+        """Show update notification in the UI."""
+        try:
+            if hasattr(self, 'update_notification'):
+                self.update_notification.setText(f"📦 Update available: v{version} - Click File > Check for Updates to install")
+                self.update_notification.setVisible(True)
+                logger.info(f"Showing update notification for version {version}")
+            else:
+                logger.warning("Update notification label not found")
+        except Exception as e:
+            logger.error(f"Error showing update notification: {e}")
     
     def open_pedal_config(self):
         """Open the pedal configuration screen."""
@@ -1679,7 +1741,22 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Unexpected error: {str(e)}")
     
     def open_race_pass(self):
-        """Open the Race Pass screen."""
+        """Open the Race Pass screen - REQUIRES PASSWORD."""
+        logger.info("🏁 Race Pass access requested")
+        
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from .auth_dialogs import PasswordDialog
+            password_dialog = PasswordDialog(self, "Race Pass")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Race Pass access denied - incorrect password")
+                return
+            logger.info("✅ Race Pass password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            QMessageBox.critical(self, "Error", f"Could not verify password: {str(e)}")
+            return
+        
         # Import here to avoid circular imports
         from ..database import supabase
         
@@ -1781,7 +1858,22 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Component Error", f"Failed to initialize Race Pass: {str(e)}")
     
     def open_community_interface(self):
-        """Open the main community interface in the stacked widget."""
+        """Open the main community interface in the stacked widget - REQUIRES PASSWORD."""
+        logger.info("🌐 Community access requested")
+        
+        # PASSWORD PROTECTION CHECK FIRST
+        try:
+            from .auth_dialogs import PasswordDialog
+            password_dialog = PasswordDialog(self, "Community")
+            if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                logger.info("Community access denied - incorrect password")
+                return
+            logger.info("✅ Community password validated successfully")
+        except Exception as e:
+            logger.error(f"Error showing password dialog: {e}")
+            QMessageBox.critical(self, "Error", f"Could not verify password: {str(e)}")
+            return
+        
         # Import here to avoid circular imports
         from ..database import supabase
         

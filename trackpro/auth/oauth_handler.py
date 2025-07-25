@@ -263,17 +263,33 @@ class OAuthHandler(QObject):
         import http.server
         import threading
         import socketserver
+        import sys
+        import socket
+        import time
         
         # Store the port being used
         self.oauth_port = port
+        
+        # Check if we're running as a built executable for enhanced error handling
+        is_frozen = getattr(sys, 'frozen', False)
+        
+        # Add comprehensive diagnostics for production builds
+        if is_frozen:
+            logger.info("Running as built executable - performing OAuth server diagnostics...")
+            self._run_oauth_diagnostics()
         
         # Handler for callback requests
         class CallbackHandler(http.server.BaseHTTPRequestHandler):
             parent = self  # Reference to the OAuthHandler instance
             
+            def log_message(self, format, *args):
+                # Custom logging to use our logger instead of printing to stderr
+                message = format % args
+                logger.info(f"OAuth callback server: {message}")
+            
             def do_GET(self):
                 try:
-                    logger.info(f"Received callback: {self.path}")
+                    logger.info(f"Received OAuth callback: {self.path}")
 
                     # Parse the full callback path properly
                     parsed_path = urlparse(self.path)
@@ -308,16 +324,83 @@ class OAuthHandler(QObject):
                     if hasattr(self, 'wfile') and self.wfile is not None:
                         self.send_response(200)
                         self.send_header('Content-type', 'text/html')
+                        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                        self.send_header('Pragma', 'no-cache')
+                        self.send_header('Expires', '0')
                         self.end_headers()
                         
-                        # HTML page that extracts tokens from URL fragment and sends them to server
-                        html_response = """
+                        # Enhanced HTML page that extracts tokens from URL fragment and sends them to server
+                        html_response = f"""
+                        <!DOCTYPE html>
                         <html>
-                        <head><title>Authentication Processing...</title></head>
+                        <head>
+                            <title>TrackPro Authentication</title>
+                            <meta charset="UTF-8">
+                            <style>
+                                body {{
+                                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                    color: white;
+                                    margin: 0;
+                                    padding: 0;
+                                    min-height: 100vh;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                }}
+                                .container {{
+                                    text-align: center;
+                                    background: rgba(255, 255, 255, 0.1);
+                                    padding: 2rem;
+                                    border-radius: 10px;
+                                    backdrop-filter: blur(10px);
+                                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                                    max-width: 450px;
+                                }}
+                                .spinner {{
+                                    border: 4px solid rgba(255, 255, 255, 0.3);
+                                    border-radius: 50%;
+                                    border-top: 4px solid white;
+                                    width: 40px;
+                                    height: 40px;
+                                    animation: spin 1s linear infinite;
+                                    margin: 20px auto;
+                                }}
+                                @keyframes spin {{
+                                    0% {{ transform: rotate(0deg); }}
+                                    100% {{ transform: rotate(360deg); }}
+                                }}
+                                .success {{ color: #4CAF50; font-weight: bold; }}
+                                .error {{ color: #f44336; font-weight: bold; }}
+                                .return-message {{
+                                    background: rgba(76, 175, 80, 0.1);
+                                    border: 1px solid #4CAF50;
+                                    border-radius: 8px;
+                                    padding: 1rem;
+                                    margin-top: 1rem;
+                                    font-size: 14px;
+                                    line-height: 1.4;
+                                }}
+                            </style>
+                        </head>
                         <body>
-                            <h1>Processing authentication...</h1>
-                            <p>Please wait while we complete your authentication.</p>
+                            <div class="container">
+                                <h1>TrackPro Authentication</h1>
+                                <div class="spinner" id="spinner"></div>
+                                <p id="status">Processing authentication...</p>
+                                <p id="details">Please wait while we complete your authentication.</p>
+                                <div id="returnMessage" class="return-message" style="display:none;">
+                                    <strong>✅ Success!</strong><br>
+                                    Please return to the TrackPro application to continue.<br>
+                                    You can close this browser window.
+                                </div>
+                            </div>
                             <script>
+                                console.log('TrackPro OAuth callback page loaded');
+                                console.log('URL:', window.location.href);
+                                console.log('Hash:', window.location.hash);
+                                console.log('Search:', window.location.search);
+                                
                                 // Extract tokens from URL fragment (for implicit flow)
                                 const fragment = window.location.hash.slice(1);
                                 const params = new URLSearchParams(fragment);
@@ -325,7 +408,25 @@ class OAuthHandler(QObject):
                                 console.log('URL fragment:', fragment);
                                 console.log('Fragment params:', params);
                                 
-                                if (params.has('access_token')) {
+                                function updateStatus(message, isError = false) {{
+                                    const statusEl = document.getElementById('status');
+                                    statusEl.textContent = message;
+                                    statusEl.className = isError ? 'error' : 'success';
+                                    
+                                    // Hide spinner when status updates
+                                    const spinner = document.getElementById('spinner');
+                                    if (spinner) spinner.style.display = 'none';
+                                }}
+                                
+                                function updateDetails(message) {{
+                                    document.getElementById('details').textContent = message;
+                                }}
+                                
+                                function showReturnMessage() {{
+                                    document.getElementById('returnMessage').style.display = 'block';
+                                }}
+                                
+                                if (params.has('access_token')) {{
                                     console.log('Found access token in fragment');
                                     
                                     // Check if this is a password reset flow
@@ -339,44 +440,75 @@ class OAuthHandler(QObject):
                                     const endpoint = isPasswordReset ? '/process_password_reset' : '/process_tokens';
                                     console.log('Using endpoint:', endpoint);
                                     
+                                    updateStatus('Processing tokens...');
+                                    updateDetails('Sending authentication data to TrackPro...');
+                                    
                                     // Send token data to appropriate endpoint
-                                    fetch(endpoint, {
+                                    fetch(endpoint, {{
                                         method: 'POST',
-                                        headers: {
+                                        headers: {{
                                             'Content-Type': 'application/json',
-                                        },
-                                        body: JSON.stringify({
+                                        }},
+                                        body: JSON.stringify({{
                                             access_token: params.get('access_token'),
                                             refresh_token: params.get('refresh_token'),
                                             expires_in: params.get('expires_in'),
                                             token_type: params.get('token_type'),
                                             type: params.get('type'),
                                             is_password_reset: isPasswordReset
-                                        })
-                                    }).then(response => {
+                                        }})
+                                    }}).then(response => {{
                                         console.log('Token processing response:', response.status);
-                                        if (response.ok) {
-                                            if (isPasswordReset) {
-                                                document.body.innerHTML = '<h1>Password Reset Ready!</h1><p>Please return to TrackPro to set your new password. You can close this window now.</p>';
-                                            } else {
-                                                document.body.innerHTML = '<h1>Authentication successful!</h1><p>You can close this window now.</p>';
-                                            }
-                                            setTimeout(() => window.close(), 2000);
-                                        } else {
-                                            document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
-                                        }
-                                    }).catch(err => {
+                                        if (response.ok) {{
+                                            if (isPasswordReset) {{
+                                                updateStatus('Password Reset Ready!');
+                                                updateDetails('Your password reset has been processed.');
+                                                showReturnMessage();
+                                            }} else {{
+                                                updateStatus('Authentication Successful!');
+                                                updateDetails('You are now logged in to TrackPro!');
+                                                showReturnMessage();
+                                            }}
+                                        }} else {{
+                                            updateStatus('Authentication Completed');
+                                            updateDetails('');
+                                            showReturnMessage();
+                                        }}
+                                    }}).catch(err => {{
                                         console.error('Error processing tokens:', err);
-                                        document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
-                                    });
-                                } else {
-                                    console.log('No access token found in fragment');
-                                    document.body.innerHTML = '<h1>Authentication completed</h1><p>Please return to the application.</p>';
-                                }
+                                        updateStatus('Authentication Completed');
+                                        updateDetails('');
+                                        showReturnMessage();
+                                    }});
+                                }} else {{
+                                    console.log('No access token found in fragment, checking for authorization code...');
+                                    
+                                    // Check for authorization code in query parameters
+                                    const urlParams = new URLSearchParams(window.location.search);
+                                    if (urlParams.has('code')) {{
+                                        console.log('Found authorization code in query parameters');
+                                        updateStatus('Authorization Received');
+                                        updateDetails('TrackPro is processing your login...');
+                                        showReturnMessage();
+                                    }} else if (urlParams.has('error')) {{
+                                        const error = urlParams.get('error');
+                                        const errorDesc = urlParams.get('error_description') || 'No description provided';
+                                        console.error('OAuth error:', error, errorDesc);
+                                        updateStatus('Authentication Failed', true);
+                                        updateDetails(`Error: ${{error}} - ${{errorDesc}}`);
+                                        showReturnMessage();
+                                    }} else {{
+                                        console.log('No tokens or codes found, assuming authentication completed elsewhere');
+                                        updateStatus('Authentication Completed');
+                                        updateDetails('');
+                                        showReturnMessage();
+                                    }}
+                                }}
                             </script>
                         </body>
                         </html>
                         """
+                        
                         self.wfile.write(html_response.encode('utf-8'))
                     else:
                         logger.error("Cannot send response: wfile is None")
@@ -388,7 +520,7 @@ class OAuthHandler(QObject):
                         # No need to check for code verifier anymore since we're using simplified OAuth flow
                         
                         # Pass code directly to process_callback in a new thread
-                        threading.Thread(target=self.process_callback, args=(code,)).start()
+                        threading.Thread(target=self.process_callback, args=(code,), daemon=True).start()
                     elif 'error' in query_params:
                         error = query_params.get('error', ['Unknown'])[0]
                         error_description = query_params.get('error_description', ['No description provided'])[0]
@@ -409,7 +541,21 @@ class OAuthHandler(QObject):
                     try:
                         if hasattr(self, 'wfile') and self.wfile is not None:
                             self.send_response(500)
+                            self.send_header('Content-type', 'text/html')
                             self.end_headers()
+                            error_html = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head><title>TrackPro Authentication Error</title></head>
+                            <body>
+                                <h1>Authentication Error</h1>
+                                <p>An error occurred while processing your authentication.</p>
+                                <p>Please return to TrackPro and try again.</p>
+                                <p>Error: {str(e)}</p>
+                            </body>
+                            </html>
+                            """
+                            self.wfile.write(error_html.encode('utf-8'))
                     except Exception as send_e:
                         logger.error(f"Error sending 500 response: {send_e}")
             
@@ -427,11 +573,12 @@ class OAuthHandler(QObject):
                         # Send success response
                         self.send_response(200)
                         self.send_header('Content-type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(b'{"status": "success"}')
                         
                         # Process the tokens in a separate thread
-                        threading.Thread(target=self.process_tokens, args=(token_data,)).start()
+                        threading.Thread(target=self.process_tokens, args=(token_data,), daemon=True).start()
                     elif self.path == '/process_password_reset':
                         content_length = int(self.headers['Content-Length'])
                         post_data = self.rfile.read(content_length)
@@ -443,19 +590,22 @@ class OAuthHandler(QObject):
                         # Send success response
                         self.send_response(200)
                         self.send_header('Content-type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(b'{"status": "success"}')
                         
                         # Process the password reset tokens in a separate thread
-                        threading.Thread(target=self.parent.process_password_reset_tokens, args=(token_data,)).start()
+                        threading.Thread(target=self.parent.process_password_reset_tokens, args=(token_data,), daemon=True).start()
                     else:
                         self.send_response(404)
                         self.end_headers()
                 except Exception as e:
-                    logger.error(f"Error in POST handler: {e}")
+                    logger.error(f"Error in POST handler: {e}", exc_info=True)
                     try:
                         self.send_response(500)
+                        self.send_header('Content-type', 'application/json')
                         self.end_headers()
+                        self.wfile.write(b'{"status": "error", "message": "Internal server error"}')
                     except:
                         pass
             
@@ -700,31 +850,31 @@ class OAuthHandler(QObject):
                                 QApplication.processEvents()
                                 break
                         
+                        # Also try to find and notify the main app instance
+                        try:
+                            from .. import main
+                            app_instances = [obj for obj in QApplication.topLevelWidgets() 
+                                           if hasattr(obj, 'app_instance')]
+                            for widget in app_instances:
+                                if hasattr(widget.app_instance, 'bring_window_to_foreground'):
+                                    logger.info("Bringing TrackPro window to foreground after OAuth success")
+                                    widget.app_instance.bring_window_to_foreground()
+                                    break
+                        except Exception as app_e:
+                            logger.debug(f"Could not notify main app instance: {app_e}")
+                        
                         if main_window:
-                            # Force an explicit UI refresh with a message
-                            QTimer.singleShot(1000, lambda: QMessageBox.information(
+                            # Show success notification
+                            QTimer.singleShot(500, lambda: QMessageBox.information(
                                 main_window, 
-                                "Authentication Successful", 
-                                f"You are now logged in as {user_response.user.email}.\n\n"
-                                f"If the UI doesn't update, please use the 'Refresh Login State' option from the File menu or restart the application."
+                                "Login Successful",
+                                f"Welcome back! You are now logged in as {user_response.user.email}"
                             ))
                         else:
-                            QTimer.singleShot(1000, lambda: QMessageBox.information(
-                                None, 
-                                "Authentication Successful", 
-                                f"You are now logged in as {user_response.user.email}.\n\n"
-                                f"Please restart the application to see the changes."
-                            ))
+                            logger.warning("Could not find main window to show success notification")
                     else:
-                        # More specific logging
-                        error_info = getattr(user_response, 'error', 'No user object found in response') if user_response else "No response from get_user"
-                        logger.warning(f"User authentication response exists but no valid user found. Details: {error_info}")
-                        QTimer.singleShot(1000, lambda: QMessageBox.warning(
-                            None, 
-                            "Authentication Issue", 
-                            "You appear to be authenticated but we couldn't retrieve your user details.\n\n"
-                            "Please restart the application."
-                        ))
+                        logger.warning("Failed to get authenticated user after OAuth callback")
+
                 except Exception as e:
                     logger.error(f"Error updating main window: {e}", exc_info=True) # Log traceback
                     QTimer.singleShot(1000, lambda: QMessageBox.critical(
@@ -740,131 +890,268 @@ class OAuthHandler(QObject):
         
         class CustomTCPServer(socketserver.TCPServer):
             allow_reuse_address = True
-        
-        httpd = CustomTCPServer(("127.0.0.1", port), handler)
+            
+            def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
+                # Enhanced error handling for production builds
+                try:
+                    super().__init__(server_address, RequestHandlerClass, bind_and_activate)
+                except Exception as e:
+                    logger.error(f"Failed to create TCP server on {server_address}: {e}")
+                    if is_frozen:
+                        logger.error("This is likely due to Windows security restrictions on the built executable")
+                    raise
+            
+            def server_bind(self):
+                # Set socket options for better reliability
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    try:
+                        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    except (AttributeError, OSError):
+                        pass  # Not available on all platforms
+                super().server_bind()
         
         try:
-            server_thread = threading.Thread(target=httpd.serve_forever)
-            server_thread.daemon = True
+            # Create the server with enhanced error handling
+            logger.info(f"Creating OAuth callback server on 127.0.0.1:{port}")
+            httpd = CustomTCPServer(("127.0.0.1", port), handler)
+            
+            # Set a timeout to prevent hanging
+            httpd.timeout = 30
+            
+            # Start the server in a daemon thread
+            def serve_forever_with_exception_handling():
+                try:
+                    logger.info(f"OAuth callback server starting on port {port}")
+                    httpd.serve_forever()
+                except Exception as e:
+                    logger.error(f"OAuth callback server error: {e}", exc_info=True)
+                    if is_frozen:
+                        logger.error("Server error in built executable - this may be due to Windows security restrictions")
+            
+            server_thread = threading.Thread(target=serve_forever_with_exception_handling, daemon=True)
+            server_thread.name = f"OAuth-Callback-Server-{port}"
             server_thread.start()
             
-            logger.info(f"Started callback server on port {port}")
-            return httpd
+            # Give the server a moment to start
+            import time
+            time.sleep(0.1)
+            
+            # Verify the server is running by checking if the thread is alive
+            if server_thread.is_alive():
+                logger.info(f"OAuth callback server started successfully on port {port}")
+                
+                # Store a reference to the thread for cleanup
+                httpd._server_thread = server_thread
+                
+                return httpd
+            else:
+                logger.error("OAuth callback server thread failed to start")
+                httpd.server_close()
+                return None
+                
         except Exception as e:
-            logger.error(f"Failed to start callback server on port {port}: {e}")
+            logger.error(f"Failed to start OAuth callback server on port {port}: {e}", exc_info=True)
+            
+            if is_frozen:
+                logger.error("OAuth server startup failed in built executable. Possible causes:")
+                logger.error("- Windows Firewall blocking the application")
+                logger.error("- Windows Defender flagging the executable")
+                logger.error("- Insufficient network permissions")
+                logger.error("- Port already in use by another application")
+                logger.error("Solution: Run as Administrator or add TrackPro to Windows Defender exclusions")
+            
             return None
     
-    def create_password_reset_page(self):
-        """Create an HTML page to handle password reset tokens from URL fragment."""
-        return """
-        <html>
-        <head><title>Password Reset - TrackPro</title></head>
-        <body>
-            <h1>Completing Password Reset...</h1>
-            <p>Please wait while we process your password reset request.</p>
-            <script>
-                // Extract tokens from URL fragment (for password reset)
-                const fragment = window.location.hash.slice(1);
-                const params = new URLSearchParams(fragment);
-                
-                console.log('URL fragment:', fragment);
-                console.log('Fragment params:', params);
-                
-                if (params.has('access_token')) {
-                    console.log('Found access token in fragment for password reset');
-                    
-                    // Send token data to our password reset endpoint
-                    fetch('/process_password_reset', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            access_token: params.get('access_token'),
-                            refresh_token: params.get('refresh_token'),
-                            expires_in: params.get('expires_in'),
-                            token_type: params.get('token_type'),
-                            type: params.get('type')
-                        })
-                    }).then(response => {
-                        console.log('Password reset token processing response:', response.status);
-                        if (response.ok) {
-                            document.body.innerHTML = '<h1>Password Reset Ready!</h1><p>Please return to TrackPro to set your new password. You can close this window now.</p>';
-                        } else {
-                            document.body.innerHTML = '<h1>Password Reset Link Processed</h1><p>Please return to TrackPro to complete your password reset.</p>';
-                        }
-                    }).catch(err => {
-                        console.error('Error processing password reset tokens:', err);
-                        document.body.innerHTML = '<h1>Password Reset Link Processed</h1><p>Please return to TrackPro to complete your password reset.</p>';
-                    });
-                } else {
-                    console.log('No access token found in fragment for password reset');
-                    document.body.innerHTML = '<h1>Invalid Reset Link</h1><p>This password reset link appears to be invalid or expired. Please request a new password reset email.</p>';
-                }
-            </script>
-        </body>
-        </html>
-        """
-
-    def process_password_reset_tokens(self, token_data):
-        """Process password reset tokens and emit signal."""
-        try:
-            access_token = token_data.get('access_token')
-            refresh_token = token_data.get('refresh_token')
-            token_type = token_data.get('type')
-            is_password_reset = token_data.get('is_password_reset', False)
-            
-            logger.info(f"Processing password reset tokens - Type: {token_type}, Is Password Reset: {is_password_reset}")
-            logger.info(f"Token data keys: {list(token_data.keys())}")
-            
-            if not access_token:
-                logger.error("No access token found in password reset data")
-                return
-            
-            logger.info(f"Processing password reset for token: {access_token[:20]}...")
-            
-            # Emit the password reset signal - this follows the same pattern as auth_completed
-            logger.info("Emitting password_reset_required signal...")
-            self.password_reset_required.emit(access_token, refresh_token or "")
-            logger.info("✓ Password reset signal emitted successfully")
-            
-        except Exception as e:
-            logger.error(f"Error processing password reset tokens: {e}", exc_info=True)
-
-    def shutdown_callback_server(self, server):
-        """
-        Shutdown the callback server.
+    def _run_oauth_diagnostics(self):
+        """Run comprehensive OAuth diagnostics for production builds."""
+        import subprocess
+        import platform
         
-        Args:
-            server: The server instance to shutdown
+        logger.info("=== OAuth Diagnostics Report ===")
+        
+        # Check Windows version
+        logger.info(f"Windows version: {platform.platform()}")
+        
+        # Check if running as admin
+        try:
+            import ctypes
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+            logger.info(f"Running as administrator: {is_admin}")
+        except:
+            logger.info("Could not determine admin status")
+        
+        # Check Windows Defender status
+        try:
+            result = subprocess.run(['powershell', '-Command', 'Get-MpComputerStatus | Select-Object -Property AntivirusEnabled'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and 'True' in result.stdout:
+                logger.warning("Windows Defender is active - may block OAuth server")
+            else:
+                logger.info("Windows Defender status: Unknown or disabled")
+        except:
+            logger.info("Could not check Windows Defender status")
+        
+        # Check firewall status
+        try:
+            result = subprocess.run(['netsh', 'advfirewall', 'show', 'allprofiles', 'state'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                if 'ON' in result.stdout:
+                    logger.warning("Windows Firewall is active - may block OAuth server")
+                else:
+                    logger.info("Windows Firewall appears to be disabled")
+        except:
+            logger.info("Could not check Windows Firewall status")
+        
+        # Check port availability
+        ports_to_check = [3000, 3001, 3002, 8080]
+        available_ports = []
+        for port in ports_to_check:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(('127.0.0.1', port))
+                sock.close()
+                if result != 0:  # Port is available
+                    available_ports.append(port)
+            except:
+                pass
+        
+        logger.info(f"Available OAuth ports: {available_ports}")
+        
+        if not available_ports:
+            logger.warning("No standard OAuth ports are available")
+        
+        logger.info("=== End OAuth Diagnostics ===")
+        
+    def create_oauth_fallback_instructions(self):
+        """Create instructions for OAuth fallback when server fails."""
+        return """
+        <div style="background: #2a2a2a; color: white; padding: 20px; border-radius: 8px; font-family: Arial, sans-serif;">
+            <h2 style="color: #ff6b6b;">🔒 OAuth Login Unavailable</h2>
+            <p>The OAuth login system cannot start due to Windows security restrictions.</p>
+            
+            <h3 style="color: #4ecdc4;">Quick Solutions:</h3>
+            <ol>
+                <li><strong>Use Email/Password Login:</strong> Click "Cancel" and use the email/password login instead</li>
+                <li><strong>Run as Administrator:</strong> Close TrackPro, right-click the executable, and select "Run as administrator"</li>
+                <li><strong>Add to Windows Defender:</strong> Add TrackPro to Windows Defender exclusions</li>
+                <li><strong>Allow through Firewall:</strong> Allow TrackPro through Windows Firewall</li>
+            </ol>
+            
+            <h3 style="color: #4ecdc4;">Why this happens:</h3>
+            <p>OAuth requires a local web server that Windows security software often blocks in built applications.</p>
+            
+            <p style="color: #feca57; background: #2d2d2d; padding: 10px; border-radius: 4px;">
+                <strong>💡 Tip:</strong> Email/password login works reliably and provides the same features!
+            </p>
+        </div>
         """
-        if server:
-            server.shutdown()
-            logger.info("Callback server shut down")
     
     def create_email_confirmation_page(self):
-        """Create a simple HTML page for email confirmation."""
+        """Create HTML page for email confirmation."""
         return """
+        <!DOCTYPE html>
         <html>
         <head>
-            <title>Email Confirmed - TrackPro</title>
+            <title>TrackPro Email Confirmation</title>
+            <meta charset="UTF-8">
             <style>
-                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f0f0f0; }
-                .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                .success { color: #28a745; font-size: 24px; margin-bottom: 20px; }
-                .message { color: #333; font-size: 16px; line-height: 1.6; }
-                .button { display: inline-block; padding: 12px 24px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; margin-top: 20px; }
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    margin: 0;
+                    padding: 0;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .container {
+                    text-align: center;
+                    background: rgba(255, 255, 255, 0.1);
+                    padding: 2rem;
+                    border-radius: 10px;
+                    backdrop-filter: blur(10px);
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                    max-width: 500px;
+                }
+                .success { color: #4CAF50; }
             </style>
         </head>
         <body>
             <div class="container">
-                <div class="success">✅ Email Confirmed!</div>
-                <div class="message">
-                    Your email address has been successfully verified.<br><br>
-                    You can now close this window and return to the TrackPro application to sign in.
+                <h1>Email Confirmed!</h1>
+                <p class="success">Your email address has been successfully confirmed.</p>
+                <p>You can now close this window and return to TrackPro to complete your registration.</p>
                 </div>
-                <a href="#" onclick="window.close()" class="button">Close Window</a>
+        </body>
+        </html>
+        """
+    
+    def create_password_reset_page(self):
+        """Create HTML page for password reset."""
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>TrackPro Password Reset</title>
+            <meta charset="UTF-8">
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    margin: 0;
+                    padding: 0;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .container {
+                    text-align: center;
+                    background: rgba(255, 255, 255, 0.1);
+                    padding: 2rem;
+                    border-radius: 10px;
+                    backdrop-filter: blur(10px);
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                    max-width: 500px;
+                }
+                .success { color: #4CAF50; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Password Reset Ready</h1>
+                <p class="success">Your password reset request has been processed.</p>
+                <p>Please return to TrackPro to set your new password.</p>
+                <p>You can close this window now.</p>
             </div>
         </body>
         </html>
         """ 
+
+    def process_password_reset_tokens(self, token_data):
+        """Process password reset tokens received from the callback."""
+        try:
+            logger.info("Processing password reset tokens...")
+            
+            access_token = token_data.get('access_token')
+            refresh_token = token_data.get('refresh_token')
+            
+            if not access_token:
+                logger.error("No access token in password reset data")
+                return
+                
+            logger.info(f"Password reset access token: {access_token[:20]}...")
+            
+            # Emit the password_reset_required signal with the tokens
+            self.password_reset_required.emit(access_token, refresh_token or "")
+            
+            logger.info("Password reset signal emitted successfully")
+            
+        except Exception as e:
+            logger.error(f"Error processing password reset tokens: {e}", exc_info=True) 

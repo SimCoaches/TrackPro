@@ -131,7 +131,9 @@ def exit_application(main_window):
     # Force kill all TrackPro processes immediately
     try:
         logger.info("🔫 System tray force killing all TrackPro processes...")
-        import subprocess
+        
+        # Use subprocess utility to hide windows
+        from ..utils.subprocess_utils import run_subprocess
         
         kill_commands = [
             ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
@@ -141,7 +143,7 @@ def exit_application(main_window):
         
         for cmd in kill_commands:
             try:
-                subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=3)
+                run_subprocess(cmd, hide_window=True, capture_output=True, text=True, check=False, timeout=3)
             except:
                 pass
                 

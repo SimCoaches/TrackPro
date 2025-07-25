@@ -543,6 +543,7 @@ class IntegratedTrackBuilderWorker(QThread):
         try:
             import json
             import os
+            from ...utils.resource_utils import get_track_map_file_path
             
             # Create the local centerline file format
             centerline_data = {
@@ -553,16 +554,10 @@ class IntegratedTrackBuilderWorker(QThread):
                 'total_points': len(track_map_data)
             }
             
-            # Save to the standard centerline file that overlay looks for
-            file_path = 'centerline_track_map.json'
+            # Use production-safe track map file path
+            file_path = get_track_map_file_path()
             
-            # Backup existing file if it exists
-            if os.path.exists(file_path):
-                backup_path = f'centerline_track_map_backup_{int(time.time())}.json'
-                os.rename(file_path, backup_path)
-                print(f"📁 Backed up existing centerline file to {backup_path}")
-            
-            # Write new file
+            # Write new file (overwrite existing without backup)
             with open(file_path, 'w') as f:
                 json.dump(centerline_data, f, indent=2)
             

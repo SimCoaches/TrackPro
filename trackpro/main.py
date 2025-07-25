@@ -257,6 +257,9 @@ class TrackProApp:
         if not self.app:
             self.app = QApplication(sys.argv)
         
+        # Set up URL scheme handling for OAuth redirects
+        self.setup_url_scheme_handling()
+        
         # Initialize attributes that will be used later
         self.hardware = None
         self.output = None
@@ -910,57 +913,151 @@ class TrackProApp:
             # Connect to the auth_completed signal
             self.oauth_handler.auth_completed.connect(self.handle_auth_state_change)
             
+            # Check if we're running as a built executable
+            import sys
+            is_frozen = getattr(sys, 'frozen', False)
+            
             # Check if port 3000 is available
             port_available = False
-            try:
-                # Try to bind to the port to check if it's available
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(('127.0.0.1', 3000))
-                sock.close()
-                logger.info("Port 3000 is available for callback server")
-                port_available = True
-            except socket.error as e:
-                logger.error(f"Port 3000 is already in use: {e}")
-                # Try to find an alternative port
-                for alt_port in [3001, 3002, 3003, 8080, 8081]:
-                    try:
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.bind(('127.0.0.1', alt_port))
-                        sock.close()
-                        logger.info(f"Using alternative port {alt_port} for callback server")
-                        # We'll need to update the redirect URL in OAuth calls
-                        self.oauth_port = alt_port
-                        port_available = True
-                        break
-                    except socket.error:
-                        continue
+            selected_port = None
+            
+            # Try multiple ports to find an available one
+            ports_to_try = [3000, 3001, 3002, 3003, 8080, 8081, 8082, 8083]
+            
+            for port in ports_to_try:
+                try:
+                    # Try to bind to the port to check if it's available
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.bind(('127.0.0.1', port))
+                    sock.close()
+                    logger.info(f"Port {port} is available for callback server")
+                    selected_port = port
+                    port_available = True
+                    break
+                except socket.error as e:
+                    logger.debug(f"Port {port} is not available: {e}")
+                    continue
                 
-                if not port_available:
-                    logger.error("No available ports found for OAuth callback server")
-                    raise Exception("No available ports for OAuth callback server")
+            if not port_available:
+                logger.error("No available ports found for OAuth callback server")
+                raise Exception("No available ports for OAuth callback server")
                         
-            # Start the callback server
-            if not hasattr(self, 'oauth_port'):
-                self.oauth_port = 3000
+            # Store the selected port
+            self.oauth_port = selected_port
                 
             logger.info(f"Starting OAuth callback server on port {self.oauth_port}")
+            
+            # For built executables, add extra checks and error handling
+            if is_frozen:
+                logger.info("Running as built executable - adding enhanced OAuth server checks")
+                
+                # Test if we can actually bind and listen on the port
+                test_server = None
+                try:
+                    import http.server
+                    import socketserver
+                    
+                    class TestHandler(http.server.BaseHTTPRequestHandler):
+                        def do_GET(self):
+                            self.send_response(200)
+                            self.end_headers()
+                            self.wfile.write(b"Test OK")
+                        def log_message(self, format, *args):
+                            pass  # Suppress test server logs
+                    
+                    class TestTCPServer(socketserver.TCPServer):
+                        allow_reuse_address = True
+                    
+                    test_server = TestTCPServer(("127.0.0.1", self.oauth_port), TestHandler)
+                    test_server.timeout = 1
+                    
+                    # Quick test to ensure we can actually serve on this port
+                    import threading
+                    def test_serve():
+                        test_server.handle_request()
+                    
+                    test_thread = threading.Thread(target=test_serve)
+                    test_thread.daemon = True
+                    test_thread.start()
+                    
+                    # Test connection
+                    import urllib.request
+                    import urllib.error
+                    
+                    try:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{self.oauth_port}", timeout=2) as response:
+                            if response.read() == b"Test OK":
+                                logger.info("OAuth port test successful")
+                            else:
+                                logger.warning("OAuth port test returned unexpected response")
+                    except Exception as test_e:
+                        logger.warning(f"OAuth port test failed (this may be normal): {test_e}")
+                    
+                    test_server.server_close()
+                    
+                except Exception as test_error:
+                    logger.warning(f"OAuth server test failed: {test_error}")
+                    if test_server:
+                        try:
+                            test_server.server_close()
+                        except:
+                            pass
+            
+            # Start the actual callback server
             self.oauth_callback_server = self.oauth_handler.setup_callback_server(port=self.oauth_port)
             
             if self.oauth_callback_server is None:
                 raise Exception("Failed to start OAuth callback server")
                 
+            # Verify the server is actually running
+            import time
+            time.sleep(0.1)  # Give server time to start
+            
+            # Test if the server is responsive
+            try:
+                import urllib.request
+                import urllib.error
+                test_url = f"http://127.0.0.1:{self.oauth_port}/"
+                req = urllib.request.Request(test_url)
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    logger.info("OAuth callback server is responding correctly")
+            except Exception as verify_e:
+                logger.warning(f"OAuth callback server verification failed: {verify_e}")
+                # Don't fail here - the server might still work for OAuth callbacks
+                
             logger.info(f"OAuth handler initialized successfully with callback server on port {self.oauth_port}")
+            
+            # Store port in the OAuth handler for use by dialogs
+            self.oauth_handler.oauth_port = self.oauth_port
             
         except Exception as e:
             logger.error(f"Error setting up OAuth handler: {e}", exc_info=True)
+            
             # Create a placeholder handler but mark OAuth as unavailable
             self.oauth_handler = oauth_handler.OAuthHandler()
             self.oauth_callback_server = None
             self.oauth_port = None
             
+            # For built executables, show more specific guidance
+            import sys
+            if getattr(sys, 'frozen', False):
+                error_msg = (
+                    f"OAuth authentication setup failed in the built application.\n\n"
+                    f"This is usually caused by Windows security restrictions.\n\n"
+                    f"Possible solutions:\n"
+                    f"• Run TrackPro as Administrator\n"
+                    f"• Add TrackPro to Windows Defender exclusions\n"
+                    f"• Allow TrackPro through Windows Firewall\n"
+                    f"• Use email/password login instead\n\n"
+                    f"Technical error: {str(e)}"
+                )
+            else:
+                error_msg = str(e)
+            
             # Show a warning to the user that OAuth won't work
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(2000, lambda: self.show_oauth_error(str(e)))
+            QTimer.singleShot(2000, lambda: self.show_oauth_error(error_msg))
     
     def cleanup(self, force_unhide=True):
         """Clean up resources before application closes."""
@@ -1143,19 +1240,19 @@ class TrackProApp:
                                 break
                     
                     if cli_path:
-                        # Use CREATE_NO_WINDOW flag to hide console window
-                        CREATE_NO_WINDOW = 0x08000000
-                        # Also use DETACHED_PROCESS for maximum hiding
-                        creationflags = CREATE_NO_WINDOW | 0x00000008  # DETACHED_PROCESS
-                        subprocess.run(
-                            [cli_path, "--cloak-off"], 
-                            check=False,  # Don't raise exceptions on non-zero exit
-                            creationflags=creationflags,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            stdin=subprocess.DEVNULL
-                        )
-                        logger.info("Successfully ran HidHideCLI directly to disable cloaking")
+                        # Use subprocess utility to hide console window
+                        from .utils.subprocess_utils import run_subprocess
+                        try:
+                            result = run_subprocess(
+                                [cli_path, "--cloak-off"], 
+                                hide_window=True,
+                                check=False,  # Don't raise exceptions on non-zero exit
+                                capture_output=True,
+                                text=True
+                            )
+                            logger.info("Successfully ran HidHideCLI directly to disable cloaking")
+                        except Exception as e:
+                            logger.error(f"Failed to run HidHideCLI directly: {e}")
                 except Exception as e:
                     logger.error(f"Failed to run HidHideCLI directly: {e}")
         
@@ -1507,6 +1604,112 @@ class TrackProApp:
                 
         except Exception as e:
             logger.error(f"Error updating UI after curves initialized: {e}")
+
+    def setup_url_scheme_handling(self):
+        """Set up URL scheme handling for OAuth redirects."""
+        try:
+            # Register the application to handle the trackpro:// URL scheme on startup
+            self.register_url_scheme()
+            
+            # Check if the application was launched with a URL scheme
+            args = self.app.arguments()
+            for arg in args:
+                if arg.startswith("trackpro://") or arg.startswith("app://"):
+                    logger.info(f"Application launched with URL scheme: {arg}")
+                    # Delay handling until window is ready
+                    QTimer.singleShot(1000, lambda: self.handle_oauth_redirect(arg))
+                    break
+        except Exception as e:
+            logger.warning(f"Error setting up URL scheme handling: {e}")
+
+    def register_url_scheme(self):
+        """Register the trackpro:// URL scheme with Windows."""
+        try:
+            import sys
+            import winreg
+            
+            if getattr(sys, 'frozen', False):  # Only register when running as executable
+                exe_path = sys.executable
+                
+                # Create registry entries for trackpro:// scheme
+                try:
+                    key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\trackpro")
+                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "URL:TrackPro Protocol")
+                    winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+                    winreg.CloseKey(key)
+                    
+                    # Set command to open TrackPro
+                    cmd_key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\trackpro\shell\open\command")
+                    winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, f'"{exe_path}" "%1"')
+                    winreg.CloseKey(cmd_key)
+                    
+                    logger.info("Successfully registered trackpro:// URL scheme")
+                except Exception as reg_error:
+                    logger.warning(f"Could not register URL scheme: {reg_error}")
+        except ImportError:
+            logger.warning("winreg not available - URL scheme registration skipped")
+        except Exception as e:
+            logger.warning(f"Error registering URL scheme: {e}")
+
+    def handle_oauth_redirect(self, url):
+        """Handle OAuth redirects from the URL scheme."""
+        logger.info(f"Handling OAuth redirect from URL: {url}")
+        try:
+            # Bring TrackPro window to the foreground
+            self.bring_window_to_foreground()
+            
+            # Check if this is just a completion notification
+            if "auth-complete" in url:
+                logger.info("OAuth authentication completion notification received")
+                # Show a brief notification that login was successful
+                if hasattr(self, 'window') and self.window:
+                    QTimer.singleShot(0, lambda: QMessageBox.information(
+                        self.window,
+                        "Authentication Complete",
+                        "You have been successfully logged in to TrackPro!"
+                    ))
+                return
+            
+            # Extract any authorization code from the URL (for future use)
+            code_match = re.search(r"code=([^&]+)", url)
+            if code_match:
+                auth_code = code_match.group(1)
+                logger.info(f"Received authorization code via URL scheme: {auth_code[:10]}...")
+                # The OAuth handler should already be processing this through the callback server
+                # This is just a backup notification method
+                
+        except Exception as e:
+            logger.error(f"Error handling OAuth redirect: {e}")
+            
+    def bring_window_to_foreground(self):
+        """Bring the TrackPro window to the foreground."""
+        try:
+            if hasattr(self, 'window') and self.window:
+                # Show and raise the window
+                self.window.show()
+                self.window.raise_()
+                self.window.activateWindow()
+                
+                # Force focus on Windows
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    
+                    # Get the window handle
+                    hwnd = int(self.window.winId())
+                    
+                    # Bring window to foreground using Windows API
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                    ctypes.windll.user32.BringWindowToTop(hwnd)
+                    ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                    
+                    logger.info("Successfully brought TrackPro window to foreground")
+                    
+                except Exception as win_error:
+                    logger.warning(f"Could not use Windows API to bring window forward: {win_error}")
+                    
+        except Exception as e:
+            logger.error(f"Error bringing window to foreground: {e}")
 
 def main():
     """Main entry point for the application."""

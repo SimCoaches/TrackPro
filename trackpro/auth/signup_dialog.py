@@ -2,7 +2,8 @@
 
 from PyQt6.QtWidgets import (
     QLineEdit, QComboBox, QDateEdit, QCheckBox, QFormLayout, QLabel,
-    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy
+    QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox, QWidget, QSizePolicy,
+    QStackedWidget
 )
 from PyQt6.QtCore import QDate, Qt, QSize
 from PyQt6.QtGui import QIcon, QPixmap
@@ -414,7 +415,7 @@ class SignupDialog(BaseAuthDialog):
             # Check if the callback server is actually running
             if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
                 self.google_button.setEnabled(True)
-                self.show_error("Google signup is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password signup instead.")
+                self._show_oauth_fallback_error("Google")
                 return
 
             # Make sure we're connected
@@ -469,7 +470,7 @@ class SignupDialog(BaseAuthDialog):
             # Check if the callback server is actually running
             if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
                 self.discord_button.setEnabled(True)
-                self.show_error("Discord signup is currently unavailable. The OAuth callback server failed to start.\n\nPlease try restarting TrackPro or use email/password signup instead.")
+                self._show_oauth_fallback_error("Discord")
                 return
 
             # Make sure we're connected
@@ -510,6 +511,40 @@ class SignupDialog(BaseAuthDialog):
             # The main re-enable happens in on_oauth_completed.
             # We cannot reliably check connection status here easily.
             pass
+    
+    def _show_oauth_fallback_error(self, provider_name):
+        """Show enhanced error message with fallback instructions for OAuth failures."""
+        error_message = f"""
+{provider_name} signup is currently unavailable due to Windows security restrictions.
+
+🔒 This happens when Windows blocks the OAuth authentication server.
+
+✅ QUICK SOLUTIONS:
+
+1. Use Email/Password Signup (recommended)
+   - Works reliably without security issues
+   - Provides the same features as {provider_name} signup
+
+2. Run TrackPro as Administrator
+   - Close TrackPro completely
+   - Right-click TrackPro executable
+   - Select "Run as administrator"
+
+3. Add TrackPro to Windows Defender exclusions
+   - This prevents Windows from blocking the authentication
+
+💡 TIP: Email/password signup is often more reliable for installed applications!
+        """
+        
+        # Create a more detailed message box
+        from PyQt6.QtWidgets import QMessageBox
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(f"{provider_name} Signup Unavailable")
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setText(f"{provider_name} signup is currently unavailable.")
+        msg_box.setDetailedText(error_message)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
     
     def on_oauth_completed(self, success, response):
         """Handle OAuth authentication completion."""

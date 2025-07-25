@@ -62,12 +62,14 @@ class TwilioService:
                 'success': False,
                 'message': 'Twilio service is not available'
             }
-        
+
         # DEVELOPMENT/FALLBACK MODE - Allow testing without valid Twilio credentials
         # This activates when TRACKPRO_DEV_MODE is set or when running without proper config
+        account_sid = config.twilio_account_sid
+        auth_token = config.twilio_auth_token
         dev_mode = (os.getenv('TRACKPRO_DEV_MODE') == 'true' or 
                    not (account_sid and auth_token and config.twilio_verify_service_sid))
-        
+
         if dev_mode:
             logger.info(f"DEV/FALLBACK MODE: Mock sending verification code to {phone_number}")
             return {
@@ -75,7 +77,7 @@ class TwilioService:
                 'message': 'Verification code sent (Development/Fallback Mode)',
                 'sid': 'mock_verification_sid'
             }
-        
+
         try:
             verification = self.client.verify.services(
                 config.twilio_verify_service_sid

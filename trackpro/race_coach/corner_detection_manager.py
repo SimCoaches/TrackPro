@@ -414,57 +414,14 @@ class CornerDetectionWorker(QThread):
         else:
             print("❌ [DEBUG] No track map data to save")
         
-        # Save to local files (backup)
-        print("📁 [DEBUG] Saving to local files...")
-        self._save_to_local_files(corners, track_map_data)
-        
         # Save to Supabase
         print("☁️ [DEBUG] Saving to Supabase...")
         self._save_to_supabase(corners, track_map_data)
         
-        self.progress_update.emit("Results saved to database and local files", 100)
+        self.progress_update.emit("Results saved to cloud database", 100)
         print("✅ [DEBUG] Save process completed")
     
-    def _save_to_local_files(self, corners: List[Corner], track_map_data: Optional[Dict] = None):
-        """Save corner detection results and track map to local files as backup."""
-        # Create results directory if it doesn't exist
-        results_dir = "corner_detection_results"
-        os.makedirs(results_dir, exist_ok=True)
-        
-        # Generate timestamp for unique filenames
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        
-        # Save corner data and track map to JSON
-        corners_data = {
-            'detection_timestamp': timestamp,
-            'total_corners': len(corners),
-            'detection_parameters': {
-                'speed_drop_threshold': self.speed_drop_threshold,
-                'steering_threshold': math.degrees(self.steering_threshold),
-                'min_corner_duration': self.min_corner_duration
-            },
-            'corners': [],
-            'track_map': track_map_data
-        }
-        
-        for corner in corners:
-            corner_data = {
-                'id': corner.id,
-                'entry_idx': corner.entry_idx,
-                'apex_idx': corner.apex_idx,
-                'exit_idx': corner.exit_idx,
-                'min_speed_ms': corner.min_speed,
-                'max_steering_degrees': math.degrees(corner.max_steering),
-                'entry_lap_dist_pct': corner.entry_lap_dist_pct,
-                'apex_lap_dist_pct': corner.apex_lap_dist_pct,
-                'exit_lap_dist_pct': corner.exit_lap_dist_pct
-            }
-            corners_data['corners'].append(corner_data)
-        
-        # Save to file
-        json_filename = os.path.join(results_dir, f"corners_{timestamp}.json")
-        with open(json_filename, 'w') as f:
-            json.dump(corners_data, f, indent=2)
+
     
     def _save_to_supabase(self, corners: List[Corner], track_map_data: Optional[Dict] = None):
         """Save corner detection results and track map to Supabase tracks table."""
