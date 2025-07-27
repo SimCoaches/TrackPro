@@ -8,9 +8,32 @@ import time
 import logging
 import argparse
 from datetime import datetime
-from PyQt6 import QtWebEngineWidgets
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
+
+# CRITICAL: Set Qt attributes BEFORE any QApplication instance can be created AND before importing QtWebEngineWidgets
+# This is required for QtWebEngine to work properly in PyQt6
+QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+
+# Set Qt WebEngine cache directory before creating QApplication
+import sys
+import os
+if getattr(sys, 'frozen', False):
+    # Running from PyInstaller bundle - use application directory for cache
+    app_dir = os.path.dirname(sys.executable)
+    qt_cache_dir = os.path.join(app_dir, "QtWebEngine", "Cache")
+    qt_data_dir = os.path.join(app_dir, "QtWebEngine", "Data")
+    
+    # Create directories if they don't exist
+    os.makedirs(qt_cache_dir, exist_ok=True)
+    os.makedirs(qt_data_dir, exist_ok=True)
+    
+    # Set environment variables for Qt WebEngine
+    os.environ.setdefault('QTWEBENGINE_CHROMIUM_FLAGS', '--disable-logging --no-sandbox')
+    os.environ.setdefault('QTWEBENGINE_DISABLE_SANDBOX', '1')
+
+# Now it's safe to import QtWebEngineWidgets after Qt attributes are set
+from PyQt6 import QtWebEngineWidgets
 
 # CRITICAL: Silence noisy libraries IMMEDIATELY before any other imports
 # This prevents massive log spam from matplotlib, HTTP libraries, etc.
@@ -23,10 +46,6 @@ logging.getLogger('matplotlib.backends').setLevel(logging.WARNING)
 # Silence other noisy libraries
 for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.poolmanager', 'httpcore.connection', 'httpx.client', 'h11', 'h2', 'requests', 'supafunc']:
     logging.getLogger(library).setLevel(logging.CRITICAL)
-
-# CRITICAL: Set Qt attributes BEFORE any QApplication instance can be created
-# This is required for QtWebEngine to work properly in PyQt6
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 
 # Check if we're running with Python 3.11, but skip if running as exe
 is_frozen = getattr(sys, 'frozen', False)
@@ -89,6 +108,13 @@ except Exception:
 def setup_enhanced_logging():
     """Set up comprehensive logging to file and console for better debugging."""
     try:
+        # Check if logging is already configured to prevent duplicate handlers
+        root_logger = logging.getLogger()
+        if root_logger.handlers:
+            logger = logging.getLogger("TrackPro_Run")
+            logger.info("Logging already configured, skipping duplicate setup")
+            return logger, None
+        
         # Create logs directory
         logs_dir = os.path.join(os.path.expanduser("~"), "Documents", "TrackPro_Logs")
         if not os.path.exists(logs_dir):
@@ -112,14 +138,17 @@ def setup_enhanced_logging():
         logger.info(f"Enhanced logging initialized. Log file: {log_file}")
         return logger, log_file
     except Exception as e:
-        # Fallback to console only if file logging fails
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler(sys.stdout)
-            ]
-        )
+        # Check again before fallback to prevent duplicate handlers
+        root_logger = logging.getLogger()
+        if not root_logger.handlers:
+            # Fallback to console only if file logging fails
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.StreamHandler(sys.stdout)
+                ]
+            )
         logger = logging.getLogger("TrackPro_Run")
         logger.warning(f"Could not set up file logging: {e}")
         return logger, None
@@ -391,17 +420,25 @@ def check_single_instance():
                     # Check for TrackPro executable or Python running TrackPro
                     is_trackpro = False
                     
+                    # Skip the current process
+                    if process_info['pid'] == os.getpid():
+                        continue
+                    
+                    # Skip build.py processes (avoid flagging build script as TrackPro process)
+                    if any('build.py' in str(cmd) for cmd in process_info['cmdline']):
+                        continue
+                    
                     # Check for TrackPro executable
                     if any('trackpro' in str(cmd).lower() for cmd in process_info['cmdline']):
                         is_trackpro = True
                     
-                    # Check for Python processes running TrackPro
+                    # Check for Python processes running TrackPro (but not build script)
                     if (process_info['name'] in ['python.exe', 'pythonw.exe'] and 
-                        any('trackpro' in str(cmd).lower() or 'run_app.py' in str(cmd).lower() 
+                        any('run_app.py' in str(cmd).lower() or 'main.py' in str(cmd).lower()
                             for cmd in process_info['cmdline'])):
                         is_trackpro = True
                     
-                    if is_trackpro and process_info['pid'] != os.getpid():
+                    if is_trackpro:
                         trackpro_processes.append(process_info['pid'])
                         
                 except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):

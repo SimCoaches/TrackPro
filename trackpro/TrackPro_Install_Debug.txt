@@ -1,0 +1,32 @@
+20:41:04 - === TrackPro Installation Started ===
+20:41:04 - Installer version: 1.5.3
+20:41:04 - Temp directory: C:\Users\LAWREN~1\AppData\Local\Temp\is-RT508.tmp
+20:41:04 - User privileges: Admin required
+20:41:04 - 
+20:41:04 - Starting prerequisite detection...
+20:41:04 - vJoy detection: Stale service key found, but vjoy.sys is missing. Assuming NOT installed.
+20:41:04 - vJoy detection: NOT FOUND (will need to install)
+20:41:04 - HidHide detection: Stale service key found, but HidHide.sys is missing. Assuming NOT installed.
+20:41:04 - HidHide detection: NOT FOUND (will need to install)
+20:41:04 - Visual C++ detection: FOUND (version v14.44.35211.00 or compatible)
+20:41:04 - Prerequisite detection completed. Showing summary to user.
+20:41:09 - === Starting installation phase ===
+20:41:09 - TrackPro application will be installed to: C:\Users\Lawrence Thomas\Downloads\Newest Trackpro 7-26\TrackPro\TrackPro
+20:41:33 - vJoy detection: Stale service key found, but vjoy.sys is missing. Assuming NOT installed.
+20:41:33 - vJoy detection: NOT FOUND (will need to install)
+20:41:33 - STARTING: vJoy installation...
+20:41:45 - COMPLETED: vJoy installation finished
+20:41:45 - HidHide detection: Stale service key found, but HidHide.sys is missing. Assuming NOT installed.
+20:41:45 - HidHide detection: NOT FOUND (will need to install)
+20:41:45 - STARTING: HidHide installation...
+20:41:52 - COMPLETED: HidHide installation finished
+20:41:52 - Visual C++ detection: FOUND (version v14.44.35211.00 or compatible)
+20:41:52 - === Installation phase completed ===
+20:41:52 - Creating Qt WebEngine directories...
+20:41:52 - Re-checking prerequisites after installation...
+20:41:52 - vJoy detection: Stale service key found, but vjoy.sys is missing. Assuming NOT installed.
+20:41:52 - vJoy detection: NOT FOUND (will need to install)
+20:41:52 - HidHide detection: Stale service key found, but HidHide.sys is missing. Assuming NOT installed.
+20:41:52 - HidHide detection: NOT FOUND (will need to install)
+20:41:52 - Visual C++ detection: FOUND (version v14.44.35211.00 or compatible)
+20:41:52 - WARNING: Only 1 of 3 prerequisites verified

@@ -82,9 +82,9 @@ def logout_current_user():
         from ..database.supabase_client import get_supabase_client
         client = get_supabase_client()
         if client and hasattr(client, 'auth'):
-            # Force clear the session regardless of remember_me setting
-            # This is for explicit logout actions
-            client.sign_out(force_clear=True)
-            logger.info("Signed out from Supabase")
+            # For explicit logout actions, force clear the session regardless of remember_me setting
+            # But give users the option to preserve credentials if they want
+            client.sign_out(force_clear=True, respect_remember_me=False)
+            logger.info("Signed out from Supabase (forced clear for explicit logout)")
     except Exception as e:
         logger.warning(f"Error signing out from Supabase: {e}") 

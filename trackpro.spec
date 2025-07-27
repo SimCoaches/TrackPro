@@ -23,16 +23,33 @@ for vjoy_path in vjoy_paths:
         binaries_list.append((vjoy_path, '.'))
         break  # Only add the first one found
 
-# Check for bundled HidHide CLI
+# Check for bundled HidHide CLI executables
 hidhide_paths = [
+    'trackpro/pedals/HidHideCLI.exe',
+    'trackpro/pedals/HidHideClient.exe',
     'trackpro/HidHideCLI.exe',
-    'trackpro/pedals/HidHideCLI.exe'
+    'trackpro/HidHideClient.exe'
 ]
 
+hidhide_found = False
 for hidhide_path in hidhide_paths:
     if os.path.exists(hidhide_path):
+        print(f"Found HidHide executable: {hidhide_path}")
         binaries_list.append((hidhide_path, '.'))
-        break  # Only add the first one found
+        hidhide_found = True
+        
+# Add both CLI and Client if found
+if hidhide_found:
+    # Try to find both CLI and Client executables
+    for cli_path in ['trackpro/pedals/HidHideCLI.exe', 'trackpro/HidHideCLI.exe']:
+        if os.path.exists(cli_path) and (cli_path, '.') not in binaries_list:
+            binaries_list.append((cli_path, '.'))
+            
+    for client_path in ['trackpro/pedals/HidHideClient.exe', 'trackpro/HidHideClient.exe']:
+        if os.path.exists(client_path) and (client_path, '.') not in binaries_list:
+            binaries_list.append((client_path, '.'))
+else:
+    print("WARNING: No HidHide executables found for bundling!")
 
 # --- Analysis Configuration ---
 a = Analysis(

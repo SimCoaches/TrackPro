@@ -255,13 +255,21 @@ class SupabaseManager:
             else:
                 return True  # Unknown format, assume expired
             
-            # Add a 2-minute buffer to avoid using tokens that are about to expire
-            # Reduced from 5 minutes to 2 minutes to be less aggressive
+            # CRITICAL FIX: Reduce buffer to 30 seconds to avoid premature token invalidation
+            # The previous 2-minute buffer was too aggressive and was causing unnecessary re-authentication
             import time
             current_time = datetime.fromtimestamp(time.time())
-            buffer_seconds = 120  # 2 minutes instead of 5
+            buffer_seconds = 30  # Only 30 seconds buffer instead of 2 minutes
             
-            return (expiry_time.timestamp() - current_time.timestamp()) < buffer_seconds
+            is_expired = (expiry_time.timestamp() - current_time.timestamp()) < buffer_seconds
+            
+            if is_expired:
+                logger.info(f"Token expired: current={current_time}, expiry={expiry_time}, buffer={buffer_seconds}s")
+            else:
+                remaining_seconds = expiry_time.timestamp() - current_time.timestamp()
+                logger.debug(f"Token valid for {remaining_seconds:.0f} more seconds")
+            
+            return is_expired
             
         except Exception as e:
             logger.warning(f"Error checking token expiration: {e}")
@@ -279,10 +287,13 @@ class SupabaseManager:
         access_token = self._saved_auth.get('access_token')
         refresh_token = self._saved_auth.get('refresh_token')
         expires_at = self._saved_auth.get('expires_at')
+        remember_me = self._saved_auth.get('remember_me', True)  # Default to True for backward compatibility
         
         if not access_token:
             logger.warning("No access token found in saved session")
             return False
+        
+        logger.info(f"Attempting session restoration (remember_me={remember_me})")
         
         try:
             # First, check if the current access token is still valid
@@ -307,6 +318,10 @@ class SupabaseManager:
                     session = self._client.auth.get_session()
                     if session and hasattr(session, 'user') and session.user:
                         logger.info("Session restored successfully with existing tokens")
+                        # Update session data if needed (in case tokens were refreshed)
+                        if hasattr(session, 'access_token') and session.access_token != access_token:
+                            logger.info("Session tokens were automatically refreshed during restoration")
+                            self._save_session(session, remember_me)
                         # Sync auth state with other modules after successful restoration
                         self._sync_auth_state_with_modules()
                         return True
@@ -323,84 +338,107 @@ class SupabaseManager:
             # Try to refresh the session using the refresh token
             if refresh_token:
                 logger.info("Access token expired or invalid, attempting to refresh session")
-                try:
-                    # Try the standard refresh method first
-                    if hasattr(self._client.auth, 'refresh_session'):
-                        logger.info("Attempting to refresh session using auth.refresh_session method")
-                        response = self._client.auth.refresh_session()
-                        if response and hasattr(response, 'session') and response.session:
-                            logger.info("Session refreshed successfully using refresh_session method")
-                            remember_me = self._saved_auth.get('remember_me', True)
-                            self._save_session(response, remember_me)
-                            # Sync auth state with other modules after successful restoration
-                            self._sync_auth_state_with_modules()
-                            return True
-                    
-                    # Try the older refresh method
-                    if hasattr(self._client.auth, 'refresh'):
-                        logger.info("Attempting to refresh session using auth.refresh method")
-                        response = self._client.auth.refresh()
-                        if response and hasattr(response, 'session') and response.session:
-                            logger.info("Session refreshed successfully using refresh method")
-                            remember_me = self._saved_auth.get('remember_me', True)
-                            self._save_session(response, remember_me)
-                            # Sync auth state with other modules after successful restoration
-                            self._sync_auth_state_with_modules()
-                            return True
-                    
-                    # Try using the refresh token directly with set_session
-                    logger.info("Attempting manual refresh using refresh token")
-                    try:
-                        # Create a temporary session with the refresh token to trigger refresh
-                        temp_session = {
-                            'access_token': access_token,
-                            'refresh_token': refresh_token
-                        }
-                        self._client.auth.set_session(access_token, refresh_token)
+                refresh_success = False
+                
+                # Try multiple refresh methods with retry logic
+                refresh_attempts = [
+                    ("refresh_session", lambda: getattr(self._client.auth, 'refresh_session', lambda: None)()),
+                    ("refresh", lambda: getattr(self._client.auth, 'refresh', lambda: None)()),
+                    ("manual_refresh", self._attempt_manual_refresh)
+                ]
+                
+                for method_name, refresh_func in refresh_attempts:
+                    if refresh_success:
+                        break
                         
-                        # Now try to get the session which should refresh automatically
-                        refreshed_session = self._client.auth.get_session()
-                        if refreshed_session and hasattr(refreshed_session, 'access_token'):
-                            logger.info("Session refreshed successfully using manual refresh")
+                    try:
+                        logger.info(f"Attempting session refresh using {method_name}")
+                        if method_name == "manual_refresh":
+                            result = refresh_func(access_token, refresh_token)
+                        else:
+                            result = refresh_func()
+                        
+                        if result and hasattr(result, 'session') and result.session:
+                            logger.info(f"Session refreshed successfully using {method_name}")
+                            self._save_session(result, remember_me)
+                            self._sync_auth_state_with_modules()
+                            refresh_success = True
+                            return True
+                        elif result and hasattr(result, 'access_token'):
+                            # Handle case where result is the session directly
+                            logger.info(f"Session refreshed successfully using {method_name} (direct session)")
                             # Create a mock response for saving
                             class MockResponse:
                                 def __init__(self, session):
                                     self.session = session
-                            
-                            remember_me = self._saved_auth.get('remember_me', True)
-                            self._save_session(MockResponse(refreshed_session), remember_me)
-                            # Sync auth state with other modules after successful restoration
+                            self._save_session(MockResponse(result), remember_me)
                             self._sync_auth_state_with_modules()
+                            refresh_success = True
                             return True
-                    except Exception as manual_e:
-                        logger.warning(f"Manual refresh failed: {manual_e}")
+                    except Exception as e:
+                        logger.warning(f"Session refresh using {method_name} failed: {e}")
+                        continue
+                
+                if not refresh_success:
+                    logger.warning("All session refresh attempts failed")
                     
-                    # If all refresh attempts fail, clear the session conditionally
-                    logger.info("All refresh attempts failed, clearing session conditionally based on remember_me")
-                    self._clear_session_conditionally()
-                    
-                except Exception as e:
-                    logger.warning(f"Session refresh handling failed: {e}")
-                    # If refresh fails, clear the saved session conditionally to respect remember_me
-                    if "already used" in str(e).lower() or "invalid" in str(e).lower():
-                        logger.info("Refresh token is invalid, clearing saved session conditionally")
-                        self._clear_session_conditionally()
+                    # CRITICAL FIX: If remember_me is True, don't clear the session completely
+                    # Instead, preserve the session data for future attempts while clearing active session
+                    if remember_me:
+                        logger.info("remember_me=True: Preserving session data for future login attempts")
+                        # Clear the client session but keep the saved auth data
+                        try:
+                            self._client.auth.sign_out()
+                        except:
+                            pass
+                        # Don't call _clear_session_conditionally which might remove the session file
+                        return False
                     else:
-                        # For other errors, keep the session if remember_me is true
-                        logger.info("Refresh failed but keeping session due to remember_me preference")
-                        # Don't clear the session, let the user try to log in again later
+                        logger.info("remember_me=False: Clearing session data after refresh failure")
+                        self._clear_session_conditionally()
+                        return False
             else:
                 logger.warning("No refresh token available for session restoration")
-                # Clear invalid session conditionally
-                self._clear_session_conditionally()
-            
-            return False
-            
+                
+                # If remember_me is True, preserve the session for manual re-authentication
+                if remember_me:
+                    logger.info("remember_me=True: No refresh token but preserving session data")
+                    return False
+                else:
+                    logger.info("remember_me=False: Clearing session due to missing refresh token")
+                    self._clear_session_conditionally()
+                    return False
+                    
         except Exception as e:
-            logger.error(f"Error during safe session restoration: {e}")
-            # Clear problematic session data conditionally on any error
-            self._clear_session_conditionally()
-            return False
+            logger.error(f"Unexpected error during session restoration: {e}")
+            # On unexpected errors, preserve remember_me sessions but clear others
+            if remember_me:
+                logger.info("remember_me=True: Preserving session data despite restoration error")
+                return False
+            else:
+                logger.info("remember_me=False: Clearing session due to restoration error")
+                self._clear_session_conditionally()
+                return False
+    
+    def _attempt_manual_refresh(self, access_token, refresh_token):
+        """Attempt manual session refresh using tokens.
+        
+        Returns:
+            Session object if successful, None otherwise
+        """
+        try:
+            # Create a temporary session with the refresh token to trigger refresh
+            self._client.auth.set_session(access_token, refresh_token)
+            
+            # Now try to get the session which should refresh automatically
+            refreshed_session = self._client.auth.get_session()
+            if refreshed_session and hasattr(refreshed_session, 'access_token'):
+                logger.info("Manual session refresh successful")
+                return refreshed_session
+            return None
+        except Exception as e:
+            logger.warning(f"Manual session refresh failed: {e}")
+            return None
     
     def _save_session(self, response, remember_me=True):
         """Save session to file for persistence between app restarts.
@@ -480,29 +518,47 @@ class SupabaseManager:
         try:
             # If not respecting remember_me, always clear
             if not respect_remember_me:
+                logger.info("Forcing session clear (ignoring remember_me preference)")
                 return self._clear_session()
             
             # Check remember_me preference
             if self._saved_auth and 'remember_me' in self._saved_auth:
                 remember_me = self._saved_auth.get('remember_me', False)
                 if remember_me:
-                    logger.info("Session has remember_me=True, keeping session data for future restoration")
-                    # Don't clear the session file, but clear the in-memory tokens to force re-auth on next attempt
-                    if self._saved_auth:
-                        # Only clear the sensitive token data but keep the file with remember_me preference
-                        logger.info("Clearing in-memory tokens but preserving remember_me preference")
-                    return False  # Session kept
+                    logger.info("Session has remember_me=True, preserving session data for future authentication")
+                    # CRITICAL IMPROVEMENT: Don't clear the session file, but clear the in-memory client session
+                    # This allows users to re-authenticate without re-entering credentials
+                    try:
+                        if self._client and hasattr(self._client, 'auth'):
+                            self._client.auth.sign_out()
+                            logger.info("Cleared active client session but preserved login credentials")
+                    except Exception as e:
+                        logger.warning(f"Error clearing active client session: {e}")
+                    
+                    # Sync auth state to reflect signed-out status while keeping credentials
+                    self._sync_auth_state_with_modules()
+                    return False  # Session file kept
                 else:
-                    logger.info("Session has remember_me=False, clearing session data")
+                    logger.info("Session has remember_me=False, clearing all session data")
                     return self._clear_session()
             else:
-                # No remember_me preference found, default to clearing
-                logger.info("No remember_me preference found, clearing session data")
-                return self._clear_session()
+                # No remember_me preference found - for backward compatibility, be conservative
+                # and keep the session (assume remember_me=True for existing sessions)
+                logger.info("No remember_me preference found - defaulting to preserve session for compatibility")
+                try:
+                    if self._client and hasattr(self._client, 'auth'):
+                        self._client.auth.sign_out()
+                        logger.info("Cleared active client session but preserved login credentials (compatibility mode)")
+                except Exception as e:
+                    logger.warning(f"Error clearing active client session: {e}")
+                
+                self._sync_auth_state_with_modules()
+                return False  # Session file kept
                 
         except Exception as e:
             logger.error(f"Error in conditional session clearing: {e}")
-            # On error, default to keeping session to be safe
+            # On error, be very conservative and keep the session to avoid data loss
+            logger.info("Error during conditional clearing - preserving session data to be safe")
             return False
     
     def initialize(self):
@@ -585,27 +641,48 @@ class SupabaseManager:
                             # Sync auth state with other modules after successful restoration
                             self._sync_auth_state_with_modules()
                         else:
-                            logger.info("Session restoration failed, user will need to sign in again")
-                            # Clear the invalid session data conditionally
-                            self._clear_session_conditionally()
+                            logger.info("Session restoration failed, but preserving session data for remember_me users")
+                            # CRITICAL FIX: Don't immediately clear session on restoration failure
+                            # Users with remember_me=True should be able to retry authentication
+                            remember_me = self._saved_auth.get('remember_me', True)
+                            if not remember_me:
+                                logger.info("remember_me=False: Clearing failed session")
+                                self._clear_session_conditionally()
+                            else:
+                                logger.info("remember_me=True: Keeping session for future authentication attempts")
                     except Exception as e:
                         logger.warning(f"Failed to restore session: {e}")
-                        # Clear the problematic session data conditionally to respect remember_me
-                        self._clear_session_conditionally()
+                        # CRITICAL FIX: Preserve remember_me sessions even on restoration errors
+                        remember_me = self._saved_auth.get('remember_me', True) if self._saved_auth else False
+                        if not remember_me:
+                            logger.info("remember_me=False: Clearing session after restoration error")
+                            self._clear_session_conditionally()
+                        else:
+                            logger.info("remember_me=True: Preserving session despite restoration error")
                 
                 # Test connection with a simple operation
                 try:
                     # Just check if we can access the auth API
                     logger.info("Testing connection to Supabase...")
                     logger.info("[INIT_DEBUG] Attempting _client.auth.get_session()...")
-                    self._client.auth.get_session()
+                    session_test = self._client.auth.get_session()
                     logger.info("[INIT_DEBUG] _client.auth.get_session() successful.")
-                    self._offline_mode = False
+                    
+                    # Check if we have an authenticated session
+                    if session_test and hasattr(session_test, 'user') and session_test.user:
+                        logger.info(f"Connected to Supabase with authenticated user: {session_test.user.email}")
+                        self._offline_mode = False
+                        # Ensure auth state is synced after connection test
+                        self._sync_auth_state_with_modules()
+                    else:
+                        logger.info("Connected to Supabase but no active user session")
+                        self._offline_mode = False
+                    
                     logger.info("Supabase client initialized and connected successfully")
                 except Exception as e:
                     logger.error(f"[INIT_DEBUG] _client.auth.get_session() failed: {e}")
                     logger.warning(f"Connected but session retrieval failed: {e}")
-                    # Still consider it a success if we got this far
+                    # Still consider it a success if we got this far - network issues shouldn't prevent app startup
                     self._offline_mode = False
                     logger.info("Supabase client initialized (with limited functionality)")
             except Exception as e:
@@ -1027,17 +1104,18 @@ class SupabaseManager:
         except Exception as e:
             logger.warning(f"Error syncing auth state with modules: {e}")
     
-    def sign_out(self, force_clear=False):
+    def sign_out(self, force_clear=False, respect_remember_me=True):
         """Sign out the current user.
         
         Args:
             force_clear: If True, always clear the saved session regardless of remember_me preference
+            respect_remember_me: If True, preserve sessions when remember_me=True (default). If False, clear all sessions.
         """
         if self._offline_mode or not self._client:
             logger.warning("Cannot sign out - Supabase is not connected")
             return
         
-        logger.info(f"Signing out user (force_clear={force_clear})")
+        logger.info(f"Signing out user (force_clear={force_clear}, respect_remember_me={respect_remember_me})")
         
         def signout_func():
             try:
@@ -1047,25 +1125,35 @@ class SupabaseManager:
                 logger.warning(f"Error during Supabase sign out: {e}")
                 # Continue with local cleanup even if remote sign out fails
             
-            # Check if we should clear the saved session
-            should_clear = force_clear
+            # Determine if we should clear the saved session
+            should_clear = force_clear or not respect_remember_me
             
             # If not forcing, check the remember_me preference
-            if not force_clear and self._saved_auth and 'remember_me' in self._saved_auth:
+            if not force_clear and respect_remember_me and self._saved_auth and 'remember_me' in self._saved_auth:
                 remember_me = self._saved_auth.get('remember_me', False)
                 # Only clear if remember_me is False
                 should_clear = not remember_me
-                logger.info(f"Remember me preference is {remember_me}, {'clearing' if should_clear else 'keeping'} session data")
+                logger.info(f"Remember me preference is {remember_me}, {'clearing' if should_clear else 'preserving'} session data")
+            elif force_clear:
+                logger.info("Force clear requested - clearing all session data")
+            elif not respect_remember_me:
+                logger.info("Not respecting remember_me - clearing all session data")
             else:
-                # Default to clearing if remember_me not found or force_clear is True
+                # Default to clearing if remember_me not found
                 should_clear = True
+                logger.info("No remember_me preference found - clearing session data")
             
             # Clear saved session if needed
             if should_clear:
                 self._clear_session()
-                logger.info("Session cleared during sign out")
+                logger.info("Session data cleared during sign out")
             else:
-                logger.info("Session retained for remember me")
+                # Use conditional clearing to preserve remember_me sessions
+                cleared = self._clear_session_conditionally(respect_remember_me=True)
+                if cleared:
+                    logger.info("Session cleared during conditional sign out")
+                else:
+                    logger.info("Session preserved during sign out due to remember_me preference")
             
             # Sync auth state with other modules
             self._sync_auth_state_with_modules()
@@ -1236,7 +1324,7 @@ class SupabaseManager:
             # If Supabase is disabled in config, don't even try
             if not config.supabase_enabled:
                 return False
-            
+                
             # If URL or key not configured, we can't connect
             if not config.supabase_url or not config.supabase_key:
                 logger.warning("Supabase credentials not configured")

@@ -284,62 +284,62 @@ def get_telemetry_points(lap_id: str, columns: Optional[list[str]] = None):
     Returns:
         Tuple[list[dict] | None, str]
     """
-    # Try multiple approaches to get an authenticated Supabase client
-    supabase_client = None
+    logger.info(f"🔍 [DB DEBUG] get_telemetry_points called with lap_id: {lap_id}")
     
-    # First try direct import from trackpro's client
+    # Use the main authenticated Supabase client from trackpro
     try:
-        from trackpro.database.supabase_client import supabase as app_supabase
-        if app_supabase and app_supabase.is_authenticated():
-            supabase_client = app_supabase.client
-            return _execute_telemetry_query(supabase_client, lap_id, columns)
-    except (ImportError, AttributeError):
-        pass
-    
-    # Then try the module-level supabase client
-    try:
-        from .client import supabase
-        if supabase and hasattr(supabase, 'client') and supabase.client:
-            # For diagnostics, try to get session info
-            try:
-                auth_session = supabase.client.auth.get_session()
-                has_user = auth_session and hasattr(auth_session, 'user') and auth_session.user is not None
-                if has_user:
-                    supabase_client = supabase.client
-                    return _execute_telemetry_query(supabase_client, lap_id, columns)
-            except Exception:
-                pass
-    except (ImportError, AttributeError):
-        pass
-    
-    # Try explicit authentication from auth module as last resort
-    try:
-        from .client import supabase
-        from . import auth
-        if auth.is_logged_in():
-            session_token = auth.get_session_token()
-            if session_token and supabase.client:
-                # Set session token and check if it's valid
-                supabase.auth.set_session(session_token)
-                try:
-                    # Check if session is valid
-                    auth_session = supabase.client.auth.get_session()
-                    if auth_session and hasattr(auth_session, 'user') and auth_session.user:
-                        # Success - return query result
-                        supabase_client = supabase.client
-                        return _execute_telemetry_query(supabase_client, lap_id, columns)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+        from trackpro.database.supabase_client import supabase as main_supabase
+        logger.info(f"🔍 [DB DEBUG] Main supabase client imported: {main_supabase is not None}")
         
-    # If we get here, all attempts to obtain an authenticated client failed
-    return None, "Failed to obtain authenticated Supabase client for telemetry access"
+        if main_supabase and main_supabase._client:
+            logger.info(f"🔍 [DB DEBUG] Main supabase client available: {main_supabase._client is not None}")
+            logger.info(f"🔍 [DB DEBUG] Client offline mode: {getattr(main_supabase, '_offline_mode', 'unknown')}")
+            
+            # Test authentication status
+            try:
+                is_authenticated = main_supabase.is_authenticated()
+                logger.info(f"🔍 [DB DEBUG] Is authenticated: {is_authenticated}")
+                
+                if is_authenticated:
+                    user = main_supabase.get_user()
+                    if user and hasattr(user, 'user') and user.user:
+                        logger.info(f"🔍 [DB DEBUG] Authenticated user: {user.user.email}")
+                    else:
+                        logger.warning(f"🔍 [DB DEBUG] User object: {user}")
+                else:
+                    logger.warning("🔍 [DB DEBUG] Not authenticated - checking saved auth")
+                    if hasattr(main_supabase, '_saved_auth') and main_supabase._saved_auth:
+                        logger.info(f"🔍 [DB DEBUG] Saved auth exists with remember_me: {main_supabase._saved_auth.get('remember_me', 'not set')}")
+                        # Try to restore session
+                        logger.info("🔍 [DB DEBUG] Attempting to restore session for telemetry access")
+                        try:
+                            session_restored = main_supabase._restore_session_safely()
+                            logger.info(f"🔍 [DB DEBUG] Session restoration result: {session_restored}")
+                        except Exception as restore_e:
+                            logger.error(f"🔍 [DB DEBUG] Session restoration failed: {restore_e}")
+                    else:
+                        logger.error("🔍 [DB DEBUG] No saved auth available")
+            except Exception as auth_e:
+                logger.error(f"🔍 [DB DEBUG] Error checking authentication: {auth_e}")
+            
+            return _execute_telemetry_query(main_supabase._client, lap_id, columns)
+        else:
+            logger.error("🔍 [DB DEBUG] Main Supabase client not available")
+            return None, "Main Supabase client not available"
+    except ImportError:
+        logger.error("🔍 [DB DEBUG] Could not import main Supabase client")
+        return None, "Could not import main Supabase client"
 
 def _execute_telemetry_query(client, lap_id: str, columns: Optional[list[str]] = None):
     """Execute the actual telemetry points query with appropriate error handling."""
+    logger.info(f"🔍 [DB DEBUG] _execute_telemetry_query called with lap_id: {lap_id}, columns: {columns}")
+    
     if not lap_id:
+        logger.error("🔍 [DB DEBUG] lap_id is required but not provided")
         return None, "lap_id is required"
+
+    logger.info(f"🔍 [DB DEBUG] Client type: {type(client)}")
+    logger.info(f"🔍 [DB DEBUG] Client has table method: {hasattr(client, 'table')}")
 
     all_points = []
     current_offset = 0
@@ -347,43 +347,85 @@ def _execute_telemetry_query(client, lap_id: str, columns: Optional[list[str]] =
     # This can be configured in Supabase project settings (Settings -> API -> Max Rows)
     # but client-side pagination is safer for potentially very large datasets.
     page_size = 1000
+    max_pages = 50  # Safety limit: 50 pages = up to 50,000 points (should handle even Nurburgring)
 
     try:
         sel = "*" if columns is None else ",".join(columns)
+        logger.info(f"🔍 [DB DEBUG] Selection string: {sel}")
         
+        page_count = 0
         while True:
-            query = (
-                client.table("telemetry_points")
-                .select(sel)
-                .eq("lap_id", lap_id)
-                .order("track_position") # Ensure consistent ordering for pagination
-                .range(current_offset, current_offset + page_size - 1) # Fetch one page
-            )
+            page_count += 1
             
-            result = query.execute()
-
-            if result.data:
-                all_points.extend(result.data)
-                if len(result.data) < page_size:
-                    # Last page fetched
+            # Safety check to prevent infinite loops
+            if page_count > max_pages:
+                logger.warning(f"🔍 [DB DEBUG] Safety limit reached: {max_pages} pages fetched ({len(all_points)} points total). Stopping pagination.")
+                break
+                
+            logger.info(f"🔍 [DB DEBUG] Fetching page {page_count}, offset: {current_offset}, page_size: {page_size}")
+            
+            try:
+                query = (
+                    client.table("telemetry_points")
+                    .select(sel)
+                    .eq("lap_id", lap_id)
+                    .order("track_position", desc=False)
+                    .order("id", desc=False)  # Ensure consistent deterministic ordering for pagination
+                    .range(current_offset, current_offset + page_size - 1)  # Fetch one page - DON'T use .limit() with .range()
+                )
+                
+                logger.info(f"🔍 [DB DEBUG] Executing query for page {page_count} - range({current_offset}, {current_offset + page_size - 1})")
+                result = query.execute()
+                logger.info(f"🔍 [DB DEBUG] Query executed successfully for page {page_count}")
+                logger.info(f"🔍 [DB DEBUG] Result type: {type(result)}")
+                logger.info(f"🔍 [DB DEBUG] Result has data: {hasattr(result, 'data')}")
+                
+                if hasattr(result, 'data') and result.data and len(result.data) > 0:
+                    page_points = len(result.data)
+                    logger.info(f"🔍 [DB DEBUG] Page {page_count} returned {page_points} points")
+                    all_points.extend(result.data)
+                    current_offset += len(result.data)
+                    logger.info(f"🔍 [DB DEBUG] Moving to next page, new offset: {current_offset}")
+                    
+                    # Continue to next page - we only stop when we get 0 results on a page
+                    # This ensures we fetch ALL telemetry points, even for 50,000+ point tracks
+                else:
+                    logger.info(f"🔍 [DB DEBUG] Page {page_count} returned no data - pagination complete")
+                    # No more data or an error occurred on this page fetch
+                    if not all_points: # If no points fetched at all and no data on first page
+                        # Check if there was an error message from PostgREST (e.g. in result.error)
+                        error_message = "Failed to retrieve telemetry points"
+                        if hasattr(result, 'error') and result.error and hasattr(result.error, 'message'):
+                            error_message += f": {result.error.message}"
+                            logger.error(f"🔍 [DB DEBUG] PostgREST error: {result.error.message}")
+                        elif hasattr(result, 'message') and result.message: # some clients might put it here
+                             error_message += f": {result.message}"
+                             logger.error(f"🔍 [DB DEBUG] Result message: {result.message}")
+                        logger.error(f"🔍 [DB DEBUG] No points retrieved on first page, returning error: {error_message}")
+                        return None, error_message
+                    break # No more data, exit loop
+            except Exception as query_e:
+                logger.error(f"🔍 [DB DEBUG] Query execution failed on page {page_count}: {query_e}", exc_info=True)
+                if not all_points:
+                    return None, f"Query execution failed: {str(query_e)}"
+                else:
+                    logger.warning(f"🔍 [DB DEBUG] Query failed but {len(all_points)} points already retrieved, continuing with partial data")
                     break
-                current_offset += len(result.data) # Move to the next page offset
-            else:
-                # No more data or an error occurred on this page fetch
-                if not all_points: # If no points fetched at all and no data on first page
-                    # Check if there was an error message from PostgREST (e.g. in result.error)
-                    error_message = "Failed to retrieve telemetry points"
-                    if hasattr(result, 'error') and result.error and hasattr(result.error, 'message'):
-                        error_message += f": {result.error.message}"
-                    elif hasattr(result, 'message') and result.message: # some clients might put it here
-                         error_message += f": {result.message}"
-                    return None, error_message
-                break # No more data, exit loop
 
+        logger.info(f"🔍 [DB DEBUG] Total pages fetched: {page_count}")
+        logger.info(f"🔍 [DB DEBUG] Total points retrieved: {len(all_points)}")
+        
+        if all_points:
+            # Log sample of data for debugging
+            sample_point = all_points[0]
+            logger.info(f"🔍 [DB DEBUG] Sample point fields: {list(sample_point.keys())}")
+            logger.info(f"🔍 [DB DEBUG] Sample track position: {sample_point.get('track_position', 'missing')}")
+        
         return all_points, f"Retrieved {len(all_points)} telemetry points"
     except Exception as e:
         # Log the full exception for better debugging
         # Consider using logger.exception("Error in _execute_telemetry_query:") if logger is configured
+        logger.error(f"🔍 [DB DEBUG] Critical exception in _execute_telemetry_query: {str(e)}", exc_info=True)
         return None, f"Failed to retrieve telemetry points due to an exception: {str(e)}"
 
 # --- Add missing get_sessions function ---
@@ -630,57 +672,15 @@ def get_ml_telemetry_points(lap_id: str, columns: Optional[list[str]] = None):
     Returns:
         Tuple[list[dict] | None, str]
     """
-    # Try multiple approaches to get an authenticated Supabase client
-    supabase_client = None
-    
-    # First try direct import from trackpro's client
+    # Use the main authenticated Supabase client from trackpro
     try:
-        from trackpro.database.supabase_client import supabase as app_supabase
-        if app_supabase and app_supabase.is_authenticated():
-            supabase_client = app_supabase.client
-            return _execute_ml_telemetry_query(supabase_client, lap_id, columns)
-    except (ImportError, AttributeError):
-        pass
-    
-    # Then try the module-level supabase client
-    try:
-        from .client import supabase
-        if supabase and hasattr(supabase, 'client') and supabase.client:
-            # For diagnostics, try to get session info
-            try:
-                auth_session = supabase.client.auth.get_session()
-                has_user = auth_session and hasattr(auth_session, 'user') and auth_session.user is not None
-                if has_user:
-                    supabase_client = supabase.client
-                    return _execute_ml_telemetry_query(supabase_client, lap_id, columns)
-            except Exception:
-                pass
-    except (ImportError, AttributeError):
-        pass
-    
-    # Try explicit authentication from auth module as last resort
-    try:
-        from .client import supabase
-        from . import auth
-        if auth.is_logged_in():
-            session_token = auth.get_session_token()
-            if session_token and supabase.client:
-                # Set session token and check if it's valid
-                supabase.auth.set_session(session_token)
-                try:
-                    # Check if session is valid
-                    auth_session = supabase.client.auth.get_session()
-                    if auth_session and hasattr(auth_session, 'user') and auth_session.user:
-                        # Success - return query result
-                        supabase_client = supabase.client
-                        return _execute_ml_telemetry_query(supabase_client, lap_id, columns)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-        
-    # If we get here, all attempts to obtain an authenticated client failed
-    return None, "Failed to obtain authenticated Supabase client for ML telemetry access"
+        from trackpro.database.supabase_client import supabase as main_supabase
+        if main_supabase and main_supabase._client:
+            return _execute_ml_telemetry_query(main_supabase._client, lap_id, columns)
+        else:
+            return None, "Main Supabase client not available"
+    except ImportError:
+        return None, "Could not import main Supabase client"
 
 
 def _execute_ml_telemetry_query(client, lap_id: str, columns: Optional[list[str]] = None):
@@ -700,18 +700,18 @@ def _execute_ml_telemetry_query(client, lap_id: str, columns: Optional[list[str]
                 client.table("telemetry_points_ml")
                 .select(sel)
                 .eq("lap_id", lap_id)
-                .order("track_position") # Ensure consistent ordering for pagination
-                .range(current_offset, current_offset + page_size - 1) # Fetch one page
+                .order("track_position", desc=False) # Ensure consistent ordering for pagination
+                .range(current_offset, current_offset + page_size - 1) # Fetch one page - DON'T use .limit() with .range()
             )
             
             result = query.execute()
 
-            if result.data:
+            if result.data and len(result.data) > 0:
                 all_points.extend(result.data)
-                if len(result.data) < page_size:
-                    # Last page fetched
-                    break
                 current_offset += len(result.data) # Move to the next page offset
+                
+                # Continue to next page - we only stop when we get 0 results
+                # This ensures we fetch ALL ML telemetry points
             else:
                 # No more data or an error occurred on this page fetch
                 if not all_points: # If no points fetched at all and no data on first page
@@ -774,53 +774,15 @@ def get_super_lap_telemetry_points(super_lap_id: str, columns: Optional[list[str
     if not super_lap_id:
         return None, "super_lap_id is required"
 
-    # Use the EXACT same authentication approach as get_telemetry_points()
-    supabase_client = None
-    
-    # First try direct import from trackpro's client
+    # Use the main authenticated Supabase client from trackpro
     try:
-        from trackpro.database.supabase_client import supabase as app_supabase
-        if app_supabase and app_supabase.is_authenticated():
-            supabase_client = app_supabase.client
-            return _execute_super_lap_telemetry_query(supabase_client, super_lap_id, columns)
-    except (ImportError, AttributeError):
-        pass
-    
-    # Then try the module-level supabase client
-    try:
-        from .client import supabase
-        if supabase and hasattr(supabase, 'client') and supabase.client:
-            try:
-                auth_session = supabase.client.auth.get_session()
-                has_user = auth_session and hasattr(auth_session, 'user') and auth_session.user is not None
-                if has_user:
-                    supabase_client = supabase.client
-                    return _execute_super_lap_telemetry_query(supabase_client, super_lap_id, columns)
-            except Exception:
-                pass
-    except (ImportError, AttributeError):
-        pass
-    
-    # Try explicit authentication from auth module as last resort
-    try:
-        from .client import supabase
-        from . import auth
-        if auth.is_logged_in():
-            session_token = auth.get_session_token()
-            if session_token and supabase.client:
-                supabase.auth.set_session(session_token)
-                try:
-                    auth_session = supabase.client.auth.get_session()
-                    if auth_session and hasattr(auth_session, 'user') and auth_session.user:
-                        supabase_client = supabase.client
-                        return _execute_super_lap_telemetry_query(supabase_client, super_lap_id, columns)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-        
-    # If we get here, all attempts to obtain an authenticated client failed
-    return None, "Failed to obtain authenticated Supabase client for SuperLap telemetry access"
+        from trackpro.database.supabase_client import supabase as main_supabase
+        if main_supabase and main_supabase._client:
+            return _execute_super_lap_telemetry_query(main_supabase._client, super_lap_id, columns)
+        else:
+            return None, "Main Supabase client not available"
+    except ImportError:
+        return None, "Could not import main Supabase client"
 
 
 def _execute_super_lap_telemetry_query(client, super_lap_id: str, columns: Optional[list[str]] = None):
@@ -908,16 +870,16 @@ def _get_sector_telemetry_using_working_method(client, sector_combination, colum
                     .select(sel)
                     .eq("lap_id", lap_id)
                     .eq("current_sector", sector_number)
-                    .order("track_position")
-                    .range(current_offset, current_offset + page_size - 1)
+                    .order("track_position", desc=False)
+                    .range(current_offset, current_offset + page_size - 1)  # DON'T use .limit() with .range()
                 )
                 result = query.execute()
 
-                if result.data:
+                if result.data and len(result.data) > 0:
                     sector_points.extend(result.data)
-                    if len(result.data) < page_size:
-                        break
                     current_offset += len(result.data)
+                    # Continue to next page - we only stop when we get 0 results
+                    # This ensures we fetch ALL telemetry points for each sector
                 else:
                     break
             

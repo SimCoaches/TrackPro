@@ -91,6 +91,38 @@ class TelemetryFetchWorker(QObject):
     def run(self):
         """Fetch telemetry data for both laps."""
         try:
+            logger.info(f"🔍 [TELEMETRY DEBUG] Starting telemetry fetch - left_lap_id: {self.left_lap_id}, right_lap_id: {self.right_lap_id}")
+            
+            # DEBUG: Check authentication status before attempting data fetch
+            try:
+                from trackpro.database.supabase_client import get_supabase_client
+                supabase_client = get_supabase_client()
+                logger.info(f"🔍 [TELEMETRY DEBUG] Supabase client available: {supabase_client is not None}")
+                
+                if supabase_client:
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Client offline mode: {getattr(supabase_client, '_offline_mode', 'unknown')}")
+                    is_authenticated = supabase_client.is_authenticated()
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Is authenticated: {is_authenticated}")
+                    
+                    if is_authenticated:
+                        user = supabase_client.get_user()
+                        if user and hasattr(user, 'user') and user.user:
+                            logger.info(f"🔍 [TELEMETRY DEBUG] Authenticated user: {user.user.email}")
+                        else:
+                            logger.warning(f"🔍 [TELEMETRY DEBUG] User object structure: {user}")
+                    else:
+                        logger.warning("🔍 [TELEMETRY DEBUG] Not authenticated - telemetry loading may fail")
+                        
+                        # Try to check for saved auth
+                        if hasattr(supabase_client, '_saved_auth'):
+                            logger.info(f"🔍 [TELEMETRY DEBUG] Saved auth available: {supabase_client._saved_auth is not None}")
+                            if supabase_client._saved_auth:
+                                logger.info(f"🔍 [TELEMETRY DEBUG] Remember me: {supabase_client._saved_auth.get('remember_me', 'not set')}")
+                else:
+                    logger.error("🔍 [TELEMETRY DEBUG] No Supabase client available")
+            except Exception as auth_e:
+                logger.error(f"🔍 [TELEMETRY DEBUG] Error checking authentication: {auth_e}")
+            
             from Supabase.database import get_telemetry_points
             
             left_result = None
@@ -101,47 +133,75 @@ class TelemetryFetchWorker(QObject):
             # Fetch left lap data
             if self.left_lap_id and not self.is_cancelled:
                 try:
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Fetching LEFT lap telemetry for lap_id: {self.left_lap_id}")
                     # get_telemetry_points returns (data, message) tuple
                     left_result_tuple = get_telemetry_points(self.left_lap_id)
-                    if left_result_tuple[0] is not None:  # Check if data is not None
-                        left_points = left_result_tuple[0]  # Extract data from tuple
-                        left_stats = self._calculate_lap_stats(left_points)
-                        left_result = {
-                            'points': left_points,
-                            'stats': left_stats
-                        }
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Left lap result tuple: {type(left_result_tuple)}, length: {len(left_result_tuple) if left_result_tuple else 'None'}")
+                    
+                    if left_result_tuple and len(left_result_tuple) >= 2:
+                        left_data, left_message = left_result_tuple[0], left_result_tuple[1]
+                        logger.info(f"🔍 [TELEMETRY DEBUG] Left lap data: {left_data is not None}, message: '{left_message}'")
+                        
+                        if left_data is not None:  # Check if data is not None
+                            left_points = left_data  # Extract data from tuple
+                            logger.info(f"🔍 [TELEMETRY DEBUG] Left lap points count: {len(left_points)}")
+                            left_stats = self._calculate_lap_stats(left_points)
+                            left_result = {
+                                'points': left_points,
+                                'stats': left_stats
+                            }
+                            logger.info(f"🔍 [TELEMETRY DEBUG] Left lap stats calculated: {left_stats}")
+                        else:
+                            left_error = left_message  # Extract error message from tuple
+                            logger.error(f"🔍 [TELEMETRY DEBUG] Left lap error: {left_error}")
                     else:
-                        left_error = left_result_tuple[1]  # Extract error message from tuple
+                        left_error = "Invalid response from get_telemetry_points"
+                        logger.error(f"🔍 [TELEMETRY DEBUG] Left lap invalid response: {left_result_tuple}")
                 except Exception as e:
                     left_error = str(e)
-                    logger.error(f"Error fetching left lap telemetry: {e}")
+                    logger.error(f"🔍 [TELEMETRY DEBUG] Exception fetching left lap telemetry: {e}", exc_info=True)
             
             # Fetch right lap data
             if self.right_lap_id and not self.is_cancelled:
                 try:
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Fetching RIGHT lap telemetry for lap_id: {self.right_lap_id}")
                     # get_telemetry_points returns (data, message) tuple
                     right_result_tuple = get_telemetry_points(self.right_lap_id)
-                    if right_result_tuple[0] is not None:  # Check if data is not None
-                        right_points = right_result_tuple[0]  # Extract data from tuple
-                        right_stats = self._calculate_lap_stats(right_points)
-                        right_result = {
-                            'points': right_points,
-                            'stats': right_stats
-                        }
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Right lap result tuple: {type(right_result_tuple)}, length: {len(right_result_tuple) if right_result_tuple else 'None'}")
+                    
+                    if right_result_tuple and len(right_result_tuple) >= 2:
+                        right_data, right_message = right_result_tuple[0], right_result_tuple[1]
+                        logger.info(f"🔍 [TELEMETRY DEBUG] Right lap data: {right_data is not None}, message: '{right_message}'")
+                        
+                        if right_data is not None:  # Check if data is not None
+                            right_points = right_data  # Extract data from tuple
+                            logger.info(f"🔍 [TELEMETRY DEBUG] Right lap points count: {len(right_points)}")
+                            right_stats = self._calculate_lap_stats(right_points)
+                            right_result = {
+                                'points': right_points,
+                                'stats': right_stats
+                            }
+                            logger.info(f"🔍 [TELEMETRY DEBUG] Right lap stats calculated: {right_stats}")
+                        else:
+                            right_error = right_message  # Extract error message from tuple
+                            logger.error(f"🔍 [TELEMETRY DEBUG] Right lap error: {right_error}")
                     else:
-                        right_error = right_result_tuple[1]  # Extract error message from tuple
+                        right_error = "Invalid response from get_telemetry_points"
+                        logger.error(f"🔍 [TELEMETRY DEBUG] Right lap invalid response: {right_result_tuple}")
                 except Exception as e:
                     right_error = str(e)
-                    logger.error(f"Error fetching right lap telemetry: {e}")
+                    logger.error(f"🔍 [TELEMETRY DEBUG] Exception fetching right lap telemetry: {e}", exc_info=True)
             
             if not self.is_cancelled:
                 if left_error or right_error:
+                    logger.error(f"🔍 [TELEMETRY DEBUG] Emitting errors - left: '{left_error}', right: '{right_error}'")
                     self.error.emit(left_error or "", right_error or "")
                 else:
+                    logger.info(f"🔍 [TELEMETRY DEBUG] Emitting successful results - left: {left_result is not None}, right: {right_result is not None}")
                     self.finished.emit(left_result, right_result)
                     
         except Exception as e:
-            logger.error(f"Error in telemetry fetch worker: {e}")
+            logger.error(f"🔍 [TELEMETRY DEBUG] Critical error in telemetry fetch worker: {e}", exc_info=True)
             self.error.emit(str(e), str(e))
 
     def cancel(self):
@@ -734,12 +794,14 @@ class TelemetryTab(QWidget):
         self._update_lap_combos()
 
     def _on_initial_load_error(self, error_message):
-        """Handle initial load errors."""
-        logger.error(f"Initial load error: {error_message}")
+        """Handle initial load error."""
+        logger.error(f"🔍 [TELEMETRY DEBUG] Initial load error: {error_message}")
         self.loading_label.setText(f"Error loading data: {error_message}")
+        self.loading_label.setVisible(True)
 
     def _on_initial_load_finished(self):
         """Handle initial load completion."""
+        logger.info("🔍 [TELEMETRY DEBUG] Initial load finished")
         self.loading_label.setVisible(False)
 
     def _format_session_display(self, session):
@@ -771,7 +833,11 @@ class TelemetryTab(QWidget):
             for lap in self.laps:
                 lap_num = lap.get('lap_number', 0)
                 lap_time = lap.get('lap_time', 0)
-                lap_state = lap.get('lap_state', 'unknown')
+                
+                # FIX: Map database is_valid field to lap_state for proper display
+                is_valid = lap.get('is_valid', True)  # Default to True for valid laps
+                lap_state = 'complete' if is_valid else 'invalid'
+                
                 display_text = self._format_lap_display(lap_num, lap_time, lap_state)
                 
                 self.left_lap_combo.addItem(display_text, lap)
@@ -885,14 +951,32 @@ class TelemetryTab(QWidget):
         """Handle loaded telemetry data."""
         self.graph_status_label.setVisible(False)
         
-        # Get track length for the graphs
-        track_length = self.get_track_length() or 1000  # Default to 1000m if not available
+        # Get track length for the graphs with improved logging
+        track_length = self.get_track_length()
+        logger.info(f"🏁 [TRACK LENGTH DEBUG] Retrieved track_length from session: {track_length}")
+        
+        # If no track length from session, try to estimate from telemetry data
+        if not track_length:
+            estimated_length = self._estimate_track_length_from_telemetry(left_data, right_data)
+            logger.info(f"🏁 [TRACK LENGTH DEBUG] Estimated track_length from telemetry: {estimated_length}")
+            track_length = estimated_length
+        
+        # Use a more reasonable default if still no track length
+        if not track_length or track_length < 100:
+            track_length = 5000  # Default to 5km for road courses
+            logger.warning(f"🏁 [TRACK LENGTH DEBUG] Using default track_length: {track_length}m")
+        else:
+            logger.info(f"🏁 [TRACK LENGTH DEBUG] Final track_length: {track_length}m")
         
         # Prepare lap data format for graph widgets with field mapping
         left_lap_data = None
         right_lap_data = None
         
         if left_data and left_data.get('points'):
+            # Log sample track_position values for debugging
+            sample_positions = [p.get('track_position', 0) for p in left_data['points'][:5]]
+            logger.info(f"🏁 [TRACK LENGTH DEBUG] Left lap sample track_positions: {sample_positions}")
+            
             # Map database field names to what graph widgets expect
             mapped_points = []
             for point in left_data['points']:
@@ -946,9 +1030,18 @@ class TelemetryTab(QWidget):
                 mapped_points.append(mapped_point)
             
             left_lap_data = {'points': mapped_points}
-            logger.info(f"Mapped {len(mapped_points)} points for left lap (first point LapDist: {mapped_points[0].get('LapDist', 'missing') if mapped_points else 'no points'})")
+            logger.info(f"Mapped {len(mapped_points)} points for left lap")
+            
+            # Log sample LapDist values after mapping
+            if mapped_points:
+                sample_lap_dists = [p.get('LapDist', 0) for p in mapped_points[:5]]
+                logger.info(f"🏁 [TRACK LENGTH DEBUG] Left lap sample LapDists after mapping: {sample_lap_dists}")
             
         if right_data and right_data.get('points'):
+            # Log sample track_position values for debugging
+            sample_positions = [p.get('track_position', 0) for p in right_data['points'][:5]]
+            logger.info(f"🏁 [TRACK LENGTH DEBUG] Right lap sample track_positions: {sample_positions}")
+            
             # Map database field names to what graph widgets expect
             mapped_points = []
             for point in right_data['points']:
@@ -1002,7 +1095,12 @@ class TelemetryTab(QWidget):
                 mapped_points.append(mapped_point)
             
             right_lap_data = {'points': mapped_points}
-            logger.info(f"Mapped {len(mapped_points)} points for right lap (first point LapDist: {mapped_points[0].get('LapDist', 'missing') if mapped_points else 'no points'})")
+            logger.info(f"Mapped {len(mapped_points)} points for right lap")
+            
+            # Log sample LapDist values after mapping
+            if mapped_points:
+                sample_lap_dists = [p.get('LapDist', 0) for p in mapped_points[:5]]
+                logger.info(f"🏁 [TRACK LENGTH DEBUG] Right lap sample LapDists after mapping: {sample_lap_dists}")
         
         # Update graphs based on whether we have comparison data or single lap
         if left_lap_data and right_lap_data:
@@ -1053,14 +1151,64 @@ class TelemetryTab(QWidget):
 
     def _on_telemetry_error(self, left_error, right_error):
         """Handle telemetry loading errors."""
-        error_msg = "Error loading telemetry: "
-        if left_error:
-            error_msg += f"Left lap: {left_error} "
-        if right_error:
-            error_msg += f"Right lap: {right_error}"
+        logger.error(f"🔍 [TELEMETRY DEBUG] Telemetry error - Left: '{left_error}', Right: '{right_error}'")
         
-        self.graph_status_label.setText(error_msg)
+        error_parts = []
+        if left_error:
+            error_parts.append(f"Left lap: {left_error}")
+        if right_error:
+            error_parts.append(f"Right lap: {right_error}")
+        
+        if error_parts:
+            error_text = "Error loading telemetry: " + " | ".join(error_parts)
+            logger.error(f"🔍 [TELEMETRY DEBUG] Displaying error to user: {error_text}")
+        else:
+            error_text = "Unknown telemetry loading error"
+            logger.error(f"🔍 [TELEMETRY DEBUG] Unknown error - both errors empty")
+        
+        self.graph_status_label.setText(error_text)
         self.graph_status_label.setStyleSheet("color: #FF5555; font-weight: bold;")
+        
+        # Clear the graphs on error
+        logger.info("🔍 [TELEMETRY DEBUG] Clearing graphs due to error")
+        self._clear_all_graphs()
+
+    def _clear_all_graphs(self):
+        """Clear all telemetry graphs and reset their displays."""
+        logger.info("🔍 [TELEMETRY DEBUG] Clearing all graph widgets")
+        
+        # List of GraphBase-derived widgets that have plot_widget attribute
+        graph_widgets = [
+            self.throttle_graph,
+            self.brake_graph, 
+            self.steering_graph,
+            self.speed_graph,
+            self.gear_graph
+        ]
+        
+        # Clear GraphBase-derived widgets
+        for widget in graph_widgets:
+            if hasattr(widget, 'plot_widget'):
+                try:
+                    # Clear all data items in the plot
+                    for item in widget.plot_widget.listDataItems():
+                        item.setData([], [])
+                    
+                    # Clear any message text if it exists
+                    if hasattr(widget, 'message_text') and widget.message_text is not None:
+                        widget.message_text.setVisible(False)
+                    
+                    logger.debug(f"🔍 [TELEMETRY DEBUG] Cleared {widget.__class__.__name__}")
+                except Exception as e:
+                    logger.error(f"🔍 [TELEMETRY DEBUG] Error clearing {widget.__class__.__name__}: {e}")
+        
+        # Clear GazeGraphWidget (has different interface)
+        if hasattr(self, 'gaze_graph') and hasattr(self.gaze_graph, 'clear_data'):
+            try:
+                self.gaze_graph.clear_data()
+                logger.debug("🔍 [TELEMETRY DEBUG] Cleared GazeGraphWidget")
+            except Exception as e:
+                logger.error(f"🔍 [TELEMETRY DEBUG] Error clearing GazeGraphWidget: {e}")
 
     def refresh_session_and_lap_lists(self):
         """Refresh both session and lap lists."""
@@ -1081,6 +1229,47 @@ class TelemetryTab(QWidget):
                 if session.get('id') == self.current_session_id:
                     return session.get('track_length', None)
         return None
+
+    def _estimate_track_length_from_telemetry(self, left_data, right_data):
+        """Estimate track length from telemetry data by analyzing track_position range."""
+        try:
+            all_positions = []
+            
+            # Collect track positions from both laps
+            for data in [left_data, right_data]:
+                if data and data.get('points'):
+                    positions = [p.get('track_position', 0) for p in data['points'] if p.get('track_position') is not None]
+                    all_positions.extend(positions)
+            
+            if not all_positions:
+                return None
+                
+            min_pos = min(all_positions)
+            max_pos = max(all_positions)
+            position_range = max_pos - min_pos
+            
+            logger.info(f"🏁 [TRACK LENGTH DEBUG] Position range: {min_pos:.6f} to {max_pos:.6f} (range: {position_range:.6f})")
+            
+            # If positions are normalized (0-1 range), estimate track length
+            # Based on the small values in your logs, try different estimates
+            if 0 <= min_pos <= 1 and 0 <= max_pos <= 1:
+                # For very small position ranges, assume a longer track
+                if position_range < 0.01:  # Less than 1% of normalized range
+                    estimated_length = 10000  # 10km for large tracks like Nurburgring
+                elif position_range < 0.1:  # Less than 10% of normalized range  
+                    estimated_length = 6000   # 6km for typical road courses
+                else:
+                    estimated_length = 3000   # 3km for shorter tracks
+                    
+                logger.info(f"🏁 [TRACK LENGTH DEBUG] Estimated length based on position range {position_range:.6f}: {estimated_length}m")
+                return estimated_length
+            else:
+                # Positions might already be in meters
+                return max_pos if max_pos > 100 else None
+                
+        except Exception as e:
+            logger.error(f"Error estimating track length: {e}")
+            return None
 
     def _remove_thread_from_tracking(self, thread_id):
         """Remove a thread from the active threads list."""

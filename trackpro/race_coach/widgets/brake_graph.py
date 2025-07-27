@@ -475,8 +475,23 @@ class BrakeGraphWidget(GraphBase):
             margin = 0.05 * (y_max - y_min)
             self.plot_widget.setYRange(y_min - margin, y_max + margin, padding=0)
             
-            # Set X-axis range to track length
-            self.plot_widget.setXRange(0, self.track_length, padding=0)
+            # Set X-axis range based on actual data range, not just track length
+            if len(resampled_data['x_m']) > 0:
+                data_x_min = float(min(resampled_data['x_m']))
+                data_x_max = float(max(resampled_data['x_m']))
+                data_range = data_x_max - data_x_min
+                
+                # Add some padding to show the full data clearly
+                x_padding = max(data_range * 0.02, 50)  # 2% padding or 50m minimum
+                x_min = max(0, data_x_min - x_padding)  # Don't go below 0
+                x_max = data_x_max + x_padding
+                
+                logger.info(f"📊 [BRAKE GRAPH] Setting X-axis range to actual data: {x_min:.1f} to {x_max:.1f}m (data range: {data_x_min:.1f} to {data_x_max:.1f}m)")
+                self.plot_widget.setXRange(x_min, x_max, padding=0)
+            else:
+                # Fallback to track length if no data
+                self.plot_widget.setXRange(0, self.track_length, padding=0)
+                
             self.plot_widget.setLabel('bottom', "Distance (m)")
             
             # Disable auto-ranging again immediately after setting ranges

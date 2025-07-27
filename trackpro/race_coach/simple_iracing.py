@@ -155,15 +155,24 @@ class SimpleIRacingAPI(QObject):
                             self.process_telemetry()
                             processing_time = time.time() - start_time
                             
-                                                        # Log processing time much less frequently - every 2 minutes instead of 10 seconds
+                            # ENHANCED DIAGNOSTICS: Track processing performance
+                            if processing_time > 0.020:  # More than 20ms (should be ~16.67ms for 60Hz)
+                                if loop_count % 300 == 0:  # Log every 5 seconds if slow
+                                    logger.warning(f"⚠️  [TELEMETRY TIMING] Slow processing: {processing_time*1000:.2f}ms (target: <16.67ms)")
+                            
+                            # Log processing time much less frequently - every 2 minutes instead of 10 seconds
                             if loop_count % 7200 == 0:  # Every ~2 minutes
-                                logger.info(f"Telemetry processing time: {processing_time*1000:.2f}ms")
+                                logger.info(f"🔄 [TELEMETRY TIMING] Processing time: {processing_time*1000:.2f}ms (target: 16.67ms for 60Hz)")
                             
                             # OPTIMIZED: Fixed 60Hz timing with minimal processing overhead
                             target_frame_time = 1/60  # 16.67ms per frame
                             sleep_time = max(0.005, target_frame_time - processing_time)  # Minimum 5ms sleep
                             self._stop_event.wait(sleep_time)
                         else:
+                            # ENHANCED DIAGNOSTICS: Track connection drops
+                            if loop_count % 30 == 0:  # Log every 0.5 seconds when disconnected
+                                logger.warning(f"🔌 [TELEMETRY CONNECTION] Not connected to iRacing - telemetry collection paused")
+                            
                             # Sleep longer if not connected
                             self._stop_event.wait(0.5)
                             continue
@@ -289,7 +298,16 @@ class SimpleIRacingAPI(QObject):
         if now - self._last_rate_check_time >= 30.0:
             duration = now - self._telemetry_start_time
             rate = self._telemetry_count / duration if duration > 0 else 0
-            logger.info(f"PRODUCER: Telemetry collection rate: {rate:.2f} Hz (collected {self._telemetry_count} points)")
+            performance_ratio = rate / 60.0 if rate > 0 else 0.0
+            
+            # ENHANCED DIAGNOSTICS: More detailed rate reporting
+            logger.info(f"🔄 [TELEMETRY RATE] Collection rate: {rate:.2f} Hz (target: 60.0 Hz)")
+            logger.info(f"🔄 [TELEMETRY RATE] Performance ratio: {performance_ratio:.1%} (collected {self._telemetry_count} points in {duration:.1f}s)")
+            
+            if rate < 55.0:  # More than 8% drop from target
+                logger.warning(f"⚠️  [TELEMETRY RATE] LOW COLLECTION RATE: {rate:.2f} Hz - Missing {(60.0-rate):.1f} Hz ({(1-performance_ratio):.1%} data loss)")
+                logger.warning(f"⚠️  [TELEMETRY RATE] Potential causes: CPU load, iRacing connection issues, or processing bottlenecks")
+            
             self._last_rate_check_time = now
             self._adjust_buffer_size_for_rate()
 
@@ -844,22 +862,36 @@ class SimpleIRacingAPI(QObject):
     
     def get_telemetry_stats(self):
         """
-        Get statistics about telemetry collection for Task 1.1.
+        Get statistics about telemetry collection for diagnostics.
         
         Returns:
-            dict: Statistics including collection rate, buffer status, etc.
+            dict: Comprehensive statistics including collection rate, performance issues, etc.
         """
         # Calculate actual collection rate
         actual_hz = 0.0
+        total_duration = 0.0
         if self._telemetry_start_time and self._telemetry_count > 0:
-            duration = time.time() - self._telemetry_start_time
-            if duration > 0:
-                actual_hz = self._telemetry_count / duration
+            total_duration = time.time() - self._telemetry_start_time
+            if total_duration > 0:
+                actual_hz = self._telemetry_count / total_duration
+        
+        # Calculate performance metrics
+        performance_ratio = actual_hz / 60.0 if actual_hz > 0 else 0.0
+        data_loss_percent = (1 - performance_ratio) * 100 if performance_ratio < 1.0 else 0.0
         
         # Calculate actual seconds of data in buffer
         buffer_seconds = 0.0
         if actual_hz > 0:
             buffer_seconds = len(self.telemetry_buffer) / actual_hz
+        
+        # Determine performance status
+        status = "excellent"
+        if actual_hz < 55.0:
+            status = "poor"
+        elif actual_hz < 58.0:
+            status = "suboptimal"
+        elif actual_hz < 59.5:
+            status = "good"
         
         stats = {
             'buffer_size': len(self.telemetry_buffer),
@@ -868,12 +900,31 @@ class SimpleIRacingAPI(QObject):
             'buffer_seconds_actual': buffer_seconds,
             'is_connected': self._is_connected,
             'total_frames': self._telemetry_count,
+            'collection_duration_seconds': total_duration,
             'actual_hz': actual_hz,
             'target_hz': 60.0,
-            'performance_ratio': actual_hz / 60.0 if actual_hz > 0 else 0.0
+            'performance_ratio': performance_ratio,
+            'data_loss_percent': data_loss_percent,
+            'status': status,
+            'diagnosis': self._diagnose_telemetry_performance(actual_hz, performance_ratio)
         }
             
         return stats
+    
+    def _diagnose_telemetry_performance(self, actual_hz, performance_ratio):
+        """Generate diagnostic message for telemetry performance issues."""
+        if performance_ratio >= 0.99:  # >99% performance
+            return "Telemetry collection is optimal"
+        elif performance_ratio >= 0.95:  # 95-99% performance  
+            return "Minor telemetry drops - likely normal variations"
+        elif performance_ratio >= 0.90:  # 90-95% performance
+            return "Moderate telemetry loss - check CPU load and iRacing connection stability"
+        elif performance_ratio >= 0.80:  # 80-90% performance
+            return "Significant telemetry loss - CPU overload or connection issues likely"
+        elif performance_ratio >= 0.40:  # 40-80% performance
+            return "Major telemetry loss - severe performance or connection problems"
+        else:  # <40% performance
+            return "Critical telemetry loss - connection likely unstable or disconnected"
     
     def _format_task_1_1_telemetry(self, telemetry_data):
         """

@@ -78,35 +78,58 @@ class GraphBase(QWidget):
                 elif has_track_position and 'track_position' in point:
                     sample_distances.append(point['track_position'])
         
-        # Determine if data is normalized or actual distance
+        # Determine if data is normalized or actual distance with improved logic
         is_normalized = False
+        original_track_length = track_length
+        
         if sample_distances:
             max_sample_dist = max(sample_distances)
             min_sample_dist = min(sample_distances)
+            distance_range = max_sample_dist - min_sample_dist
+            
+            logger.info(f"📊 [GRAPH PREPROCESSING] Distance analysis - min: {min_sample_dist:.6f}, max: {max_sample_dist:.6f}, range: {distance_range:.6f}")
             
             # More robust detection: if ALL values are between 0-1, it's normalized
-            # Even if the range is small, if all values are 0-1, it's normalized
             all_values_0_to_1 = all(0.0 <= d <= 1.0 for d in sample_distances)
-            has_reasonable_spread = (max_sample_dist - min_sample_dist) > 0.05  # Lower threshold
+            all_values_very_small = all(abs(d) < 0.01 for d in sample_distances)  # Very small values suggest incomplete lap or data issue
             
             if all_values_0_to_1:
                 is_normalized = True
-                logger.debug(f"Detected NORMALIZED distance data (all values 0-1). Range: {min_sample_dist:.3f} to {max_sample_dist:.3f}")
+                logger.info(f"📊 [GRAPH PREPROCESSING] Detected NORMALIZED distance data (all values 0-1). Range: {min_sample_dist:.6f} to {max_sample_dist:.6f}")
+                
+                # If track length is too small for normalized data, estimate a better one
+                if not track_length or track_length < 1000:
+                    if distance_range < 0.001:  # Very small range, likely incomplete lap or very short segment
+                        estimated_track_length = 15000  # 15km for very long tracks
+                        logger.warning(f"📊 [GRAPH PREPROCESSING] Very small distance range ({distance_range:.6f}), estimating long track: {estimated_track_length}m")
+                    elif distance_range < 0.01:  # Small range
+                        estimated_track_length = 8000   # 8km
+                        logger.info(f"📊 [GRAPH PREPROCESSING] Small distance range ({distance_range:.6f}), estimating track length: {estimated_track_length}m")
+                    elif distance_range < 0.1:   # Medium range
+                        estimated_track_length = 5000   # 5km
+                        logger.info(f"📊 [GRAPH PREPROCESSING] Medium distance range ({distance_range:.6f}), estimating track length: {estimated_track_length}m")
+                    else:  # Normal range
+                        estimated_track_length = 3000   # 3km
+                        logger.info(f"📊 [GRAPH PREPROCESSING] Normal distance range ({distance_range:.6f}), estimating track length: {estimated_track_length}m")
+                    
+                    track_length = estimated_track_length
+                    logger.info(f"📊 [GRAPH PREPROCESSING] Updated track_length from {original_track_length} to {track_length}m")
+                    
             else:
                 is_normalized = False
-                logger.debug(f"Detected ACTUAL distance data (values outside 0-1). Range: {min_sample_dist:.1f}m to {max_sample_dist:.1f}m")
+                logger.info(f"📊 [GRAPH PREPROCESSING] Detected ACTUAL distance data (values outside 0-1). Range: {min_sample_dist:.1f}m to {max_sample_dist:.1f}m")
         
         # Set appropriate track length
         if not track_length or track_length <= 0:
             if is_normalized:
                 # For normalized data, use a reasonable track length based on track type
                 # Most road courses are 2-6km, ovals are 1-4km
-                track_length = 3000  # Default 3km
-                logger.debug(f"Using default track length for normalized data: {track_length}m")
+                track_length = 5000  # Default 5km - more reasonable than 3km
+                logger.info(f"📊 [GRAPH PREPROCESSING] Using default track length for normalized data: {track_length}m")
             else:
                 # For actual distance data, estimate from the data range
-                track_length = max(sample_distances) if sample_distances else 1000
-                logger.debug(f"Estimated track length from actual distance data: {track_length}m")
+                track_length = max(sample_distances) if sample_distances else 5000
+                logger.info(f"📊 [GRAPH PREPROCESSING] Estimated track length from actual distance data: {track_length}m")
         
         for point in points:
             # Get distance value with improved logic

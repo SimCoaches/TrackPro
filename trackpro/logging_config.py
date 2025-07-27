@@ -70,6 +70,12 @@ def setup_logging():
     
     # Get root logger
     root_logger = logging.getLogger()
+    
+    # Check if handlers are already configured (prevents duplicate logging)
+    if root_logger.handlers:
+        print("Logging already configured, skipping duplicate setup")
+        return root_logger
+    
     root_logger.setLevel(logging.INFO)
     
     # Create trackpro logger (this will be the parent for all our module loggers)
@@ -122,6 +128,12 @@ def setup_logging():
 
 def configure_logging():
     """Configure logging for the application."""
+    # Check if logging is already configured
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        print("Logging already configured, skipping duplicate setup")
+        return logging.getLogger('trackpro')
+    
     # First, silence noisy libraries
     silence_noisy_libraries()
     

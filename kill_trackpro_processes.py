@@ -28,11 +28,19 @@ def kill_trackpro_processes():
     except Exception as e:
         print(f"! Could not remove lock file: {e}")
     
-    # Then try to find any TrackPro processes
+    # Then try to find any TrackPro processes (excluding IDEs)
     try:
         result = subprocess.run([
             'powershell', '-Command', 
-            "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Select-Object ProcessName, Id"
+            '''Get-Process | Where-Object {
+                ($_.ProcessName -eq "TrackPro" -or 
+                 $_.ProcessName -like "TrackPro_v*" -or 
+                 $_.ProcessName -like "TrackPro_Setup*") -and
+                $_.ProcessName -notlike "*Cursor*" -and
+                $_.ProcessName -notlike "*Code*" -and
+                $_.ProcessName -notlike "*Visual*" -and
+                $_.ProcessName -notlike "*Studio*"
+            } | Select-Object ProcessName, Id'''
         ], capture_output=True, text=True, timeout=10)
         
         if result.stdout.strip():
@@ -42,10 +50,10 @@ def kill_trackpro_processes():
         else:
             print("✓ No TrackPro processes found")
             
-            # Also check for Python processes running TrackPro
+            # Also check for Python processes running TrackPro (excluding build scripts)
             python_result = subprocess.run([
                 'powershell', '-Command', 
-                "Get-Process python*, pythonw* | Where-Object {$_.CommandLine -like '*trackpro*' -or $_.CommandLine -like '*run_app*'} | Select-Object ProcessName, Id, CommandLine"
+                "Get-Process python*, pythonw* | Where-Object {($_.CommandLine -like '*run_app*' -or $_.CommandLine -like '*main.py*') -and $_.CommandLine -notlike '*build.py*'} | Select-Object ProcessName, Id, CommandLine"
             ], capture_output=True, text=True, timeout=10)
             
             if python_result.stdout.strip():
@@ -78,12 +86,19 @@ def kill_trackpro_processes():
         # Method 1: Regular taskkill
         (['taskkill', '/F', '/IM', 'TrackPro_v1.5.3.exe'], "Standard taskkill v1.5.3"),
         (['taskkill', '/F', '/IM', 'TrackPro.exe'], "Standard taskkill generic"),
-        # Method 2: Kill by window title
-        (['taskkill', '/F', '/FI', 'WINDOWTITLE eq TrackPro*'], "Kill by window title"),
-        # Method 3: PowerShell force kill
+        # Method 2: More specific PowerShell kill (excluding IDEs and build scripts)
         (['powershell', '-Command', 
-          "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Stop-Process -Force"], 
-         "PowerShell force kill"),
+          '''Get-Process | Where-Object {
+              ($_.ProcessName -eq "TrackPro" -or 
+               $_.ProcessName -like "TrackPro_v*" -or 
+               $_.ProcessName -like "TrackPro_Setup*") -and
+              $_.CommandLine -notlike "*build.py*" -and
+              $_.ProcessName -notlike "*Cursor*" -and
+              $_.ProcessName -notlike "*Code*" -and
+              $_.ProcessName -notlike "*Visual*" -and
+              $_.ProcessName -notlike "*Studio*"
+          } | Stop-Process -Force'''], 
+         "PowerShell force kill (IDE-safe)"),
     ]
     
     success_count = 0
@@ -104,11 +119,19 @@ def kill_trackpro_processes():
     print("\\nWaiting for processes to terminate...")
     time.sleep(3)
     
-    # Final check and cleanup
+    # Final check and cleanup (excluding IDEs)
     try:
         result = subprocess.run([
             'powershell', '-Command', 
-            "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*'} | Measure-Object | Select-Object Count"
+            '''Get-Process | Where-Object {
+                ($_.ProcessName -eq "TrackPro" -or 
+                 $_.ProcessName -like "TrackPro_v*" -or 
+                 $_.ProcessName -like "TrackPro_Setup*") -and
+                $_.ProcessName -notlike "*Cursor*" -and
+                $_.ProcessName -notlike "*Code*" -and
+                $_.ProcessName -notlike "*Visual*" -and
+                $_.ProcessName -notlike "*Studio*"
+            } | Measure-Object | Select-Object Count'''
         ], capture_output=True, text=True, timeout=10)
         
         if "0" in result.stdout or not result.stdout.strip():

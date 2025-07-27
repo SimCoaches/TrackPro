@@ -5,29 +5,49 @@ import shutil
 import tempfile
 import logging
 import platform
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 class PerformanceOptimizer:
-    """Utility class to optimize TrackPro performance."""
+    """Optimizes TrackPro performance by managing resources and cache."""
     
     @staticmethod
     def clear_web_engine_cache():
         """Clear Qt WebEngine cache to improve performance."""
         try:
-            # Common cache locations for Qt WebEngine
-            if platform.system() == "Windows":
-                cache_paths = [
-                    os.path.expanduser("~\\AppData\\Local\\TrackPro\\QtWebEngine"),
-                    os.path.expanduser("~\\AppData\\Local\\Temp\\QtWebEngine"),
-                    os.path.expanduser("~\\AppData\\Roaming\\TrackPro\\QtWebEngine")
-                ]
+            # Determine if we're running from a PyInstaller bundle
+            if getattr(sys, 'frozen', False):
+                # Running from PyInstaller bundle - use application directory
+                app_dir = os.path.dirname(sys.executable)
+                if platform.system() == "Windows":
+                    cache_paths = [
+                        os.path.join(app_dir, "QtWebEngine", "Cache"),
+                        os.path.join(app_dir, "QtWebEngine", "Data"),
+                        os.path.expanduser("~\\AppData\\Local\\TrackPro\\QtWebEngine"),
+                        os.path.expanduser("~\\AppData\\Local\\Temp\\QtWebEngine")
+                    ]
+                else:
+                    cache_paths = [
+                        os.path.join(app_dir, "QtWebEngine", "Cache"),
+                        os.path.join(app_dir, "QtWebEngine", "Data"),
+                        os.path.expanduser("~/.cache/TrackPro/QtWebEngine"),
+                        os.path.expanduser("~/.local/share/TrackPro/QtWebEngine")
+                    ]
             else:
-                cache_paths = [
-                    os.path.expanduser("~/.cache/TrackPro/QtWebEngine"),
-                    os.path.expanduser("~/.local/share/TrackPro/QtWebEngine")
-                ]
+                # Running from source - use user directories
+                if platform.system() == "Windows":
+                    cache_paths = [
+                        os.path.expanduser("~\\AppData\\Local\\TrackPro\\QtWebEngine"),
+                        os.path.expanduser("~\\AppData\\Local\\Temp\\QtWebEngine"),
+                        os.path.expanduser("~\\AppData\\Roaming\\TrackPro\\QtWebEngine")
+                    ]
+                else:
+                    cache_paths = [
+                        os.path.expanduser("~/.cache/TrackPro/QtWebEngine"),
+                        os.path.expanduser("~/.local/share/TrackPro/QtWebEngine")
+                    ]
             
             cleared_size = 0
             for cache_path in cache_paths:

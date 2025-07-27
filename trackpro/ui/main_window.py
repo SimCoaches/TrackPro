@@ -41,7 +41,21 @@ class MainWindow(QMainWindow):
         self.window_height = 800
         self.setWindowTitle("TrackPro Configuration v1.5.3")
         self.setMinimumSize(1200, 850)  # Increased from 1000x700 to prevent overlapping
-        self.setWindowIcon(QIcon(":/icons/trackpro_tray.ico"))
+        # Set window icon using file path instead of Qt resource
+        try:
+            import os
+            icon_path = os.path.join(os.path.dirname(__file__), "..", "resources", "icons", "trackpro_tray.ico")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+            else:
+                # Fallback for packaged application
+                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "icons", "trackpro_tray.ico")
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+        except Exception as e:
+            # If icon loading fails, continue without icon
+            import logging
+            logging.getLogger(__name__).warning(f"Could not load window icon: {e}")
 
         # Store the shared OAuth handler
         self.oauth_handler = oauth_handler
@@ -259,12 +273,25 @@ class MainWindow(QMainWindow):
             # Use subprocess utility to hide windows
             from ..utils.subprocess_utils import run_subprocess
             
-            # Kill ALL TrackPro processes with extreme prejudice
+            # Kill ALL TrackPro processes with extreme prejudice (but protect IDEs)
             kill_commands = [
                 ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
-                ['taskkill', '/F', '/IM', 'python.exe', '/FI', 'WINDOWTITLE eq TrackPro*'],
                 ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.3.exe'],
-                ['powershell', '-Command', "Get-Process | Where-Object {$_.ProcessName -like '*TrackPro*' -or $_.MainWindowTitle -like '*TrackPro*'} | Stop-Process -Force"],
+                # More specific PowerShell command that excludes IDEs
+                ['powershell', '-Command', '''Get-Process | Where-Object {
+                    (($_.ProcessName -eq "TrackPro" -or 
+                      $_.ProcessName -like "TrackPro_v*" -or 
+                      $_.ProcessName -like "TrackPro_Setup*") -or
+                     ($_.MainWindowTitle -like "*TrackPro*" -and 
+                      $_.ProcessName -eq "python" -or $_.ProcessName -eq "pythonw")) -and
+                    $_.ProcessName -notlike "*Cursor*" -and
+                    $_.ProcessName -notlike "*Code*" -and
+                    $_.ProcessName -notlike "*Visual*" -and
+                    $_.ProcessName -notlike "*Studio*" -and
+                    $_.MainWindowTitle -notlike "*Cursor*" -and
+                    $_.MainWindowTitle -notlike "*Visual Studio Code*" -and
+                    $_.MainWindowTitle -notlike "*Visual Studio*"
+                } | Stop-Process -Force'''],
             ]
             
             for cmd in kill_commands:
@@ -2382,7 +2409,13 @@ class MainWindow(QMainWindow):
         """Open the calibration wizard."""
         try:
             from ..pedals.calibration import CalibrationWizard
-            wizard = CalibrationWizard(self)
+            
+            # Check if hardware is available
+            if not (hasattr(self, 'app_instance') and self.app_instance and hasattr(self.app_instance, 'hardware')):
+                QMessageBox.warning(self, "Error", "Hardware not available for calibration")
+                return
+                
+            wizard = CalibrationWizard(self.app_instance.hardware, self)
             if wizard.exec() == QDialog.DialogCode.Accepted:
                 results = wizard.get_results()
                 self.on_calibration_wizard_completed(results)

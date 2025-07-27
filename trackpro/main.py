@@ -1724,14 +1724,14 @@ def main():
     # --- Ensure Single Instance (Optional but Recommended for GUI apps) ---
     # Implement single instance lock if needed (e.g., using a lock file or QSharedMemory)
 
+    # Set application details BEFORE creating TrackProApp
+    QApplication.setApplicationName("TrackPro")
+    QApplication.setApplicationVersion("1.5.2")
+    QApplication.setOrganizationName("Sim Coaches")
+    QApplication.setOrganizationDomain("simcoaches.com")
+
     # --- Exception Handling ---
     try:
-        # Set application details
-        QApplication.setApplicationName("TrackPro")
-        QApplication.setApplicationVersion("1.5.2")
-        QApplication.setOrganizationName("Sim Coaches")
-        QApplication.setOrganizationDomain("simcoaches.com")
-
         # Initialize and run the application
         trackpro_app = TrackProApp(test_mode=test_mode, start_time=start_time)
         
