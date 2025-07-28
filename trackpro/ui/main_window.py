@@ -4,11 +4,12 @@ import os
 import sys
 import logging
 import traceback
+import math
 
 from .shared_imports import *
-from PyQt6.QtWidgets import QGraphicsOpacityEffect
-from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, QPointF, QMargins
-from PyQt6.QtGui import QHideEvent, QShowEvent
+from PyQt6.QtWidgets import QGraphicsOpacityEffect, QToolTip
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, QPointF, QMargins, Qt
+from PyQt6.QtGui import QHideEvent, QShowEvent, QPainter, QPixmap, QPen, QBrush, QFont
 from .chart_widgets import IntegratedCalibrationChart
 from .auth_dialogs import PasswordDialog
 from .theme import setup_dark_theme
@@ -22,12 +23,452 @@ from .shared_imports import __version__
 logger = logging.getLogger(__name__)
 
 
+class CurvePreviewTooltip(QWidget):
+    """Custom tooltip widget that shows a curve preview and description."""
+    
+    def __init__(self, curve_type, pedal_type, parent=None):
+        super().__init__(parent)
+        # Clean the curve type string to avoid any whitespace issues
+        self.curve_type = curve_type.strip()
+        self.pedal_type = pedal_type
+        
+        # Debug logging
+        logger.debug(f"Creating CurvePreviewTooltip for curve '{self.curve_type}' (pedal: {pedal_type})")
+        
+        # Set up the widget
+        self.setWindowFlags(Qt.WindowType.ToolTip)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(320, 180)
+        
+        # Create layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        
+        # Title
+        title_label = QLabel(f"{self.curve_type}")
+        title_font = QFont()
+        title_font.setBold(True)
+        title_font.setPointSize(11)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("color: #ffffff; background: transparent;")
+        layout.addWidget(title_label)
+        
+        # Create curve preview
+        self.curve_preview = self.create_curve_preview()
+        preview_label = QLabel()
+        preview_label.setPixmap(self.curve_preview)
+        preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(preview_label)
+        
+        # Description
+        description_info = MainWindow.get_curve_description(self.curve_type, pedal_type)
+        desc_text = f"{description_info['description']}\n\nUse case: {description_info['use_case']}"
+        
+        desc_label = QLabel(desc_text)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #cccccc; background: transparent; font-size: 9pt;")
+        layout.addWidget(desc_label)
+        
+        # Set background style
+        self.setStyleSheet("""
+            CurvePreviewTooltip {
+                background-color: rgba(45, 45, 45, 240);
+                border: 1px solid #666666;
+                border-radius: 8px;
+            }
+        """)
+    
+    def create_curve_preview(self):
+        """Create a small pixmap showing the curve shape."""
+        logger.debug(f"Creating curve preview for '{self.curve_type}'")
+        
+        width, height = 280, 80
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Set up drawing area with margins
+        margin = 10
+        draw_width = width - 2 * margin
+        draw_height = height - 2 * margin
+        
+        # Draw grid
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        for i in range(5):
+            x = margin + i * draw_width // 4
+            y = margin + i * draw_height // 4
+            painter.drawLine(x, margin, x, height - margin)
+            painter.drawLine(margin, y, width - margin, y)
+        
+        # Generate curve points
+        curve_points = []
+        for i in range(100):
+            x_percent = i
+            y_percent = self.calculate_curve_value(x_percent, self.curve_type)
+            
+            x = margin + (x_percent / 100.0) * draw_width
+            y = height - margin - (y_percent / 100.0) * draw_height
+            curve_points.append(QPointF(x, y))
+        
+        # Log a few sample points for debugging
+        if len(curve_points) > 0:
+            logger.debug(f"Sample curve points for '{self.curve_type}': 0%={self.calculate_curve_value(0, self.curve_type):.1f}, 50%={self.calculate_curve_value(50, self.curve_type):.1f}, 100%={self.calculate_curve_value(100, self.curve_type):.1f}")
+        
+        # Draw curve
+        painter.setPen(QPen(QColor(100, 150, 255), 2))
+        for i in range(len(curve_points) - 1):
+            painter.drawLine(curve_points[i], curve_points[i + 1])
+        
+        # Draw reference line (linear)
+        painter.setPen(QPen(QColor(120, 120, 120), 1, Qt.PenStyle.DashLine))
+        painter.drawLine(margin, height - margin, width - margin, margin)
+        
+        painter.end()
+        return pixmap
+    
+    def calculate_curve_value(self, x_percent, curve_type):
+        """Calculate the Y value for a given X percentage based on curve type."""
+        x = x_percent / 100.0  # Normalize to 0-1
+        
+        # Debug logging
+        if x_percent == 50:  # Log only at midpoint to avoid spam
+            logger.debug(f"Calculating curve for '{curve_type}' at x=50%")
+        
+        # Clean the curve type string
+        curve_type = curve_type.strip()
+        
+        if curve_type == "Linear (Default)":
+            return x * 100
+        elif curve_type == "Progressive":
+            result = (x ** 3) * 100
+            if x_percent == 50:
+                logger.debug(f"Progressive curve at 50%: {result}")
+            return result
+        elif curve_type == "Threshold":
+            if x <= 0.25:
+                return (x / 0.25) * 40
+            else:
+                return 40 + ((x - 0.25) / 0.75) * 60
+        elif curve_type == "Trail Brake":
+            if x <= 0.5:
+                return x * 100
+            else:
+                normalized = (x - 0.5) / 0.5
+                return 50 + (normalized ** 2) * 50
+        elif curve_type == "Endurance":
+            return 100 * (3 * x**2 - 2 * x**3)
+        elif curve_type == "Rally":
+            return (x ** 0.6) * 100
+        elif curve_type == "ABS Friendly":
+            return (x ** 1.8) * 100
+        elif curve_type == "Track Mode":
+            return (x ** 1.2) * 100
+        elif curve_type == "Turbo Lag":
+            if x <= 0.25:
+                return ((x / 0.25) ** 2) * 15
+            else:
+                normalized = (x - 0.25) / 0.75
+                return 15 + (normalized ** 0.7) * 85
+        elif curve_type == "NA Engine":
+            return (x ** 0.8) * 100
+        elif curve_type == "Feathering":
+            if x <= 0.5:
+                return ((x / 0.5) ** 0.3) * 30
+            else:
+                return 30 + ((x - 0.5) / 0.5) * 70
+        elif curve_type == "Quick Engage":
+            if x <= 0.4:
+                return ((x / 0.4) ** 0.4) * 80
+            else:
+                return 80 + ((x - 0.4) / 0.6) * 20
+        elif curve_type == "Heel-Toe":
+            return 100 * (6 * x**2 - 8 * x**3 + 3 * x**4)
+        elif curve_type == "Bite Point Focus":
+            if x <= 0.6:
+                return ((x / 0.6) ** 0.3) * 50
+            else:
+                return 50 + ((x - 0.6) / 0.4) * 50
+        else:
+            # Log when falling back to linear
+            if x_percent == 50:
+                logger.warning(f"Unknown curve type '{curve_type}', falling back to linear")
+            return x * 100
+
+
+class CurveComboBox(QComboBox):
+    """Custom combobox that shows curve preview tooltips."""
+    
+    def __init__(self, pedal_type, main_window=None, parent=None):
+        super().__init__(parent)
+        self.pedal_type = pedal_type
+        self.main_window = main_window
+        self.tooltip_widget = None
+        self.last_hovered_index = None
+        
+        # Create persistent timer for hover delay
+        self.hover_timer = QTimer(self)
+        self.hover_timer.setSingleShot(True)
+        self.hover_timer.timeout.connect(self._show_pending_tooltip)
+        self.pending_tooltip_data = None
+        
+        # Install event filter to catch mouse events
+        self.view().setMouseTracking(True)
+        self.view().installEventFilter(self)
+        
+        # Connect to main window state changes to hide tooltip
+        if self.main_window:
+            self.main_window.window_state_changed.connect(self._on_main_window_state_changed)
+        
+        # Connect to application quit to clean up tooltip
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance().aboutToQuit.connect(self.hide_tooltip)
+        
+        # Hide tooltip when losing focus or when popup closes
+        self.view().destroyed.connect(self.hide_tooltip)
+    
+    def _on_main_window_state_changed(self, state):
+        """Hide tooltip when main window state changes."""
+        from PyQt6.QtCore import Qt
+        if state & Qt.WindowState.WindowMinimized or not self.main_window.isVisible():
+            self.hide_tooltip()
+    
+    def _show_pending_tooltip(self):
+        """Slot to show the tooltip when the hover_timer times out."""
+        if self.pending_tooltip_data:
+            curve_type, pos = self.pending_tooltip_data
+            self.show_curve_tooltip_for_item(curve_type, pos)
+            self.pending_tooltip_data = None  # Clear data after showing
+    
+    def eventFilter(self, obj, event):
+        """Handle mouse events to show/hide tooltips."""
+        if obj == self.view():
+            if event.type() == event.Type.MouseMove:
+                index = self.view().indexAt(event.pos())
+                if index.isValid():
+                    # Get the actual text from the model at this index
+                    curve_text = self.model().data(index, 0)  # Use model data instead of itemText
+                    # Also try getting it via itemText as a backup
+                    item_text_backup = self.itemText(index.row()) if index.row() < self.count() else None
+                    
+                    print(f"DEBUG: Index row: {index.row()}, count: {self.count()}")  # Debug logging
+                    print(f"DEBUG: Model data: '{curve_text}'")  # Debug logging
+                    print(f"DEBUG: ItemText backup: '{item_text_backup}'")  # Debug logging
+                    
+                    # Try both methods and use the first one that gives us a valid result
+                    final_curve_text = None
+                    if curve_text and str(curve_text).strip():
+                        final_curve_text = str(curve_text).strip()
+                    elif item_text_backup and str(item_text_backup).strip():
+                        final_curve_text = str(item_text_backup).strip()
+                        print(f"DEBUG: Using backup method, got: '{final_curve_text}'")
+                    
+                    if final_curve_text:
+                        print(f"DEBUG: Final curve text: '{final_curve_text}'")  # Debug logging
+                        
+                        # Skip separator items
+                        if final_curve_text and "───" not in final_curve_text:
+                            # Show tooltip whenever hovering over a different index
+                            current_index = index.row()
+                            if current_index != self.last_hovered_index:
+                                print(f"DEBUG: Capturing curve text: '{final_curve_text}' for timer (index: {current_index})")  # Debug logging
+                                self.hide_tooltip()  # Hide any existing tooltip immediately
+                                self.hover_timer.stop()  # Stop any pending timer
+                                
+                                # Get global position from event
+                                try:
+                                    current_pos = event.globalPosition().toPoint()
+                                except AttributeError:
+                                    # Fallback for older PyQt versions
+                                    current_pos = event.globalPos()
+                                
+                                # Store data and start the persistent timer
+                                self.pending_tooltip_data = (final_curve_text, current_pos)
+                                self.hover_timer.start(300)  # Start the persistent timer
+                                self.last_hovered_index = current_index
+                        else:
+                            self.hide_tooltip()
+                            self.hover_timer.stop()  # Stop timer for separators
+                            self.last_hovered_index = None
+                else:
+                    self.hide_tooltip()
+                    self.hover_timer.stop()  # Stop timer when no valid index
+                    self.last_hovered_index = None
+            elif event.type() == event.Type.Leave:
+                self.hide_tooltip()
+                self.hover_timer.stop()  # Stop timer when mouse leaves
+                self.last_hovered_index = None
+        
+        return super().eventFilter(obj, event)
+    
+    def show_curve_tooltip_for_item(self, curve_type, pos):
+        """Show the curve preview tooltip for a specific curve type and position."""
+        print(f"DEBUG: show_curve_tooltip_for_item called with curve_type: '{curve_type}', pos: {pos}")  # Debug logging
+        if curve_type:
+            # Only show tooltip for built-in curves (not custom saved ones)
+            built_in_curves = MainWindow.get_pedal_curves(self.pedal_type)
+            print(f"DEBUG: Built-in curves for {self.pedal_type}: {built_in_curves}")  # Debug logging
+            print(f"DEBUG: Checking if '{curve_type}' is in built_in_curves")  # Debug logging
+            
+            if curve_type in built_in_curves:
+                print(f"DEBUG: Creating tooltip for: '{curve_type}'")  # Debug logging
+                self.hide_tooltip()  # Hide any existing tooltip
+                
+                self.tooltip_widget = CurvePreviewTooltip(
+                    curve_type, 
+                    self.pedal_type, 
+                    self
+                )
+                
+                # Position tooltip based on pedal type to avoid blocking curve options
+                if pos:
+                    tooltip_pos = pos
+                    
+                    # Adjust horizontal position based on pedal type
+                    if self.pedal_type == 'clutch':
+                        # For clutch, move tooltip far to the left to avoid overlap
+                        tooltip_pos.setX(tooltip_pos.x() - self.tooltip_widget.width() - 100)
+                    else:
+                        # For throttle and brake, move tooltip far to the right to completely clear dropdown
+                        tooltip_pos.setX(tooltip_pos.x() + 250)
+                    
+                    # Move tooltip up to avoid cursor interference
+                    tooltip_pos.setY(tooltip_pos.y() - 100)
+                    self.tooltip_widget.move(tooltip_pos)
+                
+                self.tooltip_widget.show()
+            else:
+                print(f"DEBUG: '{curve_type}' not found in built-in curves")  # Debug logging
+    
+    def hide_tooltip(self):
+        """Hide the curve preview tooltip."""
+        self.hover_timer.stop()  # Stop any pending timer
+        self.pending_tooltip_data = None  # Clear pending data
+        if self.tooltip_widget:
+            self.tooltip_widget.hide()
+            self.tooltip_widget.deleteLater()
+            self.tooltip_widget = None
+    
+    def hidePopup(self):
+        """Override to hide tooltip when popup closes."""
+        self.hide_tooltip()
+        super().hidePopup()
+    
+    def hideEvent(self, event):
+        """Hide tooltip when the combobox itself is hidden."""
+        self.hide_tooltip()
+        super().hideEvent(event)
+    
+    def showEvent(self, event):
+        """Override showEvent for debugging."""
+        print(f"DEBUG: CurveComboBox showEvent called")
+        super().showEvent(event)
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
     
     # Signals
     calibration_updated = pyqtSignal(str)  # Emits pedal name when calibration changes
     auth_state_changed = pyqtSignal(bool)  # Emits when authentication state changes
+    window_state_changed = pyqtSignal(object)  # Emits when window state changes
+    
+    @staticmethod
+    def get_pedal_curves(pedal_type):
+        """Get the list of curves specific to each pedal type."""
+        if pedal_type == 'brake':
+            return [
+                "Linear (Default)", "Threshold", "Trail Brake", 
+                "Endurance", "Rally", "ABS Friendly"
+            ]
+        elif pedal_type == 'throttle':
+            return [
+                "Linear (Default)", "Track Mode", "Turbo Lag", 
+                "NA Engine", "Feathering", "Progressive"
+            ]
+        elif pedal_type == 'clutch':
+            return [
+                "Linear (Default)", "Quick Engage", "Heel-Toe", "Bite Point Focus"
+            ]
+        else:
+            # Fallback to brake curves if unknown pedal type
+            return MainWindow.get_pedal_curves('brake')
+    
+    @staticmethod
+    def get_curve_description(curve_type, pedal_type):
+        """Get description and use case for each curve type."""
+        descriptions = {
+            # Universal curves
+            "Linear (Default)": {
+                "description": "1:1 linear response, no modification",
+                "use_case": "Baseline curve, good for most situations"
+            },
+            
+            # Brake curves
+            "Threshold": {
+                "description": "Sharp initial response for maximum braking",
+                "use_case": "Formula cars, prototypes - late braking into corners"
+            },
+            "Trail Brake": {
+                "description": "Linear start, aggressive end for corner entry",
+                "use_case": "Road racing - carry speed through corners"
+            },
+            "Endurance": {
+                "description": "S-curve for consistent long-stint pressure",
+                "use_case": "GT3, endurance racing - tire management"
+            },
+            "Rally": {
+                "description": "Quick response designed for loose surfaces",
+                "use_case": "Off-road, dirt oval - loose surface braking"
+            },
+            "ABS Friendly": {
+                "description": "Smooth modulation works well with ABS",
+                "use_case": "Modern cars with ABS systems"
+            },
+            
+            # Throttle curves
+            "Track Mode": {
+                "description": "Balanced curve for precise racing control",
+                "use_case": "Most road racing - balanced performance"
+            },
+            "Turbo Lag": {
+                "description": "Mimics turbo spooling with delayed response",
+                "use_case": "GT3, modern cars - turbocharged engines"
+            },
+            "NA Engine": {
+                "description": "Smooth linear progression",
+                "use_case": "NASCAR, classic cars - naturally aspirated"
+            },
+            "Feathering": {
+                "description": "Precise low-speed control in first 50%",
+                "use_case": "Off-road, tight courses - traction control"
+            },
+            "Progressive": {
+                "description": "Starts slow, builds progressively",
+                "use_case": "General racing, wet conditions - smooth buildup"
+            },
+            
+            # Clutch curves
+            "Quick Engage": {
+                "description": "Fast clutch engagement for racing starts",
+                "use_case": "Racing starts, quick shifts"
+            },
+            "Heel-Toe": {
+                "description": "Optimized for heel-toe downshifting",
+                "use_case": "Manual shifting, downshift technique"
+            },
+            "Bite Point Focus": {
+                "description": "Emphasis on finding the engagement point",
+                "use_case": "Learning clutch control, precise launches"
+            }
+        }
+        
+        return descriptions.get(curve_type, {
+            "description": "Custom curve configuration",
+            "use_case": "User-defined response curve"
+        })
     
     def __init__(self, oauth_handler=None):
         """Initialize the main window."""
@@ -39,7 +480,7 @@ class MainWindow(QMainWindow):
         # Main window setup with menu bar buttons - increased minimum size to prevent overlapping
         self.window_width = 1200
         self.window_height = 800
-        self.setWindowTitle("TrackPro Configuration v1.5.3")
+        self.setWindowTitle("TrackPro Configuration v1.5.4")
         self.setMinimumSize(1200, 850)  # Increased from 1000x700 to prevent overlapping
         # Set window icon using file path instead of Qt resource
         try:
@@ -94,15 +535,17 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # Add calibration wizard buttons in a simple layout
+        # Add smaller calibration wizard button
         wizard_layout = QHBoxLayout()
         self.calibration_wizard_btn = QPushButton("Calibration Wizard")
+        self.calibration_wizard_btn.setMaximumWidth(140)  # Make button smaller
         self.calibration_wizard_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2a82da;
-                font-size: 14px;
+                font-size: 11px;
                 font-weight: bold;
-                padding: 8px 16px;
+                padding: 6px 12px;
+                max-width: 140px;
             }
             QPushButton:hover {
                 background-color: #3a92ea;
@@ -110,23 +553,7 @@ class MainWindow(QMainWindow):
         """)
         self.calibration_wizard_btn.clicked.connect(self.open_calibration_wizard)
         
-        self.save_calibration_btn = QPushButton("Save Calibration")
-        self.save_calibration_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #5DBF61;
-            }
-        """)
-        self.save_calibration_btn.clicked.connect(self.save_calibration)
-        
         wizard_layout.addWidget(self.calibration_wizard_btn)
-        wizard_layout.addWidget(self.save_calibration_btn)
         wizard_layout.addStretch()
         layout.addLayout(wizard_layout)
         
@@ -225,6 +652,12 @@ class MainWindow(QMainWindow):
     # Keep all the MainWindow methods but remove the ones we extracted
     # setup_dark_theme, create_menu_bar, setup_system_tray methods are now in separate modules
     
+    def changeEvent(self, event):
+        """Handle window change events and emit custom signal for window state changes."""
+        if event.type() == event.Type.WindowStateChange:
+            self.window_state_changed.emit(self.windowState())
+        super().changeEvent(event)
+    
     def closeEvent(self, event):
         """Handle window close event - FORCE KILL ALL PROCESSES."""
         try:
@@ -276,7 +709,7 @@ class MainWindow(QMainWindow):
             # Kill ALL TrackPro processes with extreme prejudice (but protect IDEs)
             kill_commands = [
                 ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
-                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.3.exe'],
+                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.4.exe'],
                 # More specific PowerShell command that excludes IDEs
                 ['powershell', '-Command', '''Get-Process | Where-Object {
                     (($_.ProcessName -eq "TrackPro" -or 
@@ -395,29 +828,42 @@ class MainWindow(QMainWindow):
         cal_layout.setSpacing(5)  # Reduce spacing from 10 to 5
         
         # Add the integrated calibration chart - this replaces all the old chart code
-        calibration_chart = IntegratedCalibrationChart(
-            cal_layout, 
-            pedal_name,
-            lambda: self.on_point_moved(pedal_key)
-        )
-        
-        # Store the chart in the pedal data
-        data['calibration_chart'] = calibration_chart
+        logger.info(f"Creating IntegratedCalibrationChart for {pedal_name}")
+        try:
+            calibration_chart = IntegratedCalibrationChart(
+                cal_layout, 
+                pedal_name,
+                lambda: self.on_point_moved(pedal_key)
+            )
+            logger.info(f"Successfully created IntegratedCalibrationChart for {pedal_name}")
+            
+            # Store the chart in the pedal data
+            data['calibration_chart'] = calibration_chart
+        except Exception as e:
+            logger.error(f"Failed to create IntegratedCalibrationChart for {pedal_name}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Create a placeholder widget so layout doesn't break
+            placeholder = QLabel(f"Chart error for {pedal_name}")
+            placeholder.setStyleSheet("background-color: red; color: white; padding: 10px;")
+            cal_layout.addWidget(placeholder)
+            data['calibration_chart'] = None
         
         # Update the calibration chart to have more space at the bottom
         # Use an alternative approach that doesn't require QMargins
-        data['calibration_chart'].chart.setPlotAreaBackgroundVisible(True)
-        data['calibration_chart'].chart.setBackgroundVisible(True)
-        
-        # Try to add spacing without using QMargins
-        try:
-            # First try setting chart margins directly
-            data['calibration_chart'].chart_view.setContentsMargins(10, 0, 10, 10)  # Reduce bottom margin from 40 to 10
-            # Also set the chart's own margins
-            data['calibration_chart'].chart.setMargins(QMargins(10, 10, 10, 10))  # Reduce bottom margin from 40 to 10
-        except Exception as e:
-            logger.error(f"Failed to set chart margins: {e}")
-            pass
+        if data['calibration_chart'] is not None:
+            data['calibration_chart'].chart.setPlotAreaBackgroundVisible(True)
+            data['calibration_chart'].chart.setBackgroundVisible(True)
+            
+            # Try to add spacing without using QMargins
+            try:
+                # First try setting chart margins directly
+                data['calibration_chart'].chart_view.setContentsMargins(10, 0, 10, 10)  # Reduce bottom margin from 40 to 10
+                # Also set the chart's own margins
+                data['calibration_chart'].chart.setMargins(QMargins(10, 10, 10, 10))  # Reduce bottom margin from 40 to 10
+            except Exception as e:
+                logger.error(f"Failed to set chart margins: {e}")
+                pass
             
         # Add consistent spacing after the chart view - REDUCED
         cal_layout.addSpacing(10)  # Reduce from 70px to 10px
@@ -478,10 +924,11 @@ class MainWindow(QMainWindow):
         # Add spacer to push curve selector to the right
         controls_row.addStretch(1)
         
-        # Create the combo box for curve selection
-        curve_selector = QComboBox()
-        curve_selector.addItems(["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"])
-        curve_selector.setCurrentText("Linear")
+        # Create the combo box for curve selection with pedal-specific curves
+        curve_selector = CurveComboBox(pedal_key, self)
+        pedal_curves = self.get_pedal_curves(pedal_key)
+        curve_selector.addItems(pedal_curves)
+        curve_selector.setCurrentText("Linear (Default)")
         
         # Size settings - strictly enforce the height with fixed size policy
         curve_selector.setMinimumWidth(130)  # Reduced from 180 to 130
@@ -637,7 +1084,8 @@ class MainWindow(QMainWindow):
         
         # Finalize the calibration group
         cal_group.setLayout(cal_layout)
-        parent_layout.addWidget(cal_group)
+        # Add the calibration group with stretch factor to prioritize vertical expansion
+        parent_layout.addWidget(cal_group, 1)  # stretch factor of 1 to expand vertically
         
         # Add spacing between Calibration and Output Monitor - REDUCED
         parent_layout.addSpacing(5)  # Reduced from 15 to 5
@@ -936,7 +1384,7 @@ class MainWindow(QMainWindow):
         
         # Reset curve type selector
         if 'curve_type_selector' in data:
-            data['curve_type_selector'].setCurrentText("Linear")
+            data['curve_type_selector'].setCurrentText("Linear (Default)")
         
         # Signal that calibration has changed
         self.calibration_updated.emit(pedal)
@@ -949,7 +1397,7 @@ class MainWindow(QMainWindow):
         logger.info(f"Curve changed for {pedal}: {curve_type}")
         
         # Check if this is a built-in curve type or a saved curve
-        built_in_curves = ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]
+        built_in_curves = self.get_pedal_curves(pedal)
         
         if curve_type in built_in_curves:
             # Handle built-in curve types - generate curve points
@@ -967,8 +1415,12 @@ class MainWindow(QMainWindow):
         current_curve = data['curve_type_selector'].currentText()
         
         # Don't allow deleting built-in curves or separators
-        built_in_curves = ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]
-        if current_curve in built_in_curves or current_curve in ["─── Saved Curves ───", ""]:
+        # Get all built-in curves across all pedal types
+        all_built_in_curves = set()
+        for pedal_type in ['brake', 'throttle', 'clutch']:
+            all_built_in_curves.update(self.get_pedal_curves(pedal_type))
+        
+        if current_curve in all_built_in_curves or current_curve in ["─── Saved Curves ───", ""]:
             self.show_message("Cannot Delete", "Cannot delete built-in curve types")
             return
         
@@ -1005,58 +1457,163 @@ class MainWindow(QMainWindow):
         calibration_chart = data['calibration_chart']
         
         # Only generate new points for built-in curve types
-        if curve_type in ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]:
+        built_in_curves = self.get_pedal_curves(pedal)
+        if curve_type in built_in_curves:
             new_points = []
             
             logger.info(f"Generating {curve_type} curve for {pedal}")
             
-            if curve_type == "Linear":
+            import math
+            
+            # Universal curves (available for all pedals)
+            if curve_type == "Linear (Default)":
                 # Linear curve: y = x
                 for i in range(5):
                     x = i * 25  # 5 points at 0%, 25%, 50%, 75%, 100%
                     y = x  # Linear mapping
                     new_points.append(QPointF(x, y))
             
-            elif curve_type == "Exponential":
-                # Exponential curve: y = x^2
+            elif curve_type == "Progressive":
+                # Progressive curve: starts slow, builds progressively
                 for i in range(5):
                     x = i * 25  # 5 points at 0%, 25%, 50%, 75%, 100%
-                    y = (x / 100) ** 2 * 100  # x^2 mapping
+                    # Cubic curve for progressive response
+                    y = ((x / 100) ** 3) * 100
                     new_points.append(QPointF(x, y))
             
-            elif curve_type == "Logarithmic":
-                # Logarithmic curve: y = sqrt(x)
-                import math
+            # Brake-specific curves
+            elif curve_type == "Trail Brake":
+                # Trail Brake curve: linear start, then aggressive, perfect for trail braking
                 for i in range(5):
                     x = i * 25  # 5 points at 0%, 25%, 50%, 75%, 100%
-                    y = math.sqrt(x / 100) * 100  # sqrt(x) mapping
+                    if x <= 50:
+                        # Linear first half for gentle braking
+                        y = x
+                    else:
+                        # Exponential second half for trail braking control
+                        normalized = (x - 50) / 50  # 0-1 range for second half
+                        y = 50 + (normalized ** 2) * 50
                     new_points.append(QPointF(x, y))
             
-            elif curve_type == "S-Curve":
-                # S-Curve: combination of exponential and logarithmic
-                import math
-                k = 0.1  # Controls the steepness of the curve
+            elif curve_type == "Threshold":
+                # Threshold braking: sharp initial response for threshold braking
                 for i in range(5):
-                    x = i * 25  # 5 points at 0%, 25%, 50%, 75%, 100%
-                    # Sigmoid function scaled to 0-100 range
-                    y = 100 / (1 + math.exp(-k * (x - 50)))
+                    x = i * 25
+                    if x == 0:
+                        y = 0
+                    elif x <= 25:
+                        # Quick initial rise
+                        y = (x / 25) * 40
+                    else:
+                        # Linear after threshold
+                        y = 40 + ((x - 25) / 75) * 60
                     new_points.append(QPointF(x, y))
             
-            elif curve_type == "Reverse Log":
-                # Reverse logarithmic curve
-                import math
+            elif curve_type == "Endurance":
+                # Endurance braking: consistent pressure for long stints
                 for i in range(5):
-                    x = i * 25  # 5 points at 0%, 25%, 50%, 75%, 100%
-                    # Reverse sqrt mapping
-                    y = 100 - math.sqrt((100 - x) / 100) * 100
+                    x = i * 25
+                    # Gentle S-curve for consistent control
+                    normalized = x / 100
+                    y = 100 * (3 * normalized**2 - 2 * normalized**3)
                     new_points.append(QPointF(x, y))
             
-            elif curve_type == "Reverse Expo":
-                # Reverse exponential curve  
+            elif curve_type == "Rally":
+                # Rally braking: responsive for loose surfaces
                 for i in range(5):
-                    x = i * 25  # 5 points at 0%, 25%, 50%, 75%, 100%
-                    # Reverse x^2 mapping
-                    y = 100 - ((100 - x) / 100) ** 2 * 100
+                    x = i * 25
+                    # Quick response with controlled progression
+                    y = ((x / 100) ** 0.6) * 100
+                    new_points.append(QPointF(x, y))
+            
+            elif curve_type == "ABS Friendly":
+                # ABS Friendly: smooth modulation to work well with ABS
+                for i in range(5):
+                    x = i * 25
+                    # Smooth exponential curve
+                    y = ((x / 100) ** 1.8) * 100
+                    new_points.append(QPointF(x, y))
+            
+            # Throttle-specific curves
+            elif curve_type == "Turbo Lag":
+                # Turbo Lag: mimics turbo spooling
+                for i in range(5):
+                    x = i * 25
+                    if x <= 25:
+                        # Minimal response during "lag"
+                        y = ((x / 25) ** 2) * 15
+                    else:
+                        # Aggressive response after spool
+                        normalized = (x - 25) / 75
+                        y = 15 + (normalized ** 0.7) * 85
+                    new_points.append(QPointF(x, y))
+            
+            elif curve_type == "NA Engine":
+                # NA Engine: naturally aspirated response
+                for i in range(5):
+                    x = i * 25
+                    # Smooth linear-ish progression
+                    y = ((x / 100) ** 0.8) * 100
+                    new_points.append(QPointF(x, y))
+            
+            elif curve_type == "Track Mode":
+                # Track Mode: precise control for racing
+                for i in range(5):
+                    x = i * 25
+                    # Balanced curve with good control
+                    y = ((x / 100) ** 1.2) * 100
+                    new_points.append(QPointF(x, y))
+            
+            elif curve_type == "Feathering":
+                # Feathering: precise low-speed control
+                for i in range(5):
+                    x = i * 25
+                    if x <= 50:
+                        # Very precise control in lower range
+                        y = ((x / 50) ** 0.3) * 30
+                    else:
+                        # Normal progression in upper range
+                        y = 30 + ((x - 50) / 50) * 70
+                    new_points.append(QPointF(x, y))
+            
+            # Clutch-specific curves
+            elif curve_type == "Quick Engage":
+                # Quick Engage: fast clutch engagement
+                for i in range(5):
+                    x = i * 25
+                    if x <= 40:
+                        # Quick initial engagement
+                        y = ((x / 40) ** 0.4) * 80
+                    else:
+                        # Complete engagement
+                        y = 80 + ((x - 40) / 60) * 20
+                    new_points.append(QPointF(x, y))
+            
+            elif curve_type == "Heel-Toe":
+                # Heel-Toe: optimized for heel-toe downshifts
+                for i in range(5):
+                    x = i * 25
+                    if x <= 20:
+                        # Quick initial disengagement
+                        y = 100 - ((x / 20) ** 0.5) * 30
+                    elif x <= 80:
+                        # Stable slip zone for heel-toe
+                        y = 70 - ((x - 20) / 60) * 50
+                    else:
+                        # Final engagement
+                        y = 20 - ((x - 80) / 20) * 20
+                    new_points.append(QPointF(x, y))
+            
+            elif curve_type == "Bite Point Focus":
+                # Bite Point Focus: emphasis on engagement point
+                for i in range(5):
+                    x = i * 25
+                    if x <= 60:
+                        # Gradual approach to bite point
+                        y = ((x / 60) ** 0.3) * 50
+                    else:
+                        # Sharp engagement after bite point
+                        y = 50 + ((x - 60) / 40) * 50
                     new_points.append(QPointF(x, y))
             
             # Update the chart with the new points
@@ -1205,10 +1762,10 @@ class MainWindow(QMainWindow):
                 # Switch to Linear curve after deletion
                 data = self._pedal_data[pedal]
                 if 'curve_type_selector' in data:
-                    data['curve_type_selector'].setCurrentText("Linear")
+                    data['curve_type_selector'].setCurrentText("Linear (Default)")
                 
                 # Apply Linear curve
-                self.change_response_curve(pedal, "Linear")
+                self.change_response_curve(pedal, "Linear (Default)")
                 
                 # Refresh the curve list to remove the deleted curve
                 self.refresh_curve_lists()
@@ -1221,9 +1778,6 @@ class MainWindow(QMainWindow):
     def refresh_curve_lists(self):
         """Refresh the curve lists for all pedals."""
         try:
-            # Built-in curve types
-            built_in_curves = ["Linear", "Exponential", "Logarithmic", "S-Curve", "Reverse Log", "Reverse Expo"]
-            
             # Update curve type dropdowns for all pedals
             for pedal in ['throttle', 'brake', 'clutch']:
                 if pedal not in self._pedal_data:
@@ -1234,6 +1788,9 @@ class MainWindow(QMainWindow):
                     continue
                 
                 curve_type_selector = data['curve_type_selector']
+                
+                # Get pedal-specific built-in curves
+                built_in_curves = self.get_pedal_curves(pedal)
                 
                 # Save current selection
                 current_selection = curve_type_selector.currentText()
@@ -1273,9 +1830,9 @@ class MainWindow(QMainWindow):
                     if index >= 0:
                         curve_type_selector.setCurrentIndex(index)
                     else:
-                        curve_type_selector.setCurrentText("Linear")  # Default fallback
+                        curve_type_selector.setCurrentText("Linear (Default)")  # Default fallback
                 else:
-                    curve_type_selector.setCurrentText("Linear")  # Default
+                    curve_type_selector.setCurrentText("Linear (Default)")  # Default
                 
                 # Unblock signals
                 curve_type_selector.blockSignals(False)
@@ -2056,7 +2613,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Show about dialog."""
         about_text = """
-                        <h2>TrackPro v1.5.3</h2>
+                        <h2>TrackPro v1.5.4</h2>
         <p>Racing Telemetry System</p>
         <p>© 2024 Sim Coaches</p>
         <p>A professional racing telemetry and pedal calibration system.</p>
@@ -2424,17 +2981,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open calibration wizard: {str(e)}")
     
-    def save_calibration(self):
-        """Save calibration settings."""
-        try:
-            if hasattr(self, 'app_instance') and self.app_instance and hasattr(self.app_instance, 'hardware'):
-                # Save calibration through the hardware interface
-                self.app_instance.hardware.save_calibration()
-                QMessageBox.information(self, "Success", "Calibration settings saved successfully")
-            else:
-                QMessageBox.warning(self, "Error", "Hardware not available for saving calibration")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save calibration: {str(e)}")
+
     
     def on_calibration_wizard_completed(self, results):
         """Handle calibration wizard completion."""

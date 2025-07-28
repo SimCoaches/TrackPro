@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Get the GitHub repository from environment variable or use a default
 GITHUB_REPO = "SimCoaches/TrackPro"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CURRENT_VERSION = "1.5.3"
+CURRENT_VERSION = "1.5.4"
 UPDATE_URL = "https://trackpro.app/api/updates"
 
 class UpdateChecker(QThread):
@@ -368,12 +368,21 @@ echo - Only old executable files and shortcuts are removed
 echo ===================================
 
 echo.
-echo Step 1: User-mode installation (no admin required)
-echo This installer does not require administrator privileges
-echo Installing to user directory: {INSTALL_DIR}
+echo Step 1: Terminating all TrackPro processes
+echo This is required to allow file deletion and cleanup...
+taskkill /F /IM "TrackPro*.exe" 2>NUL
+taskkill /F /IM "trackpro*.exe" 2>NUL
+taskkill /F /IM "run_app.exe" 2>NUL
+echo TrackPro processes terminated
+timeout /t 3 /nobreak >NUL
 
 echo.
-echo Step 2: Windows Security Check
+echo Step 2: Releasing file locks and preparing for installation
+echo Waiting for any remaining file handles to be released...
+timeout /t 2 /nobreak >NUL
+
+echo.
+echo Step 3: Windows Security Check
 echo.
 echo Checking if Windows Defender might block the installer...
 echo.
@@ -384,32 +393,18 @@ echo 2. Temporarily disable real-time protection in Windows Security
 echo 3. Add an exclusion for the installer in Windows Security
 echo.
 echo Attempting to run Windows Defender scan on installer before execution...
-start /wait "Windows Defender Scan" powershell -Command "Start-Process -FilePath 'C:\\Program Files\\Windows Defender\\MpCmdRun.exe' -ArgumentList '-Scan -ScanType 3 -File \"{installer_path}\"' -Verb RunAs -Wait"
+start /wait "Windows Defender Scan" powershell -Command "Start-Process -FilePath 'C:\\Program Files\\Windows Defender\\MpCmdRun.exe' -ArgumentList '-Scan -ScanType 3 -File \"{installer_path}\"' -Verb RunAs -Wait" 2>NUL
 
 echo.
-echo Step 3: Preparing Installation Environment
-echo Checking if target directory exists...
-if exist "{INSTALL_DIR}" (
-    echo Target directory exists. Contents:
-    dir "{INSTALL_DIR}" /b /a
-) else (
-    echo Target directory does not exist, will be created by installer
-    mkdir "{INSTALL_DIR}" 2>NUL
-)
-
-echo.
-echo Step 4: Terminating TrackPro instances...
-taskkill /F /IM "TrackPro*.exe" 2>NUL
-echo TrackPro instances terminated
-echo.
-echo NOTE: The new installer includes automatic cleanup of previous versions.
+echo Step 4: Preparing Installation Environment
+echo The new installer includes automatic cleanup of previous versions.
 echo This means it will remove old TrackPro executables, shortcuts, and registry
 echo entries before installing the new version. USER DATA (calibrations, settings)
 echo will be preserved. This should resolve the issue where previous versions
 echo weren't being properly removed.
 
 echo.
-echo Step 5: Running installer interactively...
+echo Step 5: Running installer...
 echo This may take a few moments...
 echo.
 echo IMPORTANT: If Windows Defender shows a warning, select "More info" and then "Run anyway"
@@ -419,102 +414,103 @@ echo Running: "{installer_path}"
 REM Open Explorer to the folder containing the installer
 explorer /select,"{installer_path}"
 
-REM Try to run the installer with shield icon (admin prompt)
+REM Try to run the installer with admin privileges
 echo.
 echo Method 1: Running installer with PowerShell (Admin)...
-powershell -Command "Start-Process -FilePath '{installer_path}' -Verb RunAs"
-echo.
-echo IMPORTANT: If you see a security dialog, please select "More info" then "Run anyway"
-echo The installer may be running in the background.
-echo.
-echo If nothing happens, try running the installer manually from:
-echo {installer_path}
-echo.
-echo After installation completes, press any key to continue...
-pause
+powershell -Command "Start-Process -FilePath '{installer_path}' -Verb RunAs -Wait"
 
 echo.
-echo Step 6: Post-Installation Analysis
+echo Step 6: Post-Installation Check
 echo.
-echo Checking installation directories...
+echo The installer should have completed. Checking for the new version...
 
 REM Check for executable files in various possible locations
 echo.
-echo 1. Checking main Program Files directory:
+echo 1. Checking AppData\\Local\\TrackPro directory:
+if exist "%LOCALAPPDATA%\\TrackPro" (
+    echo Contents of %LOCALAPPDATA%\\TrackPro:
+    dir "%LOCALAPPDATA%\\TrackPro\\TrackPro*.exe" /b 2>NUL
+    if exist "%LOCALAPPDATA%\\TrackPro\\TrackPro*.exe" (
+        echo Found TrackPro executable in AppData Local!
+        for %%f in ("%LOCALAPPDATA%\\TrackPro\\TrackPro*.exe") do (
+            echo Starting new version: %%f
+            start "" "%%f"
+            goto :success
+        )
+    )
+) else (
+    echo Directory not found: %LOCALAPPDATA%\\TrackPro
+)
+
+echo.
+echo 2. Checking main Program Files directory:
 if exist "C:\\Program Files\\TrackPro" (
     echo Contents of C:\\Program Files\\TrackPro:
-    dir "C:\\Program Files\\TrackPro" /b /a
+    dir "C:\\Program Files\\TrackPro\\TrackPro*.exe" /b 2>NUL
+    if exist "C:\\Program Files\\TrackPro\\TrackPro*.exe" (
+        echo Found TrackPro executable in Program Files!
+        for %%f in ("C:\\Program Files\\TrackPro\\TrackPro*.exe") do (
+            echo Starting new version: %%f
+            start "" "%%f"
+            goto :success
+        )
+    )
 ) else (
     echo Directory not found: C:\\Program Files\\TrackPro
 )
 
 echo.
-echo 2. Checking Program Files (x86) directory:
+echo 3. Checking Program Files (x86) directory:
 if exist "C:\\Program Files (x86)\\TrackPro" (
     echo Contents of C:\\Program Files (x86)\\TrackPro:
-    dir "C:\\Program Files (x86)\\TrackPro" /b /a
+    dir "C:\\Program Files (x86)\\TrackPro\\TrackPro*.exe" /b 2>NUL
+    if exist "C:\\Program Files (x86)\\TrackPro\\TrackPro*.exe" (
+        echo Found TrackPro executable in Program Files (x86)!
+        for %%f in ("C:\\Program Files (x86)\\TrackPro\\TrackPro*.exe") do (
+            echo Starting new version: %%f
+            start "" "%%f"
+            goto :success
+        )
+    )
 ) else (
     echo Directory not found: C:\\Program Files (x86)\\TrackPro
 )
 
+REM If we get here, installation may have failed
 echo.
-echo GATHERING ALL POSSIBLE TRACKPRO EXECUTABLES:
-set "FOUND_EXE="
-
-REM Search for TrackPro executables in Program Files
-for %%f in ("C:\\Program Files\\TrackPro\\TrackPro*.exe" "C:\\Program Files\\TrackPro\\TrackPro_v*.exe") do (
-    if exist "%%f" (
-        echo Found executable in Program Files: %%f
-        set "FOUND_EXE=%%f"
-    )
-)
-
-REM Search for TrackPro executables in Program Files (x86)
-if "%FOUND_EXE%"=="" (
-    for %%f in ("C:\\Program Files (x86)\\TrackPro\\TrackPro*.exe" "C:\\Program Files (x86)\\TrackPro\\TrackPro_v*.exe") do (
-        if exist "%%f" (
-            echo Found executable in Program Files (x86): %%f
-            set "FOUND_EXE=%%f"
-        )
-    )
-)
-
+echo Step 7: Installation Status Check
 echo.
-echo Step 7: Summary and Resolution
-if not "%FOUND_EXE%"=="" (
-    echo.
-    echo SUCCESS: TrackPro executable found!
-    echo Found at: %FOUND_EXE%
-    
-    echo.
-    echo TrackPro update completed successfully!
-    echo Press any key to start the new version...
-    pause
-    
-    echo Starting new version...
-    start "" "%FOUND_EXE%"
-    exit /b 0
-) else (
-    echo.
-    echo No TrackPro executable found after installation
-    echo.
-    echo This could be due to:
-    echo 1. Windows Defender blocked the installation
-    echo 2. The installation was canceled
-    echo 3. The installer failed to extract files
-    echo.
-    echo Please try one of these solutions:
-    echo 1. Run the installer manually from: {installer_path}
-    echo 2. Temporarily disable Windows Defender and try again
-    echo 3. Download the latest version directly from GitHub
-    echo.
-    start "" "{installer_path}"
-    echo.
-    echo Opening the installer one last time...
-    echo After installation, you can find TrackPro in the Start Menu.
-    pause
-    exit /b 1
-)
+echo No TrackPro executable found after installation
+echo.
+echo This could be due to:
+echo 1. Windows Defender blocked the installation
+echo 2. The installation was canceled
+echo 3. The installer failed to extract files
+echo.
+echo Please try one of these solutions:
+echo 1. Run the installer manually from: {installer_path}
+echo 2. Temporarily disable Windows Defender and try again
+echo 3. Download the latest version directly from GitHub
+echo.
+echo Opening the installer one more time for manual installation...
+start "" "{installer_path}"
+echo.
+echo After installation, you can find TrackPro in the Start Menu.
+echo.
+echo Press any key to exit...
+pause
+exit /b 1
+
+:success
+echo.
+echo ===================================
+echo TrackPro update completed successfully!
+echo The new version should be starting now.
+echo ===================================
+echo.
+echo Press any key to exit...
+pause
+exit /b 0
 '''
             # Save the batch file
             batch_path = os.path.join(os.path.expanduser("~/Documents"), 'trackpro_update.bat')

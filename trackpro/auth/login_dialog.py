@@ -434,7 +434,8 @@ class LoginDialog(BaseAuthDialog):
         google_button = QPushButton()
         google_button.setToolTip("Sign in with Google")
         # Set icon if the file exists
-        google_icon_path = os.path.join(icons_dir, "google.png")
+        from trackpro.utils.resource_utils import get_resource_path
+        google_icon_path = get_resource_path("trackpro/resources/icons/google.png")
         if os.path.exists(google_icon_path):
             google_button.setIcon(QIcon(google_icon_path))
             google_button.setIconSize(google_button.sizeHint() * 1.5) # Make icon larger
@@ -450,7 +451,7 @@ class LoginDialog(BaseAuthDialog):
         self.discord_button = QPushButton()
         self.discord_button.setToolTip("Sign in with Discord")
         # Set icon if the file exists
-        discord_icon_path = os.path.join(icons_dir, "discord.png")
+        discord_icon_path = get_resource_path("trackpro/resources/icons/discord.png")
         if os.path.exists(discord_icon_path):
             self.discord_button.setIcon(QIcon(discord_icon_path))
             self.discord_button.setIconSize(self.discord_button.sizeHint() * 1.5) # Make icon larger
@@ -488,7 +489,7 @@ class LoginDialog(BaseAuthDialog):
         image_label.setStyleSheet("color: #ccc; font-size: 16px;")
         
         # Optional: Load an actual image if available
-        image_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", "images", "login_image.png")
+        image_path = get_resource_path("trackpro/resources/images/login_image.png")
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path)
             image_label.setPixmap(pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))

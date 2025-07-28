@@ -745,11 +745,11 @@ def show_early_splash():
         from PyQt6.QtWidgets import QSplashScreen, QLabel, QVBoxLayout, QWidget
         from PyQt6.QtCore import Qt, QTimer
         from PyQt6.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QBrush
+        from trackpro.utils.resource_utils import get_resource_path
         import os
         
         # Try to load our custom logo first
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                 "trackpro", "resources", "images", "trackpro_logo_small.png")
+        logo_path = get_resource_path("trackpro/resources/images/trackpro_logo_small.png")
         
         if os.path.exists(logo_path):
             # Use our custom logo

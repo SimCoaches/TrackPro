@@ -23,7 +23,8 @@ def setup_system_tray(main_window):
             logger.info(f"Loaded custom tray icon from: {icon_path}")
         else:
             # Try PNG version
-            png_icon_path = os.path.join(os.path.dirname(__file__), "..", "resources", "icons", "trackpro_tray.png")
+            from trackpro.utils.resource_utils import get_resource_path
+            png_icon_path = get_resource_path("trackpro/resources/icons/trackpro_tray.png")
             if os.path.exists(png_icon_path):
                 icon = QIcon(png_icon_path)
                 logger.info(f"Loaded custom tray icon (PNG) from: {png_icon_path}")
@@ -137,7 +138,7 @@ def exit_application(main_window):
         
         kill_commands = [
             ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
-            ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.3.exe'],
+                            ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.4.exe'],
             # More specific PowerShell command that excludes IDEs
             ['powershell', '-Command', '''Get-Process | Where-Object {
                 ($_.ProcessName -eq "TrackPro" -or 

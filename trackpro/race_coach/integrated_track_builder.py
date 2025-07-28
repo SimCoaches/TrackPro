@@ -254,6 +254,18 @@ class IntegratedTrackBuilderWorker(QThread):
     def run(self):
         """Main integrated building process."""
         try:
+            # Set thread priority to low to avoid interfering with pedal processing
+            try:
+                import ctypes
+                thread_handle = ctypes.windll.kernel32.GetCurrentThread()
+                # THREAD_PRIORITY_IDLE = -15
+                if not ctypes.windll.kernel32.SetThreadPriority(thread_handle, -15):
+                    print("Failed to set track builder thread priority to IDLE.")
+                else:
+                    print("Track builder thread priority set to IDLE.")
+            except Exception as e:
+                print(f"Could not set thread priority for track builder: {e}")
+            
             self.is_running = True
             
             # Use existing global iRacing connection instead of creating new one

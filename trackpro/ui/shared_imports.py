@@ -152,7 +152,7 @@ except ImportError:
         def detachAxis(self, axis): pass  # PyQt6 API
 
 # Version information - hardcoded to avoid cyclic imports
-__version__ = "1.5.3"
+__version__ = "1.5.4"
 
 # Import from parent module
 from ..config import config

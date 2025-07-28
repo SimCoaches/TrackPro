@@ -804,7 +804,8 @@ class RaceCoachWidget(QWidget):
             logo_label = QLabel()
             # Remove background styling and allow logo to extend beyond bounds
             logo_label.setStyleSheet("background: transparent;")
-            logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'resources', 'images', 'superlap_logo.png')
+            from trackpro.utils.resource_utils import get_resource_path
+            logo_path = get_resource_path('trackpro/resources/images/superlap_logo.png')
             
             if os.path.exists(logo_path):
                 pixmap = QPixmap(logo_path)

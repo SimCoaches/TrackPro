@@ -11,14 +11,17 @@ import os
 import traceback
 import re
 import socket
+import ctypes
+from threading import Thread, Event
+from queue import Queue, Empty
 
 # CRITICAL: Import and setup proper logging configuration FIRST
 from .logging_config import setup_logging
 setup_logging()
 
 # Defer local imports until needed in __init__ or other methods
-# from .pedals.hardware_input import HardwareInput
-# from .pedals.output import VirtualJoystick
+from .pedals.hardware_input import HardwareInput
+from .pedals.output import VirtualJoystick
 from .ui import MainWindow # Needed early for window creation
 # from .pedals.hidhide import HidHideClient
 # from .updater import Updater
@@ -270,6 +273,9 @@ class TrackProApp:
         self.startup_complete = False
         self.cleanup_completed = False  # Prevent duplicate cleanup calls
         self.oauth_callback_server = None
+        self.pedal_thread = None
+        self.pedal_stop_event = Event()
+        self.pedal_data_queue = Queue()
         
         # Add reference store to prevent C++ objects from being garbage collected
         self._reference_store = []
@@ -310,10 +316,7 @@ class TrackProApp:
             # Update progress 25%
             self.update_progress(25, "Initializing hardware systems...")
             
-            # Import HardwareInput just before use
-            from .pedals.hardware_input import HardwareInput
-            # Setup hardware input and output
-            self.hardware = HardwareInput(test_mode)
+            # Hardware will be initialized in the pedal thread
             
             # Update progress 40%
             self.update_progress(40, "Setting up virtual joystick...")
@@ -329,9 +332,7 @@ class TrackProApp:
             # Update progress 50%
             self.update_progress(50, "Connecting hardware to interface...")
             
-            # Set a reference to the hardware in the UI
-            if hasattr(self.window, 'set_hardware'):
-                self.window.set_hardware(self.hardware)
+            # Hardware will be connected to UI from the pedal thread
             
             # Update progress 55%
             self.update_progress(55, "Connecting signals...")
@@ -346,10 +347,13 @@ class TrackProApp:
             
             # Update progress 60%
             self.update_progress(60, "Setting up input processing...")
-            # Initialize timer but don't start it yet
+            # Initialize timer for UI updates at 30Hz
             self.timer = QTimer()
             self.timer.timeout.connect(self.process_input)
-            self.timer.setInterval(8)  # ~120Hz input polling rate
+            self.timer.setInterval(33)  # ~30Hz UI update rate
+            
+            # Start the dedicated pedal polling thread
+            self.start_pedal_thread()
             
             # Update progress 70%
             self.update_progress(70, "Loading calibration data...")
@@ -418,7 +422,8 @@ class TrackProApp:
             layout.setSpacing(8)
 
             # Sim Coaches Logo
-            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'images', 'sclogo.png')
+            from trackpro.utils.resource_utils import get_resource_path
+            logo_path = get_resource_path("docs/images/sclogo.png")
             if os.path.exists(logo_path):
                 logo_pixmap = QPixmap(logo_path)
                 logo_label = QLabel()
@@ -600,7 +605,11 @@ class TrackProApp:
         for pedal in ['throttle', 'brake', 'clutch']:
             if pedal in cal:
                 points = cal[pedal].get('points', [])
-                curve_type = cal[pedal].get('curve', 'Linear')
+                curve_type = cal[pedal].get('curve', 'Linear (Default)')
+                
+                # Handle backward compatibility: map old "Linear" to new "Linear (Default)"
+                if curve_type == 'Linear':
+                    curve_type = 'Linear (Default)'
                 
                 # Convert points to QPointF objects
                 qpoints = [QPointF(x, y) for x, y in points]
@@ -642,7 +651,13 @@ class TrackProApp:
                     logger.warning(f"MainWindow does not have set_pedal_available method, skipping for {pedal}")
                 
                 # Update curve selector if it's a custom curve and the required attributes exist
-                if curve_type not in ["Linear", "Exponential", "Logarithmic", "S-Curve"]:
+                # Get all possible built-in curves for all pedal types
+                all_built_in_curves = set()
+                from trackpro.ui.main_window import MainWindow
+                for pedal_type in ['brake', 'throttle', 'clutch']:
+                    all_built_in_curves.update(MainWindow.get_pedal_curves(pedal_type))
+                
+                if curve_type not in all_built_in_curves:
                     if hasattr(self.window, '_pedal_data') and pedal in self.window._pedal_data:
                         selector = self.window._pedal_data[pedal].get('curve_selector')
                         if selector:
@@ -694,114 +709,57 @@ class TrackProApp:
         if not hasattr(self, '_save_calibration_timer'):
             self._save_calibration_timer = QTimer()
             self._save_calibration_timer.setSingleShot(True)
-            self._save_calibration_timer.timeout.connect(lambda: self.hardware.save_calibration(self.hardware.calibration))
+            self._save_calibration_timer.timeout.connect(self._perform_autosave)
         
         # If timer is active, stop it and restart with new timeout
         if self._save_calibration_timer.isActive():
             self._save_calibration_timer.stop()
         
-        # Schedule a save after a short delay (500ms)
-        self._save_calibration_timer.start(500)
+        # Schedule a save after a 5 second delay for autosave
+        self._save_calibration_timer.start(5000)
         
         # Immediately reprocess current input to apply the new calibration
         # This ensures changes to the curve are reflected in real-time
         self.process_input()
     
+    def _perform_autosave(self):
+        """Perform autosave and update status message with save time."""
+        try:
+            # Save the calibration
+            self.hardware.save_calibration(self.hardware.calibration)
+            
+            # Update status message with current date/time
+            from datetime import datetime
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status_message = f"Autosaved calibration at {current_time}"
+            
+            # Update the status bar if available
+            if hasattr(self, 'window') and self.window and hasattr(self.window, 'statusBar'):
+                self.window.statusBar.showMessage(status_message)
+                
+            logger.info(f"Calibration autosaved at {current_time}")
+            
+        except Exception as e:
+            logger.error(f"Error during autosave: {e}")
+            # Show error in status bar if available
+            if hasattr(self, 'window') and self.window and hasattr(self.window, 'statusBar'):
+                self.window.statusBar.showMessage(f"Autosave failed: {str(e)}")
+    
     def process_input(self):
-        """Process input from hardware and apply to output."""
-        # Check if hardware is available
-        if not self.hardware:
-            return
-        
-        # Ensure pygame is initialized if not already (might be needed by hardware.read_pedals)
+        """Process pedal data from the queue and update the UI."""
         try:
-            import pygame
-            if not pygame.get_init():
-                pygame.init()
-            if not pygame.joystick.get_init():
-                 pygame.joystick.init()
-        except ImportError:
-            logger.error("Pygame import failed in process_input")
-            return # Cannot process input without pygame
+            # Get the latest data from the queue, non-blocking
+            raw_values = self.pedal_data_queue.get_nowait()
+            
+            # Update UI with the fresh values
+            for pedal, value in raw_values.items():
+                self.window.set_input_value(pedal, value)
+                
+        except Empty:
+            # This is normal, means no new data from the pedal thread
+            pass
         except Exception as e:
-            logger.error(f"Error initializing pygame in process_input: {e}")
-            # Optionally return or try to continue if pygame isn't strictly necessary
-            # For now, we assume it is necessary for hardware.read_pedals
-            return
-        
-        try:
-            # If we're in the middle of a reconnection attempt, use last known values to avoid jumps
-            if self.reconnecting and hasattr(self.hardware, 'last_values'):
-                raw_values = self.hardware.last_values
-                logger.debug("Using last known values during reconnection attempt")
-            else:
-                # Read new values from hardware
-                raw_values = self.hardware.read_pedals()
-                
-                # If we successfully read and had been reconnecting, update UI if needed
-                if self.reconnecting and self.hardware.pedals_connected:
-                    self.reconnecting = False
-                    logger.info("Reconnection successful, resuming normal operation")
-                    # Only update UI if connection state actually changed and this isn't startup
-                    if hasattr(self, 'startup_complete') and self.startup_complete:
-                        self.window.update_pedal_connection_status(self.hardware.pedals_connected)
-            
-            # Store the processed values
-            processed_values = {}
-            
-            # Process each axis
-            for pedal in ['throttle', 'brake', 'clutch']:
-                # Get the raw value for this pedal
-                raw_value = raw_values.get(pedal, 0)
-                
-                # Scale the value using calibration
-                output_value = self.hardware.apply_calibration(pedal, raw_value)
-                
-                # Apply threshold braking assist for brake pedal
-                if pedal == 'brake' and hasattr(self.hardware, 'process_brake_with_assist'):
-                    output_value = self.hardware.process_brake_with_assist(output_value)
-                
-                # Scale for vJoy (0-32767)
-                vjoy_value = int(output_value * 32767 / 65535)
-                
-                # Store the values
-                processed_values[pedal] = {
-                    'raw': raw_value,
-                    'output': output_value,
-                    'output_vjoy': vjoy_value
-                }
-            
-            # Update virtual joystick first (minimize output lag)
-            # Check if each axis is available before sending values
-            throttle_value = processed_values['throttle']['output_vjoy'] if self.hardware.THROTTLE_AXIS >= 0 else 0
-            brake_value = processed_values['brake']['output_vjoy'] if self.hardware.BRAKE_AXIS >= 0 else 0
-            clutch_value = processed_values['clutch']['output_vjoy'] if self.hardware.CLUTCH_AXIS >= 0 else 0
-            
-            self.output.update_axis(throttle_value, brake_value, clutch_value)
-            
-            # Throttle UI updates to reduce lag during calibration
-            # Only update UI every other frame during calibration changes
-            current_time = time.time() * 1000
-            should_update_ui = True
-            
-            if hasattr(self, '_last_ui_update_time'):
-                # Apply throttling - only update UI at ~30fps
-                if current_time - self._last_ui_update_time < 33:  # ~30fps
-                    should_update_ui = False
-            
-            if should_update_ui:
-                # Update UI with the fresh values
-                for pedal, values in processed_values.items():
-                    self.window.set_input_value(pedal, values['raw'])
-                self._last_ui_update_time = current_time
-                
-        except Exception as e:
-            logger.error(f"Error processing input: {e}")
-            # If we encounter an error processing input, attempt reconnection on next cycle
-            if self.hardware and self.hardware.pedals_connected:
-                logger.info("Error during input processing, will attempt reconnection on next cycle")
-                self.hardware.pedals_connected = False
-                self.reconnecting = True
+            logger.error(f"Error processing UI updates: {e}")
     
     def update_deadzones(self, pedal, min_deadzone, max_deadzone):
         """Update the deadzones for a pedal.
@@ -1141,6 +1099,13 @@ class TrackProApp:
             logger.info("Stopping main input timer...")
             self.timer.stop()
         
+        # Stop the pedal thread
+        try:
+            logger.info("Stopping pedal thread...")
+            self.stop_pedal_thread()
+        except Exception as e:
+            logger.error(f"Error stopping pedal thread: {e}")
+        
         # Disconnect all signals
         try:
             logger.info("Disconnecting signals...")
@@ -1459,6 +1424,75 @@ class TrackProApp:
         # if hasattr(self, 'window'):
         #     self.window.auth_state_changed.emit(is_authenticated)
 
+    def start_pedal_thread(self):
+        """Start the dedicated pedal polling thread."""
+        if self.pedal_thread is None or not self.pedal_thread.is_alive():
+            self.pedal_stop_event.clear()
+            self.pedal_thread = Thread(target=self.pedal_polling_loop, daemon=True)
+            self.pedal_thread.start()
+            logger.info("Pedal thread started successfully")
+        else:
+            logger.warning("Pedal thread is already running")
+
+    def stop_pedal_thread(self):
+        """Stop the dedicated pedal polling thread."""
+        if self.pedal_thread is not None and self.pedal_thread.is_alive():
+            self.pedal_stop_event.set()
+            self.pedal_thread.join(timeout=2.0)
+            if self.pedal_thread.is_alive():
+                logger.warning("Pedal thread did not stop gracefully")
+            else:
+                logger.info("Pedal thread stopped successfully")
+
+    def pedal_polling_loop(self):
+        """The main loop for polling pedals and sending output to vJoy."""
+        try:
+            thread_handle = ctypes.windll.kernel32.GetCurrentThread()
+            if not ctypes.windll.kernel32.SetThreadPriority(thread_handle, 15):  # THREAD_PRIORITY_TIME_CRITICAL
+                logger.warning("Failed to set pedal thread priority to TIME_CRITICAL.")
+            else:
+                logger.info("Pedal thread priority set to TIME_CRITICAL.")
+        except Exception as e:
+            logger.warning(f"Could not set thread priority on Windows: {e}")
+
+        # Initialize hardware inside the thread
+        self.hardware = HardwareInput()
+        if hasattr(self.window, 'set_hardware'):
+            self.window.set_hardware(self.hardware)
+        
+        # Load initial calibration data into UI from this thread
+        self.load_calibration()
+        
+        last_vjoy_values = {'throttle': -1, 'brake': -1, 'clutch': -1}
+
+        while not self.pedal_stop_event.is_set():
+            start_time = time.perf_counter()
+
+            raw_values = self.hardware.read_pedals()
+            
+            # Clear queue and put the latest data to avoid UI lag
+            while not self.pedal_data_queue.empty():
+                try:
+                    self.pedal_data_queue.get_nowait()
+                except Empty:
+                    break
+            self.pedal_data_queue.put(raw_values)
+
+            vjoy_values = {}
+            for pedal in ['throttle', 'brake', 'clutch']:
+                raw_value = raw_values.get(pedal, 0)
+                output_value = self.hardware.apply_calibration(pedal, raw_value)
+                vjoy_values[pedal] = int(output_value)  # apply_calibration already returns 0-65535 range
+            
+            if vjoy_values != last_vjoy_values:
+                self.output.update_axis(vjoy_values['throttle'], vjoy_values['brake'], vjoy_values['clutch'])
+                last_vjoy_values = vjoy_values
+
+            elapsed = time.perf_counter() - start_time
+            sleep_time = (1/1000) - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
     def store_reference(self, obj):
         """Store a strong reference to an object to prevent garbage collection.
         
@@ -1535,19 +1569,50 @@ class TrackProApp:
                 self.hidhide = HidHideClient(fail_silently=True)
                 if hasattr(self.hidhide, 'functioning') and self.hidhide.functioning:
                     logger.info("HidHide client initialized successfully")
+                    
+                    # Actually hide the Sim Coaches P1 Pro Pedals device
+                    self._hide_pedal_device()
+                    
                 elif hasattr(self.hidhide, 'error_context') and self.hidhide.error_context:
                     logger.warning(f"HidHide initialized with limited functionality: {self.hidhide.error_context}")
                     self.show_hidhide_warning(self.hidhide.error_context)
         except Exception as e:
             logger.error(f"Error initializing HidHide client: {e}")
             self.hidhide = None
+
+    def _hide_pedal_device(self):
+        """Hide the Sim Coaches P1 Pro Pedals device from other applications."""
+        if not hasattr(self, 'hidhide') or not self.hidhide:
+            logger.warning("HidHide client not available for device hiding")
+            return
+            
+        try:
+            device_name = "Sim Coaches P1 Pro Pedals"
+            logger.info(f"Attempting to hide device: {device_name}")
+            
+            # Get the device instance path
+            device_path = self.hidhide.get_device_instance_path(device_name)
+            if device_path:
+                logger.info(f"Found device path: {device_path}")
+                
+                # Hide the device
+                success = self.hidhide.hide_device(device_path)
+                if success:
+                    logger.info(f"Successfully hid device: {device_name}")
+                else:
+                    logger.warning(f"Failed to hide device: {device_name}")
+            else:
+                logger.warning(f"Could not find device path for: {device_name}")
+                
+        except Exception as e:
+            logger.error(f"Error hiding pedal device: {e}")
     
     def post_startup_operations(self):
         """Perform heavy operations after the main UI is shown and responsive."""
         try:
-            # Show a subtle loading indicator
+            # Show initial status
             if hasattr(self, 'window') and self.window:
-                self.window.statusBar.showMessage("Loading curves and syncing data...")
+                self.window.statusBar.showMessage("TrackPro ready - Calibration autosaves 5 seconds after changes")
             
             # Wait longer to ensure UI is fully responsive before starting heavy operations
             QTimer.singleShot(3000, self._delayed_heavy_operations)

@@ -2,338 +2,652 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QGroupBox, QButtonGroup, QRadioButton,
     QProgressBar, QMessageBox, QWidget, QWizard, QWizardPage,
-    QSizePolicy, QSpacerItem, QFrame
+    QSizePolicy, QSpacerItem, QFrame, QTextEdit
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QFont, QPixmap, QPainter, QPen, QBrush, QColor
 import pygame
 import logging
 from ..database import supabase
 
 logger = logging.getLogger(__name__)
 
-# Define Wizard Pages First
-class IntroPage(QWizardPage):
-    """Introduction page of the calibration wizard."""
+class PedalSetSelectionPage(QWizardPage):
+    """First page to select pedal set type (2 or 3 pedals)."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        # Remove any default QWizardPage margin/padding
-        self.setContentsMargins(0, 0, 0, 0)
+        self.setTitle("Pedal Set Selection")
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 0, 15, 0)  # Minimal top/bottom margins
-        layout.setSpacing(10)  # Reduced spacing between elements
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        title_label = QLabel("Welcome to Pedal Calibration")
+        # Title
+        title_label = QLabel("What pedal set do you have?")
         title_font = QFont()
-        title_font.setPointSize(16)
+        title_font.setPointSize(18)
         title_font.setBold(True)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
-        info_label = QLabel("""This wizard will guide you through calibrating your throttle, brake, and clutch pedals.
+        # Instruction
+        instruction_label = QLabel("Please select your pedal configuration:")
+        instruction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        instruction_label.setStyleSheet("""
+            font-size: 12pt; 
+            margin-bottom: 10px;
+            background-color: transparent;
+        """)
+        layout.addWidget(instruction_label)
 
-Ensure your pedals are connected and recognized by the system.
+        # Create selection area
+        selection_layout = QHBoxLayout()
+        selection_layout.setSpacing(30)
 
-Follow the instructions on each page carefully.
+        # 2-Pedal option
+        self.two_pedal_group = QGroupBox()
+        self.two_pedal_group.setStyleSheet("""
+            QGroupBox {
+                border: 2px solid #505050;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #3a3a3a;
+            }
+            QGroupBox:hover {
+                border-color: #2a82da;
+                cursor: pointer;
+            }
+        """)
+        # Make the entire group box clickable
+        self.two_pedal_group.mousePressEvent = lambda event: self.select_two_pedal()
+        # Set cursor to pointer to indicate clickability
+        self.two_pedal_group.setCursor(Qt.CursorShape.PointingHandCursor)
+        two_pedal_layout = QVBoxLayout(self.two_pedal_group)
+        
+        # 2-pedal image placeholder (you can replace with actual image)
+        two_pedal_image = self.create_pedal_image(2)
+        two_pedal_layout.addWidget(two_pedal_image)
+        
+        # 2-pedal radio button and label
+        self.two_pedal_radio = QRadioButton("2-Pedal Set")
+        self.two_pedal_radio.setStyleSheet("""
+            QRadioButton {
+                font-size: 14pt; 
+                font-weight: bold;
+                background-color: transparent;
+                color: #e0e0e0;
+            }
+        """)
+        two_pedal_layout.addWidget(self.two_pedal_radio, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        two_pedal_desc = QLabel("Throttle + Brake")
+        two_pedal_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        two_pedal_desc.setStyleSheet("""
+            font-size: 10pt; 
+            color: #b0b0b0;
+            background-color: transparent;
+        """)
+        two_pedal_layout.addWidget(two_pedal_desc)
 
-Click 'Next' to begin.""")
-        info_label.setWordWrap(True)
-        info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        info_label.setStyleSheet("font-size: 11pt;")  # Color already set in wizard stylesheet
-        layout.addWidget(info_label)
+        # 3-Pedal option
+        self.three_pedal_group = QGroupBox()
+        self.three_pedal_group.setStyleSheet("""
+            QGroupBox {
+                border: 2px solid #505050;
+                border-radius: 10px;
+                padding: 20px;
+                background-color: #3a3a3a;
+            }
+            QGroupBox:hover {
+                border-color: #2a82da;
+                cursor: pointer;
+            }
+        """)
+        # Make the entire group box clickable
+        self.three_pedal_group.mousePressEvent = lambda event: self.select_three_pedal()
+        # Set cursor to pointer to indicate clickability
+        self.three_pedal_group.setCursor(Qt.CursorShape.PointingHandCursor)
+        three_pedal_layout = QVBoxLayout(self.three_pedal_group)
+        
+        # 3-pedal image placeholder
+        three_pedal_image = self.create_pedal_image(3)
+        three_pedal_layout.addWidget(three_pedal_image)
+        
+        # 3-pedal radio button and label
+        self.three_pedal_radio = QRadioButton("3-Pedal Set")
+        self.three_pedal_radio.setStyleSheet("""
+            QRadioButton {
+                font-size: 14pt; 
+                font-weight: bold;
+                background-color: transparent;
+                color: #e0e0e0;
+            }
+        """)
+        three_pedal_layout.addWidget(self.three_pedal_radio, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        three_pedal_desc = QLabel("Throttle + Brake + Clutch")
+        three_pedal_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        three_pedal_desc.setStyleSheet("""
+            font-size: 10pt; 
+            color: #b0b0b0;
+            background-color: transparent;
+        """)
+        three_pedal_layout.addWidget(three_pedal_desc)
 
-    # Ensure the page properly fits its contents
-    def sizeHint(self):
-        return QSize(500, 280)
+        # Add to selection layout
+        selection_layout.addWidget(self.two_pedal_group)
+        selection_layout.addWidget(self.three_pedal_group)
+        layout.addLayout(selection_layout)
 
-class BasePedalPage(QWizardPage):
-    """Base class for pedal calibration pages."""
+        # Create button group for exclusive selection
+        self.button_group = QButtonGroup()
+        self.button_group.addButton(self.two_pedal_radio, 2)
+        self.button_group.addButton(self.three_pedal_radio, 3)
+        
+        # Connect signals for visual feedback
+        self.two_pedal_radio.toggled.connect(self.update_selection_ui)
+        self.three_pedal_radio.toggled.connect(self.update_selection_ui)
+        
+        # Register field for wizard
+        self.registerField("pedal_count*", self.two_pedal_radio, "checked")
+        
+        # Default to 3-pedal
+        self.three_pedal_radio.setChecked(True)
+
+    def create_pedal_image(self, pedal_count):
+        """Create a simple visual representation of pedal set or load custom image."""
+        label = QLabel()
+        label.setFixedSize(150, 100)
+        # Match the group box background color for seamless look
+        label.setStyleSheet("background-color: transparent; border: none;")
+        
+        # Try to load custom PNG files first
+        try:
+            from trackpro.utils.resource_utils import get_resource_path
+            import os
+            
+            # Look for custom images in resources/images directory
+            if pedal_count == 2:
+                image_path = get_resource_path("trackpro/resources/images/2_pedal_set.png")
+            else:
+                image_path = get_resource_path("trackpro/resources/images/3_pedal_set.png")
+            
+            if os.path.exists(image_path):
+                # Load custom PNG file
+                pixmap = QPixmap(image_path)
+                if not pixmap.isNull():
+                    # Scale the image to fit the label while maintaining aspect ratio
+                    scaled_pixmap = pixmap.scaled(150, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    label.setPixmap(scaled_pixmap)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    return label
+        except Exception as e:
+            logger.debug(f"Could not load custom pedal image: {e}, using generated image")
+        
+        # Fall back to programmatically generated image with transparent background
+        pixmap = QPixmap(150, 100)
+        pixmap.fill(QColor(0, 0, 0, 0))  # Transparent background
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw pedal rectangles
+        pedal_width = 20
+        pedal_height = 40
+        spacing = 25
+        start_x = (150 - (pedal_count * pedal_width + (pedal_count - 1) * spacing)) // 2
+        start_y = 30
+        
+        # Set colors for different pedals
+        pedal_colors = [QColor("#ff6b6b"), QColor("#4ecdc4"), QColor("#45b7d1")]  # Red, Green, Blue
+        
+        for i in range(pedal_count):
+            x = start_x + i * (pedal_width + spacing)
+            painter.fillRect(x, start_y, pedal_width, pedal_height, QBrush(pedal_colors[i]))
+            painter.setPen(QPen(QColor("#ffffff"), 1))
+            painter.drawRect(x, start_y, pedal_width, pedal_height)
+        
+        painter.end()
+        label.setPixmap(pixmap)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
+
+    def update_selection_ui(self):
+        """Update UI based on selection."""
+        if self.two_pedal_radio.isChecked():
+            self.two_pedal_group.setStyleSheet("""
+                QGroupBox {
+                    border: 3px solid #2a82da;
+                    border-radius: 10px;
+                    padding: 20px;
+                    background-color: #4a4a4a;
+                }
+            """)
+            self.three_pedal_group.setStyleSheet("""
+                QGroupBox {
+                    border: 2px solid #505050;
+                    border-radius: 10px;
+                    padding: 20px;
+                    background-color: #3a3a3a;
+                }
+            """)
+        else:
+            self.three_pedal_group.setStyleSheet("""
+                QGroupBox {
+                    border: 3px solid #2a82da;
+                    border-radius: 10px;
+                    padding: 20px;
+                    background-color: #4a4a4a;
+                }
+            """)
+            self.two_pedal_group.setStyleSheet("""
+                QGroupBox {
+                    border: 2px solid #505050;
+                    border-radius: 10px;
+                    padding: 20px;
+                    background-color: #3a3a3a;
+                }
+            """)
+        
+        self.completeChanged.emit()
+
+    def isComplete(self):
+        """Page is complete when a selection is made."""
+        return self.two_pedal_radio.isChecked() or self.three_pedal_radio.isChecked()
+    
+    def get_pedal_count(self):
+        """Get selected pedal count."""
+        return 2 if self.two_pedal_radio.isChecked() else 3
+
+    def select_two_pedal(self):
+        """Handle click on the 2-Pedal option."""
+        self.two_pedal_radio.setChecked(True)
+        self.update_selection_ui()
+        self.completeChanged.emit()
+
+    def select_three_pedal(self):
+        """Handle click on the 3-Pedal option."""
+        self.three_pedal_radio.setChecked(True)
+        self.update_selection_ui()
+        self.completeChanged.emit()
+
+class PedalCalibrationPage(QWizardPage):
+    """Individual pedal calibration page with smooth workflow."""
     def __init__(self, pedal_name, hardware_input, parent=None):
         super().__init__(parent)
         self.pedal_name = pedal_name
         self.hardware_input = hardware_input
-        self.setTitle(f"{pedal_name.capitalize()} Pedal Calibration")
+        self.setTitle(f"{pedal_name.capitalize()} Calibration")
         
-        # Axis detection state
-        self.calibration_stage = "detect_axis" # detect_axis, set_min, set_max
+        # Calibration state
+        self.calibration_stage = "waiting"  # waiting, calibrating, complete
         self.detected_axis = -1
-        self.min_value = 0
-        self.max_value = 65535
+        self.min_value = 65535
+        self.max_value = 0
         self.current_value = 0
-        self.last_significant_value = 0
+        self.values_collected = []
+        self.calibration_started = False
         
-        # UI Elements
-        layout = QVBoxLayout(self)
-        self.instructions = QLabel(f"Press and release the {pedal_name} pedal to detect the axis.")
-        self.instructions.setWordWrap(True)
-        layout.addWidget(self.instructions)
+        self.setup_ui()
         
-        self.status = QLabel("Status: Waiting for pedal movement...")
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 65535)
-        self.progress_bar.setValue(0)
-        layout.addWidget(self.progress_bar)
-        
-        value_layout = QHBoxLayout()
-        self.value_label = QLabel("Current: 0")
-        self.min_label = QLabel("Min: 0")
-        self.max_label = QLabel("Max: 65535")
-        value_layout.addWidget(self.value_label)
-        value_layout.addStretch()
-        value_layout.addWidget(self.min_label)
-        value_layout.addStretch()
-        value_layout.addWidget(self.max_label)
-        layout.addLayout(value_layout)
-        
-        # Register fields to be updated by the wizard
-        self.registerField(f"{pedal_name}_min*", self.min_label, "text")
-        self.registerField(f"{pedal_name}_max*", self.max_label, "text")
-        self.registerField(f"{pedal_name}_axis*", self.status, "text") # Using status to store axis info temporarily
-
         # Timer for input updates
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_input)
-        self.timer.start(50) # 20 Hz
+        self.timer.start(16)  # ~60 FPS for smooth updates
+
+    def setup_ui(self):
+        """Setup the UI for this calibration page."""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)  # Reduced spacing to fit better
+        layout.setContentsMargins(30, 20, 30, 20)  # Reduced top/bottom margins
+
+        # Title
+        title_label = QLabel(f"Calibrate {self.pedal_name.capitalize()} Pedal")
+        title_font = QFont()
+        title_font.setPointSize(16)  # Slightly smaller title
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_label)
+
+        # Instructions with better sizing
+        self.instructions = QLabel(f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
+        self.instructions.setWordWrap(True)
+        self.instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.instructions.setStyleSheet("""
+            font-size: 13pt; 
+            margin: 10px; 
+            padding: 12px; 
+            background-color: #3a3a3a; 
+            border-radius: 8px;
+            min-height: 50px;
+        """)
+        # Ensure the instruction label has enough space
+        self.instructions.setMinimumHeight(60)
+        layout.addWidget(self.instructions)
+
+        # Status
+        self.status = QLabel("Ready to calibrate. Press and release the pedal when ready.")
+        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status.setStyleSheet("font-size: 11pt; color: #b0b0b0; margin: 5px;")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 65535)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #505050;
+                border-radius: 8px;
+                text-align: center;
+                font-size: 11pt;
+                font-weight: bold;
+                height: 25px;
+            }
+            QProgressBar::chunk {
+                background-color: #2a82da;
+                border-radius: 6px;
+            }
+        """)
+        layout.addWidget(self.progress_bar)
+
+        # Values display
+        values_layout = QHBoxLayout()
+        
+        self.current_label = QLabel("Current: 0")
+        self.current_label.setStyleSheet("font-size: 11pt; font-weight: bold;")
+        self.current_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.min_label = QLabel("Min: --")
+        self.min_label.setStyleSheet("font-size: 11pt; color: #ff6b6b;")
+        self.min_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.max_label = QLabel("Max: --")
+        self.max_label.setStyleSheet("font-size: 11pt; color: #4ecdc4;")
+        self.max_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        values_layout.addWidget(self.current_label)
+        values_layout.addWidget(self.min_label)
+        values_layout.addWidget(self.max_label)
+        layout.addLayout(values_layout)
+
+        # Buttons layout
+        button_layout = QHBoxLayout()
+        
+        self.reset_button = QPushButton("Reset")
+        self.reset_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 10pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
+        self.reset_button.clicked.connect(self.reset_calibration)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(self.reset_button)
+        layout.addLayout(button_layout)
+
+        # Register fields
+        self.registerField(f"{self.pedal_name}_min*", self.min_label, "text")
+        self.registerField(f"{self.pedal_name}_max*", self.max_label, "text")
+        self.registerField(f"{self.pedal_name}_axis*", self.current_label, "text")
 
     def initializePage(self):
-        """Called when the page is shown."""
-        logger.info(f"Initializing page for {self.pedal_name}")
-        self.calibration_stage = "detect_axis"
-        self.detected_axis = -1
-        self.min_value = 0
-        self.max_value = 65535
-        self.instructions.setText(f"Press and release the {self.pedal_name} pedal several times to detect its axis.")
-        self.status.setText("Status: Waiting for pedal movement...")
-        self.progress_bar.setValue(0)
-        self.value_label.setText("Current: 0")
-        self.min_label.setText("Min: 0")
-        self.max_label.setText("Max: 65535")
-        self.last_significant_value = 0 # Reset last significant value
+        """Initialize the page when shown."""
+        logger.info(f"Initializing calibration for {self.pedal_name}")
+        self.reset_calibration()
 
-    def cleanupPage(self):
-        """Called when leaving the page."""
-        logger.info(f"Cleaning up page for {self.pedal_name}")
-        self.timer.stop()
+    def reset_calibration(self):
+        """Reset calibration to initial state."""
+        self.calibration_stage = "waiting"
+        self.detected_axis = -1
+        self.min_value = 65535
+        self.max_value = 0
+        self.values_collected = []
+        self.calibration_started = False
+        
+        self.instructions.setText(f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
+        self.status.setText("Ready to calibrate. Press and release the pedal when ready.")
+        self.min_label.setText("Min: --")
+        self.max_label.setText("Max: --")
+        self.progress_bar.setValue(0)
+        
+        self.completeChanged.emit()
 
     def update_input(self):
-        """Read hardware input and update UI."""
-        # Access attributes directly from self.hardware_input
+        """Update input values and detect calibration."""
         if not self.hardware_input or not self.hardware_input.joystick:
-            self.status.setText("Status: Joystick not connected.")
+            self.status.setText("⚠️ Sim Coaches P1 Pro Pedals not connected")
             return
-            
-        pygame.event.pump() # Update pygame events
-        joystick = self.hardware_input.joystick
-        
+
+        # Only proceed if we have Sim Coaches P1 Pro Pedals
+        if "Sim Coaches P1 Pro Pedals" not in self.hardware_input.joystick.get_name():
+            self.status.setText("⚠️ Please connect Sim Coaches P1 Pro Pedals")
+            return
+
         try:
-            current_raw_values = [int((joystick.get_axis(i) + 1) * 32767.5) for i in range(joystick.get_numaxes())]
-        except pygame.error as e:
-            logger.error(f"Pygame error reading axes: {e}")
-            self.status.setText("Status: Error reading joystick.")
-            return
+            pygame.event.pump()
+            joystick = self.hardware_input.joystick
+            
+            # Read all axes
+            current_raw_values = []
+            for i in range(joystick.get_numaxes()):
+                raw_value = joystick.get_axis(i)
+                scaled_value = int((raw_value + 1) * 32767.5)
+                current_raw_values.append(scaled_value)
 
-        if self.calibration_stage == "detect_axis":
-            # Simple detection: find axis with largest change from center (32767)
-            max_deviation = 0
-            detected_axis = -1
-            for i, val in enumerate(current_raw_values):
-                 # Ignore axes near center
-                deviation = abs(val - 32767)
-                if deviation > 5000 and deviation > max_deviation: # Require significant initial deviation
-                     max_deviation = deviation
-                     detected_axis = i
-                     
-            if detected_axis != -1:
-                 self.detected_axis = detected_axis
-                 self.status.setText(f"Status: Axis {self.detected_axis} detected. Press Next.")
-                 self.calibration_stage = "set_min"
-                 self.instructions.setText(f"Release the {self.pedal_name} pedal completely, then press Next.")
-                 # Update progress bar for the detected axis
-                 self.current_value = current_raw_values[self.detected_axis]
-                 self.progress_bar.setValue(self.current_value)
-                 self.value_label.setText(f"Current: {self.current_value}")
-                 self.setField(f"{self.pedal_name}_axis", f"Axis {self.detected_axis}") # Store detected axis info
-                 self.completeChanged.emit() # Enable Next button
+            # Auto-detect axis during calibration
+            if self.calibration_stage == "waiting":
+                # Look for significant movement to start calibration
+                for i, value in enumerate(current_raw_values):
+                    if abs(value - 32767) > 8000:  # Significant deviation from center
+                        self.detected_axis = i
+                        self.calibration_stage = "calibrating"
+                        self.calibration_started = True
+                        self.status.setText(f"🎯 Axis {i} detected! Continue moving the pedal...")
+                        logger.info(f"Auto-detected axis {i} for {self.pedal_name}")
+                        break
 
-        elif self.calibration_stage in ["set_min", "set_max"]:
-            if self.detected_axis == -1 or self.detected_axis >= len(current_raw_values):
-                self.status.setText("Status: Axis detection lost. Go back and try again.")
-                return 
-                
-            self.current_value = current_raw_values[self.detected_axis]
-            self.progress_bar.setValue(self.current_value)
-            self.value_label.setText(f"Current: {self.current_value}")
+            elif self.calibration_stage == "calibrating":
+                if self.detected_axis >= 0 and self.detected_axis < len(current_raw_values):
+                    self.current_value = current_raw_values[self.detected_axis]
+                    self.current_label.setText(f"Current: {self.current_value}")
+                    self.progress_bar.setValue(self.current_value)
+                    
+                    # Collect values for min/max detection
+                    self.values_collected.append(self.current_value)
+                    
+                    # Update min/max
+                    if self.current_value < self.min_value:
+                        self.min_value = self.current_value
+                        self.min_label.setText(f"Min: {self.min_value}")
+                    
+                    if self.current_value > self.max_value:
+                        self.max_value = self.current_value
+                        self.max_label.setText(f"Max: {self.max_value}")
+                    
+                    # Check if we have good calibration data
+                    if len(self.values_collected) > 60:  # About 1 second of data
+                        range_size = self.max_value - self.min_value
+                        if range_size > 20000:  # Good range detected
+                            self.calibration_stage = "complete"
+                            self.status.setText("✅ Calibration complete! Good range detected.")
+                            self.instructions.setText(f"✅ {self.pedal_name.capitalize()} calibration successful!")
+                            
+                            # Store final values
+                            self.setField(f"{self.pedal_name}_min", str(self.min_value))
+                            self.setField(f"{self.pedal_name}_max", str(self.max_value))
+                            self.setField(f"{self.pedal_name}_axis", str(self.detected_axis))
+                            
+                            self.completeChanged.emit()
+                            logger.info(f"Calibration complete for {self.pedal_name}: min={self.min_value}, max={self.max_value}, axis={self.detected_axis}")
 
-            if self.calibration_stage == "set_min":
-                 # Min value is captured when user clicks Next
-                 pass # Value is read in validatePage
-            elif self.calibration_stage == "set_max":
-                 # Max value is captured when user clicks Next
-                 pass # Value is read in validatePage
+        except Exception as e:
+            logger.error(f"Error during calibration: {e}")
+            self.status.setText(f"❌ Error: {str(e)}")
 
     def isComplete(self):
-        """Enable Next button only when an axis is detected or min/max is set."""
-        return self.calibration_stage != "detect_axis"
+        """Check if calibration is complete."""
+        return self.calibration_stage == "complete"
 
     def validatePage(self):
-        """Called when clicking Next."""
-        if self.calibration_stage == "set_min":
-            # Capture the current value as the minimum
-            self.min_value = self.current_value
-            self.min_label.setText(f"Min: {self.min_value}")
-            self.setField(f"{self.pedal_name}_min", self.min_value) # Store min value
-            logger.info(f"{self.pedal_name} Min value set to: {self.min_value}")
-            # Proceed to set max stage
-            self.calibration_stage = "set_max"
-            self.instructions.setText(f"Press the {self.pedal_name} pedal fully down, then press Next.")
-            self.completeChanged.emit() # Keep Next enabled
-            return False # Stay on this page to set max
-
-        elif self.calibration_stage == "set_max":
-            # Capture the current value as the maximum
-            self.max_value = self.current_value
-            # Basic validation: max should be greater than min
-            if self.max_value <= self.min_value:
-                 QMessageBox.warning(self, "Calibration Error", "Maximum value must be greater than minimum value. Please press the pedal fully.")
-                 return False # Stay on page
-                 
-            self.max_label.setText(f"Max: {self.max_value}")
-            self.setField(f"{self.pedal_name}_max", self.max_value) # Store max value
-            logger.info(f"{self.pedal_name} Max value set to: {self.max_value}")
-            self.instructions.setText(f"{self.pedal_name} calibration complete!")
-            # Proceed to the next page (implicitly by returning True)
+        """Validate before moving to next page."""
+        if self.calibration_stage == "complete":
             return True
-        
-        # If still in detect_axis stage, Next shouldn't be enabled, but handle just in case
-        elif self.calibration_stage == "detect_axis":
-            QMessageBox.warning(self, "Axis Not Detected", "Please press and release the pedal until an axis is detected.")
+        else:
+            QMessageBox.information(self, "Calibration Incomplete", 
+                                  f"Please complete the {self.pedal_name} calibration by pressing and releasing the pedal fully.")
             return False
-            
-        return True # Should not be reached
 
-
-class ThrottlePage(BasePedalPage):
-    """Calibration page for the throttle pedal."""
-    def __init__(self, hardware_input, parent=None):
-        super().__init__("throttle", hardware_input, parent)
-
-    def nextId(self):
-        """Return the ID of the next page."""
-        return CalibrationWizard.PAGE_BRAKE
-
-
-class BrakePage(BasePedalPage):
-    """Calibration page for the brake pedal."""
-    def __init__(self, hardware_input, parent=None):
-        super().__init__("brake", hardware_input, parent)
-
-    def nextId(self):
-        """Return the ID of the next page."""
-        return CalibrationWizard.PAGE_CLUTCH
-
-
-class ClutchPage(BasePedalPage):
-    """Calibration page for the clutch pedal."""
-    def __init__(self, hardware_input, parent=None):
-        super().__init__("clutch", hardware_input, parent)
-        
-    def nextId(self):
-        """Return the ID of the next page."""
-        return CalibrationWizard.PAGE_FINISH
-
-
-class FinishPage(QWizardPage):
-    """Final page summarizing the calibration."""
+class CongratulationsPage(QWizardPage):
+    """Final congratulations page."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("Calibration Complete")
+        self.setTitle("Calibration Complete!")
         
         layout = QVBoxLayout(self)
-        self.summary_label = QLabel("Calibration Summary:\n")
-        self.summary_label.setWordWrap(True)
-        layout.addWidget(self.summary_label)
+        layout.setSpacing(20)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        # Success icon (text-based)
+        success_label = QLabel("🎉")
+        success_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        success_label.setStyleSheet("font-size: 48pt;")
+        layout.addWidget(success_label)
+
+        # Title
+        title_label = QLabel("Congratulations!")
+        title_font = QFont()
+        title_font.setPointSize(24)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("color: #4ecdc4; margin: 20px;")
+        layout.addWidget(title_label)
+
+        # Message
+        message_label = QLabel("Your pedal calibration has been completed successfully!")
+        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        message_label.setStyleSheet("font-size: 14pt; margin: 10px;")
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
+
+        # Summary area
+        self.summary_text = QTextEdit()
+        self.summary_text.setReadOnly(True)
+        self.summary_text.setMaximumHeight(150)
+        self.summary_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #3a3a3a;
+                border: 1px solid #505050;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 11pt;
+            }
+        """)
+        layout.addWidget(self.summary_text)
+
+        # Final message
+        final_label = QLabel("Your pedals are now ready for racing! Click 'Finish' to complete the setup.")
+        final_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        final_label.setStyleSheet("font-size: 12pt; color: #b0b0b0; margin: 20px;")
+        final_label.setWordWrap(True)
+        layout.addWidget(final_label)
 
     def initializePage(self):
-        """Show the summary of calibration results."""
-        throttle_min = self.field("throttle_min")
-        throttle_max = self.field("throttle_max")
-        throttle_axis = self.field("throttle_axis")
-        
-        brake_min = self.field("brake_min")
-        brake_max = self.field("brake_max")
-        brake_axis = self.field("brake_axis")
-        
-        clutch_min = self.field("clutch_min")
-        clutch_max = self.field("clutch_max")
-        clutch_axis = self.field("clutch_axis")
-        
-        summary = "Calibration Summary:\n\n"
-        summary += f"Throttle: {throttle_axis}, Min={throttle_min}, Max={throttle_max}\n"
-        summary += f"Brake:    {brake_axis}, Min={brake_min}, Max={brake_max}\n"
-        summary += f"Clutch:   {clutch_axis}, Min={clutch_min}, Max={clutch_max}\n\n"
-        summary += "Click 'Finish' to save these settings."
-        
-        self.summary_label.setText(summary)
+        """Initialize with calibration summary."""
+        try:
+            # Get wizard reference
+            wizard = self.wizard()
+            
+            # Get pedal count
+            pedal_count = 3  # default
+            if hasattr(wizard, 'page') and wizard.page(0):
+                selection_page = wizard.page(0)
+                if hasattr(selection_page, 'get_pedal_count'):
+                    pedal_count = selection_page.get_pedal_count()
+            
+            # Build summary
+            summary = "Calibration Summary:\n\n"
+            
+            # Always include throttle and brake
+            pedals_to_show = ['throttle', 'brake']
+            if pedal_count == 3:
+                pedals_to_show.append('clutch')
+            
+            for pedal in pedals_to_show:
+                try:
+                    min_val = self.field(f"{pedal}_min")
+                    max_val = self.field(f"{pedal}_max")
+                    axis_val = self.field(f"{pedal}_axis")
+                    
+                    if min_val and max_val and axis_val:
+                        min_num = min_val.replace("Min: ", "") if isinstance(min_val, str) else str(min_val)
+                        max_num = max_val.replace("Max: ", "") if isinstance(max_val, str) else str(max_val)
+                        range_size = int(max_num) - int(min_num) if max_num.isdigit() and min_num.isdigit() else 0
+                        
+                        summary += f"{pedal.capitalize()}:\n"
+                        summary += f"  • Axis: {axis_val}\n"
+                        summary += f"  • Range: {min_num} - {max_num} ({range_size} units)\n\n"
+                except:
+                    summary += f"{pedal.capitalize()}: Configuration error\n\n"
+            
+            summary += "All pedals have been successfully calibrated and are ready for use!"
+            
+            self.summary_text.setPlainText(summary)
+            
+        except Exception as e:
+            logger.error(f"Error creating calibration summary: {e}")
+            self.summary_text.setPlainText("Calibration completed successfully!")
 
-    def nextId(self):
-        """No next page after finish."""
-        return -1
-
-# Now define the Wizard itself
 class CalibrationWizard(QWizard):
-    """Wizard for calibrating pedals."""
+    """Redesigned pedal calibration wizard with smooth workflow."""
     
-    # Define page IDs (makes nextId easier)
-    PAGE_INTRO = 0
+    # Page IDs
+    PAGE_SELECTION = 0
     PAGE_THROTTLE = 1
     PAGE_BRAKE = 2
     PAGE_CLUTCH = 3
-    PAGE_FINISH = 4
+    PAGE_COMPLETE = 4
     
     calibration_complete = pyqtSignal(dict)
     
     def __init__(self, hardware_input, parent=None):
-        """Initialize the calibration wizard."""
         super().__init__(parent)
         
         self.hardware_input = hardware_input
         self.setWindowTitle("Pedal Calibration Wizard")
-        
-        # Store calibration results (to be populated in handle_finish)
-        self.calibration_results = {}
-        
-        # Set a more modern style with reduced padding
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         
-        # Customize wizard options to reduce padding and improve layout
-        self.setOption(QWizard.WizardOption.IndependentPages, True)
+        # Store calibration results
+        self.calibration_results = {}
+        
+        # Wizard options
+        self.setOption(QWizard.WizardOption.IndependentPages, False)
         self.setOption(QWizard.WizardOption.NoBackButtonOnStartPage, True)
         self.setOption(QWizard.WizardOption.HaveFinishButtonOnEarlyPages, False)
         self.setOption(QWizard.WizardOption.NoCancelButton, False)
-        self.setOption(QWizard.WizardOption.NoDefaultButton, False)
         
-        # Remove the header/banner area entirely
-        self.setPixmap(QWizard.WizardPixmap.BannerPixmap, QPixmap())
-        self.setPixmap(QWizard.WizardPixmap.LogoPixmap, QPixmap())
-        self.setPixmap(QWizard.WizardPixmap.WatermarkPixmap, QPixmap())
-        self.setTitleFormat(Qt.TextFormat.PlainText)
-        self.setSubTitleFormat(Qt.TextFormat.PlainText)
-        
-        # Set a dark background for the wizard
+        # Modern dark styling
         self.setStyleSheet("""
             QWizard {
                 background-color: #2d2d2d;
+                color: #e0e0e0;
             }
             QWizardPage {
                 background-color: #2d2d2d;
-                margin: 0;
-                padding: 0;
+                color: #e0e0e0;
             }
             QLabel {
                 color: #e0e0e0;
@@ -342,251 +656,190 @@ class CalibrationWizard(QWizard):
                 background-color: #3a3a3a;
                 color: #e0e0e0;
                 border: 1px solid #505050;
-                border-radius: 4px;
-                padding: 5px 15px;
-                margin: 2px;
-                min-height: 24px;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 11pt;
+                min-width: 80px;
             }
             QPushButton:hover {
                 background-color: #505050;
+                border-color: #2a82da;
             }
             QPushButton:pressed {
                 background-color: #606060;
             }
             QPushButton#qt_wizard_finish {
-                background-color: #2a82da;
+                background-color: #27ae60;
                 font-weight: bold;
             }
             QPushButton#qt_wizard_finish:hover {
-                background-color: #3a92ea;
+                background-color: #2ecc71;
             }
             QPushButton#qt_wizard_next {
+                background-color: #2a82da;
                 font-weight: bold;
             }
+            QPushButton#qt_wizard_next:hover {
+                background-color: #3498db;
+            }
+            QPushButton#qt_wizard_back {
+                background-color: #7f8c8d;
+            }
+            QPushButton#qt_wizard_back:hover {
+                background-color: #95a5a6;
+            }
             QProgressBar {
-                border: 1px solid #505050;
-                border-radius: 4px;
+                border: 2px solid #505050;
+                border-radius: 8px;
                 text-align: center;
+                font-weight: bold;
             }
             QProgressBar::chunk {
                 background-color: #2a82da;
-                width: 10px;
+                border-radius: 6px;
             }
-            /* Hide title bar elements */
-            QLabel#qt_title_label { 
-                font-size: 0px;
-                max-height: 0px;
-                padding: 0px;
-                margin: 0px;
+            QRadioButton {
+                color: #e0e0e0;
+                spacing: 8px;
             }
-            QFrame#qt_title_bar { 
-                max-height: 0px;
-                background-color: transparent;
-                padding: 0px;
-                margin: 0px;
+            QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QRadioButton::indicator:unchecked {
+                border: 2px solid #505050;
+                border-radius: 8px;
+                background-color: #3a3a3a;
+            }
+            QRadioButton::indicator:checked {
+                border: 2px solid #2a82da;
+                border-radius: 8px;
+                background-color: #2a82da;
             }
         """)
+
+        # Add pages
+        self.addPage(PedalSetSelectionPage(self))
+        self.addPage(PedalCalibrationPage("throttle", self.hardware_input, self))
+        self.addPage(PedalCalibrationPage("brake", self.hardware_input, self))
+        self.addPage(PedalCalibrationPage("clutch", self.hardware_input, self))
+        self.addPage(CongratulationsPage(self))
         
-        # Create and add pages (QWizard manages layout and display)
-        self.addPage(IntroPage())
-        self.addPage(ThrottlePage(self.hardware_input))
-        self.addPage(BrakePage(self.hardware_input))
-        self.addPage(ClutchPage(self.hardware_input))
-        self.addPage(FinishPage())
-        
-        # Connect the finished signal to our handler
+        # Connect signals
         self.finished.connect(self.handle_finish)
         
-        # Set initial window properties
-        self.resize(520, 340)  # Smaller, more compact size
-        self.setMinimumSize(400, 300)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        # Set size
+        self.resize(600, 500)
+        self.setMinimumSize(500, 400)
+    
+    def nextId(self):
+        """Determine next page based on current page and selections."""
+        current_id = self.currentId()
+        
+        if current_id == self.PAGE_SELECTION:
+            return self.PAGE_THROTTLE
+        elif current_id == self.PAGE_THROTTLE:
+            return self.PAGE_BRAKE
+        elif current_id == self.PAGE_BRAKE:
+            # Check if user selected 3-pedal set
+            selection_page = self.page(self.PAGE_SELECTION)
+            if hasattr(selection_page, 'get_pedal_count') and selection_page.get_pedal_count() == 3:
+                return self.PAGE_CLUTCH
+            else:
+                return self.PAGE_COMPLETE
+        elif current_id == self.PAGE_CLUTCH:
+            return self.PAGE_COMPLETE
+        else:
+            return -1
 
     def handle_finish(self, result):
         """Handle wizard completion."""
         if result == QWizard.DialogCode.Accepted:
-            logger.info("Calibration wizard finished by user.")
-            # Extract results from fields
-            try:
-                # Helper to safely extract field value, return None if error
-                def get_field_value(name):
-                    try:
-                        # Need to access field from the specific page where it was registered
-                        # This approach might be problematic. QWizard fields are global.
-                        return self.field(name) 
-                    except Exception as e:
-                        logger.error(f"Error getting field '{name}': {e}")
-                        return None
-
-                # Helper to parse axis number from status text (e.g., "Status: Axis 2 detected...")
-                def parse_axis(axis_text):
-                    if not axis_text or not isinstance(axis_text, str):
-                        return -1 # Default or error value
-                    try:
-                        parts = axis_text.split()
-                        # Find index of "Axis" and get the next part
-                        axis_index = -1
-                        for i, part in enumerate(parts):
-                            if part == "Axis":
-                                axis_index = i
-                                break
-                        if axis_index != -1 and axis_index + 1 < len(parts):
-                            return int(parts[axis_index + 1])
-                        else:
-                             logger.warning(f"Could not find 'Axis' number in text: {axis_text}")
-                             return -1
-                    except (ValueError, IndexError):
-                        logger.warning(f"Could not parse axis from text: {axis_text}")
-                        return -1 # Default or error value
-
-                # Extract values (using the field names registered in BasePedalPage)
-                throttle_min_str = get_field_value("throttle_min")
-                throttle_max_str = get_field_value("throttle_max")
-                throttle_axis_text = get_field_value("throttle_axis")
-                
-                brake_min_str = get_field_value("brake_min")
-                brake_max_str = get_field_value("brake_max")
-                brake_axis_text = get_field_value("brake_axis")
-
-                clutch_min_str = get_field_value("clutch_min")
-                clutch_max_str = get_field_value("clutch_max")
-                clutch_axis_text = get_field_value("clutch_axis")
-
-                # Safely convert min/max from string ("Min: 123") to int
-                def parse_min_max(label_text):
-                    if not label_text or not isinstance(label_text, str):
-                        return None
-                    try:
-                        return int(label_text.split(':')[-1].strip())
-                    except (ValueError, IndexError):
-                         logger.warning(f"Could not parse min/max value from: {label_text}")
-                         return None
-
-                throttle_min = parse_min_max(throttle_min_str)
-                throttle_max = parse_min_max(throttle_max_str)
-                throttle_axis = parse_axis(throttle_axis_text)
-
-                brake_min = parse_min_max(brake_min_str)
-                brake_max = parse_min_max(brake_max_str)
-                brake_axis = parse_axis(brake_axis_text)
-
-                clutch_min = parse_min_max(clutch_min_str)
-                clutch_max = parse_min_max(clutch_max_str)
-                clutch_axis = parse_axis(clutch_axis_text)
-
-                # Update results dictionary (ensure values are not None)
-                self.calibration_results = {
-                    'throttle': {
-                        'min': throttle_min if throttle_min is not None else 0,
-                        'max': throttle_max if throttle_max is not None else 65535,
-                        'axis': throttle_axis
-                    },
-                    'brake': {
-                        'min': brake_min if brake_min is not None else 0,
-                        'max': brake_max if brake_max is not None else 65535,
-                        'axis': brake_axis
-                    },
-                    'clutch': {
-                        'min': clutch_min if clutch_min is not None else 0,
-                        'max': clutch_max if clutch_max is not None else 65535,
-                        'axis': clutch_axis
-                    }
-                }
-                logger.info(f"Extracted calibration results: {self.calibration_results}")
-                
-                # Call the save method (which now needs to use self.calibration_results)
-                self.save_calibration()
-                
-                # Emit signal with the processed results
-                self.calibration_complete.emit(self.calibration_results)
-
-            except Exception as e:
-                 logger.error(f"Error processing calibration results: {e}", exc_info=True)
-                 QMessageBox.critical(self, "Error", f"Failed to process calibration results: {e}")
-        else:
-             logger.info("Calibration wizard cancelled by user.")
-             
-    def save_calibration(self):
-        """Save the current calibration collected in handle_finish."""
-        # This method should now use self.calibration_results instead of self.results
-        # Ensure self.calibration_results is populated before calling this
-        if not self.calibration_results:
-            logger.error("save_calibration called before results were processed.")
-            return
+            logger.info("Pedal calibration wizard completed successfully")
             
+            try:
+                # Extract calibration results
+                selection_page = self.page(self.PAGE_SELECTION)
+                pedal_count = selection_page.get_pedal_count() if hasattr(selection_page, 'get_pedal_count') else 3
+                
+                # Build results dictionary
+                results = {}
+                
+                # Always include throttle and brake
+                pedals_to_process = ['throttle', 'brake']
+                if pedal_count == 3:
+                    pedals_to_process.append('clutch')
+                
+                for pedal in pedals_to_process:
+                    try:
+                        min_field = self.field(f"{pedal}_min")
+                        max_field = self.field(f"{pedal}_max")
+                        axis_field = self.field(f"{pedal}_axis")
+                        
+                        # Parse values
+                        min_val = int(min_field.replace("Min: ", "")) if isinstance(min_field, str) and "Min: " in min_field else int(min_field) if min_field else 0
+                        max_val = int(max_field.replace("Max: ", "")) if isinstance(max_field, str) and "Max: " in max_field else int(max_field) if max_field else 65535
+                        axis_val = int(axis_field) if str(axis_field).isdigit() else -1
+                        
+                        results[pedal] = {
+                            'min': min_val,
+                            'max': max_val,
+                            'axis': axis_val
+                        }
+                        
+                        logger.info(f"Extracted {pedal}: min={min_val}, max={max_val}, axis={axis_val}")
+                    except Exception as e:
+                        logger.error(f"Error extracting {pedal} calibration: {e}")
+                        results[pedal] = {'min': 0, 'max': 65535, 'axis': -1}
+                
+                # Save calibration
+                self.save_calibration(results)
+                
+                # Emit completion signal
+                self.calibration_complete.emit(results)
+                
+            except Exception as e:
+                logger.error(f"Error processing calibration results: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to process calibration results: {e}")
+        else:
+            logger.info("Pedal calibration wizard cancelled")
+
+    def save_calibration(self, results):
+        """Save calibration results to hardware and storage."""
         try:
-            # Use self.hardware_input directly
             if self.hardware_input:
                 # Update axis ranges in hardware
-                for pedal, data in self.calibration_results.items():
-                    if not isinstance(data, dict): continue # Skip if data format is wrong
-                    
-                    # Get existing deadzones to preserve them
-                    existing_ranges = self.hardware_input.axis_ranges.get(pedal, {})
-                    min_deadzone = existing_ranges.get('min_deadzone', 0)
-                    max_deadzone = existing_ranges.get('max_deadzone', 0)
-                    
-                    # Update range data, keeping existing deadzones
-                    self.hardware_input.axis_ranges[pedal] = {
-                        'min': data.get('min', 0),
-                        'max': data.get('max', 65535),
-                        'min_deadzone': min_deadzone,
-                        'max_deadzone': max_deadzone,
-                        'axis': data.get('axis', -1) # Store axis mapping here too
-                    }
+                for pedal, data in results.items():
+                    if pedal in ['throttle', 'brake', 'clutch'] and isinstance(data, dict):
+                        # Update axis ranges
+                        existing_ranges = self.hardware_input.axis_ranges.get(pedal, {})
+                        self.hardware_input.axis_ranges[pedal] = {
+                            'min': data.get('min', 0),
+                            'max': data.get('max', 65535),
+                            'min_deadzone': existing_ranges.get('min_deadzone', 0),
+                            'max_deadzone': existing_ranges.get('max_deadzone', 0),
+                            'axis': data.get('axis', -1)
+                        }
+                        
+                        # Update axis mappings
+                        if data.get('axis', -1) >= 0:
+                            self.hardware_input.axis_mappings[pedal] = data['axis']
                 
-                # Save the updated ranges (which now includes axis mapping)
+                # Save both axis ranges and mappings
                 self.hardware_input.save_axis_ranges()
-                logger.info(f"Saved axis ranges: {self.hardware_input.axis_ranges}")
+                self.hardware_input.save_axis_mappings()
                 
-                # The old save_calibration call on hardware_input might be redundant
-                # if axis ranges contain all necessary info. Check HardwareInput.save_calibration()
-                # self.hardware_input.save_calibration(self.calibration_results) # Pass the correct results
+                logger.info("Calibration saved successfully")
                 
-                # Show success message (moved from old save_calibration)
+                # Show success message
                 if supabase.is_authenticated():
-                    QMessageBox.information(
-                        self, "Calibration Saved",
-                        "Calibration saved successfully and synced to cloud!"
-                    )
+                    QMessageBox.information(self, "Success", "Calibration saved successfully and synced to cloud!")
                 else:
-                    QMessageBox.information(
-                        self, "Calibration Saved",
-                        "Calibration saved successfully! Sign in to enable cloud sync."
-                    )
+                    QMessageBox.information(self, "Success", "Calibration saved successfully!")
             else:
-                logger.warning("Cannot save calibration: hardware_input not available")
-                QMessageBox.warning(
-                    self, "Save Failed", "Hardware interface not accessible."
-                )
+                logger.error("Cannot save calibration: hardware_input not available")
+                QMessageBox.warning(self, "Error", "Hardware interface not available")
+                
         except Exception as e:
-            logger.error(f"Failed to save calibration: {e}", exc_info=True)
-            QMessageBox.critical(
-                self, "Save Failed", f"Failed to save calibration: {str(e)}"
-            )
-
-    # Override showEvent to further customize the wizard's appearance when shown
-    def showEvent(self, event):
-        super().showEvent(event)
-        
-        # Find and adjust the title bar if it exists
-        title_bar = self.findChild(QFrame, "qt_title_bar")
-        if title_bar:
-            title_bar.setMaximumHeight(0)
-            title_bar.setVisible(False)
-
-    # Removed setup_dark_theme
-    # Removed create_welcome_page
-    # Removed create_pedal_page
-    # Removed create_throttle_page
-    # Removed create_brake_page
-    # Removed create_clutch_page
-    # Removed create_finish_page
-    # Removed go_next (use super().next() if needed, QWizard handles it)
-    # Removed go_back (use super().back() if needed, QWizard handles it)
-    # Removed update_navigation_buttons (QWizard handles it)
-    # Removed initialize_pedal_calibration (logic moved to BasePedalPage.initializePage)
-    # Removed finalize_pedal_calibration (logic moved to BasePedalPage.validatePage)
-    # Removed update_summary (logic moved to FinishPage.initializePage)
-    # Removed show_all_axes (needs reimplementation in BasePedalPage if desired)
-    # Removed update_inputs (logic moved to BasePedalPage.update_input) 
+            logger.error(f"Failed to save calibration: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save calibration: {e}") 
