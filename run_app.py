@@ -775,7 +775,7 @@ def show_early_splash():
             # Add racing stripes
             painter.setPen(QColor(220, 50, 47, 60))  # Semi-transparent red
             for i in range(0, 600, 40):
-                painter.drawLine(i, 0, i - 300, 300)
+                painter.drawLine(int(i), 0, int(i - 300), 300)
             
             # Draw main title with shadow
             title_font = QFont("Arial", 32, QFont.Weight.Bold)
@@ -818,14 +818,14 @@ def show_early_splash():
                 inner_y = center_y + (radius - 10) * math.sin(rad)
                 outer_x = center_x + (radius - 5) * math.cos(rad)
                 outer_y = center_y + (radius - 5) * math.sin(rad)
-                painter.drawLine(inner_x, inner_y, outer_x, outer_y)
+                painter.drawLine(int(inner_x), int(inner_y), int(outer_x), int(outer_y))
             
             # Needle
             needle_angle = math.radians(45)
             needle_x = center_x + (radius - 8) * math.cos(needle_angle)
             needle_y = center_y + (radius - 8) * math.sin(needle_angle)
             painter.setPen(QColor(220, 50, 47))
-            painter.drawLine(center_x, center_y, needle_x, needle_y)
+            painter.drawLine(int(center_x), int(center_y), int(needle_x), int(needle_y))
             
             # Center dot
             painter.setBrush(QBrush(QColor(220, 50, 47)))
