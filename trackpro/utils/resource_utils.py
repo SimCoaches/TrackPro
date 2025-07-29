@@ -20,7 +20,8 @@ def get_resource_path(relative_path):
         logger.debug(f"Running as packaged app, using base path: {base_path}")
     except AttributeError:
         # Running in development mode
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Go up 3 levels: resource_utils.py -> utils -> trackpro -> TrackPro-1 (project root)
+        base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         logger.debug(f"Running in development mode, using base path: {base_path}")
     
     full_path = os.path.join(base_path, relative_path)
