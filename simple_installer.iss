@@ -259,7 +259,7 @@ end;
 
 function IsVJoyInstalled: Boolean;
 begin
-  // A robust check for vJoy.
+  // A robust check for vJoy that matches the Python detection logic.
   // Priority 1: Check for the driver service. This is the most reliable indicator.
   if RegKeyExists(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\vjoy') then
   begin
@@ -277,12 +277,31 @@ begin
     end;
   end;
 
-  // Priority 2: Check Uninstall registry key, which is standard practice.
-  if RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8E31F76F-74C3-47F1-9550-68D8DA846DB0}') then
+  // Priority 2: Check multiple possible uninstall registry keys (different versions use different GUIDs)
+  if RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8E31F76F-74C3-47F1-9550-68D8DA846DB0}') or
+     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8E31F76F-74C3-47F1-9550-E041EEDC5FBB}_is1') or
+     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8E31F76F-74C3-47F1-9550-E041EEDC5FBB}_is1') or
+     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\vJoy') or
+     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\vJoy') then
   begin
     LogCustom('vJoy detection: FOUND (uninstall entry exists)');
     Result := True;
     Exit;
+  end;
+
+  // Priority 3: Check for vJoy installation directories and DLL files
+  if DirExists(ExpandConstant('{pf}\vJoy')) or DirExists(ExpandConstant('{pf32}\vJoy')) then
+  begin
+    // Check if key DLL files exist
+    if FileExists(ExpandConstant('{pf}\vJoy\x64\vJoyInterface.dll')) or 
+       FileExists(ExpandConstant('{pf32}\vJoy\x64\vJoyInterface.dll')) or
+       FileExists(ExpandConstant('{pf}\vJoy\x86\vJoyInterface.dll')) or
+       FileExists(ExpandConstant('{pf32}\vJoy\x86\vJoyInterface.dll')) then
+    begin
+      LogCustom('vJoy detection: FOUND (installation directory and DLL files exist)');
+      Result := True;
+      Exit;
+    end;
   end;
 
   // If all checks fail, it's not installed.
@@ -292,7 +311,7 @@ end;
 
 function IsHidHideInstalled: Boolean;
 begin
-  // A robust check for HidHide.
+  // A robust check for HidHide that matches the Python detection logic.
   // Priority 1: Check for the driver service.
   if RegKeyExists(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\HidHide') then
   begin
@@ -309,10 +328,12 @@ begin
     end;
   end;
 
-  // Priority 2: Check Uninstall registry key.
-  if RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{0C713C5A-F072-4BD7-A714-0E0CC6BD5497}') then
+  // Priority 2: Check for HidHide registry keys (multiple possible locations)
+  if RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{0C713C5A-F072-4BD7-A714-0E0CC6BD5497}') or
+     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{0C713C5A-F072-4BD7-A714-0E0CC6BD5497}') or
+     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Nefarius Software Solutions e.U.\HidHide') then
   begin
-    LogCustom('HidHide detection: FOUND (uninstall entry exists)');
+    LogCustom('HidHide detection: FOUND (uninstall or software entry exists)');
     Result := True;
     Exit;
   end;
@@ -479,45 +500,32 @@ var
   StatusMsg: String;
   LogFile: String;
 begin
-  // Initialize debug log
   LogFile := ExpandConstant('{tmp}') + '\TrackPro_Install_Debug.txt';
   LogCustom('=== TrackPro Installation Started ===');
-  LogCustom('Installer version: 1.5.4');
+  LogCustom('Installer version: {#MyAppVersion}');
   LogCustom('Temp directory: ' + ExpandConstant('{tmp}'));
   LogCustom('User privileges: Admin required');
   LogCustom('');
   LogCustom('Starting prerequisite detection...');
   
-  StatusMsg := 'TrackPro Installer - Prerequisite Check' + #13#10 + #13#10;
-  
+  // Log prerequisite status but don't show debug window
   if IsVJoyInstalled then
-    StatusMsg := StatusMsg + '+ vJoy: Already installed (will skip)' + #13#10
+    LogCustom('+ vJoy: Already installed (will skip)')
   else
-    StatusMsg := StatusMsg + '- vJoy: Not found (will install)' + #13#10;
+    LogCustom('- vJoy: Not found (will install)');
     
   if IsHidHideInstalled then
-    StatusMsg := StatusMsg + '+ HidHide: Already installed (will skip)' + #13#10
+    LogCustom('+ HidHide: Already installed (will skip)')
   else
-    StatusMsg := StatusMsg + '- HidHide: Not found (will install)' + #13#10;
+    LogCustom('- HidHide: Not found (will install)');
     
   if IsVCRedistInstalled then
-    StatusMsg := StatusMsg + '+ Visual C++: Already installed (will skip)' + #13#10
+    LogCustom('+ Visual C++: Already installed (will skip)')
   else
-    StatusMsg := StatusMsg + '- Visual C++: Not found (will install)' + #13#10;
-    
-  StatusMsg := StatusMsg + #13#10 + 'IMPORTANT: This installer will automatically remove ALL previous' + #13#10;
-  StatusMsg := StatusMsg + 'TrackPro versions and shortcuts before installing the new version.' + #13#10;
-  StatusMsg := StatusMsg + 'This ensures a clean installation and prevents disk space issues.' + #13#10 + #13#10;
-  StatusMsg := StatusMsg + 'YOUR USER DATA WILL BE PRESERVED:' + #13#10;
-  StatusMsg := StatusMsg + '- Calibrations and settings will NOT be deleted' + #13#10;
-  StatusMsg := StatusMsg + '- Only old executable files and shortcuts are removed' + #13#10 + #13#10;
-  StatusMsg := StatusMsg + 'The default installation path can be changed on the next screen.' + #13#10;
-  StatusMsg := StatusMsg + 'A desktop shortcut will be created.' + #13#10 + #13#10;
-  StatusMsg := StatusMsg + 'Debug log: ' + LogFile + #13#10 + #13#10 + 'Click OK to continue...';
+    LogCustom('- Visual C++: Not found (will install)');
   
-  LogCustom('Prerequisite detection completed. Showing summary to user.');
-  
-  MsgBox(StatusMsg, mbInformation, MB_OK);
+  LogCustom('Prerequisite detection completed.');
+  LogCustom('=== Prerequisites will be installed silently during setup ===');
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -567,34 +575,25 @@ begin
     LogCustom('Re-checking prerequisites after installation...');
     
     InstallCount := 0;
-    StatusMsg := 'Installation completed!' + #13#10 + #13#10 + 
-                'TrackPro has been successfully installed to:' + #13#10 + 
-                ExpandConstant('{app}') + #13#10 + #13#10 + 
-                'OLD VERSION CLEANUP:' + #13#10 + 
-                'All previous TrackPro versions and shortcuts have been removed.' + #13#10 + 
-                'User data (calibrations, settings) has been preserved.' + #13#10 + #13#10 + 
-                'Prerequisites status:' + #13#10;
     
     if IsVJoyInstalled then begin
-      StatusMsg := StatusMsg + '+ vJoy: Available' + #13#10;
+      LogCustom('+ vJoy: Available');
       InstallCount := InstallCount + 1;
     end;
     
     if IsHidHideInstalled then begin
-      StatusMsg := StatusMsg + '+ HidHide: Available' + #13#10;
+      LogCustom('+ HidHide: Available');
       InstallCount := InstallCount + 1;
     end;
     
     if IsVCRedistInstalled then begin
-      StatusMsg := StatusMsg + '+ Visual C++: Available' + #13#10;
+      LogCustom('+ Visual C++: Available');
       InstallCount := InstallCount + 1;
     end;
     
     if InstallCount = 3 then begin
-      StatusMsg := StatusMsg + #13#10 + 'All prerequisites are ready!' + #13#10;
       LogCustom('SUCCESS: All 3 prerequisites verified as installed');
     end else begin
-      StatusMsg := StatusMsg + #13#10 + 'Some prerequisites may need manual attention.' + #13#10;
       LogCustom('WARNING: Only ' + IntToStr(InstallCount) + ' of 3 prerequisites verified');
     end;
       
@@ -603,18 +602,12 @@ begin
     // Copy debug log to application directory for easy access
     try
       FileCopy(LogFile, ExpandConstant('{app}') + '\TrackPro_Install_Debug.txt', False);
-      StatusMsg := StatusMsg + #13#10 + 'Debug log saved to: ' + ExpandConstant('{app}') + '\TrackPro_Install_Debug.txt' + #13#10 + #13#10;
       LogCustom('Debug log copied to application directory for user access');
     except
-      StatusMsg := StatusMsg + #13#10 + 'Debug log available at: ' + LogFile + #13#10 + #13#10;
       LogCustom('Could not copy debug log to application directory, left in temp');
     end;
     
-    StatusMsg := StatusMsg + 'You can now launch TrackPro from the Start Menu or Desktop shortcut!';
-    
     LogCustom('=== Installation completed successfully ===');
-    
-    MsgBox(StatusMsg, mbInformation, MB_OK);
   end;
 end;
 
