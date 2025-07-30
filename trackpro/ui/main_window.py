@@ -1922,6 +1922,13 @@ class MainWindow(QMainWindow):
         data = self._pedal_data[pedal]
         return (data['min_value'], data['max_value'])
     
+    def get_deadzone_values(self, pedal: str) -> tuple:
+        """Get the min/max deadzone values for a pedal."""
+        data = self._pedal_data[pedal]
+        min_deadzone = data.get('min_deadzone', 0)
+        max_deadzone = data.get('max_deadzone', 0)
+        return (min_deadzone, max_deadzone)
+    
     def set_calibration_range(self, pedal: str, min_val: int, max_val: int):
         """Set the min/max calibration range for a pedal."""
         data = self._pedal_data[pedal]

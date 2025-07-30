@@ -702,11 +702,14 @@ class TrackProApp:
             'curve': curve_type
         }
         
-        # Update axis ranges
+        # Update axis ranges (preserve existing deadzone values)
         min_val, max_val = self.window.get_calibration_range(pedal)
+        min_deadzone, max_deadzone = self.window.get_deadzone_values(pedal)
         self.hardware.axis_ranges[pedal] = {
             'min': min_val,
-            'max': max_val
+            'max': max_val,
+            'min_deadzone': min_deadzone,
+            'max_deadzone': max_deadzone
         }
         
         # Save calibration - use a single timer to defer save during multiple rapid changes
