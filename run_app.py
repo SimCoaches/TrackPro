@@ -751,13 +751,49 @@ def show_early_splash():
         # Try to load our custom logo first
         logo_path = get_resource_path("trackpro/resources/images/trackpro_logo_small.png")
         
+        # Debug: Print the exact path being tried
+        print(f"DEBUG: Trying to load splash image from: {logo_path}")
+        print(f"DEBUG: File exists: {os.path.exists(logo_path)}")
+        
+        # If packaged, also debug the _MEIPASS contents
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            print(f"DEBUG: Running as packaged app, _MEIPASS = {sys._MEIPASS}")
+            try:
+                meipass_contents = os.listdir(sys._MEIPASS)
+                print(f"DEBUG: _MEIPASS contents: {meipass_contents[:10]}...")  # First 10 items
+                # Check for trackpro directory
+                trackpro_path = os.path.join(sys._MEIPASS, "trackpro")
+                if os.path.exists(trackpro_path):
+                    print(f"DEBUG: trackpro directory exists")
+                    resources_path = os.path.join(trackpro_path, "resources")
+                    if os.path.exists(resources_path):
+                        print(f"DEBUG: resources directory exists")
+                        images_path = os.path.join(resources_path, "images")
+                        if os.path.exists(images_path):
+                            print(f"DEBUG: images directory exists")
+                            images = os.listdir(images_path)
+                            print(f"DEBUG: Images in directory: {images}")
+                        else:
+                            print(f"DEBUG: images directory missing")
+                    else:
+                        print(f"DEBUG: resources directory missing")
+                else:
+                    print(f"DEBUG: trackpro directory missing")
+            except Exception as e:
+                print(f"DEBUG: Error listing _MEIPASS: {e}")
+        
         if os.path.exists(logo_path):
+            print(f"DEBUG: Successfully found logo at {logo_path}")
             # Use our custom logo
             splash_pixmap = QPixmap(logo_path)
+            if splash_pixmap.isNull():
+                print(f"DEBUG: QPixmap failed to load image from {logo_path}")
+                raise Exception("QPixmap is null")
             # Scale to appropriate size if needed
             if splash_pixmap.width() > 400 or splash_pixmap.height() > 200:
                 splash_pixmap = splash_pixmap.scaled(400, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         else:
+            print(f"DEBUG: Logo not found, creating programmatic splash screen")
             # Fallback: Create an enhanced splash screen programmatically
             splash_pixmap = QPixmap(500, 300)
             

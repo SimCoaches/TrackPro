@@ -502,7 +502,7 @@ var
 begin
   LogFile := ExpandConstant('{tmp}') + '\TrackPro_Install_Debug.txt';
   LogCustom('=== TrackPro Installation Started ===');
-  LogCustom('Installer version: {#MyAppVersion}');
+  LogCustom('Installer version: {version}');
   LogCustom('Temp directory: ' + ExpandConstant('{tmp}'));
   LogCustom('User privileges: Admin required');
   LogCustom('');

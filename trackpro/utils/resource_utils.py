@@ -18,6 +18,37 @@ def get_resource_path(relative_path):
         # PyInstaller creates a temporary folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
         logger.debug(f"Running as packaged app, using base path: {base_path}")
+        
+        # For packaged apps, try multiple possible locations
+        full_path = os.path.join(base_path, relative_path)
+        logger.debug(f"Packaged app resource path: {relative_path} -> {full_path}")
+        
+        # If the file exists, return it
+        if os.path.exists(full_path):
+            logger.debug(f"Found resource at: {full_path}")
+            return full_path
+        
+        # Try alternative path structure (sometimes PyInstaller nests differently)
+        alt_path = os.path.join(base_path, os.path.basename(relative_path))
+        if os.path.exists(alt_path):
+            logger.debug(f"Found resource at alternative path: {alt_path}")
+            return alt_path
+            
+        # Log what's actually in the base directory for debugging
+        try:
+            logger.warning(f"Resource not found at {full_path}")
+            logger.warning(f"Contents of base path {base_path}:")
+            for item in os.listdir(base_path):
+                item_path = os.path.join(base_path, item)
+                if os.path.isdir(item_path):
+                    logger.warning(f"  DIR:  {item}")
+                else:
+                    logger.warning(f"  FILE: {item}")
+        except Exception as e:
+            logger.warning(f"Could not list base path contents: {e}")
+            
+        return full_path  # Return the original path even if it doesn't exist
+        
     except AttributeError:
         # Running in development mode
         # Go up 3 levels: resource_utils.py -> utils -> trackpro -> TrackPro-1 (project root)
@@ -26,6 +57,11 @@ def get_resource_path(relative_path):
     
     full_path = os.path.join(base_path, relative_path)
     logger.debug(f"Resource path resolved: {relative_path} -> {full_path}")
+    
+    # Additional debug logging for development mode
+    if not os.path.exists(full_path):
+        logger.warning(f"Resource file not found: {full_path}")
+    
     return full_path
 
 def get_data_directory():

@@ -116,7 +116,19 @@ class SimpleIRacingAPI(QObject):
         """Start a timer to process telemetry data periodically."""
         if not hasattr(self, '_telemetry_timer') or self._telemetry_timer is None:
             def telemetry_worker():
-                logger.info("Starting telemetry worker thread")
+                logger.info("🧵 Starting telemetry worker thread - isolated from pedal processing")
+                # Set this thread to below normal priority to ensure pedal thread gets priority
+                try:
+                    import ctypes
+                    thread_handle = ctypes.windll.kernel32.GetCurrentThread()
+                    # Set to BELOW_NORMAL priority to ensure pedal thread gets priority
+                    if not ctypes.windll.kernel32.SetThreadPriority(thread_handle, -1):
+                        logger.warning("Failed to set telemetry thread priority to BELOW_NORMAL")
+                    else:
+                        logger.info("📊 TELEMETRY THREAD: Set to BELOW_NORMAL priority (pedal thread has TIME_CRITICAL)")
+                except Exception as e:
+                    logger.warning(f"Could not set telemetry thread priority: {e}")
+                
                 try:
                     loop_count = 0
                     connection_attempts = 0
@@ -167,6 +179,11 @@ class SimpleIRacingAPI(QObject):
                             # OPTIMIZED: Fixed 60Hz timing with minimal processing overhead
                             target_frame_time = 1/60  # 16.67ms per frame
                             sleep_time = max(0.005, target_frame_time - processing_time)  # Minimum 5ms sleep
+                            
+                            # CRITICAL: Yield extra CPU time to ensure pedal thread gets priority
+                            if loop_count % 10 == 0:  # Every 10th loop
+                                sleep_time += 0.001  # Extra 1ms yield for pedal thread
+                            
                             self._stop_event.wait(sleep_time)
                         else:
                             # ENHANCED DIAGNOSTICS: Track connection drops

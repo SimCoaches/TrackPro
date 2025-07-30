@@ -147,29 +147,71 @@ class VirtualJoystick:
             self.vjoy_acquired = False
     
     def update_axis(self, throttle: int, brake: int, clutch: int):
-        """Update the virtual joystick axes."""
+        """Update the virtual joystick axes - ULTRA-FAST VERSION."""
         if self.test_mode:
-            # In test mode, just log the values
-            logger.debug(f"Test mode - Axis values: Throttle={throttle}, Brake={brake}, Clutch={clutch}")
+            # In test mode, just log the values occasionally
+            if not hasattr(self, '_test_log_count'):
+                self._test_log_count = 0
+            self._test_log_count += 1
+            if self._test_log_count % 1000 == 0:  # Log every 1000 calls (1 second at 1000Hz)
+                logger.debug(f"🎮 Test mode - Axis values: T={throttle}, B={brake}, C={clutch}")
             return True
             
         if not hasattr(self, 'vjoy_acquired') or not self.vjoy_acquired:
-            logger.error("Cannot update axes: vJoy device not acquired")
+            # Don't log errors frequently as it will slow down the pedal thread
+            if not hasattr(self, '_error_log_count'):
+                self._error_log_count = 0
+            self._error_log_count += 1
+            if self._error_log_count % 1000 == 0:  # Log error every 1000 calls
+                logger.error("❌ vJoy device not acquired - cannot update axes")
             return False
             
         try:
-            # Set X axis (throttle)
-            self.vjoy_dll.SetAxis(throttle, self.vjoy_device_id, 0x30)  # HID_USAGE_X
+            # ULTRA-FAST: Direct API calls with minimal overhead
+            # Set X axis (throttle) - critical for acceleration
+            if not self.vjoy_dll.SetAxis(throttle, self.vjoy_device_id, 0x30):  # HID_USAGE_X
+                return False
             
-            # Set Y axis (brake)
-            self.vjoy_dll.SetAxis(brake, self.vjoy_device_id, 0x31)  # HID_USAGE_Y
+            # Set Y axis (brake) - critical for braking
+            if not self.vjoy_dll.SetAxis(brake, self.vjoy_device_id, 0x31):  # HID_USAGE_Y
+                return False
             
-            # Set Z axis (clutch)
-            self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32)  # HID_USAGE_Z
+            # Set Z axis (clutch) - less critical but still fast
+            if not self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32):  # HID_USAGE_Z
+                return False
+            
+            # Performance monitoring (very lightweight)
+            if not hasattr(self, '_update_count'):
+                self._update_count = 0
+                self._last_perf_log = time.time()
+            
+            self._update_count += 1
+            
+            # Log performance every 10 seconds without blocking
+            current_time = time.time()
+            if current_time - self._last_perf_log >= 10.0:
+                update_rate = self._update_count / (current_time - self._last_perf_log)
+                logger.info(f"🎯 vJoy PERFORMANCE: {update_rate:.0f} updates/sec (target: 1000Hz)")
+                self._update_count = 0
+                self._last_perf_log = current_time
             
             return True
+            
         except Exception as e:
-            logger.error(f"Failed to update vJoy axes: {e}")
+            # Handle errors without blocking pedal processing
+            if not hasattr(self, '_vjoy_error_count'):
+                self._vjoy_error_count = 0
+                self._last_error_log = time.time()
+            
+            self._vjoy_error_count += 1
+            
+            # Only log errors occasionally to prevent log spam
+            current_time = time.time()
+            if current_time - self._last_error_log >= 5.0:  # Log every 5 seconds max
+                logger.error(f"⚠️ vJoy update error (last 5s: {self._vjoy_error_count} errors): {e}")
+                self._vjoy_error_count = 0
+                self._last_error_log = current_time
+            
             return False
     
     def __del__(self):

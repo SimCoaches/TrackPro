@@ -308,8 +308,15 @@ class IntegratedTrackBuilderWorker(QThread):
         self.progress_update.emit("Starting real-time track building...", 15)
         print(f"🎯 Worker starting real-time building with connection: {self.ir is not None}")
         
+        # Track builder performance monitoring
+        loop_count = 0
+        last_performance_log = time.time()
+        
         while self.ir and self.ir.is_connected and self.is_running:
             try:
+                loop_count += 1
+                start_time = time.time()
+                
                 # Get telemetry data from the shared connection
                 current_time = time.time()
                 
@@ -375,7 +382,22 @@ class IntegratedTrackBuilderWorker(QThread):
                             self.completion_ready.emit(centerline, corners)
                             break
                 
-                time.sleep(0.05)  # 20Hz update rate
+                # CRITICAL: CPU yielding to prevent interfering with pedal processing
+                processing_time = time.time() - start_time
+                
+                # Performance monitoring
+                if current_time - last_performance_log >= 10.0:  # Log every 10 seconds
+                    avg_processing_time = processing_time * 1000  # Convert to ms
+                    print(f"🏗️ TRACK BUILDER PERFORMANCE: {avg_processing_time:.2f}ms processing time, yielding CPU for pedal priority")
+                    last_performance_log = current_time
+                
+                # Yield CPU time more generously - prioritize pedal responsiveness
+                sleep_time = max(0.05, 0.1 - processing_time)  # At least 50ms sleep, up to 100ms
+                time.sleep(sleep_time)
+                
+                # Additional yield every 10 loops to ensure pedal thread gets priority
+                if loop_count % 10 == 0:
+                    time.sleep(0.01)  # Extra 10ms yield for pedal thread
                 
             except Exception as e:
                 print(f"Error in real-time building: {e}")

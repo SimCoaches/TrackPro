@@ -300,6 +300,9 @@ class TrackProApp:
             self.update_progress(15, "Creating main interface...")
             self.window = MainWindow(oauth_handler=self.oauth_handler)
             
+            # Connect the app to the window for performance stats access
+            self.window.app = self
+            
             # Store a reference to this app instance in the window for cleanup
             self.window.app_instance = self
             
@@ -347,10 +350,11 @@ class TrackProApp:
             
             # Update progress 60%
             self.update_progress(60, "Setting up input processing...")
-            # Initialize timer for UI updates at 30Hz
+            # Initialize timer for UI updates at 60Hz for smooth visual feedback
             self.timer = QTimer()
             self.timer.timeout.connect(self.process_input)
-            self.timer.setInterval(33)  # ~30Hz UI update rate
+            self.timer.setInterval(17)  # ~60Hz UI update rate for smooth visual feedback
+            logger.info("🎮 UI TIMER: Set to 60Hz for smooth pedal visualization (independent of 1000Hz pedal processing)")
             
             # Start the dedicated pedal polling thread
             self.start_pedal_thread()
@@ -931,11 +935,10 @@ class TrackProApp:
                     test_server.timeout = 1
                     
                     # Quick test to ensure we can actually serve on this port
-                    import threading
                     def test_serve():
                         test_server.handle_request()
                     
-                    test_thread = threading.Thread(target=test_serve)
+                    test_thread = Thread(target=test_serve)
                     test_thread.daemon = True
                     test_thread.start()
                     
@@ -1425,14 +1428,23 @@ class TrackProApp:
         #     self.window.auth_state_changed.emit(is_authenticated)
 
     def start_pedal_thread(self):
-        """Start the dedicated pedal polling thread."""
-        if self.pedal_thread is None or not self.pedal_thread.is_alive():
-            self.pedal_stop_event.clear()
-            self.pedal_thread = Thread(target=self.pedal_polling_loop, daemon=True)
-            self.pedal_thread.start()
-            logger.info("Pedal thread started successfully")
-        else:
-            logger.warning("Pedal thread is already running")
+        """Start the dedicated high-priority pedal polling thread."""
+        # Create stop event for clean shutdown
+        self.pedal_stop_event = Event()
+        
+        # Create thread with ultra-high priority
+        self.pedal_thread = Thread(
+            target=self.pedal_polling_loop, 
+            name="TrackPro-Pedal-Thread",
+            daemon=False  # Don't make it daemon so we can control shutdown
+        )
+        
+        # Start the thread
+        self.pedal_thread.start()
+        logger.info("🚀 ULTRA-FAST PEDAL THREAD: Started with maximum priority")
+        
+        # Store thread reference to prevent garbage collection
+        self.store_reference(self.pedal_thread)
 
     def stop_pedal_thread(self):
         """Stop the dedicated pedal polling thread."""
@@ -1445,17 +1457,25 @@ class TrackProApp:
                 logger.info("Pedal thread stopped successfully")
 
     def pedal_polling_loop(self):
-        """The main loop for polling pedals and sending output to vJoy."""
+        """The main loop for polling pedals and sending output to vJoy - ULTRA HIGH PERFORMANCE."""
+        # Set absolute maximum thread priority for Windows
         try:
             thread_handle = ctypes.windll.kernel32.GetCurrentThread()
+            # Set to TIME_CRITICAL priority (highest possible)
             if not ctypes.windll.kernel32.SetThreadPriority(thread_handle, 15):  # THREAD_PRIORITY_TIME_CRITICAL
                 logger.warning("Failed to set pedal thread priority to TIME_CRITICAL.")
             else:
-                logger.info("Pedal thread priority set to TIME_CRITICAL.")
+                logger.info("🏎️ PEDAL THREAD: Set to TIME_CRITICAL priority for ultra-low latency")
+                
+            # Set process priority to HIGH for the entire TrackPro process
+            process_handle = ctypes.windll.kernel32.GetCurrentProcess()
+            ctypes.windll.kernel32.SetPriorityClass(process_handle, 0x00000080)  # HIGH_PRIORITY_CLASS
+            logger.info("🚀 PROCESS: Set TrackPro to HIGH priority class")
+            
         except Exception as e:
-            logger.warning(f"Could not set thread priority on Windows: {e}")
+            logger.warning(f"Could not set thread/process priority on Windows: {e}")
 
-        # Initialize hardware inside the thread
+        # Initialize hardware inside the thread for isolation
         self.hardware = HardwareInput()
         if hasattr(self.window, 'set_hardware'):
             self.window.set_hardware(self.hardware)
@@ -1463,36 +1483,165 @@ class TrackProApp:
         # Load initial calibration data into UI from this thread
         self.load_calibration()
         
+        # Ultra-fast pedal processing variables
         last_vjoy_values = {'throttle': -1, 'brake': -1, 'clutch': -1}
+        loop_count = 0
+        performance_log_interval = 10000  # Log every 10 seconds at 1000Hz
+        target_frequency = 1000  # 1000Hz for ultimate responsiveness
+        target_frame_time = 1.0 / target_frequency  # 1ms per frame
+        
+        logger.info(f"🎯 ULTRA-FAST PEDAL PROCESSING: Starting at {target_frequency}Hz (1ms response time)")
+        
+        # Enhanced diagnostics for lag detection
+        slow_frame_count = 0
+        missed_frame_count = 0
+        max_processing_time = 0
+        min_processing_time = float('inf')
+        
+        # System diagnostics
+        import psutil
+        initial_cpu_percent = psutil.cpu_percent()
+        logger.info(f"🖥️ SYSTEM DIAGNOSTICS: CPU: {initial_cpu_percent}% | Available cores: {psutil.cpu_count()}")
+        logger.info(f"🔧 THREAD DIAGNOSTICS: Current thread priority: TIME_CRITICAL | Process priority: HIGH")
+        
+        # Check for competing high-priority processes
+        try:
+            high_priority_processes = []
+            for proc in psutil.process_iter(['name', 'nice']):
+                try:
+                    if proc.info['nice'] and proc.info['nice'] < 0:  # High priority
+                        high_priority_processes.append(proc.info['name'])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            if high_priority_processes:
+                logger.warning(f"⚠️ HIGH PRIORITY PROCESSES DETECTED: {', '.join(set(high_priority_processes[:10]))}")
+        except Exception as e:
+            logger.debug(f"Could not check competing processes: {e}")
 
         while not self.pedal_stop_event.is_set():
             start_time = time.perf_counter()
+            loop_count += 1
 
+            # CRITICAL PATH: Ultra-fast pedal reading
             raw_values = self.hardware.read_pedals()
             
-            # Clear queue and put the latest data to avoid UI lag
-            while not self.pedal_data_queue.empty():
-                try:
-                    self.pedal_data_queue.get_nowait()
-                except Empty:
-                    break
-            self.pedal_data_queue.put(raw_values)
+            # OPTIMIZED: Only update UI queue if needed (don't block on UI)
+            try:
+                # Clear old data from queue to prevent lag accumulation
+                while not self.pedal_data_queue.empty():
+                    try:
+                        self.pedal_data_queue.get_nowait()
+                    except Empty:
+                        break
+                # Add latest data non-blocking
+                self.pedal_data_queue.put_nowait(raw_values)
+            except:
+                pass  # Don't let UI queue issues slow down pedal processing
 
+            # ULTRA-FAST: Direct calibration and vJoy output
             vjoy_values = {}
             for pedal in ['throttle', 'brake', 'clutch']:
                 raw_value = raw_values.get(pedal, 0)
                 output_value = self.hardware.apply_calibration(pedal, raw_value)
-                vjoy_values[pedal] = int(output_value)  # apply_calibration already returns 0-65535 range
+                vjoy_values[pedal] = int(output_value)
             
-            if vjoy_values != last_vjoy_values:
+            # CRITICAL OPTIMIZATION: Only send to vJoy if values changed
+            values_changed = vjoy_values != last_vjoy_values
+            if values_changed:
+                vjoy_start = time.perf_counter()
                 self.output.update_axis(vjoy_values['throttle'], vjoy_values['brake'], vjoy_values['clutch'])
-                last_vjoy_values = vjoy_values
+                vjoy_time = time.perf_counter() - vjoy_start
+                last_vjoy_values = vjoy_values.copy()
+                
+                # Track vJoy performance
+                if vjoy_time > 0.005:  # More than 5ms for vJoy update is concerning
+                    if loop_count % 100 == 0:  # Log occasionally
+                        logger.warning(f"🐌 SLOW vJoy UPDATE: {vjoy_time*1000:.2f}ms (should be <1ms)")
 
+            # PERFORMANCE MONITORING: Track actual performance
             elapsed = time.perf_counter() - start_time
-            sleep_time = (1/1000) - elapsed
+            
+            # Track performance statistics
+            max_processing_time = max(max_processing_time, elapsed)
+            min_processing_time = min(min_processing_time, elapsed)
+            
+            if elapsed > target_frame_time * 2:  # More than 2ms
+                slow_frame_count += 1
+            if elapsed > target_frame_time * 5:  # More than 5ms
+                missed_frame_count += 1
+                if missed_frame_count % 10 == 0:  # Log every 10 severe misses
+                    logger.error(f"🚨 SEVERE LAG: Frame took {elapsed*1000:.2f}ms (target: 1ms) - Count: {missed_frame_count}")
+            
+            # Enhanced performance logging every 10 seconds
+            if loop_count % performance_log_interval == 0:
+                actual_frequency = 1.0 / elapsed if elapsed > 0 else float('inf')
+                slow_percentage = (slow_frame_count / performance_log_interval) * 100
+                miss_percentage = (missed_frame_count / performance_log_interval) * 100
+                
+                # Create performance status for UI
+                if miss_percentage > 1.0:
+                    status_icon = "🚨"
+                    status_color = "red"
+                    status_text = f"PEDAL LAG DETECTED! {miss_percentage:.1f}% severe delays"
+                elif slow_percentage > 5.0:
+                    status_icon = "⚠️"
+                    status_color = "orange" 
+                    status_text = f"Pedal performance degraded: {slow_percentage:.1f}% slow frames"
+                elif actual_frequency < 500:
+                    status_icon = "🐌"
+                    status_color = "yellow"
+                    status_text = f"Pedal frequency low: {actual_frequency:.0f}Hz (target: 1000Hz)"
+                else:
+                    status_icon = "✅"
+                    status_color = "green"
+                    status_text = f"Pedals optimal: {actual_frequency:.0f}Hz, {elapsed*1000:.1f}ms"
+                
+                # Update UI status bar with performance info
+                try:
+                    if hasattr(self, 'window') and self.window and hasattr(self.window, 'statusBar'):
+                        # Create styled status message
+                        status_message = f"{status_icon} {status_text}"
+                        self.window.statusBar.showMessage(status_message)
+                        
+                        # Also store detailed stats for tooltip or detailed view
+                        detailed_status = {
+                            'frequency': actual_frequency,
+                            'latency_ms': elapsed * 1000,
+                            'slow_percentage': slow_percentage,
+                            'severe_lag_percentage': miss_percentage,
+                            'vjoy_responsive': vjoy_time < 0.005 if values_changed else True,
+                            'status_color': status_color
+                        }
+                        
+                        # Store for potential UI display
+                        if not hasattr(self, 'pedal_performance_stats'):
+                            self.pedal_performance_stats = {}
+                        self.pedal_performance_stats = detailed_status
+                        
+                except Exception as ui_error:
+                    # Don't let UI errors affect pedal processing
+                    pass
+                
+                # Reduced logging - only log severe issues
+                if miss_percentage > 1.0:
+                    logger.error(f"🚨 PEDAL LAG: {miss_percentage:.1f}% severe delays, {actual_frequency:.0f}Hz actual")
+                elif slow_percentage > 10.0:
+                    logger.warning(f"⚠️ PEDAL PERFORMANCE: {slow_percentage:.1f}% slow frames")
+                
+                # Reset counters
+                slow_frame_count = 0
+                missed_frame_count = 0
+                max_processing_time = 0
+                min_processing_time = float('inf')
+            
+            # PRECISION TIMING: Sleep for exact timing
+            sleep_time = target_frame_time - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
-
+            elif elapsed > target_frame_time * 1.5:  # If we're way over budget
+                if loop_count % 1000 == 0:  # Log every second when slow
+                    logger.warning(f"⚠️ PEDAL LAG WARNING: Processing took {elapsed*1000:.2f}ms (target: {target_frame_time*1000:.2f}ms)")
+                    
     def store_reference(self, obj):
         """Store a strong reference to an object to prevent garbage collection.
         
@@ -1628,7 +1777,6 @@ class TrackProApp:
             # Initialize curves in background thread to avoid UI blocking
             if self.hardware:
                 # Do curve initialization in a separate thread
-                import threading
                 def init_curves():
                     try:
                         logger.info("Initializing curves in background thread...")
@@ -1644,7 +1792,7 @@ class TrackProApp:
                     except Exception as e:
                         logger.error(f"Error initializing curves in background: {e}")
                 
-                curve_thread = threading.Thread(target=init_curves, daemon=True)
+                curve_thread = Thread(target=init_curves, daemon=True)
                 curve_thread.start()
             
             # Start update check in background after a longer delay

@@ -637,6 +637,27 @@ class MainWindow(QMainWindow):
         self.cloud_sync_label = QLabel("☁️ Sign in to enable cloud sync")
         self.cloud_sync_label.setStyleSheet("color: #3498db; cursor: pointer; font-size: 10px; padding: 2px 8px;")
         self.statusBar.addPermanentWidget(self.cloud_sync_label)
+        
+        # Add real-time pedal performance indicator
+        self.pedal_status_label = QLabel("🎮 Pedals: Starting...")
+        self.pedal_status_label.setStyleSheet("""
+            QLabel {
+                background-color: #2c3e50;
+                color: white;
+                padding: 5px 10px;
+                border-radius: 3px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+        """)
+        self.pedal_status_label.setFixedHeight(25)
+        self.pedal_status_label.setMinimumWidth(200)
+        self.statusBar.addPermanentWidget(self.pedal_status_label)
+        
+        # Timer to update pedal status display
+        self.pedal_status_timer = QTimer()
+        self.pedal_status_timer.timeout.connect(self.update_pedal_status_display)
+        self.pedal_status_timer.start(1000)  # Update every second
 
         # IMPORTANT: Update authentication state on startup to restore session
         # Use a longer delay to make sure all components are properly initialized
@@ -2062,7 +2083,6 @@ class MainWindow(QMainWindow):
                     self.community_action.setChecked(False)
                 # Hide calibration buttons
                 self.calibration_wizard_btn.setVisible(False)
-                self.save_calibration_btn.setVisible(False)
                 return
             
             # Import and create the standalone account page
@@ -2086,7 +2106,6 @@ class MainWindow(QMainWindow):
             
             # Hide calibration buttons since they're not relevant for account page
             self.calibration_wizard_btn.setVisible(False)
-            self.save_calibration_btn.setVisible(False)
             
             logger.info(f"✅ Account page created and added at index {account_index}")
             
@@ -2272,7 +2291,6 @@ class MainWindow(QMainWindow):
                         self.community_action.setChecked(False)
                     # Hide calibration buttons
                     self.calibration_wizard_btn.setVisible(False)
-                    self.save_calibration_btn.setVisible(False)
                     return
                 
                 # Create and add the Race Coach widget if it doesn't exist
@@ -2300,7 +2318,6 @@ class MainWindow(QMainWindow):
                     self.community_action.setChecked(False)
                 # Hide calibration buttons
                 self.calibration_wizard_btn.setVisible(False)
-                self.save_calibration_btn.setVisible(False)
                 logger.info(f"Race Coach screen added at index {race_coach_index} and switched to")
                 
             except ImportError as import_error:
@@ -2397,7 +2414,6 @@ class MainWindow(QMainWindow):
                     self.community_action.setChecked(False)
                 # Hide calibration buttons
                 self.calibration_wizard_btn.setVisible(False)
-                self.save_calibration_btn.setVisible(False)
                 return
             
             # Create and add the Race Pass widget if it doesn't exist
@@ -2424,7 +2440,6 @@ class MainWindow(QMainWindow):
                 self.community_action.setChecked(False)
             # Hide calibration buttons
             self.calibration_wizard_btn.setVisible(False)
-            self.save_calibration_btn.setVisible(False)
             logger.info(f"Race Pass screen added at index {race_pass_index} and switched to")
             
         except ImportError as import_error:
@@ -2514,7 +2529,6 @@ class MainWindow(QMainWindow):
                     self.race_pass_action.setChecked(False)
                 # Hide calibration buttons
                 self.calibration_wizard_btn.setVisible(False)
-                self.save_calibration_btn.setVisible(False)
                 return
             
             # Create or reuse the integrated community widget
@@ -2589,7 +2603,6 @@ class MainWindow(QMainWindow):
                     
                 # Hide calibration buttons
                 self.calibration_wizard_btn.setVisible(False)
-                self.save_calibration_btn.setVisible(False)
                 
                 logger.info(f"Community screen added at index {community_index} and switched to")
                 
@@ -3020,7 +3033,6 @@ class MainWindow(QMainWindow):
         if index == 0:  # Pedal Config tab
             self.pedal_config_action.setChecked(True)
             self.calibration_wizard_btn.setVisible(True)
-            self.save_calibration_btn.setVisible(True)
             
             # Send a hide event to other widgets if they exist
             for i in range(1, self.stacked_widget.count()):
@@ -3038,7 +3050,6 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'race_coach_action'):
                 self.race_coach_action.setChecked(True)
             self.calibration_wizard_btn.setVisible(False)
-            self.save_calibration_btn.setVisible(False)
             
             # Send a show event to the Race Coach widget
             if hasattr(current_widget, 'showEvent'):
@@ -3057,18 +3068,15 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'race_pass_action'):
                 self.race_pass_action.setChecked(True)
             self.calibration_wizard_btn.setVisible(False)
-            self.save_calibration_btn.setVisible(False)
             
         elif 'Community' in widget_class_name:  # Community tab
             if hasattr(self, 'community_action'):
                 self.community_action.setChecked(True)
             self.calibration_wizard_btn.setVisible(False)
-            self.save_calibration_btn.setVisible(False)
             
         else:  # Any other tab
             # Hide calibration buttons for unknown tabs
             self.calibration_wizard_btn.setVisible(False)
-            self.save_calibration_btn.setVisible(False)
             
         logger.debug(f"Tab changed to index {index}, widget: {widget_class_name}")
         
@@ -3394,3 +3402,80 @@ class MainWindow(QMainWindow):
     
     # NOTE: In the actual implementation, ALL remaining methods from the original MainWindow 
     # would be copied here verbatim, except for the three methods we extracted.
+    
+    def update_pedal_status_display(self):
+        """Update the real-time pedal performance indicator."""
+        try:
+            # Get performance stats from the main app if available
+            if hasattr(self, 'app') and hasattr(self.app, 'pedal_performance_stats'):
+                stats = self.app.pedal_performance_stats
+                
+                # Create status text based on performance
+                if stats['severe_lag_percentage'] > 1.0:
+                    icon = "🚨"
+                    text = f"LAG! {stats['severe_lag_percentage']:.1f}% delays"
+                    color = "#e74c3c"  # Red
+                elif stats['slow_percentage'] > 5.0:
+                    icon = "⚠️"
+                    text = f"Slow: {stats['slow_percentage']:.1f}%"
+                    color = "#f39c12"  # Orange
+                elif stats['frequency'] < 500:
+                    icon = "🐌"
+                    text = f"{stats['frequency']:.0f}Hz (Low)"
+                    color = "#f1c40f"  # Yellow
+                else:
+                    icon = "✅"
+                    text = f"{stats['frequency']:.0f}Hz, {stats['latency_ms']:.1f}ms"
+                    color = "#27ae60"  # Green
+                
+                # Update the label
+                self.pedal_status_label.setText(f"{icon} Pedals: {text}")
+                self.pedal_status_label.setStyleSheet(f"""
+                    QLabel {{
+                        background-color: {color};
+                        color: white;
+                        padding: 5px 10px;
+                        border-radius: 3px;
+                        font-weight: bold;
+                        font-size: 11px;
+                    }}
+                """)
+                
+                # Set tooltip with detailed info
+                tooltip = (f"Pedal Performance:\n"
+                          f"• Frequency: {stats['frequency']:.0f}Hz (target: 1000Hz)\n"
+                          f"• Latency: {stats['latency_ms']:.2f}ms (target: <1ms)\n"
+                          f"• Slow frames: {stats['slow_percentage']:.1f}%\n"
+                          f"• Severe lag: {stats['severe_lag_percentage']:.1f}%\n"
+                          f"• vJoy responsive: {'Yes' if stats['vjoy_responsive'] else 'No'}")
+                self.pedal_status_label.setToolTip(tooltip)
+                
+            else:
+                # No stats available yet
+                self.pedal_status_label.setText("🎮 Pedals: Initializing...")
+                self.pedal_status_label.setStyleSheet("""
+                    QLabel {
+                        background-color: #95a5a6;
+                        color: white;
+                        padding: 5px 10px;
+                        border-radius: 3px;
+                        font-weight: bold;
+                        font-size: 11px;
+                    }
+                """)
+                self.pedal_status_label.setToolTip("Pedal performance monitoring starting...")
+                
+        except Exception as e:
+            # Fallback for any errors
+            self.pedal_status_label.setText("🎮 Pedals: Unknown")
+            self.pedal_status_label.setStyleSheet("""
+                QLabel {
+                    background-color: #7f8c8d;
+                    color: white;
+                    padding: 5px 10px;
+                    border-radius: 3px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+            """)
+            self.pedal_status_label.setToolTip(f"Error updating pedal status: {e}")

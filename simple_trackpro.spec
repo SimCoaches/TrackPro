@@ -69,9 +69,30 @@ datas_list = [
     *([('.env', '.')] if os.path.exists('.env') else []),
     ('trackpro/resources/terms_of_service.txt', 'trackpro/resources'),
     ('trackpro/database/migrations', 'trackpro/database/migrations'),
+    # Explicitly include all resource files
     ('trackpro/resources', 'trackpro/resources'),
+    # Explicitly include individual image files for safety
+    ('trackpro/resources/images/splash_background.png', 'trackpro/resources/images'),
+    ('trackpro/resources/images/trackpro_logo_small.png', 'trackpro/resources/images'),
+    ('trackpro/resources/images/2_pedal_set.png', 'trackpro/resources/images'),
+    ('trackpro/resources/images/3_pedal_set.png', 'trackpro/resources/images'),
+    ('trackpro/resources/images/trackpro_logo.png', 'trackpro/resources/images'),
+    ('trackpro/resources/icons/trackpro_tray.ico', 'trackpro/resources/icons'),
     ('Supabase', 'Supabase'),
 ]
+
+# Debug: Print what files we're including
+print("="*50)
+print("SPEC FILE: Including these data files:")
+for src, dst in datas_list:
+    if os.path.exists(src):
+        if os.path.isfile(src):
+            print(f"  FILE: {src} -> {dst}")
+        else:
+            print(f"  DIR:  {src} -> {dst}")
+    else:
+        print(f"  MISSING: {src}")
+print("="*50)
 
 # Add Qt WebEngine resources if available
 if pyqt6_path:
