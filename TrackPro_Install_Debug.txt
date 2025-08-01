@@ -1,0 +1,54 @@
+18:42:32 - === TrackPro Installation Started ===
+18:42:32 - Installer version: {version}
+18:42:32 - Temp directory: C:\Users\PRODRI~1\AppData\Local\Temp\is-DVBOV.tmp
+18:42:32 - User privileges: Admin required
+18:42:32 - 
+18:42:32 - Starting prerequisite detection...
+18:42:32 - vJoy detection: Stale service key found, but vjoy.sys is missing. Assuming NOT installed.
+18:42:32 - vJoy detection: NOT FOUND (will need to install)
+18:42:32 - - vJoy: Not found (will install)
+18:42:32 - HidHide detection: Stale service key found, but HidHide.sys is missing. Assuming NOT installed.
+18:42:32 - HidHide detection: NOT FOUND (will need to install)
+18:42:32 - - HidHide: Not found (will install)
+18:42:32 - Visual C++ detection: FOUND (version v14.44.35211.00 or compatible)
+18:42:32 - + Visual C++: Already installed (will skip)
+18:42:32 - Prerequisite detection completed.
+18:42:32 - === Prerequisites will be installed silently during setup ===
+18:42:36 - === Starting installation phase ===
+18:42:36 - TrackPro application will be installed to: C:\Users\PRO Drift Simulator\Desktop\TrackPro
+18:42:36 - === Starting Old Installation Cleanup ===
+18:42:36 - Checking installation path: C:\Users\PRO Drift Simulator\AppData\Local\TrackPro
+18:42:36 - Found existing TrackPro installation at: C:\Users\PRO Drift Simulator\AppData\Local\TrackPro
+18:42:36 - Checking installation path: C:\Program Files (x86)\TrackPro
+18:42:36 - Checking installation path: C:\Program Files (x86)\TrackPro
+18:42:36 - Checking installation path: C:\Users\PRO Drift Simulator\AppData\Roaming\TrackPro
+18:42:36 - Checking installation path: C:\Users\PRO Drift Simulator\AppData\Roaming\Local\TrackPro
+18:42:36 - === Old Installation Cleanup Completed ===
+18:42:36 - === Starting Old Shortcut Cleanup ===
+18:42:36 - Removing old shortcut: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\(Default)\TrackPro.lnk
+18:42:36 - Successfully removed: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\(Default)\TrackPro.lnk
+18:42:36 - Cleaned up empty TrackPro Start Menu folders
+18:42:36 - === Old Shortcut Cleanup Completed ===
+18:42:36 - vJoy detection: Stale service key found, but vjoy.sys is missing. Assuming NOT installed.
+18:42:36 - vJoy detection: NOT FOUND (will need to install)
+18:42:36 - vJoy not detected, starting installation...
+18:42:36 - Starting vJoy installation with timeout handling...
+18:42:36 - Attempting silent vJoy installation...
+18:42:36 - Silent installation failed, trying with minimal UI...
+18:42:36 - Previous attempts failed, trying normal installation with monitoring...
+18:42:36 - vJoy installation encountered issues but may still be functional
+18:42:44 - HidHide detection: Stale service key found, but HidHide.sys is missing. Assuming NOT installed.
+18:42:44 - HidHide detection: NOT FOUND (will need to install)
+18:42:44 - STARTING: HidHide installation...
+18:42:53 - COMPLETED: HidHide installation finished
+18:42:53 - Visual C++ detection: FOUND (version v14.44.35211.00 or compatible)
+18:42:53 - === Installation phase completed ===
+18:42:53 - Creating Qt WebEngine directories...
+18:42:53 - Re-checking prerequisites after installation...
+18:42:53 - vJoy detection: Stale service key found, but vjoy.sys is missing. Assuming NOT installed.
+18:42:53 - vJoy detection: NOT FOUND (will need to install)
+18:42:53 - HidHide detection: Stale service key found, but HidHide.sys is missing. Assuming NOT installed.
+18:42:53 - HidHide detection: NOT FOUND (will need to install)
+18:42:53 - Visual C++ detection: FOUND (version v14.44.35211.00 or compatible)
+18:42:53 - + Visual C++: Available
+18:42:53 - WARNING: Only 1 of 3 prerequisites verified

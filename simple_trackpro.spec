@@ -35,30 +35,6 @@ if pyqt6_path:
         else:
             print(f"WARNING: Missing Qt WebEngine file: {webengine_file}")
 
-# Check for vJoy DLL (optional - don't fail build if not found)
-vjoy_paths = [
-    'C:\\Program Files\\vJoy\\x64\\vJoyInterface.dll',
-    'C:\\Program Files (x86)\\vJoy\\x64\\vJoyInterface.dll'
-]
-
-vjoy_found = False
-for vjoy_path in vjoy_paths:
-    if os.path.exists(vjoy_path):
-        binaries_list.append((vjoy_path, '.'))
-        vjoy_found = True
-        print(f"Found vJoy DLL: {vjoy_path}")
-        break
-
-if not vjoy_found:
-    print("vJoy DLL not found on build machine - this is OK, users will install it via installer")
-
-# Check for HidHide executables (optional)
-hidhide_paths = ['trackpro/pedals/HidHideCLI.exe', 'trackpro/pedals/HidHideClient.exe']
-for hidhide_path in hidhide_paths:
-    if os.path.exists(hidhide_path):
-        binaries_list.append((hidhide_path, '.'))
-        print(f"Found HidHide executable: {hidhide_path}")
-
 # Build datas list with Qt WebEngine resources
 datas_list = [
     # Core TrackPro files
@@ -93,6 +69,42 @@ for src, dst in datas_list:
     else:
         print(f"  MISSING: {src}")
 print("="*50)
+
+# Check for vJoy DLL (optional - don't fail build if not found)
+vjoy_paths = [
+    'C:\\Program Files\\vJoy\\x64\\vJoyInterface.dll',
+    'C:\\Program Files (x86)\\vJoy\\x64\\vJoyInterface.dll',
+    'C:\\Program Files\\vJoy\\x86\\vJoyInterface.dll',
+    'C:\\Program Files (x86)\\vJoy\\x86\\vJoyInterface.dll',
+    # Also check if vJoy installer is available to include
+    'installer_temp\\prerequisites\\vJoySetup.exe'
+]
+
+vjoy_found = False
+vjoy_installer_found = False
+for vjoy_path in vjoy_paths:
+    if os.path.exists(vjoy_path):
+        if vjoy_path.endswith('vJoyInterface.dll'):
+            binaries_list.append((vjoy_path, '.'))
+            vjoy_found = True
+            print(f"Found vJoy DLL: {vjoy_path}")
+        elif vjoy_path.endswith('vJoySetup.exe'):
+            datas_list.append((vjoy_path, '.'))
+            vjoy_installer_found = True
+            print(f"Found vJoy installer: {vjoy_path}")
+        # Don't break - continue checking for both DLL and installer
+
+if not vjoy_found:
+    print("vJoy DLL not found on build machine - this is OK, users will install it via installer")
+if not vjoy_installer_found:
+    print("vJoy installer not found - users will need to install vJoy manually")
+
+# Check for HidHide executables (optional)
+hidhide_paths = ['trackpro/pedals/HidHideCLI.exe', 'trackpro/pedals/HidHideClient.exe']
+for hidhide_path in hidhide_paths:
+    if os.path.exists(hidhide_path):
+        binaries_list.append((hidhide_path, '.'))
+        print(f"Found HidHide executable: {hidhide_path}")
 
 # Add Qt WebEngine resources if available
 if pyqt6_path:
@@ -176,6 +188,68 @@ a = Analysis(
         # Essential modules for TrackPro
         'psutil',
         'json',
+        
+        # Setuptools and pkg_resources dependencies
+        'pkg_resources',
+        'setuptools',
+        'jaraco.text',
+        'jaraco.functools',
+        'jaraco.classes',
+        'more_itertools',
+        'packaging',
+        'pyparsing',
+        'zipp',
+        
+        # External API dependencies
+        'twilio',
+        'twilio.rest',
+        'twilio.base',
+        'twilio.http',
+        'stripe',
+        'supabase',
+        'supabase.lib',
+        'supabase.auth',
+        'supabase.client',
+        'openai',
+        'elevenlabs',
+        'soundfile',
+        'pydub',
+        
+        # Additional dependencies that might be missing
+        'httpx',
+        'httpcore',
+        'hpack',
+        'gotrue',
+        'postgrest',
+        'urllib3',
+        'websockets',
+        'redis',
+        'celery',
+        'sentry_sdk',
+        'plyer',
+        'cryptography',
+        'pydantic',
+        'pillow',
+        'opencv',
+        'cv2',
+        'mediapipe',
+        'eyetrax',
+        'filterpy',
+        'scikit-learn',
+        'scipy',
+        'pyqtgraph',
+        'pygame',
+        'pygame.mixer',
+        'pyirsdk',
+        'pyyaml',
+        'python-dotenv',
+        'socketio',
+        'babel',
+        'jinja2',
+        'markupsafe',
+        'docutils',
+        'sphinx',
+        'typing_extensions',
     ],
     hookspath=[],
     hooksconfig={},
@@ -195,9 +269,9 @@ a = Analysis(
         'scipy.stats',
         'IPython', 'jupyter', 'notebook',
         'pytest', 'unittest', 'test', 'tests',
-        'setuptools', 'pip',
+        'pip',
         'wheel', 'distutils',
-        'mediapipe', 'tensorflow', 'jax', 'torch',
+        'tensorflow', 'jax', 'torch',
         'cv2.data',  # OpenCV data files
         'PIL.ImageTk',  # Tkinter support
         'tkinter',
@@ -235,9 +309,6 @@ a = Analysis(
         'sounddevice',
         'soundfile',
         # Large development tools
-        'babel',
-        'jinja2',
-        'markupsafe',
         'docutils',
         'sphinx',
     ],

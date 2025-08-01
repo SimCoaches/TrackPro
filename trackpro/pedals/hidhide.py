@@ -41,6 +41,30 @@ def is_admin():
     except:
         return False
 
+def run_as_user(command):
+    """Run command as current user (not elevated) for better compatibility."""
+    try:
+        # Use runas with /trustlevel:0x20000 to run as standard user
+        import subprocess
+        import sys
+        
+        if sys.platform == 'win32':
+            # Use CREATE_NO_WINDOW to hide command windows
+            CREATE_NO_WINDOW = 0x08000000
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=CREATE_NO_WINDOW
+            )
+            return result
+        else:
+            return subprocess.run(command, capture_output=True, text=True, timeout=10)
+    except Exception as e:
+        logger.error(f"Error running command as user: {e}")
+        return None
+
 def check_hidhide_service():
     """Check if the HidHide service is running."""
     try:
@@ -152,7 +176,8 @@ class HidHideClient:
                     "and restart the application.",
                     "driver_not_installed"
                 )
-                return
+                if not self.fail_silently:
+                    return
             
             # Check HidHide service
             try:
@@ -223,30 +248,25 @@ class HidHideClient:
                 # Create default configuration
                 self.config = {'hidden_devices': []}
 
-            # Clean up old temporary registrations
+            # Clean up old temporary registrations (non-critical)
             try:
                 self.cleanup_temp_registrations()
             except Exception as e:
-                logger.warning(f"Failed to clean up temporary registrations: {e}")
+                logger.debug(f"Failed to clean up temporary registrations: {e}")
                 # Continue anyway, this is not critical
             
             # Register our application - use CLI method which is more reliable
             app_path = os.path.abspath(sys.argv[0])
             logger.info(f"Registering application path: {app_path}")
             try:
-                if not self.register_application_cli(app_path):
-                    self._handle_error(
-                        "Failed to register application with HidHide. "
-                        "Please try running the application as administrator.",
-                        "app_registration_failed",
-                        raise_error=not self.fail_silently
-                    )
+                registration_success = self.register_application_cli(app_path)
+                if not registration_success:
+                    logger.warning("Failed to register application with HidHide - continuing with limited functionality")
+                    self.error_context = "app_registration_failed"
+                    # Don't fail completely - we can still try to hide/unhide devices
             except Exception as e:
-                self._handle_error(
-                    f"Error registering application with HidHide: {e}",
-                    "app_registration_error",
-                    raise_error=not self.fail_silently
-                )
+                logger.warning(f"Error registering application with HidHide: {e} - continuing anyway")
+                self.error_context = "app_registration_error"
             
         except Exception as e:
             if fail_silently:
@@ -263,14 +283,17 @@ class HidHideClient:
             error_context: Error context to set
             raise_error: Whether to raise a RuntimeError (if not failing silently)
         """
-        logger.error(error_msg)
+        logger.warning(error_msg)  # Changed from error to warning for better UX
         self.error_context = error_context
         
-        if self.fail_silently:
+        # Only mark as non-functioning for critical errors
+        if error_context in ["driver_not_installed", "service_not_installed"]:
             self.functioning = False
+        
+        if self.fail_silently:
             return
         
-        if raise_error:
+        if raise_error and error_context in ["driver_not_installed", "service_not_installed"]:
             raise RuntimeError(error_msg)
     
     def _is_hidhide_installed(self):
@@ -352,23 +375,32 @@ class HidHideClient:
                 cmd = [self.cli_path] + args
                 logger.debug(f"Running command: {cmd}")
                 
-                # Set up subprocess run parameters
-                run_kwargs = {
-                    'capture_output': True,
-                    'text': True,
-                    'timeout': 5
-                }
+                # Use run_as_user for better compatibility
+                result = run_as_user(cmd)
                 
-                # Add creationflags only on Windows
-                if sys.platform == 'win32':
-                    # Use CREATE_NO_WINDOW to hide command windows
-                    CREATE_NO_WINDOW = 0x08000000
-                    run_kwargs['creationflags'] = CREATE_NO_WINDOW
-                
-                result = subprocess.run(cmd, **run_kwargs)
+                if result is None:
+                    logger.error("Failed to execute CLI command")
+                    if retry_count > 0:
+                        retry_count -= 1
+                        time.sleep(0.5)
+                        continue
+                    return None if check_output else False
                 
                 if result.returncode != 0:
                     logger.error(f"CLI command failed with code {result.returncode}")
+                    logger.debug(f"stderr: {result.stderr}")
+                    
+                    # Handle specific error codes
+                    if result.returncode == 31:
+                        logger.warning("Access denied - trying to continue with limited functionality")
+                        if ignore_errors:
+                            return None if check_output else False
+                    
+                    if result.returncode == 5:  # Access denied
+                        logger.warning("Access denied error - may need elevated permissions for this operation")
+                        if ignore_errors:
+                            return None if check_output else False
+                    
                     if retry_count > 0:
                         logger.info(f"Retrying command (attempts left: {retry_count})...")
                         retry_count -= 1
@@ -378,12 +410,9 @@ class HidHideClient:
                     if ignore_errors:
                         return None if check_output else False
                     
-                    if "Access is denied" in result.stderr:
-                        # Special handling for access denied errors
-                        logger.error("Access denied error when running HidHide CLI")
-                        self.error_context = "cli_access_denied"
+                    # Don't mark as non-functioning for access denied - continue with limited functionality
+                    if result.returncode not in [31, 5]:
                         self.functioning = False
-                        return None if check_output else False
                     
                     return None if check_output else False
                 
@@ -422,13 +451,14 @@ class HidHideClient:
             logger.info("Application already registered")
             return True
         
-        # Register using CLI
-        result = self._run_cli(["--app-reg", app_path])
+        # Register using CLI with error tolerance
+        result = self._run_cli(["--app-reg", app_path], ignore_errors=True)
         if result:
             logger.info("Successfully registered application with HidHide")
             return True
         else:
-            logger.error("Failed to register application with HidHide")
+            logger.warning("Failed to register application with HidHide - continuing with limited functionality")
+            # Don't fail completely - we can still try to hide/unhide devices
             return False
     
     def register_application(self, app_path):
@@ -534,85 +564,94 @@ class HidHideClient:
     
     def hide_device(self, instance_path):
         """Hide a device by its instance path."""
+        if not self.functioning:
+            logger.warning("HidHide not functioning, cannot hide device")
+            return False
+            
         logger.info(f"Hiding device: {instance_path}")
         
         # Normalize the path to ensure proper format
         instance_path = instance_path.replace('"', '')
         
-        # First check if already hidden
-        hidden_devices = self._run_cli(["--dev-list"], check_output=True)
-        if hidden_devices:
-            # Check if device is already hidden
-            if any(instance_path in device for device in hidden_devices.splitlines()):
-                logger.info("Device already hidden")
-                # Make sure cloaking is enabled
-                cloak_result = self._run_cli(["--cloak-on"])
-                logger.info(f"Cloak enabled: {cloak_result}")
-                # Verify cloaking status
-                self.verify_cloaking_status()
-                return cloak_result
-        
-        # Hide the device and enable cloaking
-        hide_result = self._run_cli(["--dev-hide", instance_path])
-        if hide_result:
-            # Update our config
-            if instance_path not in self.config['hidden_devices']:
-                self.config['hidden_devices'].append(instance_path)
-                self.save_config()
-            # Enable cloaking and verify it's enabled
-            cloak_result = self._run_cli(["--cloak-on"])
-            logger.info(f"Cloak enabled: {cloak_result}")
-            
-            # Verify cloaking status
-            self.verify_cloaking_status()
-            
-            # Verify the device is actually hidden
-            hidden_devices = self._run_cli(["--dev-list"], check_output=True)
+        try:
+            # First check if already hidden
+            hidden_devices = self._run_cli(["--dev-list"], check_output=True, ignore_errors=True)
             if hidden_devices:
+                # Check if device is already hidden
                 if any(instance_path in device for device in hidden_devices.splitlines()):
-                    logger.info("Verified device is hidden")
+                    logger.info("Device already hidden")
+                    # Make sure cloaking is enabled
+                    cloak_result = self._run_cli(["--cloak-on"], ignore_errors=True)
+                    logger.info(f"Cloak enabled: {cloak_result}")
                     return True
-                else:
-                    logger.error("Device not found in hidden devices list after hiding")
-                    return False
+            
+            # Hide the device and enable cloaking
+            hide_result = self._run_cli(["--dev-hide", instance_path], ignore_errors=True)
+            if hide_result:
+                # Update our config
+                try:
+                    if instance_path not in self.config['hidden_devices']:
+                        self.config['hidden_devices'].append(instance_path)
+                        self.save_config()
+                except Exception as e:
+                    logger.debug(f"Error updating config: {e}")
+                
+                # Enable cloaking
+                cloak_result = self._run_cli(["--cloak-on"], ignore_errors=True)
+                logger.info(f"Device hiding result: hide={hide_result}, cloak={cloak_result}")
+                
+                return True
             else:
-                logger.error("Failed to get hidden devices list after hiding")
+                logger.warning("Failed to hide device - may need elevated permissions")
                 return False
-        else:
-            logger.error("Failed to hide device")
+                
+        except Exception as e:
+            logger.error(f"Error hiding device: {e}")
             return False
     
     def unhide_device(self, instance_path):
         """Unhide a device by its instance path."""
+        if not self.functioning:
+            logger.warning("HidHide not functioning, cannot unhide device")
+            return False
+            
         logger.info(f"Unhiding device: {instance_path}")
         
         # Normalize the path to ensure proper format
         instance_path = instance_path.replace('"', '')
         
-        # First check if actually hidden
-        hidden_devices = self._run_cli(["--dev-list"], check_output=True)
-        if not hidden_devices or not any(instance_path in device for device in hidden_devices.splitlines()):
-            logger.info("Device not hidden")
-            return True
-        
-        # Unhide the device
-        unhide_result = self._run_cli(["--dev-unhide", instance_path])
-        if unhide_result:
-            # Update our config
-            if instance_path in self.config['hidden_devices']:
-                self.config['hidden_devices'].remove(instance_path)
-                self.save_config()
+        try:
+            # First check if actually hidden
+            hidden_devices = self._run_cli(["--dev-list"], check_output=True, ignore_errors=True)
+            if not hidden_devices or not any(instance_path in device for device in hidden_devices.splitlines()):
+                logger.info("Device not hidden")
+                return True
             
-            # Check if any devices are still hidden
-            hidden_devices = self._run_cli(["--dev-list"], check_output=True)
-            if not hidden_devices or hidden_devices.strip() == "":
-                # If no devices are hidden, turn off cloaking
-                cloak_result = self._run_cli(["--cloak-off"])
-                logger.info(f"Cloak disabled: {cloak_result}")
-                return cloak_result
-            return True
-        else:
-            logger.error("Failed to unhide device")
+            # Unhide the device
+            unhide_result = self._run_cli(["--dev-unhide", instance_path], ignore_errors=True)
+            if unhide_result:
+                # Update our config
+                try:
+                    if instance_path in self.config['hidden_devices']:
+                        self.config['hidden_devices'].remove(instance_path)
+                        self.save_config()
+                except Exception as e:
+                    logger.debug(f"Error updating config: {e}")
+                
+                # Check if any devices are still hidden
+                hidden_devices = self._run_cli(["--dev-list"], check_output=True, ignore_errors=True)
+                if not hidden_devices or hidden_devices.strip() == "":
+                    # If no devices are hidden, turn off cloaking
+                    cloak_result = self._run_cli(["--cloak-off"], ignore_errors=True)
+                    logger.info(f"Cloak disabled: {cloak_result}")
+                    return True
+                return True
+            else:
+                logger.warning("Failed to unhide device - may need elevated permissions")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error unhiding device: {e}")
             return False
     
     def get_device_instance_path(self, device_name):
@@ -927,11 +966,15 @@ class HidHideClient:
             
         logger.info(f"Setting HidHide cloak state to: {'active' if active else 'inactive'}")
         
-        # Use CLI method only (most reliable)
-        cli_result = self._run_cli(["--cloak-on" if active else "--cloak-off"], retry_count=2)
-        if cli_result:
-            logger.info(f"Set cloak state via CLI: {active}")
-            return True
-        else:
-            logger.warning(f"Failed to set cloak state via CLI: {active}")
+        try:
+            # Use CLI method only (most reliable)
+            cli_result = self._run_cli(["--cloak-on" if active else "--cloak-off"], retry_count=2, ignore_errors=True)
+            if cli_result:
+                logger.info(f"Set cloak state via CLI: {active}")
+                return True
+            else:
+                logger.warning(f"Failed to set cloak state via CLI: {active} - may need elevated permissions")
+                return False
+        except Exception as e:
+            logger.warning(f"Error setting cloak state: {e}")
             return False 

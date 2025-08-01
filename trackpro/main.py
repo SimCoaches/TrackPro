@@ -325,6 +325,22 @@ class TrackProApp:
             self.update_progress(40, "Setting up virtual joystick...")
             # Import VirtualJoystick just before use
             from .pedals.output import VirtualJoystick
+            from .pedals.vjoy_installer import VJoyInstaller
+            
+            # Check if vJoy is installed
+            vjoy_installer = VJoyInstaller(fail_silently=True)
+            is_vjoy_installed, vjoy_version = vjoy_installer.is_vjoy_installed()
+            
+            logger.info(f"vJoy installation check: installed={is_vjoy_installed}, version={vjoy_version}")
+            
+            if not is_vjoy_installed:
+                logger.warning("vJoy is not installed - pedal functionality will be limited")
+                # Offer to install vJoy if we have the installer
+                logger.info("Attempting to offer vJoy installation...")
+                self.offer_vjoy_installation()
+            else:
+                logger.info(f"vJoy is already installed (version: {vjoy_version})")
+            
             try:
                 self.output = VirtualJoystick()
             except RuntimeError as e:
@@ -1160,83 +1176,45 @@ class TrackProApp:
             except Exception as e:
                 logger.error(f"Error saving calibration: {e}")
         
-        # Disable HidHide cloaking - PRIORITIZE CLI --cloak-off approach
+        # Disable HidHide cloaking - simplified approach
         if hasattr(self, 'hidhide') and self.hidhide:
-            logger.info("Disabling HidHide cloaking using CLI --cloak-off command...")
+            logger.info("🔓 SHUTDOWN: Disabling HidHide device hiding")
+            
             try:
-                # Use CLI as primary method - most reliable
-                cli_result = self.hidhide._run_cli(["--cloak-off"])
-                logger.info(f"Cloak disabled via CLI: {cli_result}")
+                # Try to disable cloaking
+                success = self.hidhide.set_cloak_state(False)
+                if success:
+                    logger.info("✅ HidHide cloaking disabled successfully")
+                else:
+                    logger.warning("⚠️ Failed to disable HidHide cloaking - may need elevated permissions")
                 
-                # Also try to unhide specific devices as a backup
+                # Try to unhide specific pedal devices
                 device_name = "Sim Coaches P1 Pro Pedals"
-                matching_devices = self.hidhide.find_all_matching_devices(device_name)
-                for device_path in matching_devices:
-                    try:
-                        unhide_result = self.hidhide._run_cli(["--unhide-by-id", device_path])
-                        logger.info(f"Unhid device via CLI: {unhide_result}")
-                    except Exception as e2:
-                        logger.error(f"Error unhiding device via CLI: {e2}")
-                
-                # Try API methods as backup
                 try:
-                    success = self.hidhide.set_cloak_state(False)
-                    if success:
-                        logger.info("Successfully disabled HidHide cloaking via API")
+                    matching_devices = self.hidhide.find_all_matching_devices(device_name)
+                    if matching_devices:
+                        logger.info(f"Found {len(matching_devices)} matching devices to unhide")
+                        for device_path in matching_devices:
+                            unhide_result = self.hidhide.unhide_device(device_path)
+                            logger.info(f"Unhide result for {device_path}: {unhide_result}")
                     else:
-                        logger.warning("Failed to disable HidHide cloaking via API method")
+                        logger.debug("No matching devices found to unhide")
                 except Exception as e:
-                    logger.error(f"Error disabling cloaking via API: {e}")
-            except Exception as e:
-                logger.error(f"Error disabling cloaking via CLI: {e}")
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                
-                # Last resort: try to run the CLI directly
-                try:
-                    logger.info("Attempting to run HidHideCLI directly as last resort...")
-                    # Try to find the CLI executable
-                    cli_path = None
-                    if hasattr(self.hidhide, '_cli_path') and self.hidhide._cli_path:
-                        cli_path = self.hidhide._cli_path
-                    else:
-                        # Check common locations
-                        possible_paths = [
-                            os.path.join(os.path.dirname(os.path.abspath(__file__)), "HidHideCLI.exe"),
-                            r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe",
-                            r"C:\Program Files (x86)\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
-                        ]
-                        for path in possible_paths:
-                            if os.path.exists(path):
-                                cli_path = path
-                                break
+                    logger.warning(f"Error unhiding specific devices: {e}")
                     
-                    if cli_path:
-                        # Use subprocess utility to hide console window
-                        from .utils.subprocess_utils import run_subprocess
-                        try:
-                            result = run_subprocess(
-                                [cli_path, "--cloak-off"], 
-                                hide_window=True,
-                                check=False,  # Don't raise exceptions on non-zero exit
-                                capture_output=True,
-                                text=True
-                            )
-                            logger.info("Successfully ran HidHideCLI directly to disable cloaking")
-                        except Exception as e:
-                            logger.error(f"Failed to run HidHideCLI directly: {e}")
-                except Exception as e:
-                    logger.error(f"Failed to run HidHideCLI directly: {e}")
-        
-        # Try hardware reference as a backup
-        if hasattr(self, 'hardware') and hasattr(self.hardware, 'hidhide'):
-            logger.info("Attempting to disable HidHide cloaking via hardware reference...")
-            try:
-                # Try CLI method first
-                if hasattr(self.hardware.hidhide, '_run_cli'):
-                    cli_result = self.hardware.hidhide._run_cli(["--cloak-off"])
-                    logger.info(f"Cloak disabled via hardware.hidhide CLI: {cli_result}")
             except Exception as e:
-                logger.error(f"Error disabling HidHide cloaking via hardware CLI: {e}")
+                logger.warning(f"Error during HidHide cleanup: {e}")
+                
+                # Fallback: try CLI directly
+                try:
+                    logger.debug("Attempting direct CLI fallback...")
+                    cli_result = self.hidhide._run_cli(["--cloak-off"], ignore_errors=True)
+                    if cli_result:
+                        logger.info("HidHide CLI fallback successful")
+                    else:
+                        logger.debug("HidHide CLI fallback failed")
+                except Exception as e:
+                    logger.debug(f"HidHide CLI fallback error: {e}")
         
         # Shutdown OAuth callback server
         if hasattr(self, 'oauth_callback_server') and self.oauth_callback_server:
@@ -1271,6 +1249,207 @@ class TrackProApp:
         
         # Final cleanup of single instance locks
         self._cleanup_single_instance_locks()
+        
+        # Clean up emergency registry entries
+        try:
+            self._cleanup_emergency_hidhide_cleanup()
+        except Exception as e:
+            logger.error(f"Error cleaning up emergency registry entries: {e}")
+        
+        # Clean up emergency batch file
+        try:
+            self._cleanup_emergency_cleanup_batch()
+        except Exception as e:
+            logger.error(f"Error cleaning up emergency batch file: {e}")
+        
+        # Clean up emergency scheduled task
+        try:
+            self._cleanup_emergency_scheduled_task()
+        except Exception as e:
+            logger.error(f"Error cleaning up emergency scheduled task: {e}")
+    
+    def _setup_emergency_hidhide_cleanup(self):
+        """Set up emergency HidHide cleanup via registry for system shutdown."""
+        try:
+            import winreg
+            
+            # Create a registry entry that will run HidHide CLI --cloak-off on system shutdown
+            key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+            
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_WRITE)
+            except PermissionError:
+                # Try current user if admin access not available
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE)
+            
+            # Find HidHideCLI path
+            cli_path = None
+            if hasattr(self.hidhide, '_cli_path') and self.hidhide._cli_path:
+                cli_path = self.hidhide._cli_path
+            else:
+                # Check common locations
+                possible_paths = [
+                    r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe",
+                    r"C:\Program Files (x86)\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        cli_path = path
+                        break
+            
+            if cli_path:
+                # Set registry value to run HidHide CLI --cloak-off
+                winreg.SetValueEx(key, "TrackPro_HidHide_Cleanup", 0, winreg.REG_SZ, f'"{cli_path}" --cloak-off')
+                logger.info("Emergency HidHide cleanup registry entry created")
+            
+            winreg.CloseKey(key)
+            
+        except Exception as e:
+            logger.error(f"Error setting up emergency HidHide cleanup: {e}")
+    
+    def _cleanup_emergency_hidhide_cleanup(self):
+        """Remove emergency HidHide cleanup registry entries."""
+        try:
+            import winreg
+            
+            # Remove the registry entry
+            key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+            
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_WRITE)
+            except PermissionError:
+                # Try current user if admin access not available
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE)
+            
+            try:
+                winreg.DeleteValue(key, "TrackPro_HidHide_Cleanup")
+                logger.info("Emergency HidHide cleanup registry entry removed")
+            except FileNotFoundError:
+                # Value doesn't exist, that's fine
+                pass
+            
+            winreg.CloseKey(key)
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up emergency HidHide cleanup: {e}")
+    
+    def _create_emergency_cleanup_batch(self):
+        """Create an emergency cleanup batch file that can be run manually."""
+        try:
+            import tempfile
+            
+            # Find HidHideCLI path
+            cli_path = None
+            if hasattr(self.hidhide, '_cli_path') and self.hidhide._cli_path:
+                cli_path = self.hidhide._cli_path
+            else:
+                # Check common locations
+                possible_paths = [
+                    r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe",
+                    r"C:\Program Files (x86)\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        cli_path = path
+                        break
+            
+            if cli_path:
+                # Create batch file content
+                batch_content = f'''@echo off
+echo TrackPro Emergency HidHide Cleanup
+echo Disabling HidHide cloaking...
+"{cli_path}" --cloak-off
+if %errorlevel% equ 0 (
+    echo HidHide cloaking disabled successfully
+) else (
+    echo Failed to disable HidHide cloaking
+)
+echo.
+echo Press any key to exit...
+pause >nul
+'''
+                
+                # Write batch file to temp directory
+                batch_path = os.path.join(tempfile.gettempdir(), "TrackPro_HidHide_Cleanup.bat")
+                with open(batch_path, 'w') as f:
+                    f.write(batch_content)
+                
+                logger.info(f"Emergency cleanup batch file created: {batch_path}")
+                
+        except Exception as e:
+            logger.error(f"Error creating emergency cleanup batch file: {e}")
+    
+    def _cleanup_emergency_cleanup_batch(self):
+        """Remove emergency cleanup batch file."""
+        try:
+            import tempfile
+            
+            batch_path = os.path.join(tempfile.gettempdir(), "TrackPro_HidHide_Cleanup.bat")
+            if os.path.exists(batch_path):
+                os.remove(batch_path)
+                logger.info("Emergency cleanup batch file removed")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up emergency batch file: {e}")
+    
+    def _setup_emergency_scheduled_task(self):
+        """Set up emergency HidHide cleanup via scheduled task."""
+        try:
+            # Find HidHideCLI path
+            cli_path = None
+            if hasattr(self.hidhide, '_cli_path') and self.hidhide._cli_path:
+                cli_path = self.hidhide._cli_path
+            else:
+                # Check common locations
+                possible_paths = [
+                    r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe",
+                    r"C:\Program Files (x86)\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        cli_path = path
+                        break
+            
+            if cli_path:
+                # Create scheduled task to run HidHide CLI --cloak-off
+                from .utils.subprocess_utils import run_subprocess
+                
+                # Delete existing task if it exists
+                run_subprocess(['schtasks', '/delete', '/tn', 'TrackPro_HidHide_Cleanup', '/f'], 
+                             hide_window=True, check=False, capture_output=True)
+                
+                # Create new task
+                cmd = [
+                    'schtasks', '/create', '/tn', 'TrackPro_HidHide_Cleanup',
+                    '/tr', f'"{cli_path}" --cloak-off',
+                    '/sc', 'onlogon',
+                    '/ru', 'SYSTEM',
+                    '/f'
+                ]
+                
+                result = run_subprocess(cmd, hide_window=True, check=False, capture_output=True)
+                if result.returncode == 0:
+                    logger.info("Emergency HidHide cleanup scheduled task created")
+                else:
+                    logger.warning(f"Failed to create scheduled task: {result.stderr}")
+                
+        except Exception as e:
+            logger.error(f"Error setting up emergency scheduled task: {e}")
+    
+    def _cleanup_emergency_scheduled_task(self):
+        """Remove emergency HidHide cleanup scheduled task."""
+        try:
+            from .utils.subprocess_utils import run_subprocess
+            
+            result = run_subprocess(['schtasks', '/delete', '/tn', 'TrackPro_HidHide_Cleanup', '/f'], 
+                                  hide_window=True, check=False, capture_output=True)
+            if result.returncode == 0:
+                logger.info("Emergency HidHide cleanup scheduled task removed")
+            else:
+                logger.warning(f"Failed to remove scheduled task: {result.stderr}")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up emergency scheduled task: {e}")
     
     def _cleanup_single_instance_locks(self):
         """Clean up single instance locks and mutexes."""
@@ -1399,6 +1578,156 @@ class TrackProApp:
         error_dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
         error_dialog.setWindowModality(Qt.WindowModality.NonModal)
         error_dialog.show()
+
+    def offer_vjoy_installation(self):
+        """Offer to install vJoy if the installer is bundled with the app"""
+        try:
+            logger.info("Starting vJoy installation offer process...")
+            # Check if vJoy installer is bundled with the app
+            import sys
+            import os
+            
+            # Get the application directory
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                app_dir = os.path.dirname(sys.executable)
+            else:
+                # Running in development
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Try multiple possible paths for the installer
+            possible_installer_paths = [
+                os.path.join(app_dir, 'vJoySetup.exe'),
+                os.path.join(app_dir, '_internal', 'vJoySetup.exe')
+            ]
+            
+            vjoy_installer_path = None
+            for path in possible_installer_paths:
+                if os.path.exists(path):
+                    vjoy_installer_path = path
+                    logger.info(f"Found vJoy installer at: {path}")
+                    break
+            
+            if not vjoy_installer_path:
+                logger.warning(f"vJoy installer not found in app directory. Checked: {possible_installer_paths}")
+                return
+            
+            # Import Qt components for the dialog
+            from PyQt6.QtWidgets import QMessageBox, QApplication
+            from PyQt6.QtCore import Qt
+            
+            # Show installation prompt
+            msg_box = QMessageBox()
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setWindowTitle("vJoy Installation Required")
+            msg_box.setText("vJoy is required for full pedal functionality in TrackPro.")
+            msg_box.setInformativeText("Would you like to install vJoy now? This will require administrator privileges.")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            
+            # Center the dialog on the main window if available
+            if hasattr(self, 'main_window') and self.main_window:
+                msg_box.setParent(self.main_window)
+            
+            result = msg_box.exec()
+            
+            if result == QMessageBox.StandardButton.Yes:
+                logger.info("User agreed to install vJoy")
+                self.install_vjoy(vjoy_installer_path)
+            else:
+                logger.info("User declined vJoy installation")
+                
+        except Exception as e:
+            logger.error(f"Error offering vJoy installation: {e}")
+
+    def install_vjoy(self, installer_path):
+        """Install vJoy using the bundled installer"""
+        try:
+            import subprocess
+            import sys
+            import os
+            
+            logger.info(f"Starting vJoy installation from: {installer_path}")
+            
+            # Run the installer silently with administrator privileges
+            # Use /S for silent installation (common for NSIS installers)
+            cmd = [installer_path, '/S']
+            
+            # On Windows, we need to run as administrator
+            if sys.platform == 'win32':
+                try:
+                    # Use shell=True and proper Windows UAC elevation
+                    # The installer should prompt for elevation automatically
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,  # 5 minute timeout
+                        shell=True  # Allow Windows UAC to prompt for elevation
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info("vJoy installation completed successfully")
+                        self.show_installation_success()
+                    else:
+                        logger.error(f"vJoy installation failed with return code: {result.returncode}")
+                        logger.error(f"Installation output: {result.stdout}")
+                        logger.error(f"Installation errors: {result.stderr}")
+                        self.show_installation_error("Installation failed. Please try running TrackPro as administrator.")
+                        
+                except subprocess.TimeoutExpired:
+                    logger.error("vJoy installation timed out")
+                    self.show_installation_error("Installation timed out. Please try again.")
+                except Exception as e:
+                    logger.error(f"Error running vJoy installer: {e}")
+                    self.show_installation_error(f"Installation error: {str(e)}")
+            else:
+                logger.warning("vJoy installation only supported on Windows")
+                self.show_installation_error("vJoy installation is only supported on Windows.")
+                
+        except Exception as e:
+            logger.error(f"Error in vJoy installation: {e}")
+            self.show_installation_error(f"Installation error: {str(e)}")
+
+    def show_installation_success(self):
+        """Show success message after vJoy installation"""
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            
+            msg_box = QMessageBox()
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.setWindowTitle("vJoy Installation Complete")
+            msg_box.setText("vJoy has been installed successfully!")
+            msg_box.setInformativeText("TrackPro will now have full pedal functionality. You may need to restart the application.")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            
+            if hasattr(self, 'main_window') and self.main_window:
+                msg_box.setParent(self.main_window)
+            
+            msg_box.exec()
+            
+        except Exception as e:
+            logger.error(f"Error showing installation success: {e}")
+
+    def show_installation_error(self, error_message):
+        """Show error message after failed vJoy installation"""
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            
+            msg_box = QMessageBox()
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("vJoy Installation Failed")
+            msg_box.setText("vJoy installation was not successful.")
+            msg_box.setInformativeText(error_message)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            
+            if hasattr(self, 'main_window') and self.main_window:
+                msg_box.setParent(self.main_window)
+            
+            msg_box.exec()
+            
+        except Exception as e:
+            logger.error(f"Error showing installation error: {e}")
     
     def handle_auth_state_change(self, is_authenticated):
         """Handles the authentication state change from the OAuth handler or initial load."""
@@ -1719,28 +2048,43 @@ class TrackProApp:
                 # Import HidHideClient just before use
                 from .pedals.hidhide import HidHideClient
                 self.hidhide = HidHideClient(fail_silently=True)
+                
                 if hasattr(self.hidhide, 'functioning') and self.hidhide.functioning:
                     logger.info("HidHide client initialized successfully")
                     
-                    # Actually hide the Sim Coaches P1 Pro Pedals device
+                    # Try to hide the pedal device (this will also enable cloaking)
                     self._hide_pedal_device()
                     
                 elif hasattr(self.hidhide, 'error_context') and self.hidhide.error_context:
                     logger.warning(f"HidHide initialized with limited functionality: {self.hidhide.error_context}")
-                    self.show_hidhide_warning(self.hidhide.error_context)
+                    # Don't show warning to user for non-critical errors
+                    if self.hidhide.error_context in ["driver_not_installed", "service_not_installed"]:
+                        self.show_hidhide_warning(self.hidhide.error_context)
+                else:
+                    logger.info("HidHide client initialized (functionality unknown)")
+                    # Still try to hide the device
+                    self._hide_pedal_device()
+                    
         except Exception as e:
-            logger.error(f"Error initializing HidHide client: {e}")
+            logger.warning(f"Error initializing HidHide client: {e} - continuing without device hiding")
             self.hidhide = None
 
     def _hide_pedal_device(self):
         """Hide the Sim Coaches P1 Pro Pedals device from other applications."""
         if not hasattr(self, 'hidhide') or not self.hidhide:
-            logger.warning("HidHide client not available for device hiding")
+            logger.debug("HidHide client not available for device hiding")
             return
             
         try:
             device_name = "Sim Coaches P1 Pro Pedals"
             logger.info(f"Attempting to hide device: {device_name}")
+            
+            # First enable cloaking
+            cloak_success = self.hidhide.set_cloak_state(True)
+            if cloak_success:
+                logger.info("HidHide cloaking enabled")
+            else:
+                logger.warning("Failed to enable HidHide cloaking - may need elevated permissions")
             
             # Get the device instance path
             device_path = self.hidhide.get_device_instance_path(device_name)
@@ -1752,12 +2096,18 @@ class TrackProApp:
                 if success:
                     logger.info(f"Successfully hid device: {device_name}")
                 else:
-                    logger.warning(f"Failed to hide device: {device_name}")
+                    logger.warning(f"Failed to hide device: {device_name} - may need elevated permissions")
             else:
-                logger.warning(f"Could not find device path for: {device_name}")
+                logger.debug(f"Could not find device path for: {device_name} - device may not be connected")
                 
         except Exception as e:
-            logger.error(f"Error hiding pedal device: {e}")
+            logger.warning(f"Error hiding pedal device: {e}")
+    
+    def _enable_device_hiding_on_startup(self):
+        """Automatically enable HidHide cloaking when TrackPro starts."""
+        # This method is now merged into _hide_pedal_device for simplicity
+        logger.debug("_enable_device_hiding_on_startup called but functionality moved to _hide_pedal_device")
+        pass
     
     def post_startup_operations(self):
         """Perform heavy operations after the main UI is shown and responsive."""

@@ -17,6 +17,7 @@ from ...utils.resource_utils import get_track_map_file_path
 import os
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -221,13 +222,13 @@ class TrackMapOverlaySettingsDialog(QDialog):
         super().__init__(parent)
         
         # Get shared iRacing API from main window
-        shared_iracing_api = self._get_shared_iracing_api()
+        self.shared_iracing_api = self._get_shared_iracing_api()
         
         # Create overlay manager with shared iRacing API
-        self.overlay_manager = TrackMapOverlayManager(shared_iracing_api)
+        self.overlay_manager = TrackMapOverlayManager(self.shared_iracing_api)
         
         # Log the connection status
-        if shared_iracing_api:
+        if self.shared_iracing_api:
             logger.info("🔗 Using shared iRacing API for overlay manager")
         else:
             logger.warning("⚠️ No shared iRacing API available - overlay will work with limited functionality")
@@ -250,6 +251,9 @@ class TrackMapOverlaySettingsDialog(QDialog):
         # Connect UI signals to handlers
         self.connect_signals()
         
+        # Connect to sessionInfoUpdated signal for real-time updates
+        self._connect_session_updates()
+        
         # Load the current track info when dialog opens
         self.refresh_current_track_info()
     
@@ -262,7 +266,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
                 # Search through top-level widgets to find the main window with iRacing API
                 for widget in app.topLevelWidgets():
                     # Check for various possible API attribute names
-                    api_attrs = ['iracing_api', 'simple_iracing_api', 'ir_api', 'iRacing_api']
+                    api_attrs = ['global_iracing_api', 'iracing_api', 'simple_iracing_api', 'ir_api', 'iRacing_api']
                     for attr in api_attrs:
                         if hasattr(widget, attr):
                             api = getattr(widget, attr)
@@ -286,6 +290,34 @@ class TrackMapOverlaySettingsDialog(QDialog):
             logger.error(f"❌ Error getting shared iRacing API: {e}")
         
         return None
+    
+    def _connect_session_updates(self):
+        """Connect to sessionInfoUpdated signal for real-time UI updates."""
+        try:
+            if self.shared_iracing_api and hasattr(self.shared_iracing_api, 'sessionInfoUpdated'):
+                self.shared_iracing_api.sessionInfoUpdated.connect(self._on_session_info_updated)
+                logger.info("✅ Track builder UI connected to sessionInfoUpdated signal for real-time updates")
+            else:
+                logger.warning("⚠️ No sessionInfoUpdated signal available for real-time updates")
+        except Exception as e:
+            logger.error(f"❌ Error connecting to session updates: {e}")
+    
+    def _on_session_info_updated(self, session_payload):
+        """Handle session info updates to refresh UI in real-time."""
+        try:
+            # Only update UI every 5 seconds to prevent spam
+            import time
+            current_time = time.time()
+            if not hasattr(self, '_last_ui_update_time'):
+                self._last_ui_update_time = 0
+            
+            if current_time - self._last_ui_update_time > 5.0:
+                self.check_track_availability_status()
+                self.check_cloud_track_maps()
+                self._last_ui_update_time = current_time
+            
+        except Exception as e:
+            logger.error(f"Error handling session info update: {e}")
     
     def _load_json_file_safely(self, file_path):
         """Safely load JSON file with null byte cleaning."""
@@ -696,6 +728,10 @@ class TrackMapOverlaySettingsDialog(QDialog):
 
     def start_track_builder(self):
         """Start the ultimate track builder."""
+        # Clean up any dead threads first
+        if self.track_builder_thread and not self.track_builder_thread.isRunning():
+            self.track_builder_thread = None
+            
         if self.track_builder_thread and self.track_builder_thread.isRunning():
             QMessageBox.warning(self, "Track Builder Running", 
                                "Track builder is already running. Please wait for it to complete or stop it first.")
@@ -711,22 +747,21 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.progress_bar.setValue(0)
         self.builder_status_label.setText("Starting track builder...")
         
-        # Get global iRacing connection from parent if available
-        simple_iracing_api = None
-        try:
-            # Access the global iRacing connection through the main window
-            from PyQt6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app:
-                # Get the main window
-                main_window = None
-                for widget in app.topLevelWidgets():
-                    if hasattr(widget, 'global_iracing_api') and widget.global_iracing_api:
-                        main_window = widget
-                        simple_iracing_api = widget.global_iracing_api
-                        break
-        except Exception:
-            pass  # Silently handle any errors accessing global iRacing connection
+        # Use stored shared iRacing API if available, otherwise try to get it
+        simple_iracing_api = self.shared_iracing_api
+        if not simple_iracing_api:
+            try:
+                # Access the global iRacing connection through the main window
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app:
+                    # Get the main window
+                    for widget in app.topLevelWidgets():
+                        if hasattr(widget, 'global_iracing_api') and widget.global_iracing_api:
+                            simple_iracing_api = widget.global_iracing_api
+                            break
+            except Exception:
+                pass  # Silently handle any errors accessing global iRacing connection
         
         # Start the builder thread with the global connection (or None for fallback)
         self.track_builder_thread = TrackBuilderThread(simple_iracing_api)
@@ -745,13 +780,13 @@ class TrackMapOverlaySettingsDialog(QDialog):
         # Connect visualization window if it exists
         self._connect_visualization_to_builder()
         
-        self.track_builder_thread.start()
-        
-        # Update UI
+        # Update UI state to running
         self.start_builder_button.setEnabled(False)
         self.stop_builder_button.setEnabled(True)
-        self.builder_status_label.setText("🔌 Starting track builder...")
+        self.builder_status_label.setText("Starting track builder...")
         self.progress_bar.setValue(0)
+        
+        self.track_builder_thread.start()
         
         QMessageBox.information(self, "Track Builder Started", 
                               "🎯 Track builder is now running!\n\n"
@@ -818,10 +853,10 @@ class TrackMapOverlaySettingsDialog(QDialog):
             self.progress_bar.setValue(completed_laps)
             self.builder_status_label.setText(status_message)
             
-            # Force UI refresh
-            self.progress_bar.repaint()
-            self.builder_status_label.repaint()
-            QApplication.processEvents()
+            # CRITICAL FIX: Remove blocking UI operations that interfere with pedal processing
+            # self.progress_bar.repaint()  # REMOVED: Forces immediate paint blocking threads
+            # self.builder_status_label.repaint()  # REMOVED: Forces immediate paint blocking threads
+            # QApplication.processEvents()  # REMOVED: This is the main culprit blocking pedal thread!
             
         except Exception as e:
             logger.error(f"Error in direct progress update: {e}")
@@ -843,6 +878,17 @@ class TrackMapOverlaySettingsDialog(QDialog):
     def update_progress_ui(self, completed_laps, current_points):
         """Update the UI progress bar and status - called from main thread."""
         try:
+            # PERFORMANCE FIX: Throttle UI updates to prevent blocking pedal thread
+            current_time = time.time()
+            if not hasattr(self, '_last_ui_update_time'):
+                self._last_ui_update_time = 0
+            
+            # Only update UI at most every 250ms (4Hz) to prevent blocking pedal processing
+            if current_time - self._last_ui_update_time < 0.25:
+                return
+            
+            self._last_ui_update_time = current_time
+            
             required_laps = 3
             
             # Update progress bar
@@ -857,12 +903,19 @@ class TrackMapOverlaySettingsDialog(QDialog):
             
             self.builder_status_label.setText(status)
             
-            # Force repaint
-            self.progress_bar.repaint()
-            self.builder_status_label.repaint()
-            QApplication.processEvents()
+            # CRITICAL FIX: Remove blocking UI operations that interfere with pedal processing
+            # Let Qt handle repaints naturally instead of forcing them
+            # self.progress_bar.repaint()  # REMOVED: Forces immediate paint blocking threads
+            # self.builder_status_label.repaint()  # REMOVED: Forces immediate paint blocking threads  
+            # QApplication.processEvents()  # REMOVED: This is the main culprit blocking pedal thread!
             
-            print(f"✅ DEBUG: UI updated successfully - {completed_laps}/{required_laps} laps, {current_points} points")
+            # Only log every 5 updates (every ~1.25 seconds) to reduce debug spam
+            if not hasattr(self, '_ui_update_count'):
+                self._ui_update_count = 0
+            self._ui_update_count += 1
+            
+            if self._ui_update_count % 5 == 0:
+                print(f"✅ DEBUG: UI updated successfully - {completed_laps}/{required_laps} laps, {current_points} points")
             
         except Exception as e:
             print(f"❌ DEBUG: Error in update_progress_ui: {e}")
@@ -929,7 +982,9 @@ The track map has been saved and is ready for use in:
             self.track_builder_thread.stop()
             self.track_builder_thread.wait(5000)  # Wait up to 5 seconds
             
-        self.on_builder_finished()
+        # Force reset UI state regardless of thread state
+        self._reset_ui_state()
+        self.builder_status_label.setText("Track builder stopped.")
     
     def show_track_visualization(self):
         """Show the live track building visualization window."""
@@ -939,7 +994,7 @@ The track map has been saved and is ready for use in:
         # Always try to connect to any running track builder
         self._connect_visualization_to_builder()
         
-        # CRITICAL FIX: If worker is already running, connect directly to it
+        # CRITICAL FIX: Simplified and more reliable live view connection
         if (self.track_builder_thread and 
             hasattr(self.track_builder_thread, 'track_builder_manager') and 
             self.track_builder_thread.track_builder_manager and
@@ -947,23 +1002,35 @@ The track map has been saved and is ready for use in:
             self.track_builder_thread.track_builder_manager.worker):
             
             worker = self.track_builder_thread.track_builder_manager.worker
-            print("🔗 FIXED: Live view opened after worker ready - connecting directly")
+            print("🔗 LIVE VIEW: Connecting to running track builder worker")
+            
+            # Use try-finally to ensure connection always succeeds
             try:
-                # Disconnect any existing connections to avoid duplicates
-                worker.track_update.disconnect(self.visualization_window.update_track_data)
-            except:
-                pass
-            
-            # Connect to worker signal
-            worker.track_update.connect(
-                self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
-            )
-            print("✅ FIXED: Live view connected to running worker")
-            
-            # Send current track state immediately to visualization window
-            if hasattr(worker, 'track_builder') and worker.track_builder:
-                print("🔄 FIXED: Sending current track state to visualization window")
-                self.visualization_window.update_track_data(worker.track_builder)
+                # Safely disconnect any existing connections
+                try:
+                    worker.track_update.disconnect(self.visualization_window.update_track_data)
+                except (TypeError, RuntimeError):
+                    pass  # No existing connection or signal doesn't exist
+                
+                # Connect with queued connection for thread safety
+                worker.track_update.connect(
+                    self.visualization_window.update_track_data, 
+                    Qt.ConnectionType.QueuedConnection
+                )
+                print("✅ LIVE VIEW: Successfully connected to worker signals")
+                
+                # Send initial track state if available
+                if (hasattr(worker, 'track_builder') and 
+                    worker.track_builder and 
+                    hasattr(worker.track_builder, 'track_points') and
+                    len(worker.track_builder.track_points) > 0):
+                    print(f"🔄 LIVE VIEW: Sending current track state ({len(worker.track_builder.track_points)} points)")
+                    QTimer.singleShot(100, lambda: self.visualization_window.update_track_data(worker.track_builder))
+                
+            except Exception as e:
+                print(f"❌ LIVE VIEW: Connection error: {e}")
+                # Fallback: Try to connect to thread-level signals
+                self._connect_to_thread_signals()
         
         self.visualization_window.show()
         self.visualization_window.raise_()
@@ -984,54 +1051,46 @@ The track map has been saved and is ready for use in:
         if not self.visualization_window:
             return
             
-        # Try to connect to thread-level signals
-        if self.track_builder_thread and hasattr(self.track_builder_thread, 'track_update'):
-            try:
-                # Disconnect any existing connections to avoid duplicates
-                self.track_builder_thread.track_update.disconnect(self.visualization_window.update_track_data)
-            except:
-                pass  # No existing connection
-            
-            # Connect to thread signal
-            self.track_builder_thread.track_update.connect(
-                self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
-            )
-            print("🔗 Connected visualization to track builder thread signals")
+        # SIMPLIFIED CONNECTION LOGIC: Try connections in order of preference
+        connection_established = False
         
-        # Also try to connect to manager signals if available
+        # First priority: Direct worker connection (most reliable)
         if (self.track_builder_thread and 
             hasattr(self.track_builder_thread, 'track_builder_manager') and 
-            self.track_builder_thread.track_builder_manager):
+            self.track_builder_thread.track_builder_manager and
+            hasattr(self.track_builder_thread.track_builder_manager, 'worker') and
+            self.track_builder_thread.track_builder_manager.worker and
+            hasattr(self.track_builder_thread.track_builder_manager.worker, 'track_update')):
             
-            manager = self.track_builder_thread.track_builder_manager
-            if hasattr(manager, 'track_update'):
-                try:
-                    # Disconnect any existing connections
-                    manager.track_update.disconnect(self.visualization_window.update_track_data)
-                except:
-                    pass
-                
-                # Connect to manager signal
-                manager.track_update.connect(
-                    self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
+            try:
+                worker = self.track_builder_thread.track_builder_manager.worker
+                worker.track_update.connect(
+                    self.visualization_window.update_track_data, 
+                    Qt.ConnectionType.QueuedConnection
                 )
-                print("🔗 Connected visualization to track builder manager signals")
+                print("🔗 LIVE VIEW: Connected to worker signals (priority 1)")
+                connection_established = True
+            except Exception as e:
+                print(f"❌ LIVE VIEW: Worker connection failed: {e}")
+        
+        # Second priority: Thread-level signals
+        if not connection_established:
+            self._connect_to_thread_signals()
+    
+    def _connect_to_thread_signals(self):
+        """Connect to thread-level signals as fallback."""
+        if not self.visualization_window or not self.track_builder_thread:
+            return
             
-            # Connect to worker signals if available
-            if hasattr(manager, 'worker') and manager.worker:
-                worker = manager.worker
-                if hasattr(worker, 'track_update'):
-                    try:
-                        # Disconnect any existing connections
-                        worker.track_update.disconnect(self.visualization_window.update_track_data)
-                    except:
-                        pass
-                    
-                    # Connect to worker signal
-                    worker.track_update.connect(
-                        self.visualization_window.update_track_data, Qt.ConnectionType.QueuedConnection
-                    )
-                    print("🔗 Connected visualization to track builder worker signals")
+        if hasattr(self.track_builder_thread, 'track_update'):
+            try:
+                self.track_builder_thread.track_update.connect(
+                    self.visualization_window.update_track_data, 
+                    Qt.ConnectionType.QueuedConnection
+                )
+                print("🔗 LIVE VIEW: Connected to thread signals (fallback)")
+            except Exception as e:
+                print(f"❌ LIVE VIEW: Thread connection failed: {e}")
 
     def on_builder_status_updated(self, status):
         """Handle status updates from the track builder."""
@@ -1039,12 +1098,23 @@ The track map has been saved and is ready for use in:
 
     def on_builder_progress_updated(self, completed_laps, required_laps):
         """Handle progress updates from the track builder thread."""
+        # PERFORMANCE FIX: Throttle progress updates
+        current_time = time.time()
+        if not hasattr(self, '_last_progress_update_time'):
+            self._last_progress_update_time = 0
+        
+        # Only update every 250ms to prevent blocking pedal thread
+        if current_time - self._last_progress_update_time < 0.25:
+            return
+        
+        self._last_progress_update_time = current_time
+        
         self.progress_bar.setValue(completed_laps)
         self.progress_bar.setMaximum(required_laps)
         
-        # Force UI refresh
-        self.progress_bar.repaint()
-        QApplication.processEvents()
+        # CRITICAL FIX: Remove blocking UI operations
+        # self.progress_bar.repaint()  # REMOVED: Forces immediate paint blocking threads
+        # QApplication.processEvents()  # REMOVED: This blocks the pedal thread!
 
     def on_centerline_generated(self, file_path):
         """Handle when centerline is generated."""
@@ -1060,15 +1130,26 @@ The track map has been saved and is ready for use in:
     def on_builder_error(self, error_message):
         """Handle errors from the track builder."""
         QMessageBox.critical(self, "Track Builder Error", error_message)
-        self.builder_status_label.setText(f"❌ Error: {error_message}")
+        self.builder_status_label.setText(f"Error: {error_message}")
+        
+        # CRITICAL FIX: Reset UI state when error occurs
+        self._reset_ui_state()
 
     def on_builder_finished(self):
         """Handle when the track builder finishes."""
+        self._reset_ui_state()
+        
+        if not self.builder_status_label.text().startswith("✅") and not self.builder_status_label.text().startswith("Error:"):
+            self.builder_status_label.setText("Track builder stopped. Ready to start again.")
+    
+    def _reset_ui_state(self):
+        """Reset the UI state to allow starting track builder again."""
         self.start_builder_button.setEnabled(True)
         self.stop_builder_button.setEnabled(False)
         
-        if not self.builder_status_label.text().startswith("✅"):
-            self.builder_status_label.setText("Track builder stopped. Ready to start again.")
+        # Clean up thread reference if it's finished
+        if self.track_builder_thread and not self.track_builder_thread.isRunning():
+            self.track_builder_thread = None
 
     def load_track_map_file(self):
         """Load a track map file for the overlay."""
@@ -1798,29 +1879,18 @@ The track map has been saved and is ready for use in:
     def get_current_track_info(self):
         """Get current track name and configuration from iRacing."""
         try:
-            # Try to get from global iRacing connection first
-            simple_iracing_api = None
-            if hasattr(self.parent(), 'global_iracing_api'):
-                simple_iracing_api = self.parent().global_iracing_api
-            
-            if simple_iracing_api and simple_iracing_api.ir and simple_iracing_api.ir.is_connected:
-                track_name = simple_iracing_api.ir['WeekendInfo']['TrackDisplayName']
-                track_config = simple_iracing_api.ir['WeekendInfo']['TrackConfigName']
-                logger.info(f"🔍 Got track info from global connection: {track_name} ({track_config})")
+            # Use direct temporary connection - this is what actually works
+            import irsdk
+            ir = irsdk.IRSDK()
+            if ir.startup() and ir.is_connected:
+                track_name = ir['WeekendInfo']['TrackDisplayName']
+                track_config = ir['WeekendInfo']['TrackConfigName']
+                ir.shutdown()
+                logger.info(f"Got track info: {track_name} ({track_config})")
                 return track_name, track_config
-            else:
-                # Fallback: create temporary connection
-                import irsdk
-                ir = irsdk.IRSDK()
-                if ir.startup() and ir.is_connected:
-                    track_name = ir['WeekendInfo']['TrackDisplayName']
-                    track_config = ir['WeekendInfo']['TrackConfigName']
-                    ir.shutdown()
-                    logger.info(f"🔍 Got track info from temporary connection: {track_name} ({track_config})")
-                    return track_name, track_config
                 
         except Exception as e:
-            print(f"⚠️ Error getting track info: {e}")
+            print(f"Error getting track info: {e}")
         
         return None
 

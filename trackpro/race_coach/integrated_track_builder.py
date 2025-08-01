@@ -250,6 +250,11 @@ class IntegratedTrackBuilderWorker(QThread):
         self.speed_drop_threshold = 5.0
         self.steering_threshold = 0.1
         self.min_corner_duration = 1.0
+    
+    def stop_building(self):
+        """Stop the track building process cleanly."""
+        print("🛑 Track builder worker stopping...")
+        self.is_running = False
         
     def run(self):
         """Main integrated building process."""
@@ -360,8 +365,8 @@ class IntegratedTrackBuilderWorker(QThread):
                         completed_laps = len(self.track_builder.laps)
                         current_points = len(self.track_builder.current_lap)
                         
-                        # Only print occasionally to avoid log spam
-                        if current_points % 50 == 0:  # Print every 50 points
+                        # PERFORMANCE FIX: Reduce debug spam - only print every 100 points
+                        if current_points % 100 == 0:  # Print every 100 points instead of 50
                             print(f"🎯 Track update: Lap {completed_laps + 1}/3 - {current_points} points")
                         
                         self.track_update.emit(self.track_builder)
@@ -619,11 +624,23 @@ class IntegratedTrackBuilderManager(QObject):
         self.worker = None
         self.is_running = False
         self.simple_iracing_api = simple_iracing_api  # Store global iRacing connection
+        
+        # Track change detection - same pattern as race coach
+        self.current_track_id = None
+        self.current_track_config = None
+        
+        # Connect to sessionInfoUpdated signal for track change detection
+        if self.simple_iracing_api and hasattr(self.simple_iracing_api, 'sessionInfoUpdated'):
+            self.simple_iracing_api.sessionInfoUpdated.connect(self._on_session_info_updated)
+            print("✅ Track map builder connected to sessionInfoUpdated signal for track change detection")
     
     def start_building(self):
         """Start the track building process."""
         if self.is_running:
             return
+        
+        # Initialize current track info for change detection
+        self._update_current_track_info()
         
         self.is_running = True
         # Pass the global iRacing connection to the worker
@@ -661,4 +678,66 @@ class IntegratedTrackBuilderManager(QObject):
     def _on_worker_finished(self):
         """Handle worker completion."""
         self.is_running = False
-        self.worker = None 
+        self.worker = None
+    
+    def _on_session_info_updated(self, session_payload):
+        """Handle session info updates to detect track changes - same pattern as race coach."""
+        try:
+            if not session_payload.get('is_connected', False):
+                return
+            
+            session_info = session_payload.get('session_info', {})
+            if not session_info:
+                return
+            
+            # Extract track information from session info
+            weekend_info = session_info.get('WeekendInfo', {})
+            if not weekend_info:
+                return
+            
+            new_track_id = weekend_info.get('TrackID')
+            new_track_config = weekend_info.get('TrackConfigName', '')
+            
+            # Check if track changed
+            if (new_track_id != self.current_track_id or 
+                new_track_config != self.current_track_config):
+                
+                if self.current_track_id is not None:  # Not first initialization
+                    track_name = weekend_info.get('TrackDisplayName', 'Unknown Track')
+                    print(f"🏁 TRACK CHANGE DETECTED: {self.current_track_id} -> {new_track_id}")
+                    print(f"🏁 Config change: '{self.current_track_config}' -> '{new_track_config}'")
+                    print(f"🏁 New track: {track_name}")
+                    
+                    self.status_update.emit(f"Track changed to {track_name} - restarting track builder...")
+                    
+                    # Stop current building and restart for new track
+                    if self.is_running:
+                        self.stop_building()
+                        # Small delay to ensure clean shutdown
+                        from PyQt6.QtCore import QTimer
+                        QTimer.singleShot(500, self.start_building)
+                
+                # Update stored track info
+                self.current_track_id = new_track_id
+                self.current_track_config = new_track_config
+                
+        except Exception as e:
+            print(f"⚠️ Error in track change detection: {e}")
+    
+    def _update_current_track_info(self):
+        """Update current track info from iRacing connection."""
+        try:
+            if (self.simple_iracing_api and 
+                hasattr(self.simple_iracing_api, 'ir') and 
+                self.simple_iracing_api.ir and 
+                self.simple_iracing_api.ir.is_connected):
+                
+                weekend_info = self.simple_iracing_api.ir['WeekendInfo']
+                if weekend_info:
+                    self.current_track_id = weekend_info.get('TrackID')
+                    self.current_track_config = weekend_info.get('TrackConfigName', '')
+                    track_name = weekend_info.get('TrackDisplayName', 'Unknown Track')
+                    print(f"🏁 Initial track info: {track_name} (ID: {self.current_track_id}, Config: {self.current_track_config})")
+                    
+        except Exception as e:
+            print(f"⚠️ Error getting initial track info: {e}") 

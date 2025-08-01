@@ -723,6 +723,19 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                 is_connected = False
                 print("Monitor: iRacing DISCONNECTED.")
                 
+                # CRITICAL FIX: Reset track change tracking variables on disconnect
+                # This ensures clean state for next connection and proper track detection
+                global last_processed_iracing_track_id, last_processed_iracing_car_id, last_processed_track_config
+                global last_session_id, last_subsession_id, current_session_uuid
+                last_processed_iracing_track_id = None
+                last_processed_iracing_car_id = None  
+                last_processed_track_config = None
+                last_session_id = None
+                last_subsession_id = None
+                current_session_uuid = None
+                _monitor_loop.last_session_setup_logged = False
+                print("Monitor: ✅ Reset tracking variables for clean reconnection")
+                
                 # Update the API connection status (disconnected) with safety checks
                 if api_valid:
                     try:
@@ -1048,14 +1061,15 @@ def _monitor_loop(supabase_client: Client, logged_in_user_id: str, lap_saver_ins
                                     if not _monitor_loop.last_session_setup_logged:
                                         print(f"Monitor: Error retrieving existing session data: {e}")
                             
-                            # CRITICAL FIX: Update tracking variables for resumed sessions too!
+                            # CRITICAL FIX: ALWAYS update tracking variables for resumed sessions!
                             # This prevents the monitor from thinking the session changed on next loop
+                            # BUGFIX: Remove the logging flag condition - always update tracking variables
+                            last_processed_iracing_track_id = iracing_track_id
+                            last_processed_iracing_car_id = iracing_car_id
+                            last_processed_track_config = track_config
+                            last_session_id = session_id
+                            last_subsession_id = subsession_id
                             if not _monitor_loop.last_session_setup_logged:
-                                last_processed_iracing_track_id = iracing_track_id
-                                last_processed_iracing_car_id = iracing_car_id
-                                last_processed_track_config = track_config
-                                last_session_id = session_id
-                                last_subsession_id = subsession_id
                                 print(f"Monitor: ✅ Updated tracking variables for resumed session")
                                 logger.info(f"[SESSION MONITOR] ✅ Updated tracking variables for resumed session - SessionID: {session_id}, Track: {iracing_track_id}, Config: {track_config}")
                             

@@ -680,7 +680,7 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
     
     def closeEvent(self, event):
-        """Handle window close event - FORCE KILL ALL PROCESSES."""
+        """Handle window close event - PROPER CLEANUP THEN FORCE KILL."""
         try:
             # Check if this should minimize to tray instead of closing
             from ..config import config
@@ -690,19 +690,34 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             
-            logger.info("FORCE CLOSING - Killing all TrackPro processes...")
+            logger.info("PROPER CLOSING - Performing cleanup before force kill...")
             
-            # STEP 1: Force kill ALL TrackPro processes immediately
+            # STEP 1: Call proper cleanup method to disable HidHide cloaking
+            if hasattr(self, 'app_instance') and self.app_instance:
+                logger.info("Calling app cleanup method to disable HidHide cloaking...")
+                try:
+                    self.app_instance.cleanup(force_unhide=True)
+                    logger.info("✅ App cleanup completed successfully")
+                    
+                    # Give HidHide commands time to take effect
+                    import time
+                    logger.info("Waiting 2 seconds for HidHide commands to take effect...")
+                    time.sleep(2)
+                    
+                except Exception as e:
+                    logger.error(f"Error during app cleanup: {e}")
+            
+            # STEP 2: Force kill ALL TrackPro processes immediately
             self._force_kill_all_trackpro_processes()
             
-            # STEP 2: Clean up single instance locks
+            # STEP 3: Clean up single instance locks
             self._cleanup_single_instance_locks_immediate()
             
-            # STEP 3: Hide tray icon
+            # STEP 4: Hide tray icon
             if hasattr(self, 'tray_icon') and self.tray_icon:
                 self.tray_icon.hide()
             
-            # STEP 4: Force quit application immediately
+            # STEP 5: Force quit application immediately
             logger.info("Force quitting application...")
             event.accept()
             QApplication.instance().quit()
@@ -3016,7 +3031,7 @@ class MainWindow(QMainWindow):
                     if 'curve_type' in data:
                         self.set_curve_type(pedal, data['curve_type'])
             
-            QMessageBox.information(self, "Calibration Complete", "Calibration wizard completed successfully!")
+
         except Exception as e:
             logger.error(f"Error processing calibration wizard results: {e}")
             QMessageBox.warning(self, "Error", f"Error applying calibration results: {str(e)}")

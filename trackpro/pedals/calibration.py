@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QGroupBox, QButtonGroup, QRadioButton,
     QProgressBar, QMessageBox, QWidget, QWizard, QWizardPage,
-    QSizePolicy, QSpacerItem, QFrame, QTextEdit
+    QSizePolicy, QSpacerItem, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QPen, QBrush, QColor
@@ -311,8 +311,15 @@ class PedalCalibrationPage(QWizardPage):
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
-        # Instructions with better sizing
-        self.instructions = QLabel(f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
+        # Instructions with better sizing and specific guidance (brake/clutch positions swapped)
+        pedal_guidance = {
+            'throttle': "Press the RIGHT pedal (throttle/gas) FULLY and then RELEASE it completely",
+            'brake': "Press the LEFT pedal (brake) FULLY and then RELEASE it completely",  # Now on axis 2
+            'clutch': "Press the MIDDLE pedal (clutch) FULLY and then RELEASE it completely"  # Now on axis 1
+        }
+        instruction_text = pedal_guidance.get(self.pedal_name, f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
+        
+        self.instructions = QLabel(instruction_text)
         self.instructions.setWordWrap(True)
         self.instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.instructions.setStyleSheet("""
@@ -417,8 +424,22 @@ class PedalCalibrationPage(QWizardPage):
         self.values_collected = []
         self.calibration_started = False
         
-        self.instructions.setText(f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
-        self.status.setText("Ready to calibrate. Press and release the pedal when ready.")
+        # Use same guidance as in setup (brake/clutch positions swapped)
+        pedal_guidance = {
+            'throttle': "Press the RIGHT pedal (throttle/gas) FULLY and then RELEASE it completely",
+            'brake': "Press the LEFT pedal (brake) FULLY and then RELEASE it completely",  # Now on axis 2
+            'clutch': "Press the MIDDLE pedal (clutch) FULLY and then RELEASE it completely"  # Now on axis 1
+        }
+        instruction_text = pedal_guidance.get(self.pedal_name, f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
+        self.instructions.setText(instruction_text)
+        
+        # Show which axis is expected for this pedal type
+        expected_axis = {
+            'throttle': 0,
+            'brake': 2,  # Swap: brake is now on axis 2 
+            'clutch': 1  # Swap: clutch is now on axis 1
+        }.get(self.pedal_name, 0)
+        self.status.setText(f"Ready to calibrate {self.pedal_name} on axis {expected_axis}. Press the correct physical pedal to begin.")
         self.min_label.setText("Min: --")
         self.max_label.setText("Max: --")
         self.progress_bar.setValue(0)
@@ -447,17 +468,29 @@ class PedalCalibrationPage(QWizardPage):
                 scaled_value = int((raw_value + 1) * 32767.5)
                 current_raw_values.append(scaled_value)
 
-            # Auto-detect axis during calibration
+            # Force detection on correct axis only
             if self.calibration_stage == "waiting":
-                # Look for significant movement to start calibration
-                for i, value in enumerate(current_raw_values):
-                    if abs(value - 32767) > 8000:  # Significant deviation from center
-                        self.detected_axis = i
+                # Determine the expected axis for this pedal type
+                expected_axis = {
+                    'throttle': 0,
+                    'brake': 2,  # Swap: brake is now on axis 2
+                    'clutch': 1  # Swap: clutch is now on axis 1
+                }.get(self.pedal_name, 0)
+                
+                # Only check movement on the expected axis
+                if expected_axis < len(current_raw_values):
+                    expected_value = current_raw_values[expected_axis]
+                    if abs(expected_value - 32767) > 8000:  # Significant deviation from center
+                        self.detected_axis = expected_axis
                         self.calibration_stage = "calibrating"
                         self.calibration_started = True
-                        self.status.setText(f"🎯 Axis {i} detected! Continue moving the pedal...")
-                        logger.info(f"Auto-detected axis {i} for {self.pedal_name}")
-                        break
+                        self.status.setText(f"✅ Correct {self.pedal_name} pedal detected on axis {expected_axis}!")
+                        logger.info(f"Detected {self.pedal_name} on correct axis {expected_axis}")
+                    else:
+                        # Show live feedback about which axis to use
+                        self.status.setText(f"Waiting for {self.pedal_name.upper()} pedal movement on axis {expected_axis}...")
+                else:
+                    self.status.setText(f"⚠️ Expected axis {expected_axis} not available for {self.pedal_name}")
 
             elif self.calibration_stage == "calibrating":
                 if self.detected_axis >= 0 and self.detected_axis < len(current_raw_values):
@@ -478,9 +511,9 @@ class PedalCalibrationPage(QWizardPage):
                         self.max_label.setText(f"Max: {self.max_value}")
                     
                     # Check if we have good calibration data
-                    if len(self.values_collected) > 60:  # About 1 second of data
+                    if len(self.values_collected) > 30:  # About 0.5 seconds of data
                         range_size = self.max_value - self.min_value
-                        if range_size > 20000:  # Good range detected
+                        if range_size > 8000:  # More reasonable range threshold (about 25% of full range)
                             self.calibration_stage = "complete"
                             self.status.setText("✅ Calibration complete! Good range detected.")
                             self.instructions.setText(f"✅ {self.pedal_name.capitalize()} calibration successful!")
@@ -490,12 +523,28 @@ class PedalCalibrationPage(QWizardPage):
                             self.setField(f"{self.pedal_name}_max", str(self.max_value))
                             self.setField(f"{self.pedal_name}_axis", str(self.detected_axis))
                             
+                            # Update the hardware input mapping to match detected axis
+                            if hasattr(self.hardware_input, 'update_axis_mapping'):
+                                self.hardware_input.update_axis_mapping(self.pedal_name, self.detected_axis)
+                                logger.info(f"Updated {self.pedal_name} hardware mapping to axis {self.detected_axis}")
+                            
+                            # Force UI update and emit completion signal multiple times to ensure it's caught
                             self.completeChanged.emit()
+                            
+                            # Use QTimer to emit signal again after a brief delay
+                            QTimer.singleShot(50, self.completeChanged.emit)
+                            
+                            # Additional signal emission to ensure wizard catches it
+                            QTimer.singleShot(100, self.completeChanged.emit)
+                            
                             logger.info(f"Calibration complete for {self.pedal_name}: min={self.min_value}, max={self.max_value}, axis={self.detected_axis}")
+                            logger.info(f"✅ {self.pedal_name} calibration page is now complete - Next button should be enabled")
 
         except Exception as e:
             logger.error(f"Error during calibration: {e}")
             self.status.setText(f"❌ Error: {str(e)}")
+
+
 
     def isComplete(self):
         """Check if calibration is complete."""
@@ -510,106 +559,7 @@ class PedalCalibrationPage(QWizardPage):
                                   f"Please complete the {self.pedal_name} calibration by pressing and releasing the pedal fully.")
             return False
 
-class CongratulationsPage(QWizardPage):
-    """Final congratulations page."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setTitle("Calibration Complete!")
-        
-        layout = QVBoxLayout(self)
-        layout.setSpacing(20)
-        layout.setContentsMargins(40, 40, 40, 40)
 
-        # Success icon (text-based)
-        success_label = QLabel("🎉")
-        success_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        success_label.setStyleSheet("font-size: 48pt;")
-        layout.addWidget(success_label)
-
-        # Title
-        title_label = QLabel("Congratulations!")
-        title_font = QFont()
-        title_font.setPointSize(24)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("color: #4ecdc4; margin: 20px;")
-        layout.addWidget(title_label)
-
-        # Message
-        message_label = QLabel("Your pedal calibration has been completed successfully!")
-        message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        message_label.setStyleSheet("font-size: 14pt; margin: 10px;")
-        message_label.setWordWrap(True)
-        layout.addWidget(message_label)
-
-        # Summary area
-        self.summary_text = QTextEdit()
-        self.summary_text.setReadOnly(True)
-        self.summary_text.setMaximumHeight(150)
-        self.summary_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #3a3a3a;
-                border: 1px solid #505050;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 11pt;
-            }
-        """)
-        layout.addWidget(self.summary_text)
-
-        # Final message
-        final_label = QLabel("Your pedals are now ready for racing! Click 'Finish' to complete the setup.")
-        final_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        final_label.setStyleSheet("font-size: 12pt; color: #b0b0b0; margin: 20px;")
-        final_label.setWordWrap(True)
-        layout.addWidget(final_label)
-
-    def initializePage(self):
-        """Initialize with calibration summary."""
-        try:
-            # Get wizard reference
-            wizard = self.wizard()
-            
-            # Get pedal count
-            pedal_count = 3  # default
-            if hasattr(wizard, 'page') and wizard.page(0):
-                selection_page = wizard.page(0)
-                if hasattr(selection_page, 'get_pedal_count'):
-                    pedal_count = selection_page.get_pedal_count()
-            
-            # Build summary
-            summary = "Calibration Summary:\n\n"
-            
-            # Always include throttle and brake
-            pedals_to_show = ['throttle', 'brake']
-            if pedal_count == 3:
-                pedals_to_show.append('clutch')
-            
-            for pedal in pedals_to_show:
-                try:
-                    min_val = self.field(f"{pedal}_min")
-                    max_val = self.field(f"{pedal}_max")
-                    axis_val = self.field(f"{pedal}_axis")
-                    
-                    if min_val and max_val and axis_val:
-                        min_num = min_val.replace("Min: ", "") if isinstance(min_val, str) else str(min_val)
-                        max_num = max_val.replace("Max: ", "") if isinstance(max_val, str) else str(max_val)
-                        range_size = int(max_num) - int(min_num) if max_num.isdigit() and min_num.isdigit() else 0
-                        
-                        summary += f"{pedal.capitalize()}:\n"
-                        summary += f"  • Axis: {axis_val}\n"
-                        summary += f"  • Range: {min_num} - {max_num} ({range_size} units)\n\n"
-                except:
-                    summary += f"{pedal.capitalize()}: Configuration error\n\n"
-            
-            summary += "All pedals have been successfully calibrated and are ready for use!"
-            
-            self.summary_text.setPlainText(summary)
-            
-        except Exception as e:
-            logger.error(f"Error creating calibration summary: {e}")
-            self.summary_text.setPlainText("Calibration completed successfully!")
 
 class CalibrationWizard(QWizard):
     """Redesigned pedal calibration wizard with smooth workflow."""
@@ -619,7 +569,6 @@ class CalibrationWizard(QWizard):
     PAGE_THROTTLE = 1
     PAGE_BRAKE = 2
     PAGE_CLUTCH = 3
-    PAGE_COMPLETE = 4
     
     calibration_complete = pyqtSignal(dict)
     
@@ -723,7 +672,6 @@ class CalibrationWizard(QWizard):
         self.addPage(PedalCalibrationPage("throttle", self.hardware_input, self))
         self.addPage(PedalCalibrationPage("brake", self.hardware_input, self))
         self.addPage(PedalCalibrationPage("clutch", self.hardware_input, self))
-        self.addPage(CongratulationsPage(self))
         
         # Connect signals
         self.finished.connect(self.handle_finish)
@@ -743,12 +691,21 @@ class CalibrationWizard(QWizard):
         elif current_id == self.PAGE_BRAKE:
             # Check if user selected 3-pedal set
             selection_page = self.page(self.PAGE_SELECTION)
-            if hasattr(selection_page, 'get_pedal_count') and selection_page.get_pedal_count() == 3:
+            try:
+                pedal_count = selection_page.get_pedal_count()
+                logger.info(f"Pedal count selected: {pedal_count}")
+                if pedal_count == 3:
+                    logger.info("Moving to clutch calibration")
+                    return self.PAGE_CLUTCH
+                else:
+                    logger.info("Skipping clutch, calibration complete")
+                    return -1
+            except Exception as e:
+                logger.error(f"Error getting pedal count: {e}")
+                # Default to 3-pedal if we can't determine
                 return self.PAGE_CLUTCH
-            else:
-                return self.PAGE_COMPLETE
         elif current_id == self.PAGE_CLUTCH:
-            return self.PAGE_COMPLETE
+            return -1
         else:
             return -1
 
@@ -791,6 +748,9 @@ class CalibrationWizard(QWizard):
                     except Exception as e:
                         logger.error(f"Error extracting {pedal} calibration: {e}")
                         results[pedal] = {'min': 0, 'max': 65535, 'axis': -1}
+                
+                # Store results for later retrieval
+                self.calibration_results = results
                 
                 # Save calibration
                 self.save_calibration(results)
@@ -842,4 +802,12 @@ class CalibrationWizard(QWizard):
                 
         except Exception as e:
             logger.error(f"Failed to save calibration: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save calibration: {e}") 
+            QMessageBox.critical(self, "Error", f"Failed to save calibration: {e}")
+    
+    def get_results(self):
+        """Get the calibration results from the wizard.
+        
+        Returns:
+            dict: Dictionary containing calibration results for each pedal
+        """
+        return self.calibration_results 

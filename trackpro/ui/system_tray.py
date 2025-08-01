@@ -118,8 +118,8 @@ def toggle_minimize_to_tray(main_window, checked):
 
 
 def exit_application(main_window):
-    """Exit the application completely - FORCE KILL ALL PROCESSES."""
-    logger.info("FORCE EXIT requested from system tray")
+    """Exit the application completely - PROPER CLEANUP THEN FORCE KILL."""
+    logger.info("PROPER EXIT requested from system tray")
     
     # Hide tray icon first
     if hasattr(main_window, 'tray_icon'):
@@ -129,7 +129,22 @@ def exit_application(main_window):
     original_setting = config.minimize_to_tray
     config.set('ui.minimize_to_tray', False)
     
-    # Force kill all TrackPro processes immediately
+    # STEP 1: Call proper cleanup method to disable HidHide cloaking
+    if hasattr(main_window, 'app_instance') and main_window.app_instance:
+        logger.info("Calling app cleanup method to disable HidHide cloaking...")
+        try:
+            main_window.app_instance.cleanup(force_unhide=True)
+            logger.info("✅ App cleanup completed successfully")
+            
+            # Give HidHide commands time to take effect
+            import time
+            logger.info("Waiting 2 seconds for HidHide commands to take effect...")
+            time.sleep(2)
+            
+        except Exception as e:
+            logger.error(f"Error during app cleanup: {e}")
+    
+    # STEP 2: Force kill all TrackPro processes immediately
     try:
         logger.info("🔫 System tray force killing all TrackPro processes...")
         
@@ -160,7 +175,7 @@ def exit_application(main_window):
     except Exception as e:
         logger.warning(f"Error during system tray force kill: {e}")
     
-    # Clean up lock file
+    # STEP 3: Clean up lock file
     try:
         import tempfile
         import os
@@ -170,7 +185,7 @@ def exit_application(main_window):
     except:
         pass
     
-    # Force quit application
+    # STEP 4: Force quit application
     try:
         QApplication.instance().quit()
     except:

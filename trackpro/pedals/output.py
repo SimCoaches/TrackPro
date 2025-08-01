@@ -76,6 +76,9 @@ class VirtualJoystick:
         if not self.vjoy_dll.vJoyEnabled():
             raise RuntimeError("vJoy is not enabled")
             
+        # Add axis checking functions
+        self._setup_axis_checking_functions()
+            
         # Default device ID
         self.vjoy_device_id = 1
         self.vjoy_acquired = False
@@ -107,14 +110,26 @@ class VirtualJoystick:
                     if status == 0:  # VJD_STAT_OWN
                         logger.info(f"vJoy Device {device_id} is already owned by this feeder")
                         self.vjoy_acquired = True
-                        acquired = True
-                        break
+                        
+                        # Verify axes are configured properly
+                        if self._verify_axes_configuration(device_id):
+                            acquired = True
+                            break
+                        else:
+                            logger.error(f"vJoy Device {device_id} does not have required axes configured")
+                            self.vjoy_acquired = False
                     elif status == 1:  # VJD_STAT_FREE
                         if self.vjoy_dll.AcquireVJD(device_id):
                             logger.info(f"Acquired vJoy Device {device_id}")
                             self.vjoy_acquired = True
-                            acquired = True
-                            break
+                            
+                            # Verify axes are configured properly
+                            if self._verify_axes_configuration(device_id):
+                                acquired = True
+                                break
+                            else:
+                                logger.error(f"vJoy Device {device_id} does not have required axes configured")
+                                self.vjoy_acquired = False
                         else:
                             last_error = f"Failed to acquire vJoy Device {device_id}"
                             logger.warning(last_error)
@@ -214,6 +229,74 @@ class VirtualJoystick:
             
             return False
     
+    def _setup_axis_checking_functions(self):
+        """Setup vJoy axis checking function prototypes."""
+        try:
+            # Add function to check if axis is implemented
+            self.vjoy_dll.GetVJDAxisExist.restype = ctypes.c_bool
+            self.vjoy_dll.GetVJDAxisExist.argtypes = [ctypes.c_uint, ctypes.c_uint]
+            
+            # Add function to get axis min/max values
+            self.vjoy_dll.GetVJDAxisMin.restype = ctypes.c_bool
+            self.vjoy_dll.GetVJDAxisMin.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]
+            
+            self.vjoy_dll.GetVJDAxisMax.restype = ctypes.c_bool
+            self.vjoy_dll.GetVJDAxisMax.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]
+            
+            logger.info("✅ vJoy axis checking functions initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not setup axis checking functions: {e}")
+    
+    def _verify_axes_configuration(self, device_id):
+        """Verify that vJoy device has the required axes configured."""
+        try:
+            required_axes = {
+                'X': HID_USAGE_X,  # 0x30 - Throttle
+                'Y': HID_USAGE_Y,  # 0x31 - Brake  
+                'Z': HID_USAGE_Z   # 0x32 - Clutch
+            }
+            
+            logger.info(f"🔍 Checking vJoy Device {device_id} axis configuration...")
+            
+            all_axes_available = True
+            for axis_name, axis_id in required_axes.items():
+                if hasattr(self.vjoy_dll, 'GetVJDAxisExist'):
+                    axis_exists = self.vjoy_dll.GetVJDAxisExist(device_id, axis_id)
+                    if axis_exists:
+                        # Get axis range if possible
+                        min_val = ctypes.c_long()
+                        max_val = ctypes.c_long()
+                        
+                        if (hasattr(self.vjoy_dll, 'GetVJDAxisMin') and 
+                            hasattr(self.vjoy_dll, 'GetVJDAxisMax')):
+                            
+                            min_ok = self.vjoy_dll.GetVJDAxisMin(device_id, axis_id, ctypes.byref(min_val))
+                            max_ok = self.vjoy_dll.GetVJDAxisMax(device_id, axis_id, ctypes.byref(max_val))
+                            
+                            if min_ok and max_ok:
+                                logger.info(f"✅ {axis_name} axis (0x{axis_id:02X}): Available, Range: {min_val.value} - {max_val.value}")
+                            else:
+                                logger.info(f"✅ {axis_name} axis (0x{axis_id:02X}): Available (range unknown)")
+                        else:
+                            logger.info(f"✅ {axis_name} axis (0x{axis_id:02X}): Available")
+                    else:
+                        logger.error(f"❌ {axis_name} axis (0x{axis_id:02X}): NOT configured in vJoy!")
+                        all_axes_available = False
+                else:
+                    logger.warning(f"⚠️ Cannot check {axis_name} axis - GetVJDAxisExist not available")
+            
+            if all_axes_available:
+                logger.info("🎯 All required axes (X, Y, Z) are properly configured in vJoy")
+                return True
+            else:
+                logger.error("💥 vJoy configuration problem: Missing required axes!")
+                logger.error("🔧 SOLUTION: Open vJoy Configure, enable X, Y, and Z axes for Device 1")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error checking vJoy axes configuration: {e}")
+            return False
+    
     def __del__(self):
         """Clean up vJoy device."""
         try:
@@ -227,14 +310,30 @@ class VirtualJoystick:
         """Find the vJoy DLL path."""
         import os
         import ctypes
+        import sys
         
         # Try to find the vJoy SDK DLL
         dll_paths = [
             r"C:\Program Files\vJoy\x64\vJoyInterface.dll",
             r"C:\Program Files (x86)\vJoy\x86\vJoyInterface.dll",
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "vJoyInterface.dll"),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vJoyInterface.dll")
+            r"C:\Program Files\vJoy\x86\vJoyInterface.dll",
+            r"C:\Program Files (x86)\vJoy\x64\vJoyInterface.dll"
         ]
+        
+        # Add paths for bundled DLL when running as frozen executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled executable - check application directory
+            app_dir = os.path.dirname(sys.executable)
+            dll_paths.extend([
+                os.path.join(app_dir, "vJoyInterface.dll"),
+                os.path.join(app_dir, "_internal", "vJoyInterface.dll")
+            ])
+        else:
+            # Running in development - check relative to this file
+            dll_paths.extend([
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "vJoyInterface.dll"),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vJoyInterface.dll")
+            ])
         
         for path in dll_paths:
             if os.path.exists(path):

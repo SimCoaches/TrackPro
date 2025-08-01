@@ -33,10 +33,10 @@ class TrackVisualizationWindow(QDialog):
         # Setup UI
         self.setup_ui()
         
-        # Auto-refresh timer
+        # Auto-refresh timer - PERFORMANCE FIX: Reduced frequency to prevent blocking pedal thread
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_plot)
-        self.refresh_timer.start(100)  # Update every 100ms
+        self.refresh_timer.start(250)  # Update every 250ms (4Hz) instead of 100ms to reduce CPU load
         
         self.last_update_time = time.time()
         
@@ -148,6 +148,10 @@ class TrackVisualizationWindow(QDialog):
     
     def refresh_plot(self):
         """Refresh the plot with current data."""
+        # PERFORMANCE FIX: Skip refresh if no new data
+        current_time = time.time()
+        if current_time - self.last_update_time < 0.2:  # Only refresh if data updated in last 200ms
+            return
         if not self.track_builder:
             return
         
