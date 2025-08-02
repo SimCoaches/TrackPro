@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Global instance of SupabaseManager
 _supabase_manager = None
+_supabase_manager_lock = threading.Lock()
 
 def get_supabase_client():
     """Get the global Supabase client instance.
@@ -33,16 +34,37 @@ def get_supabase_client():
     """
     global _supabase_manager
     
-    try:
-        # Initialize the manager if it doesn't exist
-        if _supabase_manager is None:
-            logger.info("Initializing Supabase manager for the first time")
-            _supabase_manager = SupabaseManager()
-        
-        # Return the client
+    # Fast path: if already initialized, return immediately
+    if _supabase_manager is not None:
         return _supabase_manager.client if _supabase_manager else None
+    
+    # Slow path: thread-safe initialization with reduced timeout for faster startup
+    try:
+        # Use much shorter timeout to prevent hanging during startup
+        acquired = _supabase_manager_lock.acquire(timeout=2.0)  # Reduced from 10s to 2s
+        if not acquired:
+            logger.error("⚠️ STARTUP FIX: Supabase initialization timed out - continuing without client")
+            return None
+        
+        try:
+            # Double-check pattern: another thread might have initialized it
+            if _supabase_manager is None:
+                try:
+                    logger.info("Initializing Supabase manager for the first time")
+                    _supabase_manager = SupabaseManager()
+                except Exception as e:
+                    logger.error(f"Error initializing Supabase manager: {e}")
+                    # Create a dummy manager to prevent repeated initialization attempts
+                    _supabase_manager = type('DummyManager', (), {'client': None})()
+                    return None
+            
+            # Return the client
+            return _supabase_manager.client if _supabase_manager else None
+        finally:
+            _supabase_manager_lock.release()
+            
     except Exception as e:
-        logger.error(f"Error getting Supabase client: {e}")
+        logger.error(f"⚠️ STARTUP FIX: Unexpected error in Supabase client initialization: {e}")
         return None
 
 # DNS cache to avoid repeated lookups
@@ -57,17 +79,23 @@ def resolve_hostname(hostname):
             return DNS_CACHE[hostname]['ips']
     
     try:
-        # Add shorter timeout for faster resolution
+        # Use even shorter timeout for startup optimization
         import socket
         old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(5.0)  # 5 second timeout instead of default
+        socket.setdefaulttimeout(1.0)  # Reduced to 1 second for ultra-fast startup
         
         # Try to resolve the hostname
-        logger.info(f"[DNS] Resolving {hostname} with 5s timeout...")
+        logger.info(f"[DNS] Resolving {hostname} with 1s timeout...")
         start_time = time.time()
         
-        # Use the same interface as before but with better error handling
-        ips = socket.gethostbyname_ex(hostname)[2]
+        # Use faster resolution method
+        try:
+            # Try simple gethostbyname first (faster)
+            ip = socket.gethostbyname(hostname)
+            ips = [ip]
+        except:
+            # Fallback to full resolution
+            ips = socket.gethostbyname_ex(hostname)[2]
         
         end_time = time.time()
         logger.info(f"[DNS] Resolved {hostname} to {ips[0]} in {end_time - start_time:.2f}s")
@@ -84,7 +112,7 @@ def resolve_hostname(hostname):
         logger.error(f"[DNS] Failed to resolve {hostname}: {e}")
         return None
     except socket.timeout:
-        logger.error(f"[DNS] Timeout resolving {hostname} after 5 seconds")
+        logger.error(f"[DNS] Timeout resolving {hostname} after 1 second")
         return None
     except Exception as e:
         logger.error(f"[DNS] Unexpected error resolving {hostname}: {e}")
@@ -132,6 +160,7 @@ class SupabaseManager:
         self._hostname = None
         self._cached_ip = None
         self._auth_file = os.path.join(os.path.expanduser("~"), ".trackpro", "auth.json")
+        self._saved_auth = None  # Initialize to None to prevent AttributeError
         
         # Initialize secure session manager
         self._secure_session = None
@@ -145,11 +174,12 @@ class SupabaseManager:
                 logger.error(f"Failed to initialize secure session manager: {e}")
                 self._secure_session = None
         
-        # Try to restore session from file
+        # Always try to restore session from file for better user experience
+        # This prevents the "login every time" issue
         self._restore_session()
         
-        # Initialize the client
-        self.initialize()
+        # Defer initialization to speed up startup - client will be created on first use
+        self._initialization_deferred = True
     
     def _migrate_plaintext_sessions(self):
         """Migrate existing plaintext sessions to encrypted storage."""
@@ -222,7 +252,11 @@ class SupabaseManager:
                     self._saved_auth = auth_data
                     return True
             
-            logger.info("No saved authentication session found")
+            logger.info(f"No saved authentication session found at: {self._auth_file}")
+            # Also check if the directory exists
+            auth_dir = os.path.dirname(self._auth_file)
+            if not os.path.exists(auth_dir):
+                logger.info(f"Auth directory doesn't exist: {auth_dir}")
             self._saved_auth = None
             return False
         except Exception as e:
@@ -302,17 +336,23 @@ class SupabaseManager:
             if not is_expired:
                 logger.info("Access token appears to still be valid, attempting direct restoration")
                 try:
-                    # Try to set the session with both tokens but in a way that doesn't consume refresh token
-                    # Only pass refresh token if we have it, otherwise just access token
-                    if refresh_token:
-                        self._client.auth.set_session(access_token, refresh_token)
-                    else:
-                        # Some clients support setting just access token
-                        try:
-                            self._client.auth.set_session(access_token)
-                        except TypeError:
-                            # If single parameter doesn't work, pass empty string for refresh token
-                            self._client.auth.set_session(access_token, "")
+                    # STARTUP OPTIMIZATION: Use faster session restoration method
+                    try:
+                        # Try to set the session with both tokens but in a way that doesn't consume refresh token
+                        # Only pass refresh token if we have it, otherwise just access token
+                        if refresh_token:
+                            self._client.auth.set_session(access_token, refresh_token)
+                        else:
+                            # Some clients support setting just access token
+                            try:
+                                self._client.auth.set_session(access_token)
+                            except TypeError:
+                                # If single parameter doesn't work, pass empty string for refresh token
+                                self._client.auth.set_session(access_token, "")
+                    except Exception as session_error:
+                        logger.warning(f"Session restoration failed: {session_error}")
+                        # Don't just pass - attempt refresh token restoration below
+                        raise session_error
                     
                     # Test if the session works by making a simple call
                     session = self._client.auth.get_session()
@@ -631,7 +671,7 @@ class SupabaseManager:
                 logger.info(f"[INIT_DEBUG] Client object created: {self._client is not None}")
                 
                 # If we have a saved session, try to restore it
-                if self._saved_auth and self._saved_auth.get('access_token'):
+                if hasattr(self, '_saved_auth') and self._saved_auth and self._saved_auth.get('access_token'):
                     logger.info("Attempting to restore saved session...")
                     try:
                         # Use the new safe restoration method that properly handles token expiration
@@ -644,7 +684,7 @@ class SupabaseManager:
                             logger.info("Session restoration failed, but preserving session data for remember_me users")
                             # CRITICAL FIX: Don't immediately clear session on restoration failure
                             # Users with remember_me=True should be able to retry authentication
-                            remember_me = self._saved_auth.get('remember_me', True)
+                            remember_me = self._saved_auth.get('remember_me', True) if hasattr(self, '_saved_auth') and self._saved_auth else True
                             if not remember_me:
                                 logger.info("remember_me=False: Clearing failed session")
                                 self._clear_session_conditionally()
@@ -653,7 +693,7 @@ class SupabaseManager:
                     except Exception as e:
                         logger.warning(f"Failed to restore session: {e}")
                         # CRITICAL FIX: Preserve remember_me sessions even on restoration errors
-                        remember_me = self._saved_auth.get('remember_me', True) if self._saved_auth else False
+                        remember_me = self._saved_auth.get('remember_me', True) if hasattr(self, '_saved_auth') and self._saved_auth else False
                         if not remember_me:
                             logger.info("remember_me=False: Clearing session after restoration error")
                             self._clear_session_conditionally()
@@ -723,6 +763,13 @@ class SupabaseManager:
         """
         if self._offline_mode:
             return None
+        
+        # Deferred initialization - only initialize when first accessed
+        if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
+            logger.info("🚀 STARTUP OPTIMIZATION: Performing deferred Supabase initialization on first access")
+            self._initialization_deferred = False
+            self.initialize()
+        
         return self._client
     
     def is_authenticated(self) -> bool:
@@ -732,6 +779,12 @@ class SupabaseManager:
             bool: True if authenticated, False otherwise
         """
         try:
+            # Force initialization if needed for auth checks
+            if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
+                logger.info("🔐 AUTH CHECK: Triggering deferred Supabase initialization")
+                self._initialization_deferred = False
+                self.initialize()
+            
             if self._offline_mode or not self._client:
                 return False
             

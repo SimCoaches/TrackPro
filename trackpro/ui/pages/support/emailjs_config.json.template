@@ -1,0 +1,5 @@
+{
+  "service_id": "your_emailjs_service_id",
+  "template_id": "your_emailjs_template_id", 
+  "public_key": "your_emailjs_public_key"
+}

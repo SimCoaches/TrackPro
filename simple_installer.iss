@@ -1,18 +1,18 @@
 [Setup]
 AppName=TrackPro
-AppVersion=1.5.4
+AppVersion=1.5.5
 DefaultDirName={localappdata}\TrackPro
 DisableDirPage=no
 AllowNoIcons=no
-OutputBaseFilename=TrackPro_Setup_v1.5.4
+OutputBaseFilename=TrackPro_Setup_v1.5.5
 OutputDir=.
 PrivilegesRequired=admin
 SetupLogging=yes
 Compression=lzma2/max
 SolidCompression=yes
 CreateAppDir=yes
-UninstallDisplayName=TrackPro v1.5.4
-UninstallDisplayIcon={app}\TrackPro_v1.5.4.exe
+UninstallDisplayName=TrackPro v1.5.5
+UninstallDisplayIcon={app}\TrackPro_v1.5.5.exe
 
 [InstallDelete]
 ; Clean up old TrackPro executables from all possible installation locations
@@ -43,7 +43,7 @@ Type: files; Name: "{userappdata}\TrackPro\*.log"
 Type: files; Name: "{userappdata}\TrackPro\*.tmp"
 
 [Files]
-Source: "installer_temp\dist\TrackPro_v1.5.4.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "installer_temp\dist\TrackPro_v1.5.5.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "installer_temp\prerequisites\vJoySetup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 Source: "installer_temp\prerequisites\HidHide_1.5.230_x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 Source: "installer_temp\prerequisites\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
@@ -126,7 +126,10 @@ begin
     OldShortcuts.Add(ExpandConstant('{commondesktop}') + '\TrackPro.lnk');
     OldShortcuts.Add(ExpandConstant('{userdesktop}') + '\TrackPro.lnk');
     
-    // Check for shortcuts with version numbers (e.g., TrackPro v1.5.4.lnk)
+    // Check for shortcuts with version numbers (e.g., TrackPro v1.5.5.lnk)
+    OldShortcuts.Add(ExpandConstant('{group}') + '\TrackPro v1.5.5.lnk');
+    OldShortcuts.Add(ExpandConstant('{commondesktop}') + '\TrackPro v1.5.5.lnk');
+    OldShortcuts.Add(ExpandConstant('{userdesktop}') + '\TrackPro v1.5.5.lnk');
     OldShortcuts.Add(ExpandConstant('{group}') + '\TrackPro v1.5.4.lnk');
     OldShortcuts.Add(ExpandConstant('{commondesktop}') + '\TrackPro v1.5.4.lnk');
     OldShortcuts.Add(ExpandConstant('{userdesktop}') + '\TrackPro v1.5.4.lnk');
@@ -617,8 +620,8 @@ Filename: "{tmp}\HidHide_1.5.230_x64.exe"; StatusMsg: "Installing HidHide..."; F
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/quiet"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated; Check: not IsVCRedistInstalled; BeforeInstall: LogPrereqStart('Visual C++'); AfterInstall: LogPrereqEnd('Visual C++')
 
 [Icons]
-Name: "{group}\TrackPro"; Filename: "{app}\TrackPro_v1.5.4.exe"; WorkingDir: "{app}"; Comment: "TrackPro Racing Coach Application"
-Name: "{commondesktop}\TrackPro"; Filename: "{app}\TrackPro_v1.5.4.exe"; WorkingDir: "{app}"; Comment: "TrackPro Racing Coach Application"; Tasks: desktopicon; Flags: createonlyiffileexists
+Name: "{group}\TrackPro"; Filename: "{app}\TrackPro_v1.5.5.exe"; WorkingDir: "{app}"; Comment: "TrackPro Racing Coach Application"
+Name: "{commondesktop}\TrackPro"; Filename: "{app}\TrackPro_v1.5.5.exe"; WorkingDir: "{app}"; Comment: "TrackPro Racing Coach Application"; Tasks: desktopicon; Flags: createonlyiffileexists
 
 [Tasks]
 Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce

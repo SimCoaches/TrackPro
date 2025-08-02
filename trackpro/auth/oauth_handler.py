@@ -104,8 +104,13 @@ class OAuthHandler(QObject):
             
             # Add more debugging and validation
             if not supabase or not hasattr(supabase, 'client') or not supabase.client:
-                logger.error("Discord auth failed: Supabase client not initialized")
-                raise ValueError("Supabase client not initialized")
+                logger.warning("Discord auth: Supabase client not initialized, forcing initialization...")
+                # Force initialization by accessing the client property
+                from ..database.supabase_client import get_supabase_client
+                client = get_supabase_client()
+                if not client:
+                    logger.error("Discord auth failed: Supabase client not initialized")
+                    raise ValueError("Supabase client not initialized")
             
             if not hasattr(supabase.client, 'auth'):
                 logger.error("Discord auth failed: Supabase client auth module not available")
@@ -165,6 +170,16 @@ class OAuthHandler(QObject):
             self.pending_provider = "google"
             
             logger.info(f"Starting Google auth with simplified flow, redirect to {redirect_url}")
+            
+            # Ensure Supabase client is initialized
+            if not supabase or not hasattr(supabase, 'client') or not supabase.client:
+                logger.warning("Supabase client not initialized, forcing initialization...")
+                # Force initialization by accessing the client property
+                from ..database.supabase_client import get_supabase_client
+                client = get_supabase_client()
+                if not client:
+                    logger.error("Cannot sign in with Google - Supabase is not connected")
+                    raise ValueError("Supabase client could not be initialized")
             
             options = {
                 "redirect_to": redirect_url,
@@ -669,15 +684,36 @@ class OAuthHandler(QObject):
                     
                     mock_response = MockAuthResponse(token_data)
                     
-                    # Set the session in the Supabase client
-                    from ..database.supabase_client import supabase
-                    if supabase and supabase.client:
+                    # Set the session in the Supabase client - with fallback to forcing initialization
+                    from ..database.supabase_client import get_supabase_client
+                    client = get_supabase_client()
+                    if client:
                         try:
                             # Set the session directly in the client
-                            supabase.client.auth.set_session(access_token, refresh_token)
+                            client.auth.set_session(access_token, refresh_token)
                             logger.info("Successfully set session in Supabase client")
                         except Exception as e:
                             logger.error(f"Error setting session in client: {e}")
+                    else:
+                        logger.warning("Supabase client not available - session will be saved for later restoration")
+                        # Force initialization by temporarily disabling fast startup
+                        import os
+                        was_fast_startup = os.environ.get('TRACKPRO_FAST_STARTUP')
+                        if was_fast_startup:
+                            del os.environ['TRACKPRO_FAST_STARTUP']
+                        
+                        # Try to get client again
+                        client = get_supabase_client() 
+                        if client:
+                            try:
+                                client.auth.set_session(access_token, refresh_token)
+                                logger.info("Successfully set session after forcing Supabase initialization")
+                            except Exception as e:
+                                logger.error(f"Error setting session after forced init: {e}")
+                        
+                        # Restore fast startup mode if it was set
+                        if was_fast_startup:
+                            os.environ['TRACKPRO_FAST_STARTUP'] = was_fast_startup
                     
                     # Save session and emit success
                     if hasattr(self.parent, '_save_session'):
@@ -1006,6 +1042,7 @@ class OAuthHandler(QObject):
         
         # Check port availability
         ports_to_check = [3000, 3001, 3002, 8080]
+        import socket
         available_ports = []
         for port in ports_to_check:
             try:

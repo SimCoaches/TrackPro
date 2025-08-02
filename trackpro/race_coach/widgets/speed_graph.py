@@ -14,8 +14,7 @@ class SpeedGraphWidget(GraphBase):
         # Create the plot widget with anti-aliasing enabled
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
-        self.plot_widget.setTitle("Speed vs Distance")
-        self.plot_widget.setLabel('bottom', "Distance (m)")
+        # Remove title and bottom label for compact layout
         
         # Enable anti-aliasing for smoother lines
         self.plot_widget.setAntialiasing(True)
@@ -26,9 +25,9 @@ class SpeedGraphWidget(GraphBase):
         left_axis.setTextPen('#e6edf3')
         left_axis.setPen('#30363d')
         
-        # Configure X-axis with better styling
+        # Hide bottom axis for compact layout
         bottom_axis = self.plot_widget.getAxis('bottom')
-        bottom_axis.setTextPen('#e6edf3')
+        bottom_axis.setStyle(showValues=False)
         bottom_axis.setPen('#30363d')
         
         # Style the plot title
@@ -43,10 +42,8 @@ class SpeedGraphWidget(GraphBase):
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.plotItem.vb.disableAutoRange()
         
-        # Create a modern legend in the top-right corner
-        self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt',
-                                                 brush=(22, 27, 34, 180), 
-                                                 pen='#30363d')
+        # Legend removed - using centralized legend instead
+        self.legend = None
         
         # Create crosshair lines with modern styling
         self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.PenStyle.DotLine))
@@ -104,12 +101,12 @@ class SpeedGraphWidget(GraphBase):
         self.label_b = "Lap B"
         
         # Initialize plot items - these will be updated by update_graph/update_comparison_data
-        # Use improved pen settings for smoother, higher-quality lines
-        smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
-        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)
+        # Use professional racing telemetry colors for better readability
+        smooth_pen_a = pg.mkPen('#00BFFF', width=2.5, cosmetic=True)  # DeepSkyBlue - professional reference color
+        smooth_pen_b = pg.mkPen('#FF8C00', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)  # DarkOrange - professional comparison color
         
-        self.speed_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Speed", autoDownsample=False, clipToView=False, antialias=True)
-        self.speed_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Speed", autoDownsample=False, clipToView=False, antialias=True)
+        self.speed_curve = self.plot_widget.plot(pen=smooth_pen_a, autoDownsample=False, clipToView=False, antialias=True)
+        self.speed_curve_b = self.plot_widget.plot(pen=smooth_pen_b, autoDownsample=False, clipToView=False, antialias=True)
         
         # Initially hide comparison curves
         self.speed_curve_b.hide()
@@ -190,22 +187,19 @@ class SpeedGraphWidget(GraphBase):
                         if closest_idx < len(self.speed_curve_b.yData):
                             speed_value_b = self.speed_curve_b.yData[closest_idx]
                 
-                # Update tooltip label with data
-                tooltip_text = f"Distance: {distance:.1f}m"
-                
+                # Emit hover data to centralized hover info widget instead of showing tooltip
                 if speed_value_a is not None:
-                    tooltip_text += f"\nYour Speed: {speed_value_a:.1f} km/h"
+                    lap_a_data = {'speed': f"{speed_value_a:.1f} km/h"}
+                    lap_b_data = {}
                     
-                if speed_value_b is not None:
-                    tooltip_text += f"\n{self.label_b} Speed: {speed_value_b:.1f} km/h"
+                    if speed_value_b is not None:
+                        lap_b_data = {'speed': f"{speed_value_b:.1f} km/h"}
                     
-                    if speed_value_a is not None:
-                        # Calculate and display delta
-                        delta = speed_value_b - speed_value_a
-                        tooltip_text += f"\nDelta: {delta:+.1f} km/h"
+                    # Emit the hover data signal
+                    self.hover_data_changed.emit(distance, lap_a_data, lap_b_data)
                     
-                self.label.setText(tooltip_text)
-                self.label.setPos(x, y)
+                    # Hide the individual tooltip
+                    self.label.setText("")
         except Exception as e:
             # Silently handle any mouse movement errors to prevent console spam
             pass
@@ -465,7 +459,7 @@ class SpeedGraphWidget(GraphBase):
                 # Fallback to track length if no data
                 self.plot_widget.setXRange(0, self.track_length, padding=0)
                 
-            self.plot_widget.setLabel('bottom', "Distance (m)")
+    
             
             # Disable auto-ranging again immediately after setting ranges
             self.plot_widget.plotItem.vb.disableAutoRange()
@@ -502,7 +496,7 @@ class SpeedGraphWidget(GraphBase):
             self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
             
             # Update title for single lap view
-            self.plot_widget.setTitle("Speed vs Distance")
+    
             
             # Update grid based on track length (skip for now to prevent crashes)
             # self.update_grid()
@@ -573,9 +567,7 @@ class SpeedGraphWidget(GraphBase):
         # --- Ensure curves are visible and legend exists --- 
         self.speed_curve.show()
         self.speed_curve_b.show()
-        if self.legend is None:
-            # Create a new legend with proper styling if it doesn't exist
-            self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt')
+        # Individual legend removed - using centralized legend instead
         # ------------------------------------------------
 
         # Store track length
@@ -658,7 +650,7 @@ class SpeedGraphWidget(GraphBase):
         
         # Set X-axis range to track length
         self.plot_widget.setXRange(0, self.track_length, padding=0)
-        self.plot_widget.setLabel('bottom', "Distance (m)")
+
         
         # Disable auto-ranging again immediately after setting ranges
         self.plot_widget.plotItem.vb.disableAutoRange()
@@ -672,7 +664,7 @@ class SpeedGraphWidget(GraphBase):
         if self.label not in self.plot_widget.items(): self.plot_widget.addItem(self.label, ignoreBounds=True)
         
         # Update title and ensure grid is visible
-        self.plot_widget.setTitle("Speed vs Distance (Comparison)")
+
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
         # Update grid based on track length (skip for now to prevent crashes)

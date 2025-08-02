@@ -14,8 +14,7 @@ class GearGraphWidget(GraphBase):
         # Create the plot widget with anti-aliasing enabled
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
-        self.plot_widget.setTitle("Gear vs Distance")
-        self.plot_widget.setLabel('bottom', "Distance (m)")
+        # Remove title and bottom label for compact layout
         
         # Enable anti-aliasing for smoother lines
         self.plot_widget.setAntialiasing(True)
@@ -26,9 +25,9 @@ class GearGraphWidget(GraphBase):
         left_axis.setTextPen('#e6edf3')
         left_axis.setPen('#30363d')
         
-        # Configure X-axis with better styling
+        # Hide bottom axis for compact layout
         bottom_axis = self.plot_widget.getAxis('bottom')
-        bottom_axis.setTextPen('#e6edf3')
+        bottom_axis.setStyle(showValues=False)
         bottom_axis.setPen('#30363d')
         
         # Style the plot title
@@ -43,10 +42,8 @@ class GearGraphWidget(GraphBase):
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.plotItem.vb.disableAutoRange()
         
-        # Create a modern legend in the top-left corner
-        self.legend = self.plot_widget.addLegend(offset=(20, 10), labelTextSize='10pt',
-                                                 brush=(22, 27, 34, 180), 
-                                                 pen='#30363d')
+        # Legend removed - using centralized legend instead
+        self.legend = None
         
         # Create crosshair lines with modern styling
         self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#58a6ff', width=1, style=Qt.PenStyle.DotLine))
@@ -110,12 +107,12 @@ class GearGraphWidget(GraphBase):
         # Default labels (can be overridden in update methods)
         self.label_a = "Lap A"
         self.label_b = "Lap B" 
-        # Use improved pen settings for smoother, higher-quality lines
-        smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
-        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)
+        # Use professional racing telemetry colors for better readability
+        smooth_pen_a = pg.mkPen('#00BFFF', width=2.5, cosmetic=True)  # DeepSkyBlue - professional reference color
+        smooth_pen_b = pg.mkPen('#FF8C00', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)  # DarkOrange - professional comparison color
         
-        self.gear_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Gear", autoDownsample=False, clipToView=False, antialias=True)
-        self.gear_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Gear", autoDownsample=False, clipToView=False, antialias=True)
+        self.gear_curve = self.plot_widget.plot(pen=smooth_pen_a, autoDownsample=False, clipToView=False, antialias=True)
+        self.gear_curve_b = self.plot_widget.plot(pen=smooth_pen_b, autoDownsample=False, clipToView=False, antialias=True)
         
         # Initially hide comparison curves
         self.gear_curve_b.hide()
@@ -200,51 +197,19 @@ class GearGraphWidget(GraphBase):
                     else:
                         return str(gear_val)
                 
-                # Format tooltip text with the actual values
+                # Emit hover data to centralized hover info widget instead of showing tooltip
                 if gear_value_a is not None:
-                    # Basic tooltip for single lap
-                    if not self.comparison_mode or gear_value_b is None:
-                        tooltip = f"""
-                            <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
-                                <span style='color: white;'>Dist: {distance:.1f}m</span> &nbsp;
-                                <span style='color: #ff6b6b;'>{self.label_a} Gear: {format_gear(gear_value_a)}</span>
-                            </div>
-                        """
-                    else:
-                        # Enhanced tooltip for comparison
-                        tooltip = f"""
-                            <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
-                                <span style='color: white;'>Dist: {distance:.1f}m</span><br/>
-                                <span style='color: #ff6b6b;'>{self.label_a} Gear: {format_gear(gear_value_a)}</span><br/>
-                                <span style='color: #4ecdc4;'>{self.label_b} Gear: {format_gear(gear_value_b)}</span>
-                            </div>
-                        """
+                    lap_a_data = {'gear': format_gear(gear_value_a)}
+                    lap_b_data = {}
                     
-                    # Check if hovering over a stopped section
-                    for marker in self.stopped_section_markers:
-                        if hasattr(marker, 'stopped_data') and abs(x - marker.pos().x()) < 5:
-                            section = marker.stopped_data
-                            if not self.comparison_mode:
-                                tooltip = f"""
-                                    <div style='background-color: rgba(0, 0, 0, 180); padding: 4px;'>
-                                        <span style='color: white;'>Dist: {distance:.1f}m</span> &nbsp;
-                                        <span style='color: #FF6666;'><b>Car Stopped</b></span> &nbsp;
-                                        <span style='color: #00FF00;'>Gear: {format_gear(section.get('avg_gear', 0))}</span>
-                                    </div>
-                                """
-                            break
+                    if gear_value_b is not None:
+                        lap_b_data = {'gear': format_gear(gear_value_b)}
                     
-                    # Set tooltip position and content
-                    self.label.setHtml(tooltip)
+                    # Emit the hover data signal
+                    self.hover_data_changed.emit(distance, lap_a_data, lap_b_data)
                     
-                    # Position the tooltip at the top of the graph where there's more space
-                    # Check if we're in the upper part of the graph
-                    if y > 0.5:
-                        # If cursor is in top half, show tooltip below cursor
-                        self.label.setPos(x, 0.2)
-                    else:
-                        # If cursor is in bottom half, show tooltip above cursor
-                        self.label.setPos(x, 0.8)
+                    # Hide the individual tooltip
+                    self.label.setHtml("")
         except Exception as e:
             # Silently handle any mouse movement errors to prevent console spam
             pass
@@ -566,7 +531,7 @@ class GearGraphWidget(GraphBase):
                 # Fallback to track length if no data
                 self.plot_widget.setXRange(0, self.track_length, padding=0)
                 
-            self.plot_widget.setLabel('bottom', "Distance (m)")
+    
             
             # Disable auto-ranging again immediately after setting ranges
             self.plot_widget.plotItem.vb.disableAutoRange()
@@ -600,7 +565,7 @@ class GearGraphWidget(GraphBase):
             self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
             
             # Update title for single lap view
-            self.plot_widget.setTitle("Gear vs Distance")
+    
             
             # Show crosshairs for interaction
             self.vLine.show()
@@ -675,11 +640,7 @@ class GearGraphWidget(GraphBase):
         # --- Ensure curves are visible and legend exists --- 
         self.gear_curve.show()
         self.gear_curve_b.show()
-        if self.legend is None:
-             # Create a new legend with proper styling if it doesn't exist
-             self.legend = self.plot_widget.addLegend(offset=(20, 10), labelTextSize='10pt',
-                                                      brush=(22, 27, 34, 180), 
-                                                      pen='#30363d')
+        # Individual legend removed - using centralized legend instead
         # ------------------------------------------------
         
         # Store track length
@@ -749,7 +710,7 @@ class GearGraphWidget(GraphBase):
         
         # Set X-axis range to track length
         self.plot_widget.setXRange(0, self.track_length, padding=0)
-        self.plot_widget.setLabel('bottom', "Distance (m)")
+
         
         # Disable auto-ranging again immediately after setting ranges
         self.plot_widget.plotItem.vb.disableAutoRange()
@@ -763,7 +724,7 @@ class GearGraphWidget(GraphBase):
         if self.label not in self.plot_widget.items(): self.plot_widget.addItem(self.label, ignoreBounds=True)
         
         # Update title and ensure grid is visible
-        self.plot_widget.setTitle("Gear vs Distance (Comparison)")
+
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
         # Show crosshairs for interaction

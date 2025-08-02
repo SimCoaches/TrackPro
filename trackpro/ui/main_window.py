@@ -480,7 +480,7 @@ class MainWindow(QMainWindow):
         # Main window setup with menu bar buttons - increased minimum size to prevent overlapping
         self.window_width = 1200
         self.window_height = 800
-        self.setWindowTitle("TrackPro Configuration v1.5.4")
+        self.setWindowTitle("TrackPro Configuration v1.5.5")
         self.setMinimumSize(1200, 850)  # Increased from 1000x700 to prevent overlapping
         # Set window icon using file path instead of Qt resource
         try:
@@ -730,7 +730,7 @@ class MainWindow(QMainWindow):
             # Kill ALL TrackPro processes with extreme prejudice (but protect IDEs)
             kill_commands = [
                 ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
-                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.4.exe'],
+                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.5.exe'],
                 # More specific PowerShell command that excludes IDEs
                 ['powershell', '-Command', '''Get-Process | Where-Object {
                     (($_.ProcessName -eq "TrackPro" -or 
@@ -2626,7 +2626,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Show about dialog."""
         about_text = """
-                        <h2>TrackPro v1.5.4</h2>
+                        <h2>TrackPro v1.5.5</h2>
         <p>Racing Telemetry System</p>
         <p>© 2024 Sim Coaches</p>
         <p>A professional racing telemetry and pedal calibration system.</p>

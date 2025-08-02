@@ -1939,7 +1939,7 @@ def main():
 
     # Set application details BEFORE creating TrackProApp
     QApplication.setApplicationName("TrackPro")
-    QApplication.setApplicationVersion("1.5.2")
+    QApplication.setApplicationVersion("1.5.5")
     QApplication.setOrganizationName("Sim Coaches")
     QApplication.setOrganizationDomain("simcoaches.com")
 

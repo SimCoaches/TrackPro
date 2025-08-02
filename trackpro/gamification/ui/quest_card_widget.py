@@ -312,7 +312,7 @@ class QuestCardWidget(QWidget):
                     icon_label = QLabel()
                     pixmap = QPixmap(icon_path)
                     if not pixmap.isNull(): # Check if pixmap loaded successfully
-                        icon_label.setPixmap(pixmap.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                        icon_label.setPixmap(pixmap.scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                     else:
                         # Use text-based icons as fallback
                         if reward_type == 'xp':

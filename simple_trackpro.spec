@@ -253,7 +253,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='TrackPro_v1.5.4',
+    name='TrackPro_v1.5.5',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # Disabled for Windows compatibility

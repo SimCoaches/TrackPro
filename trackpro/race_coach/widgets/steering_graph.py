@@ -15,13 +15,12 @@ class SteeringGraphWidget(GraphBase):
         # Create the plot widget with anti-aliasing enabled
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('#161b22')  # Modern dark background to match new design
-        self.plot_widget.setTitle("Steering vs Distance")
-        self.plot_widget.setLabel('bottom', "Distance (m)")
+        # Remove title and bottom label for compact layout
         
         # Enable anti-aliasing for smoother lines
         self.plot_widget.setAntialiasing(True)
         
-        # Configure Y-Axis for steering (-100% to 100%) with better styling
+        # Configure Y-Axis for steering (-100% to 100%) with fixed range
         left_axis = self.plot_widget.getAxis('left')
         left_axis.setLabel("Steering (%)", color='#e6edf3')
         left_axis.setTextPen('#e6edf3')
@@ -30,9 +29,12 @@ class SteeringGraphWidget(GraphBase):
                              (0, '0'), 
                              (0.25, '25'), (0.5, '50'), (0.75, '75'), (1.0, '100')]])
         
-        # Configure X-axis with better styling
+        # Set fixed Y-axis range to always show -100% to +100% (negative = right, positive = left)
+        self.plot_widget.setYRange(-1.0, 1.0, padding=0)
+        
+        # Hide bottom axis for compact layout
         bottom_axis = self.plot_widget.getAxis('bottom')
-        bottom_axis.setTextPen('#e6edf3')
+        bottom_axis.setStyle(showValues=False)
         bottom_axis.setPen('#30363d')
         
         # Style the plot title
@@ -50,10 +52,8 @@ class SteeringGraphWidget(GraphBase):
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.plotItem.vb.disableAutoRange()
         
-        # Create a modern legend in the top-right corner
-        self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt', 
-                                                 brush=(22, 27, 34, 180), 
-                                                 pen='#30363d')
+        # Legend removed - using centralized legend instead
+        self.legend = None
         
         # Add horizontal line at 0 with better styling
         self.zero_line = pg.InfiniteLine(angle=0, pos=0, pen=pg.mkPen('#6e7681', width=1, style=Qt.PenStyle.DashLine))
@@ -103,12 +103,12 @@ class SteeringGraphWidget(GraphBase):
         # Default labels (can be overridden in update methods)
         self.label_a = "Lap A"
         self.label_b = "Lap B"
-        # Use improved pen settings for smoother, higher-quality lines
-        smooth_pen_a = pg.mkPen('#ff6b6b', width=2.5, cosmetic=True)
-        smooth_pen_b = pg.mkPen('#4ecdc4', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)
+                # Use professional racing telemetry colors for better readability
+        smooth_pen_a = pg.mkPen('#00BFFF', width=2.5, cosmetic=True)  # DeepSkyBlue - professional reference color
+        smooth_pen_b = pg.mkPen('#FF8C00', width=2.5, style=Qt.PenStyle.SolidLine, cosmetic=True)  # DarkOrange - professional comparison color
         
-        self.steering_curve = self.plot_widget.plot(pen=smooth_pen_a, name=f"{self.label_a} Steering", autoDownsample=False, clipToView=False, antialias=True)
-        self.steering_curve_b = self.plot_widget.plot(pen=smooth_pen_b, name=f"{self.label_b} Steering", autoDownsample=False, clipToView=False, antialias=True)
+        self.steering_curve = self.plot_widget.plot(pen=smooth_pen_a, autoDownsample=False, clipToView=False, antialias=True)
+        self.steering_curve_b = self.plot_widget.plot(pen=smooth_pen_b, autoDownsample=False, clipToView=False, antialias=True)
         
         # Initially hide comparison curve
         self.steering_curve_b.hide()
@@ -185,38 +185,25 @@ class SteeringGraphWidget(GraphBase):
                 
                 # Format tooltip text with steering direction and the actual values
                 if steering_value_a is not None:
-                    # Basic tooltip for single lap
-                    if not self.comparison_mode or steering_value_b is None:
-                        direction_a = "Right" if steering_value_a > 0 else "Left"
-                        if abs(steering_value_a) < 1.0:  # Close to zero
-                            direction_a = "Center"
-                            
-                        tooltip = f"""
-                            <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
-                                <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                                <span style='color: #00AAFF;'>Your: {direction_a} {abs(steering_value_a):.0f}%</span>
-                            </div>
-                        """
-                    else:
-                        # Enhanced tooltip for comparison
-                        direction_a = "Right" if steering_value_a > 0 else "Left"
-                        if abs(steering_value_a) < 1.0:
-                            direction_a = "Center"
-                            
+                    # Emit hover data to centralized hover info widget instead of showing tooltip
+                    direction_a = "Right" if steering_value_a > 0 else "Left"
+                    if abs(steering_value_a) < 1.0:  # Close to zero
+                        direction_a = "Center"
+                        
+                    lap_a_data = {'steering': f"{direction_a} {abs(steering_value_a):.0f}%"}
+                    lap_b_data = {}
+                    
+                    if steering_value_b is not None:
                         direction_b = "Right" if steering_value_b > 0 else "Left"
                         if abs(steering_value_b) < 1.0:
                             direction_b = "Center"
-                        
-                        tooltip = f"""
-                            <div style='background-color: rgba(0, 0, 0, 180); padding: 5px;'>
-                                <span style='color: white;'>Dist: {distance:.1f}m</span><br>
-                                <span style='color: #00AAFF;'>Your: {direction_a} {abs(steering_value_a):.0f}%</span><br>
-                                <span style='color: #88CCFF;'>{self.label_b}: {direction_b} {abs(steering_value_b):.0f}%</span>
-                            </div>
-                        """
+                        lap_b_data = {'steering': f"{direction_b} {abs(steering_value_b):.0f}%"}
                     
-                    self.label.setHtml(tooltip)
-                    self.label.setPos(x, -0.9)  # Position tooltip at top of graph
+                    # Emit the hover data signal
+                    self.hover_data_changed.emit(distance, lap_a_data, lap_b_data)
+                    
+                    # Hide the individual tooltip
+                    self.label.setHtml("")
         except Exception as e:
             # Silently handle any mouse movement errors to prevent console spam
             pass
@@ -228,7 +215,7 @@ class SteeringGraphWidget(GraphBase):
             self.plot_widget.plotItem.vb.enableAutoRange()
 
             # Set FIXED Y range for steering (-100% to 100%) - NO MORE AUTO-RANGING
-            self.plot_widget.setYRange(-1, 1, padding=0.02)
+    
             
             # Set X range to track length if available, otherwise use a default
             if self.track_length and self.track_length > 0:
@@ -389,7 +376,7 @@ class SteeringGraphWidget(GraphBase):
             
             # Use FIXED Y-axis range for steering - consistent -100% to +100%
             # No more complex auto-ranging that causes range to jump around
-            self.plot_widget.setYRange(-1, 1, padding=0.02)
+    
             
             # Set X-axis range based on actual data range, not just track length
             if len(resampled_data['x_m']) > 0:
@@ -408,7 +395,7 @@ class SteeringGraphWidget(GraphBase):
                 # Fallback to track length if no data
                 self.plot_widget.setXRange(0, self.track_length, padding=0)
                 
-            self.plot_widget.setLabel('bottom', "Distance (m)")
+
             
             # Disable auto-ranging again immediately after setting ranges
             self.plot_widget.plotItem.vb.disableAutoRange()
@@ -442,7 +429,7 @@ class SteeringGraphWidget(GraphBase):
             self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
             
             # Update title for single lap view
-            self.plot_widget.setTitle("Steering vs Distance")
+    
             
             # Update grid based on track length (skip for now to prevent crashes)
             # self.update_grid()
@@ -513,11 +500,7 @@ class SteeringGraphWidget(GraphBase):
         # --- Ensure curves are visible and legend exists --- 
         self.steering_curve.show()
         self.steering_curve_b.show()
-        if self.legend is None:
-             # Create a new legend with proper styling if it doesn't exist
-             self.legend = self.plot_widget.addLegend(offset=(-20, 10), labelTextSize='10pt', 
-                                                      brush=(22, 27, 34, 180), 
-                                                      pen='#30363d')
+        # Individual legend removed - using centralized legend instead
         # ------------------------------------------------
         
         # Store track length
@@ -566,7 +549,7 @@ class SteeringGraphWidget(GraphBase):
         self.plot_widget.plotItem.vb.enableAutoRange()
         
         # Use FIXED Y-axis range for steering comparison - consistent -100% to +100%
-        self.plot_widget.setYRange(-1, 1, padding=0.02)
+
         
         # Set X-axis range to track length
         self.plot_widget.setXRange(0, self.track_length, padding=0)
@@ -584,7 +567,7 @@ class SteeringGraphWidget(GraphBase):
         if self.label not in self.plot_widget.items(): self.plot_widget.addItem(self.label, ignoreBounds=True)
         
         # Update title and ensure grid is visible
-        self.plot_widget.setTitle("Steering vs Distance (Comparison)")
+
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
         # Update grid based on track length (skip for now to prevent crashes)
@@ -682,9 +665,9 @@ class SteeringGraphWidget(GraphBase):
             display_range_max = self.track_length if self.track_length > 0 else max(max_dist_overall * 1.05, 1000)
 
             # Update title and axis ranges
-            self.plot_widget.setTitle("Steering vs Distance (Comparison)")
+    
             self.plot_widget.setXRange(0, display_range_max, padding=0)
-            self.plot_widget.setYRange(-1, 1, padding=0.02)
+    
             
             # Add context markers
             self._add_track_context_markers(track_context, display_range_max)

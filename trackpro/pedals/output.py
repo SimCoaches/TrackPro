@@ -146,7 +146,7 @@ class VirtualJoystick:
             self.vjoy_device_id = 1
             self.vjoy_acquired = False
     
-    def update_axis(self, throttle: int, brake: int, clutch: int):
+    def update_axis(self, throttle: int, brake: int, clutch: int, handbrake: int = 0):
         """Update the virtual joystick axes - ULTRA-FAST VERSION."""
         if self.test_mode:
             # In test mode, just log the values occasionally
@@ -154,7 +154,7 @@ class VirtualJoystick:
                 self._test_log_count = 0
             self._test_log_count += 1
             if self._test_log_count % 1000 == 0:  # Log every 1000 calls (1 second at 1000Hz)
-                logger.debug(f"🎮 Test mode - Axis values: T={throttle}, B={brake}, C={clutch}")
+                logger.debug(f"🎮 Test mode - Axis values: T={throttle}, B={brake}, C={clutch}, H={handbrake}")
             return True
             
         if not hasattr(self, 'vjoy_acquired') or not self.vjoy_acquired:
@@ -179,6 +179,11 @@ class VirtualJoystick:
             # Set Z axis (clutch) - less critical but still fast
             if not self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32):  # HID_USAGE_Z
                 return False
+            
+            # Set RX axis (handbrake) - additional axis for handbrake
+            if handbrake > 0:  # Only update if handbrake value is provided
+                if not self.vjoy_dll.SetAxis(handbrake, self.vjoy_device_id, 0x33):  # HID_USAGE_RX
+                    return False
             
             # Performance monitoring (very lightweight)
             if not hasattr(self, '_update_count'):

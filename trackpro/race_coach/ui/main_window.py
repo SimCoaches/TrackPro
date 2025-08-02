@@ -396,87 +396,28 @@ class RaceCoachWidget(QWidget):
         """Set up the race coach UI components on the given widget."""
         main_layout = QVBoxLayout(widget)
 
-        # Status bar at the top
-        self.status_bar = QWidget()
-        status_layout = QHBoxLayout(self.status_bar)
-        status_layout.setContentsMargins(5, 5, 5, 5)
-
-        self.connection_label = QLabel("iRacing: Disconnected")
-        self.connection_label.setStyleSheet("""
-            color: red;
-            font-weight: bold;
-        """)
-        status_layout.addWidget(self.connection_label)
-
-        self.driver_label = QLabel("No Driver")
-        status_layout.addWidget(self.driver_label)
-
-        self.track_label = QLabel("No Track")
-        status_layout.addWidget(self.track_label)
-
-        status_layout.addStretch()
-
-        # Add diagnostic mode toggle button
-        self.diagnostic_mode_button = QPushButton("🔍 Diagnostics: OFF")
-        self.diagnostic_mode_button.setStyleSheet("""
-            background-color: #333;
-            color: #AAA;
-            padding: 5px 10px;
-            border-radius: 3px;
-        """)
-        self.diagnostic_mode_button.setToolTip("Toggle detailed lap detection diagnostics")
-        self.diagnostic_mode_button.clicked.connect(self.toggle_diagnostic_mode)
-        status_layout.addWidget(self.diagnostic_mode_button)
-
-        # Add lap debug button
-        self.lap_debug_button = QPushButton("🏁 Lap Debug")
-        self.lap_debug_button.setStyleSheet("""
-            background-color: #333;
-            color: #AAA;
-            padding: 5px 10px;
-            border-radius: 3px;
-        """)
-        self.lap_debug_button.setToolTip("View lap recording status and save partial laps")
-        self.lap_debug_button.clicked.connect(self.show_lap_debug_dialog)
-        status_layout.addWidget(self.lap_debug_button)
+        # REMOVED: Large status bar banner to save space
+        # The status bar with connection info, buttons, etc. has been removed
+        # to provide more space for the actual Race Coach content.
+        # 
+        # Status information is now available through:
+        # - iRacing connection status: Available in the sidebar navigation
+        # - Debug functions: Can be accessed through right-click menus or settings
+        # - AI Coach controls: Moved to individual tab contexts where relevant
         
-        # Add Corner Detection button
-        self.corner_detection_button = QPushButton("🏁 Corner Detection")
-        self.corner_detection_button.setStyleSheet("""
-            background-color: #ff9800;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 3px;
-            font-weight: bold;
-        """)
-        self.corner_detection_button.setToolTip("Analyze track to automatically detect corners (Task 2.2)")
-        self.corner_detection_button.clicked.connect(self.show_corner_detection_dialog)
-        status_layout.addWidget(self.corner_detection_button)
+        # Initialize the removed components as None to prevent errors
+        self.status_bar = None
+        self.connection_label = None
+        self.driver_label = None
+        self.track_label = None
+        self.diagnostic_mode_button = None
+        self.lap_debug_button = None
+        self.corner_detection_button = None
+        self.ai_coach_button = None
+        self.ai_coach_volume_widget = None
+        self._volume_widget_placeholder = None
 
-        # Add AI Coach control button
-        self.ai_coach_button = QPushButton("🤖 AI Coach: OFF")
-        self.ai_coach_button.setStyleSheet("""
-            background-color: #333;
-            color: #AAA;
-            padding: 5px 10px;
-            border-radius: 3px;
-        """)
-        self.ai_coach_button.setToolTip("Start/Stop real-time AI voice coaching")
-        self.ai_coach_button.clicked.connect(self.toggle_ai_coaching)
-        status_layout.addWidget(self.ai_coach_button)
-
-        # Add AI Coach Volume Control - DEFER TO BACKGROUND
-        self.ai_coach_volume_widget = None  # Will be created when needed
-        self._volume_widget_placeholder = QLabel("🔊 Volume: Loading...")
-        self._volume_widget_placeholder.setStyleSheet("color: #888; font-style: italic; padding: 5px;")
-        status_layout.addWidget(self._volume_widget_placeholder)
-        
-        # Create volume widget in background
-        QTimer.singleShot(100, self._create_volume_widget_deferred)
-
-        main_layout.addWidget(self.status_bar)
-
-        # Create tab widget
+        # Create tab widget - now taking up the full space
         self.tab_widget = QTabWidget()
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
@@ -574,32 +515,17 @@ class RaceCoachWidget(QWidget):
             self.ai_coach_volume_widget = AICoachVolumeWidget(self)
             self.ai_coach_volume_widget.setMaximumWidth(300)
             
-            # Replace placeholder with actual widget
-            status_layout = self.status_bar.layout()
-            placeholder_index = -1
-            for i in range(status_layout.count()):
-                if status_layout.itemAt(i).widget() == self._volume_widget_placeholder:
-                    placeholder_index = i
-                    break
-            
-            if placeholder_index >= 0:
-                status_layout.removeWidget(self._volume_widget_placeholder)
-                self._volume_widget_placeholder.deleteLater()
-                status_layout.insertWidget(placeholder_index, self.ai_coach_volume_widget)
-                logger.info("✅ AI Coach volume control loaded in background")
+            # Status bar removed - volume widget functionality can be added to tabs if needed
+            pass
+            logger.info("✅ AI Coach volume control created (status bar removed)")
             
         except ImportError as e:
             if "elevenlabs" in str(e):
                 logger.warning(f"⚠️ AI Coach volume control disabled - elevenlabs not available: {e}")
-                self._volume_widget_placeholder.setText("🔊 Volume: N/A")
-                self._volume_widget_placeholder.setToolTip("AI Coach features not available")
             else:
                 logger.error(f"❌ Failed to import volume control: {e}")
-                self._volume_widget_placeholder.setText("🔊 Volume: Error")
         except Exception as e:
             logger.error(f"❌ Failed to create volume control: {e}")
-            # Keep placeholder with error message
-            self._volume_widget_placeholder.setText("🔊 Volume: Error")
 
     def _on_tab_changed_lazy(self, index):
         """Handle tab changes with true lazy loading."""
@@ -876,8 +802,8 @@ class RaceCoachWidget(QWidget):
         self.session_info = session_info
 
         if self.is_connected:
-            self.connection_label.setText("iRacing: Connected")
-            self.connection_label.setStyleSheet("color: green; font-weight: bold;")
+            # Connection status now shown in sidebar navigation
+            logger.info("iRacing: Connected")
 
             # Get latest track/car/config from the received session_info dictionary
             track_name = session_info.get("current_track", "No Track")
@@ -890,15 +816,15 @@ class RaceCoachWidget(QWidget):
                 track_display_text += f" ({config_name})"
 
             # Update labels in the status bar
-            self.track_label.setText(track_display_text)
-            self.driver_label.setText(f"Car: {car_name}")
+            # Track and driver info no longer displayed in removed status bar
+            logger.info(f"Track: {track_display_text}, Car: {car_name}")
 
         else:
             # Disconnected state
-            self.connection_label.setText("iRacing: Disconnected")
-            self.connection_label.setStyleSheet("color: red; font-weight: bold;")
-            self.driver_label.setText("No Driver")
-            self.track_label.setText("No Track")
+            # Connection status now shown in sidebar navigation  
+            logger.info("iRacing: Disconnected")
+            # Driver and track info no longer displayed in removed status bar
+            pass
 
     def on_telemetry_data(self, telemetry_data):
         """Handle telemetry data from iRacing API - for UI updates only.
@@ -932,23 +858,11 @@ class RaceCoachWidget(QWidget):
             self.iracing_lap_saver._diagnostic_mode = not current_mode
             new_mode = self.iracing_lap_saver._diagnostic_mode
             
-            # Update button text and style
+            # Button removed with status bar - log diagnostic mode changes
             if new_mode:
-                self.diagnostic_mode_button.setText("🔍 Diagnostics: ON")
-                self.diagnostic_mode_button.setStyleSheet("""
-                    background-color: #004400;
-                    color: #88FF88;
-                    padding: 5px 10px;
-                    border-radius: 3px;
-                """)
+                logger.info("🔍 Diagnostics: ON")
             else:
-                self.diagnostic_mode_button.setText("🔍 Diagnostics: OFF")
-                self.diagnostic_mode_button.setStyleSheet("""
-                    background-color: #333;
-                    color: #AAA;
-                    padding: 5px 10px;
-                    border-radius: 3px;
-                """)
+                logger.info("🔍 Diagnostics: OFF")
             
             logger.info(f"Diagnostic mode toggled to: {new_mode}")
 
@@ -971,14 +885,7 @@ class RaceCoachWidget(QWidget):
         if self.is_ai_coaching_active():
             # Stop coaching
             self.stop_ai_coaching()
-            self.ai_coach_button.setText("🤖 AI Coach: OFF")
-            self.ai_coach_button.setStyleSheet("""
-                background-color: #333;
-                color: #AAA;
-                padding: 5px 10px;
-                border-radius: 3px;
-            """)
-            self.ai_coach_button.setToolTip("Start real-time AI voice coaching")
+            logger.info("🤖 AI Coach: OFF")
         else:
             # Need to get superlap ID - for now, show a dialog
             superlap_id, ok = QInputDialog.getText(
@@ -1173,16 +1080,8 @@ class RaceCoachWidget(QWidget):
                     logger.info("🔧 [AI INDEPENDENT] AI coaching is now completely independent of lap saving")
                     print("🎙️ [AI COACH] Voice coaching activated! Drive normally to receive guidance.")
                     
-                    # Update button state to show AI coach is active
-                    if hasattr(self, 'ai_coach_button'):
-                        self.ai_coach_button.setText("🤖 AI Coach: ON")
-                        self.ai_coach_button.setStyleSheet("""
-                            background-color: #004400;
-                            color: #88FF88;
-                            padding: 5px 10px;
-                            border-radius: 3px;
-                        """)
-                        self.ai_coach_button.setToolTip("Stop real-time AI voice coaching")
+                    # AI coach button removed with status bar
+                    logger.info("🤖 AI Coach: ON")
                     
                     # Don't show success dialog immediately - let the coach prove it's working first
                     print(f"✅ [AI COACH READY] SuperLap loaded: {len(ai_coach_instance.superlap_points)} points")

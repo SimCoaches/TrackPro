@@ -22,7 +22,7 @@ class ModernCard(QFrame):
         self.setStyleSheet("""
             QFrame {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #36393f, stop:1 #2f3136);
+                    stop:0 #252525, stop:1 #252525);
                 border-radius: 12px;
                 border: 1px solid #40444b;
                 margin: 5px;
@@ -194,7 +194,7 @@ class AccountPage(QWidget):
         self.setStyleSheet("""
             QWidget {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #1e2124, stop:1 #2f3136);
+                    stop:0 #1e2124, stop:1 #252525);
                 color: #dcddde;
             }
             QScrollArea {
@@ -202,7 +202,7 @@ class AccountPage(QWidget):
                 border: none;
             }
             QScrollBar:vertical {
-                background-color: #2f3136;
+                background-color: #252525;
                 width: 12px;
                 border-radius: 6px;
             }
@@ -404,7 +404,7 @@ class AccountPage(QWidget):
                 border-top: 5px solid #dcddde;
             }
             QComboBox QAbstractItemView {
-                background-color: #36393f;
+                background-color: #252525;
                 border: 1px solid #40444b;
                 border-radius: 6px;
                 color: #dcddde;
@@ -1204,7 +1204,7 @@ class AccountPage(QWidget):
             # Apply modern Discord-style dark theme
             msg_box.setStyleSheet("""
                 QMessageBox {
-                    background-color: #36393f;
+                    background-color: #252525;
                     color: #dcddde;
                     border-radius: 8px;
                 }
@@ -1246,7 +1246,7 @@ class AccountPage(QWidget):
             # Apply modern Discord-style dark theme
             msg_box.setStyleSheet("""
                 QMessageBox {
-                    background-color: #36393f;
+                    background-color: #252525;
                     color: #dcddde;
                     border-radius: 8px;
                 }
@@ -1514,7 +1514,7 @@ class AccountPage(QWidget):
             # Apply modern Discord-style dark theme
             msg_box.setStyleSheet("""
                 QMessageBox {
-                    background-color: #36393f;
+                    background-color: #252525;
                     color: #dcddde;
                     border-radius: 8px;
                 }
@@ -1777,7 +1777,7 @@ class AccountPage(QWidget):
                 success_box.setStandardButtons(QMessageBox.StandardButton.Ok)
                 success_box.setStyleSheet("""
                     QMessageBox {
-                        background-color: #36393f;
+                        background-color: #252525;
                         color: #dcddde;
                         border-radius: 8px;
                     }
@@ -1836,7 +1836,7 @@ class AccountPage(QWidget):
                 error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
                 error_box.setStyleSheet("""
                     QMessageBox {
-                        background-color: #36393f;
+                        background-color: #252525;
                         color: #dcddde;
                         border-radius: 8px;
                     }
@@ -1905,7 +1905,7 @@ class AccountPage(QWidget):
                 success_box.setStandardButtons(QMessageBox.StandardButton.Ok)
                 success_box.setStyleSheet("""
                     QMessageBox {
-                        background-color: #36393f;
+                        background-color: #252525;
                         color: #dcddde;
                         border-radius: 8px;
                     }
@@ -2244,7 +2244,7 @@ class AccountPage(QWidget):
         # Apply modern Discord-style dark theme
         msg_box.setStyleSheet("""
             QMessageBox {
-                background-color: #36393f;
+                background-color: #252525;
                 color: #dcddde;
                 border-radius: 8px;
             }

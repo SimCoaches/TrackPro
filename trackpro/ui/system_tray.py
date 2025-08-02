@@ -138,7 +138,7 @@ def exit_application(main_window):
         
         kill_commands = [
             ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
-                            ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.4.exe'],
+                            ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.5.exe'],
             # More specific PowerShell command that excludes IDEs
             ['powershell', '-Command', '''Get-Process | Where-Object {
                 ($_.ProcessName -eq "TrackPro" -or 

@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 import pyqtgraph as pg
 import numpy as np
 import logging
@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 class GraphBase(QWidget):
     """Base class for telemetry graph widgets with common debugging functionality."""
+    
+    # Signal to emit hover data to centralized hover info widget
+    hover_data_changed = pyqtSignal(float, dict, dict)  # distance, lap_a_data, lap_b_data
     
     def __init__(self, parent=None):
         super().__init__(parent)

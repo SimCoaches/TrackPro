@@ -312,7 +312,7 @@ class SignupDialog(BaseAuthDialog):
         right_column_widget = QWidget()
         right_column_layout = QVBoxLayout(right_column_widget)
         right_column_layout.setContentsMargins(20, 10, 10, 10)
-        right_column_widget.setStyleSheet("background-color: #3a3a3a; border-radius: 5px;")
+        right_column_widget.setStyleSheet("background-color: #252525; border-radius: 5px;")
 
         # Placeholder for image
         image_label = QLabel("Signup Image Placeholder")
