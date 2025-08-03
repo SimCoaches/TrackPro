@@ -20,7 +20,7 @@ __version__ = "0.1.0"
 # Import main components
 try:
     from .ui import RaceCoachWidget
-    from .iracing_api import IRacingAPI
+    # from .iracing_api import IRacingAPI  # Removed redundant wrapper
     from .simple_iracing import SimpleIRacingAPI  # Import our new simple implementation
     from .data_manager import DataManager
     from .model import RacingModel
@@ -118,5 +118,5 @@ except ImportError as e:
         logger.error("Cannot create Race Coach widget - modules not properly imported")
         return None
     
-__all__ = ['RaceCoachWidget', 'IRacingAPI', 'SimpleIRacingAPI', 'DataManager', 'RacingModel', 
+__all__ = ['RaceCoachWidget', 'SimpleIRacingAPI', 'DataManager', 'RacingModel', 
            'LapAnalysis', 'TelemetrySaver', 'IRacingLapSaver', 'create_race_coach_widget'] 

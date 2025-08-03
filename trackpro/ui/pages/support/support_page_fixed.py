@@ -542,9 +542,9 @@ class SupportPage(BasePage):
             
             # First check if user is authenticated via Supabase
             try:
-                from trackpro.database.supabase_client import SupabaseManager
-                supabase_manager = SupabaseManager()
-                user_response = supabase_manager.get_user()
+                from trackpro.database.supabase_client import get_supabase_client
+                supabase_client = get_supabase_client()
+                user_response = supabase_client.auth.get_user() if supabase_client else None
                 
                 if not user_response or not user_response.user:
                     QMessageBox.warning(self, "Authentication Required", 
@@ -582,9 +582,9 @@ class SupportPage(BasePage):
             
             # Get user info from authenticated Supabase session
             try:
-                from trackpro.database.supabase_client import SupabaseManager
-                supabase_manager = SupabaseManager()
-                user_response = supabase_manager.get_user()
+                from trackpro.database.supabase_client import get_supabase_client
+                supabase_client = get_supabase_client()
+                user_response = supabase_client.auth.get_user() if supabase_client else None
                 
                 if user_response and user_response.user:
                     # Get user info from Supabase profile

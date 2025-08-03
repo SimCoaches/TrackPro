@@ -1,6 +1,6 @@
 import logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton, QProgressBar, QComboBox
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QEvent, QPointF
 from ...modern.shared.base_page import GlobalManagers
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,16 @@ class PedalCalibrationWidget(QWidget):
         self.max_label = None
         self.curve_selector = None
         self.calibration_chart = None
+        
+        # Dragging state
+        self.dragging = False
+        self.dragging_point = None
+        
+        # Curve data
+        self.curve_x = [0, 25, 50, 75, 100]
+        self.curve_y = [0, 25, 50, 75, 100]
+        self.curve_line = None
+        self.scatter = None
         
         self.init_ui()
         
@@ -94,25 +104,21 @@ class PedalCalibrationWidget(QWidget):
         self.input_progress = QProgressBar()
         self.input_progress.setMaximum(65535)
         self.input_progress.setValue(0)
-        self.input_progress.setMaximumHeight(20)
         self.input_progress.setStyleSheet("""
             QProgressBar {
-                background-color: #252525;
                 border: 1px solid #666666;
                 border-radius: 3px;
                 text-align: center;
+                background-color: #1a1a1a;
                 color: #fefefe;
+                font-size: 10px;
             }
             QProgressBar::chunk {
-                background-color: #fba43b;
+                background-color: #2a82da;
                 border-radius: 2px;
             }
         """)
         
-        input_layout.addWidget(self.input_label)
-        input_layout.addWidget(self.input_progress)
-        
-        # Output monitor (what the game sees)
         self.output_label = QLabel("Output: 0%")
         self.output_label.setMinimumHeight(20)
         self.output_label.setStyleSheet("""
@@ -125,23 +131,25 @@ class PedalCalibrationWidget(QWidget):
             }
         """)
         self.output_progress = QProgressBar()
-        self.output_progress.setRange(0, 100)
+        self.output_progress.setMaximum(100)
         self.output_progress.setValue(0)
-        self.output_progress.setMaximumHeight(20)
         self.output_progress.setStyleSheet("""
             QProgressBar {
-                background-color: #252525;
                 border: 1px solid #666666;
                 border-radius: 3px;
                 text-align: center;
+                background-color: #1a1a1a;
                 color: #fefefe;
+                font-size: 10px;
             }
             QProgressBar::chunk {
-                background-color: #3498db;
+                background-color: #fba43b;
                 border-radius: 2px;
             }
         """)
         
+        input_layout.addWidget(self.input_label)
+        input_layout.addWidget(self.input_progress)
         input_layout.addWidget(self.output_label)
         input_layout.addWidget(self.output_progress)
         
@@ -168,28 +176,51 @@ class PedalCalibrationWidget(QWidget):
         chart_layout = QVBoxLayout()
         
         try:
-            from ...chart_widgets import IntegratedCalibrationChart
-            self.calibration_chart = IntegratedCalibrationChart(
-                chart_layout,
-                self.pedal_name,
-                self.on_chart_point_moved
-            )
-            logger.info(f"Created IntegratedCalibrationChart for {self.pedal_name}")
+            import pyqtgraph as pg
+            self.calibration_chart = pg.PlotWidget()
+            self.calibration_chart.setLabel('left', 'Output %')
+            self.calibration_chart.setLabel('bottom', 'Input %')
+            self.calibration_chart.setTitle(f'{self.pedal_name.title()} Response Curve')
+            self.calibration_chart.setBackground('#252525')
+            self.calibration_chart.getAxis('left').setPen('#fefefe')
+            self.calibration_chart.getAxis('bottom').setPen('#fefefe')
+            self.calibration_chart.getAxis('left').setTextPen('#fefefe')
+            self.calibration_chart.getAxis('bottom').setTextPen('#fefefe')
+            
+            # Set axis ranges
+            self.calibration_chart.setXRange(0, 100)
+            self.calibration_chart.setYRange(0, 100)
+            
+            # Add grid
+            self.calibration_chart.showGrid(x=True, y=True, alpha=0.3)
+            
+            # Plot the line
+            self.curve_line = self.calibration_chart.plot(self.curve_x, self.curve_y, pen=pg.mkPen('#fba43b', width=2))
+            
+            # Create draggable scatter points
+            self.scatter = pg.ScatterPlotItem(x=self.curve_x, y=self.curve_y, 
+                                            symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                                            pen=pg.mkPen('#00ff00', width=2))
+            self.calibration_chart.addItem(self.scatter)
+            
+            # Disable chart dragging/zooming
+            self.calibration_chart.setMouseEnabled(x=False, y=False)
+            
+            # Install event filter
+            self.calibration_chart.installEventFilter(self)
+            logger.debug(f"🔍 INSTALLED event filter on {self.pedal_name} chart")
+            
+            # Test if event filter is working by adding a simple mouse press handler
+            self.calibration_chart.mousePressEvent = lambda event: logger.debug(f"🔍 MOUSE PRESS EVENT on {self.pedal_name} chart: {event.button()}")
+            
+            chart_layout.addWidget(self.calibration_chart)
+            logger.info(f"Created pyqtgraph chart for {self.pedal_name}")
         except ImportError:
-            try:
-                import pyqtgraph as pg
-                self.calibration_chart = pg.PlotWidget()
-                self.calibration_chart.setLabel('left', 'Output %')
-                self.calibration_chart.setLabel('bottom', 'Input %')
-                self.calibration_chart.setTitle(f'{self.pedal_name.title()} Response Curve')
-                chart_layout.addWidget(self.calibration_chart)
-                logger.info(f"Created pyqtgraph chart for {self.pedal_name}")
-            except ImportError:
-                chart_placeholder = QLabel("Chart not available - pyqtgraph not installed")
-                chart_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                chart_placeholder.setMinimumHeight(200)
-                chart_layout.addWidget(chart_placeholder)
-                logger.warning(f"No charting library available for {self.pedal_name}")
+            chart_placeholder = QLabel("Chart not available - pyqtgraph not installed")
+            chart_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chart_placeholder.setMinimumHeight(200)
+            chart_layout.addWidget(chart_placeholder)
+            logger.warning(f"No charting library available for {self.pedal_name}")
         
         chart_group.setLayout(chart_layout)
         parent_layout.addWidget(chart_group)
@@ -258,7 +289,10 @@ class PedalCalibrationWidget(QWidget):
                 border-radius: 4px;
             }
             QPushButton:hover {
-                background-color: #3498db;
+                background-color: #1e6bb8;
+            }
+            QPushButton:pressed {
+                background-color: #155a9e;
             }
         """
         
@@ -276,11 +310,10 @@ class PedalCalibrationWidget(QWidget):
             QPushButton:hover {
                 background-color: #c0392b;
             }
+            QPushButton:pressed {
+                background-color: #a93226;
+            }
         """
-        
-        set_min_btn.setMaximumHeight(28)
-        set_max_btn.setMaximumHeight(28)
-        reset_btn.setMaximumHeight(28)
         
         set_min_btn.setStyleSheet(blue_style)
         set_max_btn.setStyleSheet(blue_style)
@@ -296,12 +329,13 @@ class PedalCalibrationWidget(QWidget):
         
         controls_layout.addLayout(range_layout)
         controls_layout.addLayout(button_layout)
+        
         controls_group.setLayout(controls_layout)
         parent_layout.addWidget(controls_group)
     
     def create_curve_selector(self, parent_layout):
         curve_group = QGroupBox("Response Curve")
-        curve_group.setMaximumHeight(65)
+        curve_group.setMaximumHeight(120)
         curve_group.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #666666;
@@ -321,145 +355,120 @@ class PedalCalibrationWidget(QWidget):
         curve_layout.setSpacing(8)
         curve_layout.setContentsMargins(12, 12, 12, 12)
         
+        # Curve type selector
         self.curve_selector = QComboBox()
-        self.curve_selector.setMaximumHeight(28)
+        self.curve_selector.addItems([
+            "Linear (Default)",
+            "Exponential",
+            "Logarithmic",
+            "S-Curve",
+            "Custom"
+        ])
         self.curve_selector.setStyleSheet("""
             QComboBox {
-                background-color: #252525;
-                border: 1px solid #666666;
-                border-radius: 4px;
-                padding: 4px 8px;
+                background-color: #1a1a1a;
                 color: #fefefe;
+                border: 1px solid #666666;
+                border-radius: 3px;
+                padding: 4px 8px;
                 font-size: 11px;
-            }
-            QComboBox:hover {
-                border-color: #fba43b;
             }
             QComboBox::drop-down {
                 border: none;
-                background-color: transparent;
+                width: 20px;
             }
             QComboBox::down-arrow {
                 image: none;
-                border: none;
-                width: 12px;
-                height: 12px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #fefefe;
             }
             QComboBox QAbstractItemView {
-                background-color: #252525;
-                border: 1px solid #666666;
-                border-radius: 4px;
+                background-color: #1a1a1a;
                 color: #fefefe;
-                selection-background-color: #fba43b;
-                selection-color: #252525;
+                border: 1px solid #666666;
+                selection-background-color: #2a82da;
             }
         """)
-        curves = self.get_pedal_curves()
-        self.curve_selector.addItems(curves)
         self.curve_selector.currentTextChanged.connect(self.on_curve_changed)
         
-        # Initialize with default curve
-        self.on_curve_changed("Linear (Default)")
-        
         curve_layout.addWidget(self.curve_selector)
+        
         curve_group.setLayout(curve_layout)
         parent_layout.addWidget(curve_group)
     
     def get_pedal_curves(self):
-        if self.pedal_name == 'brake':
-            return ["Linear (Default)", "Threshold", "Trail Brake", "Endurance", "Rally", "ABS Friendly"]
-        elif self.pedal_name == 'throttle':
-            return ["Linear (Default)", "Track Mode", "Turbo Lag", "NA Engine", "Feathering", "Progressive"]
-        elif self.pedal_name == 'clutch':
-            return ["Linear (Default)", "Quick Engage", "Heel-Toe", "Bite Point Focus"]
-        else:
-            return ["Linear (Default)", "Progressive", "Threshold"]
+        """Get available curves for this pedal."""
+        curves = {
+            "Linear (Default)": [(0, 0), (25, 25), (50, 50), (75, 75), (100, 100)],
+            "Exponential": [(0, 0), (25, 10), (50, 25), (75, 50), (100, 100)],
+            "Logarithmic": [(0, 0), (25, 40), (50, 60), (75, 80), (100, 100)],
+            "S-Curve": [(0, 0), (25, 15), (50, 50), (75, 85), (100, 100)]
+        }
+        return curves
     
     def get_curve_points(self, curve_name: str):
-        """Get the predefined points for a given curve type."""
-        curve_definitions = {
-            # Throttle curves
-            "Linear (Default)": [(0, 0), (33, 33), (67, 67), (100, 100)],
-            "Track Mode": [(0, 0), (25, 10), (50, 30), (75, 60), (100, 100)],
-            "Turbo Lag": [(0, 0), (25, 5), (50, 15), (75, 40), (100, 100)],
-            "NA Engine": [(0, 0), (25, 35), (50, 65), (75, 85), (100, 100)],
-            "Feathering": [(0, 0), (20, 5), (40, 15), (60, 35), (80, 70), (100, 100)],
-            "Progressive": [(0, 0), (25, 15), (50, 35), (75, 65), (100, 100)],
-            
-            # Brake curves
-            "Threshold": [(0, 0), (10, 5), (25, 15), (50, 45), (75, 80), (100, 100)],
-            "Trail Brake": [(0, 0), (15, 25), (35, 50), (60, 75), (85, 95), (100, 100)],
-            "Endurance": [(0, 0), (20, 15), (40, 30), (60, 50), (80, 75), (100, 95)],
-            "Rally": [(0, 0), (30, 20), (50, 45), (70, 80), (85, 95), (100, 100)],
-            "ABS Friendly": [(0, 0), (20, 10), (35, 22), (50, 38), (65, 55), (80, 75), (100, 90)],
-            
-            # Clutch curves
-            "Quick Engage": [(0, 0), (10, 5), (30, 20), (60, 85), (100, 100)],
-            "Heel-Toe": [(0, 0), (25, 10), (50, 40), (75, 80), (100, 100)],
-            "Bite Point Focus": [(0, 0), (15, 5), (40, 15), (60, 60), (80, 90), (100, 100)],
-        }
-        
-        return curve_definitions.get(curve_name, [(0, 0), (33, 33), (67, 67), (100, 100)])
+        """Get the points for a specific curve."""
+        curves = self.get_pedal_curves()
+        if curve_name in curves:
+            return curves[curve_name]
+        return curves["Linear (Default)"]
     
     def update_input_value(self, value: int):
+        """Update the input value display and calculate output."""
         self.current_input = value
-        if self.input_progress:
-            self.input_progress.setValue(value)
+        
         if self.input_label:
             self.input_label.setText(f"Raw Input: {value}")
         
-        # Calculate output percentage with deadzone consideration
-        output_percentage = self.calculate_output_with_deadzone(value)
+        if self.input_progress:
+            self.input_progress.setValue(value)
         
-        # Update output display
+        # Calculate output based on current curve
+        output_percentage = self.calculate_output_with_curve(value)
+        
+        if self.output_label:
+            self.output_label.setText(f"Output: {output_percentage:.1f}%")
+        
         if self.output_progress:
             self.output_progress.setValue(int(output_percentage))
-        if self.output_label:
-            self.output_label.setText(f"Output: {output_percentage:.0f}%")
-        
-        if self.calibration_chart and hasattr(self.calibration_chart, 'update_input_position'):
-            if self.max_value > self.min_value:
-                percentage = ((value - self.min_value) / (self.max_value - self.min_value)) * 100
-                percentage = max(0.0, min(100.0, percentage))
-                self.calibration_chart.update_input_position(percentage)
     
-    def calculate_output_with_deadzone(self, raw_value: int) -> float:
-        """Calculate the output percentage considering calibration and deadzone."""
-        if self.max_value <= self.min_value:
+    def calculate_output_with_curve(self, raw_value: int) -> float:
+        """Calculate output percentage based on input and current curve."""
+        if self.max_value == self.min_value:
             return 0.0
         
-        # Convert raw value to input percentage
-        input_percentage = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
-        input_percentage = max(0.0, min(100.0, input_percentage))
+        # Normalize input to 0-100 range
+        normalized_input = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
+        normalized_input = max(0, min(100, normalized_input))
         
-        # Get deadzone values from chart if available
-        min_deadzone = 0
-        max_deadzone = 0
-        if self.calibration_chart and hasattr(self.calibration_chart, 'min_deadzone'):
-            min_deadzone = self.calibration_chart.min_deadzone
-            max_deadzone = self.calibration_chart.max_deadzone
-        
-        # Apply deadzone logic
-        if input_percentage <= min_deadzone:
-            return 0.0
-        elif input_percentage >= (100 - max_deadzone):
-            return 100.0
+        # Interpolate between curve points
+        if normalized_input <= 0:
+            return self.curve_y[0]
+        elif normalized_input >= 100:
+            return self.curve_y[-1]
         else:
-            # Scale the usable range
-            usable_range = 100.0 - min_deadzone - max_deadzone
-            if usable_range > 0:
-                scaled_input = ((input_percentage - min_deadzone) / usable_range) * 100.0
-                return max(0.0, min(100.0, scaled_input))
-            else:
-                return input_percentage
+            # Find the two points to interpolate between
+            for i in range(len(self.curve_x) - 1):
+                x1, y1 = self.curve_x[i], self.curve_y[i]
+                x2, y2 = self.curve_x[i + 1], self.curve_y[i + 1]
+                
+                if x1 <= normalized_input <= x2:
+                    # Linear interpolation
+                    ratio = (normalized_input - x1) / (x2 - x1)
+                    return y1 + ratio * (y2 - y1)
+        
+        return normalized_input  # Fallback to linear
     
     def set_current_as_min(self):
+        """Set current input value as minimum."""
         self.min_value = self.current_input
         if self.min_label:
             self.min_label.setText(f"Min: {self.min_value}")
         self.emit_calibration_update()
     
     def set_current_as_max(self):
+        """Set current input value as maximum."""
         self.max_value = self.current_input
         if self.max_label:
             self.max_label.setText(f"Max: {self.max_value}")
@@ -481,24 +490,190 @@ class PedalCalibrationWidget(QWidget):
         curve_points = self.get_curve_points(curve_name)
         
         # Apply to chart if available
-        if self.calibration_chart and hasattr(self.calibration_chart, 'set_points'):
-            # Convert to QPointF objects
-            from PyQt6.QtCore import QPointF
-            qpoints = [QPointF(x, y) for x, y in curve_points]
-            self.calibration_chart.set_points(qpoints)
-            logger.debug(f"Applied {len(qpoints)} points to {self.pedal_name} chart")
+        if self.calibration_chart and hasattr(self.calibration_chart, 'clear'):
+            try:
+                import pyqtgraph as pg
+                
+                # Extract x and y coordinates
+                x = [point[0] for point in curve_points]
+                y = [point[1] for point in curve_points]
+                
+                # Update curve data
+                self.curve_x = x
+                self.curve_y = y
+                
+                # Clear existing items
+                self.calibration_chart.clear()
+                
+                # Plot the line
+                self.curve_line = self.calibration_chart.plot(x, y, pen=pg.mkPen('#fba43b', width=2))
+                
+                # Create new draggable scatter points
+                self.scatter = pg.ScatterPlotItem(x=x, y=y, 
+                                                symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                                                pen=pg.mkPen('#00ff00', width=2))
+                self.calibration_chart.addItem(self.scatter)
+                
+                # Reinstall event filter
+                self.calibration_chart.installEventFilter(self)
+                
+                logger.debug(f"Applied {len(x)} points to {self.pedal_name} chart")
+            except ImportError:
+                pass
         
         self.emit_calibration_update()
     
-    def on_chart_point_moved(self):
-        logger.debug(f"Chart point moved for {self.pedal_name}")
-        self.emit_calibration_update()
+    def find_nearest_point(self, mouse_x: float, mouse_y: float) -> int:
+        """Find the nearest control point to the mouse position."""
+        logger.debug(f"🔍 FIND_NEAREST: mouse=({mouse_x:.2f}, {mouse_y:.2f})")
+        
+        if not self.scatter:
+            logger.debug("🔍 No scatter plot available")
+            return -1
+        
+        min_distance = float('inf')
+        nearest_point = -1
+        
+        logger.debug(f"🔍 Current curve points: {list(zip(self.curve_x, self.curve_y))}")
+        
+        for i, (x, y) in enumerate(zip(self.curve_x, self.curve_y)):
+            distance = ((mouse_x - x) ** 2 + (mouse_y - y) ** 2) ** 0.5
+            logger.debug(f"🔍 Point {i}: ({x}, {y}) - distance: {distance:.2f}")
+            if distance < min_distance:
+                min_distance = distance
+                nearest_point = i
+        
+        # Use a reasonable threshold for chart coordinates
+        threshold = 10.0  # 10% of chart size
+        logger.debug(f"🔍 Min distance: {min_distance:.2f}, threshold: {threshold}")
+        
+        if min_distance <= threshold:
+            logger.debug(f"🔍 Found nearest point: {nearest_point}")
+            return nearest_point
+        else:
+            logger.debug(f"🔍 No point within threshold")
+            return -1
+    
+    def eventFilter(self, obj, event):
+        """Handle mouse events for dragging points."""
+        # Debug: Log all events - this should show up for ANY event
+        logger.debug(f"🔍 EVENT: obj={type(obj).__name__}, event_type={event.type()}, dragging={self.dragging}")
+        
+        # Check if this is the right object
+        if obj == self.calibration_chart:
+            logger.debug(f"🔍 CORRECT OBJECT: {self.pedal_name} chart")
+        else:
+            logger.debug(f"🔍 WRONG OBJECT: expected calibration_chart, got {type(obj).__name__}")
+        
+        if obj == self.calibration_chart and hasattr(self, 'calibration_chart'):
+            try:
+                import pyqtgraph as pg
+                
+                if event.type() == QEvent.Type.MouseButtonPress:
+                    logger.debug("🔍 MOUSE PRESS DETECTED")
+                    if event.button() == Qt.MouseButton.LeftButton:
+                        logger.debug("🔍 LEFT BUTTON PRESS")
+                        # Get mouse position in chart coordinates
+                        pos = event.pos()
+                        logger.debug(f"🔍 Raw mouse pos: ({pos.x()}, {pos.y()})")
+                        
+                        view_box = self.calibration_chart.getViewBox()
+                        logger.debug(f"🔍 ViewBox: {view_box}")
+                        
+                        # Convert QPoint to QPointF for pyqtgraph compatibility
+                        pos_f = QPointF(pos.x(), pos.y())
+                        logger.debug(f"🔍 Converted to QPointF: ({pos_f.x()}, {pos_f.y()})")
+                        
+                        try:
+                            chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos_f))
+                            logger.debug(f"🔍 Chart coordinates: ({chart_pos.x():.2f}, {chart_pos.y():.2f})")
+                        except Exception as e:
+                            logger.error(f"🔍 Error in coordinate conversion: {e}")
+                            return False
+                        
+                        # Find nearest point
+                        nearest_point = self.find_nearest_point(chart_pos.x(), chart_pos.y())
+                        logger.debug(f"🔍 Nearest point: {nearest_point}")
+                        
+                        if nearest_point >= 0:
+                            logger.debug(f"🔍 STARTING DRAG for point {nearest_point}")
+                            self.dragging = True
+                            self.dragging_point = nearest_point
+                            return True
+                        else:
+                            logger.debug("🔍 No nearby point found")
+                    else:
+                        logger.debug(f"🔍 Wrong button: {event.button()}")
+                
+                elif event.type() == QEvent.Type.MouseMove:
+                    logger.debug(f"🔍 MOUSE MOVE - dragging={self.dragging}")
+                    if self.dragging:
+                        logger.debug("🔍 DRAGGING - processing move")
+                        # Get mouse position in chart coordinates
+                        pos = event.pos()
+                        view_box = self.calibration_chart.getViewBox()
+                        # Convert QPoint to QPointF for pyqtgraph compatibility
+                        pos_f = QPointF(pos.x(), pos.y())
+                        chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos_f))
+                        
+                        # Constrain to chart bounds (0-100)
+                        x = max(0, min(100, chart_pos.x()))
+                        y = max(0, min(100, chart_pos.y()))
+                        logger.debug(f"🔍 Dragging to: ({x:.2f}, {y:.2f})")
+                        
+                        # Update the curve data
+                        if self.dragging_point is not None and self.dragging_point < len(self.curve_x):
+                            logger.debug(f"🔍 Updating point {self.dragging_point}")
+                            self.curve_x[self.dragging_point] = x
+                            self.curve_y[self.dragging_point] = y
+                            
+                            # Sort points by x-coordinate to maintain order
+                            points = list(zip(self.curve_x, self.curve_y))
+                            points.sort(key=lambda p: p[0])
+                            self.curve_x, self.curve_y = zip(*points)
+                            
+                            # Update the scatter plot
+                            self.scatter.setData(self.curve_x, self.curve_y)
+                            
+                            # Update the line
+                            self.curve_line.setData(self.curve_x, self.curve_y)
+                            logger.debug(f"🔍 Updated chart with new data")
+                        
+                        return True
+                    else:
+                        logger.debug("🔍 Mouse move but not dragging")
+                
+                elif event.type() == QEvent.Type.MouseButtonRelease:
+                    logger.debug("🔍 MOUSE RELEASE")
+                    if self.dragging:
+                        logger.debug("🔍 STOPPING DRAG")
+                        # Stop dragging
+                        self.dragging = False
+                        self.dragging_point = None
+                        self.emit_calibration_update()
+                        return True
+                    else:
+                        logger.debug("🔍 Mouse release but not dragging")
+                
+                else:
+                    logger.debug(f"🔍 Other event type: {event.type()}")
+                        
+            except ImportError:
+                logger.error("🔍 ImportError in eventFilter")
+                pass
+            except Exception as e:
+                logger.error(f"🔍 Error in eventFilter: {e}")
+        else:
+            logger.debug(f"🔍 Event not from calibration chart: obj={type(obj).__name__}")
+        
+        return super().eventFilter(obj, event)
     
     def emit_calibration_update(self):
         data = {
             'min_value': self.min_value,
             'max_value': self.max_value,
-            'curve_type': self.curve_selector.currentText() if self.curve_selector else "Linear (Default)"
+            'curve_type': self.curve_selector.currentText() if self.curve_selector else "Linear (Default)",
+            'curve_points': list(zip(self.curve_x, self.curve_y))
         }
         self.calibration_updated.emit(data)
     
@@ -516,5 +691,6 @@ class PedalCalibrationWidget(QWidget):
             'min_value': self.min_value,
             'max_value': self.max_value,
             'curve_type': self.curve_selector.currentText() if self.curve_selector else "Linear (Default)",
-            'current_input': self.current_input
+            'current_input': self.current_input,
+            'curve_points': list(zip(self.curve_x, self.curve_y))
         }

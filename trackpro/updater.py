@@ -324,7 +324,7 @@ class Updater:
             # Ensure devices are unhidden before continuing
             logger.info("Disabling HidHide cloaking before update")
             try:
-                from trackpro.main import TrackProApp
+                from trackpro.modern_main import ModernTrackProApp
                 if hasattr(QApplication.instance(), 'trackpro_app'):
                     app = QApplication.instance().trackpro_app
                     

@@ -5,11 +5,9 @@ from ..discord_navigation import DiscordNavigation
 from ..online_users_sidebar import OnlineUsersSidebar
 from .shared.base_page import GlobalManagers
 from .performance_manager import PerformanceManager, ThreadPriorityManager, CPUCoreManager
-from ..pages.pedals import PedalsPage
-from ..pages.race_coach import CoachPage
-from ..pages.race_pass import RacePassPage
-from ..pages.overlays import OverlaysPage
+# Import only what we need immediately to avoid circular imports
 from ..pages.home import HomePage
+from ..pages.community import CommunityPage
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +420,14 @@ class ModernMainWindow(QMainWindow):
         
         self.create_pages()
         self.switch_to_page("home")
+        
+        # Refresh authentication state after UI is fully initialized
+        # This ensures navigation shows correct user info
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, self.refresh_auth_state)
+        
+        # Set up keyboard shortcuts
+        self.setup_keyboard_shortcuts()
     
     def create_navigation(self):
         nav_widget = DiscordNavigation()
@@ -450,14 +456,14 @@ class ModernMainWindow(QMainWindow):
         # LAZY LOADING: Don't create other pages yet - they'll be created when first accessed
         # This dramatically speeds up startup time
         self._lazy_pages = {
-            "pedals": {"class": PedalsPage, "created": False},
-            "race_coach": {"class": CoachPage, "created": False},
-            "overlays": {"class": OverlaysPage, "created": False},
-            "race_pass": {"class": RacePassPage, "created": False},
+            "pedals": {"class": None, "created": False},  # Dynamic import
+            "race_coach": {"class": None, "created": False},  # Dynamic import
+            "overlays": {"class": None, "created": False},  # Dynamic import
+            "race_pass": {"class": None, "created": False},  # Dynamic import
             "handbrake": {"class": None, "created": False},  # Special handling needed
             "support": {"class": None, "created": False},  # Special handling needed
-            "community": {"class": None, "created": False, "placeholder": True},
-            "account": {"class": None, "created": False, "placeholder": True}
+            "community": {"class": CommunityPage, "created": False},
+            "account": {"class": None, "created": False}
         }
         
         logger.info("🚀 PERFORMANCE: Page lazy-loading configured - pages will be created when accessed")
@@ -500,8 +506,23 @@ class ModernMainWindow(QMainWindow):
         # Special handling for account page - check authentication first
         if page_name == "account":
             try:
-                from ...database.supabase_client import supabase
-                is_authenticated = supabase.is_authenticated()
+                from ...database.supabase_client import get_supabase_client
+                supabase_client = get_supabase_client()
+                is_authenticated = False
+                
+                if supabase_client:
+                    user_response = supabase_client.auth.get_user()
+                    is_authenticated = bool(user_response and user_response.user)
+                    logger.info(f"🔐 Account page auth check: user_response={user_response is not None}, has_user={user_response.user is not None if user_response else False}")
+                
+                # Additional check: if the home page shows a user name, we're authenticated
+                # This handles cases where the session might be temporarily inconsistent
+                if not is_authenticated:
+                    # Check if we have user info that indicates authentication
+                    user_info = self.get_current_user_info()
+                    if user_info and user_info.get('email'):
+                        logger.info(f"🔐 Auth check bypass: Found user info {user_info.get('email')}, treating as authenticated")
+                        is_authenticated = True
                 
                 if not is_authenticated:
                     # Show login dialog immediately when user clicks account
@@ -518,6 +539,7 @@ class ModernMainWindow(QMainWindow):
                         self.update_auth_state(True)
                 else:
                     # User is authenticated, update the auth state UI
+                    logger.info("🔐 User is authenticated, proceeding to account page")
                     self.update_auth_state(True)
                     
             except Exception as e:
@@ -554,6 +576,22 @@ class ModernMainWindow(QMainWindow):
             if page_config.get("placeholder", False):
                 # Create placeholder pages
                 page_widget = self.create_placeholder_page(page_name)
+            elif page_name == "pedals":
+                # Dynamic import for pedals page
+                from ..pages.pedals import PedalsPage
+                page_widget = PedalsPage(self.global_managers)
+            elif page_name == "race_coach":
+                # Dynamic import for race coach page
+                from ..pages.race_coach import CoachPage
+                page_widget = CoachPage(self.global_managers)
+            elif page_name == "overlays":
+                # Dynamic import for overlays page
+                from ..pages.overlays import OverlaysPage
+                page_widget = OverlaysPage(self.global_managers)
+            elif page_name == "race_pass":
+                # Dynamic import for race pass page
+                from ..pages.race_pass import RacePassPage
+                page_widget = RacePassPage(self.global_managers)
             elif page_name == "handbrake":
                 # Special handling for handbrake page
                 from ..pages.handbrake import HandbrakePage
@@ -562,6 +600,9 @@ class ModernMainWindow(QMainWindow):
                 # Special handling for support page
                 from ..pages.support import SupportPage
                 page_widget = SupportPage(self.global_managers)
+            elif page_name == "account":
+                # Special handling for account page
+                page_widget = self.create_account_page()
             elif page_config["class"]:
                 # Standard page creation
                 page_widget = page_config["class"](self.global_managers)
@@ -620,157 +661,16 @@ class ModernMainWindow(QMainWindow):
         return self.content_stack
     
     def create_account_page(self):
-        """Create the account page with authentication features."""
-        from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QGroupBox, QFrame
-        from PyQt6.QtCore import Qt
+        """Create the modern account page with sidebar navigation."""
+        from ..pages.account.account_page import AccountPage
         
-        account_page = QWidget()
-        layout = QVBoxLayout(account_page)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(20)
+        # Create the account page with global managers
+        account_page = AccountPage(self.global_managers)
         
-        # Header
-        header = QLabel("👤 Account")
-        header.setStyleSheet("font-size: 28px; font-weight: bold; color: #fefefe; margin-bottom: 20px;")
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(header)
-        
-        # Account status container
-        self.account_status_container = QWidget()
-        status_layout = QVBoxLayout(self.account_status_container)
-        
-        # Authentication status group
-        auth_group = QGroupBox("Authentication Status")
-        auth_group.setStyleSheet("""
-            QGroupBox {
-                font-size: 16px;
-                font-weight: bold;
-                color: #fefefe;
-                border: 2px solid #444;
-                border-radius: 10px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-        auth_layout = QVBoxLayout(auth_group)
-        auth_layout.setSpacing(15)
-        
-        # Status label
-        self.auth_status_label = QLabel("Checking authentication status...")
-        self.auth_status_label.setStyleSheet("font-size: 14px; color: #c0c0c0; padding: 10px;")
-        self.auth_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        auth_layout.addWidget(self.auth_status_label)
-        
-        # User info container (hidden by default)
-        self.user_info_container = QWidget()
-        self.user_info_container.setVisible(False)
-        user_info_layout = QVBoxLayout(self.user_info_container)
-        
-        self.user_email_label = QLabel("")
-        self.user_email_label.setStyleSheet("font-size: 14px; color: #fefefe; padding: 5px;")
-        user_info_layout.addWidget(self.user_email_label)
-        
-        self.user_name_label = QLabel("")
-        self.user_name_label.setStyleSheet("font-size: 14px; color: #c0c0c0; padding: 5px;")
-        user_info_layout.addWidget(self.user_name_label)
-        
-        auth_layout.addWidget(self.user_info_container)
-        
-        # Buttons container
-        buttons_container = QWidget()
-        buttons_layout = QHBoxLayout(buttons_container)
-        buttons_layout.setSpacing(10)
-        
-        # Login button (shown when not authenticated)
-        self.login_button = QPushButton("🔑 Login")
-        self.login_button.setMinimumHeight(40)
-        self.login_button.setStyleSheet("""
-            QPushButton {
-                background-color: #0066cc;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #0052a3;
-            }
-            QPushButton:pressed {
-                background-color: #004080;
-            }
-        """)
-        self.login_button.clicked.connect(self.show_login_dialog)
-        buttons_layout.addWidget(self.login_button)
-        
-        # Signup button (shown when not authenticated)
-        self.signup_button = QPushButton("📝 Sign Up")
-        self.signup_button.setMinimumHeight(40)
-        self.signup_button.setStyleSheet("""
-            QPushButton {
-                background-color: #28a745;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #218838;
-            }
-            QPushButton:pressed {
-                background-color: #1e7e34;
-            }
-        """)
-        self.signup_button.clicked.connect(self.show_signup_dialog)
-        buttons_layout.addWidget(self.signup_button)
-        
-        # Logout button (shown when authenticated)
-        self.logout_button = QPushButton("🚪 Logout")
-        self.logout_button.setMinimumHeight(40)
-        self.logout_button.setVisible(False)
-        self.logout_button.setStyleSheet("""
-            QPushButton {
-                background-color: #dc3545;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #c82333;
-            }
-            QPushButton:pressed {
-                background-color: #bd2130;
-            }
-        """)
-        self.logout_button.clicked.connect(self.logout_user)
-        buttons_layout.addWidget(self.logout_button)
-        
-        auth_layout.addWidget(buttons_container)
-        status_layout.addWidget(auth_group)
-        
-        # User Profile Form (shown when authenticated)
-        self.profile_group = self.create_user_profile_form()
-        self.profile_group.setVisible(False)  # Hidden by default
-        status_layout.addWidget(self.profile_group)
-        
-        layout.addWidget(self.account_status_container)
-        
-        layout.addStretch()
-        
-        # Store reference to account page for updates
+        # Store reference for authentication updates
         account_page.update_auth_status = lambda authenticated: self.update_account_page_auth_status(authenticated)
         
+        logger.info("✅ Modern Account page created with sidebar navigation")
         return account_page
     
     def create_user_profile_form(self):
@@ -969,6 +869,11 @@ class ModernMainWindow(QMainWindow):
     def update_account_page_auth_status(self, authenticated):
         """Update the account page UI based on authentication status."""
         try:
+            # Check if account page elements exist before updating
+            if not hasattr(self, 'auth_status_label'):
+                logger.debug("🔍 Account page elements not created yet - skipping auth status update")
+                return
+                
             if authenticated:
                 # Show user as logged in
                 self.auth_status_label.setText("✅ You are logged in")
@@ -984,19 +889,27 @@ class ModernMainWindow(QMainWindow):
                         metadata = getattr(user.user, 'user_metadata', {})
                         name = metadata.get('full_name') or metadata.get('name') or "No name available"
                         
-                        self.user_email_label.setText(f"📧 {email}")
-                        self.user_name_label.setText(f"👤 {name}")
-                        self.user_info_container.setVisible(True)
+                        if hasattr(self, 'user_email_label'):
+                            self.user_email_label.setText(f"📧 {email}")
+                        if hasattr(self, 'user_name_label'):
+                            self.user_name_label.setText(f"👤 {name}")
+                        if hasattr(self, 'user_info_container'):
+                            self.user_info_container.setVisible(True)
                     else:
-                        self.user_info_container.setVisible(False)
+                        if hasattr(self, 'user_info_container'):
+                            self.user_info_container.setVisible(False)
                 except Exception as e:
                     logger.error(f"Error getting user info: {e}")
-                    self.user_info_container.setVisible(False)
+                    if hasattr(self, 'user_info_container'):
+                        self.user_info_container.setVisible(False)
                 
                 # Show logout button, hide login/signup
-                self.login_button.setVisible(False)
-                self.signup_button.setVisible(False)
-                self.logout_button.setVisible(True)
+                if hasattr(self, 'login_button'):
+                    self.login_button.setVisible(False)
+                if hasattr(self, 'signup_button'):
+                    self.signup_button.setVisible(False)
+                if hasattr(self, 'logout_button'):
+                    self.logout_button.setVisible(True)
                 
                 # Show profile form and load profile data
                 if hasattr(self, 'profile_group'):
@@ -1009,12 +922,16 @@ class ModernMainWindow(QMainWindow):
                 self.auth_status_label.setStyleSheet("font-size: 14px; color: #dc3545; padding: 10px; font-weight: bold;")
                 
                 # Hide user info
-                self.user_info_container.setVisible(False)
+                if hasattr(self, 'user_info_container'):
+                    self.user_info_container.setVisible(False)
                 
                 # Show login/signup buttons, hide logout
-                self.login_button.setVisible(True)
-                self.signup_button.setVisible(True)
-                self.logout_button.setVisible(False)
+                if hasattr(self, 'login_button'):
+                    self.login_button.setVisible(True)
+                if hasattr(self, 'signup_button'):
+                    self.signup_button.setVisible(True)
+                if hasattr(self, 'logout_button'):
+                    self.logout_button.setVisible(False)
                 
                 # Hide profile form when not authenticated
                 if hasattr(self, 'profile_group'):
@@ -1254,15 +1171,142 @@ class ModernMainWindow(QMainWindow):
             # Emit signal for other components
             self.auth_state_changed.emit(authenticated)
             
+            # Update all pages that need authentication state
+            for page_name, page in self.pages.items():
+                if hasattr(page, 'on_auth_state_changed'):
+                    page.on_auth_state_changed()
+            
         except Exception as e:
             logger.error(f"Error updating auth state: {e}")
+    
+    def refresh_auth_state(self):
+        """Manually refresh authentication state - useful for fixing sync issues."""
+        try:
+            from ...database.supabase_client import get_supabase_client
+            supabase_client = get_supabase_client()
+            
+            if supabase_client:
+                # Check if we have a valid user
+                user_response = supabase_client.auth.get_user()
+                session = supabase_client.auth.get_session()
+                
+                is_authenticated = bool(
+                    (user_response and user_response.user) or 
+                    (session and session.user)
+                )
+                
+                logger.info(f"🔄 Auth state refresh: authenticated={is_authenticated}")
+                self.update_auth_state(is_authenticated)
+            else:
+                # If Supabase client is not available, try to initialize it
+                logger.info("🔄 Supabase client not available, attempting to initialize...")
+                from ...database.supabase_client import supabase
+                if hasattr(supabase, 'initialize'):
+                    supabase.initialize()
+                    # Get the client again after initialization (no recursive call)
+                    supabase_client = get_supabase_client()
+                    if supabase_client:
+                        user_response = supabase_client.auth.get_user()
+                        session = supabase_client.auth.get_session()
+                        
+                        is_authenticated = bool(
+                            (user_response and user_response.user) or 
+                            (session and session.user)
+                        )
+                        
+                        logger.info(f"🔄 Auth state refresh after init: authenticated={is_authenticated}")
+                        self.update_auth_state(is_authenticated)
+                    else:
+                        logger.warning("⚠️ Supabase client still not available after initialization")
+                
+        except Exception as e:
+            logger.error(f"Error refreshing auth state: {e}")
+    
+    def force_auth_refresh_after_login(self):
+        """Force refresh authentication state after successful login."""
+        try:
+            logger.info("🔄 Force refreshing authentication state after login...")
+            
+            # First, ensure Supabase client is initialized
+            from ...database.supabase_client import get_supabase_client
+            supabase_client = get_supabase_client()
+            
+            if not supabase_client:
+                logger.warning("⚠️ Supabase client not available, trying to initialize...")
+                from ...database.supabase_client import supabase
+                if hasattr(supabase, 'initialize'):
+                    supabase.initialize()
+                    supabase_client = get_supabase_client()
+            
+            if supabase_client:
+                # Force a session refresh
+                try:
+                    session = supabase_client.auth.get_session()
+                    if session and session.user:
+                        logger.info("✅ Found valid session, updating UI...")
+                        self.update_auth_state(True)
+                        
+                                    # Also update all pages that need authentication state
+                        if "home" in self.pages:
+                            self.pages["home"].refresh_header()
+                            # Also call the auth state changed method
+                            if hasattr(self.pages["home"], 'on_auth_state_changed'):
+                                self.pages["home"].on_auth_state_changed()
+                        
+                        return True
+                except Exception as session_error:
+                    logger.error(f"Error getting session: {session_error}")
+            
+            # Fallback: try user manager
+            try:
+                from ...auth.user_manager import get_current_user
+                current_user = get_current_user()
+                if current_user and current_user.is_authenticated:
+                    logger.info("✅ Found authenticated user via user manager")
+                    self.update_auth_state(True)
+                    return True
+            except Exception as user_error:
+                logger.error(f"Error checking user manager: {user_error}")
+            
+            logger.warning("⚠️ Could not verify authentication state")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error in force_auth_refresh_after_login: {e}")
+            return False
     
     def get_current_user_info(self):
         """Get current user information from the authentication system and profile database."""
         try:
-            from ...database.supabase_client import supabase
-            # Use the SupabaseManager's get_user method
-            user_response = supabase.get_user()
+            from ...database.supabase_client import get_supabase_client
+            supabase_client = get_supabase_client()
+            if not supabase_client:
+                logger.warning("🔍 DEBUG: No Supabase client available, trying user manager fallback...")
+                # Fallback to user manager if Supabase client isn't available
+                try:
+                    from ...auth.user_manager import get_current_user
+                    current_user = get_current_user()
+                    if current_user and current_user.is_authenticated:
+                        logger.info(f"🔍 DEBUG: Got user from user manager: {current_user.name}")
+                        return {
+                            'email': current_user.email,
+                            'name': current_user.name,
+                            'user_id': current_user.id
+                        }
+                except Exception as fallback_error:
+                    logger.error(f"Error getting user from user manager: {fallback_error}")
+                return None
+            
+            # Use the correct auth.get_user method
+            user_response = supabase_client.auth.get_user()
+            
+            # Also try to get session info as fallback
+            if not user_response or not user_response.user:
+                logger.warning("🔍 DEBUG: No user in auth.get_user(), trying session...")
+                session = supabase_client.auth.get_session()
+                if session and session.user:
+                    user_response = session
+                    logger.info("🔍 DEBUG: Got user from session instead")
             
             logger.info(f"🔍 DEBUG: user_response = {user_response}")
             
@@ -1313,7 +1357,7 @@ class ModernMainWindow(QMainWindow):
                 if name == "User":
                     try:
                         logger.info("📝 No name in metadata, checking database...")
-                        profile_result = supabase.client.table('user_details').select('first_name, last_name').eq('user_id', user_id).execute()
+                        profile_result = supabase_client.table('user_details').select('first_name, last_name').eq('user_id', user_id).execute()
                         
                         if profile_result.data and len(profile_result.data) > 0:
                             profile = profile_result.data[0]
@@ -1358,11 +1402,32 @@ class ModernMainWindow(QMainWindow):
     def check_authentication_on_account_click(self):
         """Check authentication when account page is requested."""
         try:
-            from ...database.supabase_client import supabase
-            is_authenticated = supabase.is_authenticated()
+            from ...database.supabase_client import get_supabase_client
+            supabase_client = get_supabase_client()
+            
+            is_authenticated = False
+            
+            # Try Supabase client first
+            if supabase_client:
+                try:
+                    session = supabase_client.auth.get_session()
+                    is_authenticated = bool(session and session.user)
+                except Exception as supabase_error:
+                    logger.warning(f"Error checking Supabase auth: {supabase_error}")
+            
+            # Fallback to user manager
+            if not is_authenticated:
+                try:
+                    from ...auth.user_manager import get_current_user
+                    current_user = get_current_user()
+                    is_authenticated = current_user and current_user.is_authenticated
+                    logger.info(f"🔍 Account click auth check via user manager: {is_authenticated}")
+                except Exception as user_manager_error:
+                    logger.warning(f"Error checking user manager auth: {user_manager_error}")
             
             if not is_authenticated:
                 # Show login dialog immediately
+                logger.info("🔐 User clicked account but not authenticated - showing login dialog")
                 self.show_login_dialog()
             
             return is_authenticated
@@ -1381,6 +1446,20 @@ class ModernMainWindow(QMainWindow):
         """Handle online users sidebar toggle."""
         logger.info(f"📱 Online users sidebar {'expanded' if is_expanded else 'collapsed'}")
         # Could save preference or adjust layout here if needed
+    
+    def setup_keyboard_shortcuts(self):
+        """Set up keyboard shortcuts for the application."""
+        try:
+            from PyQt6.QtGui import QKeySequence, QShortcut
+            
+            # Force refresh authentication state (Ctrl+Shift+R)
+            refresh_auth_shortcut = QShortcut(QKeySequence("Ctrl+Shift+R"), self)
+            refresh_auth_shortcut.activated.connect(self.force_auth_refresh_after_login)
+            
+            logger.info("✅ Keyboard shortcuts configured")
+            
+        except Exception as e:
+            logger.error(f"Error setting up keyboard shortcuts: {e}")
     
     def cleanup(self):
         """Clean up resources before window closes."""

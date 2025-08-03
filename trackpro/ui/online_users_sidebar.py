@@ -187,7 +187,12 @@ class OnlineUsersSidebar(QWidget):
         
         # Setup UI
         self.setup_ui()
-        self.load_users_from_database()
+        
+        # Load current user immediately for instant display
+        self.load_current_user_instantly()
+        
+        # Load other users asynchronously
+        QTimer.singleShot(100, self.load_users_from_database)
         
         # Auto-refresh timer for online status and user data
         self.refresh_timer = QTimer()
@@ -503,59 +508,87 @@ class OnlineUsersSidebar(QWidget):
             logger.warning(f"Error getting current user: {e}")
         return None
     
+    def load_current_user_instantly(self):
+        """Load current user immediately for instant display."""
+        try:
+            self.current_user_id = self.get_current_user_id()
+            if self.current_user_id:
+                # Add current user instantly
+                current_user_data = {
+                    'user_id': self.current_user_id,
+                    'username': 'currentuser',
+                    'display_name': 'You',
+                    'avatar_url': None,
+                    'is_friend': False,
+                    'is_online': True,
+                    'status': 'Online'
+                }
+                self.all_users = [current_user_data]
+                self.refresh_users_list()
+                logger.info("✅ Current user loaded instantly")
+            else:
+                logger.warning("No authenticated user found")
+        except Exception as e:
+            logger.error(f"Error loading current user instantly: {e}")
+    
     def load_users_from_database(self):
         """Load all users from database with friends prioritized."""
         try:
-            # Get current user ID
-            self.current_user_id = self.get_current_user_id()
+            # Get current user ID if not already set
             if not self.current_user_id:
-                logger.warning("No authenticated user found, loading mock data")
-                self.load_fallback_users()
-                return
+                self.current_user_id = self.get_current_user_id()
+                if not self.current_user_id:
+                    logger.warning("No authenticated user found")
+                    return
             
             # Import database managers
             from ..social.friends_manager import FriendsManager
             from ..social.user_manager import EnhancedUserManager
             
-            # Get friends list
+            # Get friends list (non-blocking)
             friends_manager = FriendsManager()
             self.friends_list = friends_manager.get_friends_list(self.current_user_id, include_online_status=True)
             
-            # Get all users from database
+            # Get all users from database (optimized query)
             user_manager = EnhancedUserManager()
             response = user_manager.client.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, last_active"
             ).execute()
             
-            self.all_users = []
+            # Start with current user (already loaded)
+            current_user_in_list = False
             friends_ids = [friend['friend_id'] for friend in self.friends_list]
             
-            # Process all users
+            # Process all users except current user (already shown)
             for user in (response.data or []):
-                # Skip current user
-                if user['user_id'] == self.current_user_id:
-                    continue
-                    
+                is_current_user = user['user_id'] == self.current_user_id
+                
+                if is_current_user:
+                    current_user_in_list = True
+                    continue  # Skip current user as it's already loaded
+                
                 user_data = {
                     'user_id': user['user_id'],
                     'username': user.get('username', 'Unknown'),
                     'display_name': user.get('display_name'),
                     'avatar_url': user.get('avatar_url'),
                     'is_friend': user['user_id'] in friends_ids,
-                    'is_online': self._simulate_online_status(user['user_id']),  # TODO: Replace with real online status
+                    'is_online': self._simulate_online_status(user['user_id']),
                     'status': self._get_user_status(user['user_id'], user.get('last_active'))
                 }
                 self.all_users.append(user_data)
             
+            # Update the UI with new users
             self.refresh_users_list()
+            logger.info(f"✅ Loaded {len(self.all_users)} users from database")
             
         except Exception as e:
             logger.error(f"Error loading users from database: {e}")
-            self.load_fallback_users()
+            # Don't call load_fallback_users() as current user is already shown
     
     def load_fallback_users(self):
         """Load fallback users when database is unavailable."""
-        # Include current user if authenticated
+        # Only include current user if authenticated
         fallback_users = []
         
         if self.current_user_id:
@@ -569,64 +602,6 @@ class OnlineUsersSidebar(QWidget):
                 'is_online': True,   # Always online if authenticated
                 'last_active': None
             })
-        
-        # Add other mock users
-        fallback_users.extend([
-            {
-                'user_id': '1',
-                'username': 'alexjohnson',
-                'display_name': 'Alex Johnson',
-                'avatar_url': None,
-                'is_friend': True,
-                'is_online': True,
-                'last_active': '2024-01-20T15:45:00Z'
-            },
-            {
-                'user_id': '2', 
-                'username': 'sarahmiller',
-                'display_name': 'Sarah Miller',
-                'avatar_url': None,
-                'is_friend': True,
-                'is_online': True,
-                'last_active': '2024-01-20T15:40:00Z'
-            },
-            {
-                'user_id': '3',
-                'username': 'mikewilson',
-                'display_name': 'Mike Wilson',
-                'avatar_url': None,
-                'is_friend': False,
-                'is_online': True,
-                'last_active': '2024-01-20T15:35:00Z'
-            },
-            {
-                'user_id': '4',
-                'username': 'emmadavis',
-                'display_name': 'Emma Davis',
-                'avatar_url': None,
-                'is_friend': False,
-                'is_online': False,
-                'last_active': '2024-01-18T18:20:00Z'
-            },
-            {
-                'user_id': '5',
-                'username': 'tombrown',
-                'display_name': 'Tom Brown',
-                'avatar_url': None,
-                'is_friend': True,
-                'is_online': True,
-                'last_active': '2024-01-19T12:30:00Z'
-            },
-            {
-                'user_id': '6',
-                'username': 'lisagarcia',
-                'display_name': 'Lisa Garcia',
-                'avatar_url': None,
-                'is_friend': False,
-                'is_online': False,
-                'last_active': '2024-01-17T20:45:00Z'
-            }
-        ])
         
         # Set dynamic status for each user
         for user in fallback_users:
@@ -895,7 +870,9 @@ class OnlineUsersSidebar(QWidget):
     def refresh_users_data(self):
         """Refresh users data including online status from the backend."""
         logger.debug("Refreshing users data...")
-        self.load_users_from_database()
+        # Only refresh if we have users loaded
+        if self.all_users:
+            self.load_users_from_database()
         self.update_add_friend_ui_state()  # Update UI based on auth status
     
     def on_user_selected(self, user_data: Dict[str, Any]):

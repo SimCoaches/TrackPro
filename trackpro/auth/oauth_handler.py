@@ -870,7 +870,7 @@ class OAuthHandler(QObject):
 
                         # Find the main window by looking through top-level widgets
                         from PyQt6.QtWidgets import QApplication, QMessageBox
-                        from ..ui import MainWindow
+                        from ..ui.modern.main_window import ModernMainWindow as MainWindow
                         
                         # Force reload of auth state to ensure cache is cleared
                         supabase._restore_session()
@@ -880,9 +880,9 @@ class OAuthHandler(QObject):
                             if isinstance(widget, MainWindow):
                                 main_window = widget
                                 logger.info("Found main window, updating auth state")
-                                # Force update UI state
+                                # Force update UI state with authenticated=True
                                 QApplication.processEvents()
-                                widget.update_auth_state()
+                                widget.update_auth_state(True)
                                 QApplication.processEvents()
                                 break
                         

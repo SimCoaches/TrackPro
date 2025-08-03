@@ -724,7 +724,7 @@ class LoginDialog(BaseAuthDialog):
                         # If the parent has update_auth_state method, call it directly
                         if hasattr(parent, 'update_auth_state'):
                             logger.info("Parent has update_auth_state method, calling it")
-                            parent.update_auth_state()
+                            parent.update_auth_state(True)
                             QApplication.processEvents()
                 except Exception as e:
                     logger.error(f"Error updating parent window: {e}")
@@ -892,7 +892,13 @@ class LoginDialog(BaseAuthDialog):
                     # If the parent has update_auth_state method, call it directly
                     if hasattr(parent, 'update_auth_state'):
                         logger.info("Parent has update_auth_state method, calling it")
-                        parent.update_auth_state()
+                        parent.update_auth_state(True)
+                        QApplication.processEvents()
+                    
+                    # Force refresh authentication state after login
+                    if hasattr(parent, 'force_auth_refresh_after_login'):
+                        logger.info("Calling force_auth_refresh_after_login to ensure UI updates")
+                        parent.force_auth_refresh_after_login()
                         QApplication.processEvents()
             except Exception as e:
                 logger.error(f"Error updating parent window: {e}")
@@ -1194,7 +1200,13 @@ class LoginDialog(BaseAuthDialog):
                         # If the parent has update_auth_state method, call it directly
                         if hasattr(parent, 'update_auth_state'):
                             logger.info("Parent has update_auth_state method, calling it")
-                            parent.update_auth_state()
+                            parent.update_auth_state(True)
+                            QApplication.processEvents()
+                        
+                        # Force refresh authentication state after login
+                        if hasattr(parent, 'force_auth_refresh_after_login'):
+                            logger.info("Calling force_auth_refresh_after_login to ensure UI updates")
+                            parent.force_auth_refresh_after_login()
                             QApplication.processEvents()
                 except Exception as e:
                     logger.error(f"Error updating parent window: {e}")

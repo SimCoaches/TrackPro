@@ -31,13 +31,21 @@ class EnhancedUserManager(DatabaseManager):
         """
         try:
             if not user_id:
-                user = self.supabase.auth.get_user()
-                if not user:
+                # Ensure we have a valid supabase client
+                if not self.supabase:
+                    self.supabase = get_supabase_client()
+                    if not self.supabase:
+                        logger.error("No Supabase client available for user profile query")
+                        return None
+                
+                user_response = self.supabase.auth.get_user()
+                if not user_response or not user_response.user:
+                    logger.warning("No authenticated user found for profile query")
                     return None
-                user_id = user.id
+                user_id = user_response.user.id
             
             # First try to get from the view for complete profile data
-            response = self.client.from_("user_profile_complete").select("*").eq("user_id", user_id).limit(1).execute()
+            response = self.supabase.from_("user_profile_complete").select("*").eq("user_id", user_id).limit(1).execute()
             
             if response.data:
                 return response.data[0]
@@ -45,7 +53,7 @@ class EnhancedUserManager(DatabaseManager):
             # If view returns empty (user not in user_profiles), try to get from user_details as fallback
             logger.info(f"User {user_id} not found in user_profile_complete view, checking user_details table")
             
-            details_response = self.client.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
+            details_response = self.supabase.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
             
             if details_response.data:
                 # Return minimal profile data with 2FA info from user_details

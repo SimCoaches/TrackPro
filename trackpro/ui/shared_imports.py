@@ -159,8 +159,28 @@ from ..config import config
 from ..pedals.calibration import CalibrationWizard
 from ..pedals.profile_dialog import PedalProfileDialog
 from ..race_coach.ui import RaceCoachWidget
-from trackpro.gamification.ui.race_pass_view import RacePassViewWidget
-from trackpro.gamification.ui.enhanced_quest_view import EnhancedQuestViewWidget
+# Gamification imports - these are in the future directory
+try:
+    from future.gamification.trackpro_gamification.ui.race_pass_view import RacePassViewWidget
+    from future.gamification.trackpro_gamification.ui.enhanced_quest_view import EnhancedQuestViewWidget
+    GAMIFICATION_AVAILABLE = True
+except ImportError:
+    # Fallback implementations if gamification is not available
+    class RacePassViewWidget:
+        def __init__(self, *args, **kwargs):
+            from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
+            super().__init__()
+            layout = QVBoxLayout(self)
+            layout.addWidget(QLabel("Race Pass features not available"))
+    
+    class EnhancedQuestViewWidget:
+        def __init__(self, *args, **kwargs):
+            from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
+            super().__init__()
+            layout = QVBoxLayout(self)
+            layout.addWidget(QLabel("Quest features not available"))
+    
+    GAMIFICATION_AVAILABLE = False
 
 # Set up logging
 logger = logging.getLogger(__name__)

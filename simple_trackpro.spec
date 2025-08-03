@@ -114,14 +114,14 @@ if pyqt6_path:
         print("Added Qt WebEngine translations")
 
 a = Analysis(
-    ['run_app.py'],
+    ['new_ui.py'],
     pathex=[],
     binaries=binaries_list,
     datas=datas_list,
     hiddenimports=[
         # Core TrackPro modules
         'trackpro',
-        'trackpro.main',
+        'trackpro.modern_main',
         'trackpro.config',
         'trackpro.logging_config',
         

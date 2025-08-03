@@ -98,6 +98,14 @@ packaging>=21.0,<24.0          # Package version handling
 typing-extensions>=4.0.0,<5.0.0 # Type hints for older Python versions
 
 # ================================================================================================
+# VOICE CHAT & COMMUNITY DEPENDENCIES
+# ================================================================================================
+PyAudio>=0.2.14,<1.0.0         # Audio capture and playback for voice chat
+websockets>=11.0.0,<12.0.0     # WebSocket communication (already listed above)
+numpy>=1.19.0,<2.0.0           # Scientific computing (already listed above)
+scipy>=1.7.0,<2.0.0            # Scientific computing (already listed above)
+
+# ================================================================================================
 # OPTIONAL AUDIO ENHANCEMENTS
 # ================================================================================================
 sounddevice>=0.4.0,<1.0.0      # Advanced audio I/O (notifications, AI coach)
@@ -117,6 +125,8 @@ sounddevice>=0.4.0,<1.0.0      # Advanced audio I/O (notifications, AI coach)
 # - 4GB RAM minimum, 8GB recommended
 # - 500MB free disk space
 # - Internet connection for cloud features
+# - Microphone and speakers/headphones for voice chat
+# - Stable internet connection for voice chat (recommended 1Mbps+)
 # 
 # OPTIONAL COMPONENTS:
 # -------------------
@@ -137,5 +147,10 @@ sounddevice>=0.4.0,<1.0.0      # Advanced audio I/O (notifications, AI coach)
 #    - Use Windows Store Python if available
 #    - Try: pip install --user --upgrade setuptools wheel
 # 7. If pywin32 fails: pip install --user pywin32 --force-reinstall
+# 8. Voice Chat Issues:
+#    - If PyAudio fails: pip install --user PyAudio --force-reinstall
+#    - On Windows: pip install --user pipwin && pipwin install pyaudio
+#    - Alternative: Download PyAudio wheel from https://www.lfd.uci.edu/~gohlke/pythonlibs/
+#    - Ensure microphone permissions are enabled in Windows settings
 # 
 # ================================================================================================

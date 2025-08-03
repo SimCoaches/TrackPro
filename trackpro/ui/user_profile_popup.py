@@ -439,7 +439,16 @@ class UserProfilePopup(QDialog):
     
     def create_avatar(self, size: int = 64) -> QPixmap:
         """Create a circular avatar with user initials."""
+        # Use real name for current user, fallback to display name or username
         name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
+        
+        # For current user, try to use first and last name if available
+        if self.user_data.get('user_id') == self.current_user_id:
+            first_name = self.user_data.get('first_name', '')
+            last_name = self.user_data.get('last_name', '')
+            if first_name or last_name:
+                name = f"{first_name} {last_name}".strip()
+        
         initials = ''.join([word[0].upper() for word in name.split()][:2])
         
         # Create pixmap for avatar
@@ -449,8 +458,8 @@ class UserProfilePopup(QDialog):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw circle background
-        colors = ['#7289da', '#99aab5', '#2c2f33', '#23272a', '#f04747', '#faa61a']
+        # Draw circle background using TrackPro colors
+        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
         color_index = hash(name) % len(colors)
         painter.setBrush(QBrush(QColor(colors[color_index])))
         painter.setPen(Qt.PenStyle.NoPen)
@@ -480,6 +489,15 @@ class UserProfilePopup(QDialog):
     
     def load_user_data(self):
         """Load and display user data."""
+        # Check if this is the current user and fetch real data
+        is_current_user = self.user_data.get('user_id') == self.current_user_id
+        
+        if is_current_user and self.current_user_id:
+            # Fetch real user data from database for current user
+            real_user_data = self.get_current_user_data()
+            if real_user_data:
+                self.user_data.update(real_user_data)
+        
         # Set avatar
         avatar_pixmap = self.create_avatar(64)
         self.avatar_label.setPixmap(avatar_pixmap)
@@ -499,7 +517,7 @@ class UserProfilePopup(QDialog):
         username = self.user_data.get('username', 'Unknown')
         self.username_value.setText(f"@{username}")
         
-        # Set member since (mock data for now)
+        # Set member since
         member_since = self.format_join_date()
         self.member_since_value.setText(member_since)
         
@@ -515,10 +533,129 @@ class UserProfilePopup(QDialog):
         # Update button states
         self.update_button_states()
     
+    def get_current_user_data(self) -> Optional[Dict[str, Any]]:
+        """Get current user's real data from database."""
+        try:
+            from ..database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            
+            if not client or not self.current_user_id:
+                return None
+            
+            # Fetch user profile from database
+            response = client.table("user_profiles").select(
+                "user_id, username, display_name, email, first_name, last_name, bio, created_at"
+            ).eq("user_id", self.current_user_id).single().execute()
+            
+            if response.data:
+                user_data = response.data
+                
+                # Get current iRacing status if available
+                iracing_status = self.get_current_user_iracing_status()
+                
+                return {
+                    'user_id': user_data['user_id'],
+                    'username': user_data.get('username', 'currentuser'),
+                    'display_name': user_data.get('display_name') or user_data.get('first_name', 'You'),
+                    'email': user_data.get('email'),
+                    'first_name': user_data.get('first_name'),
+                    'last_name': user_data.get('last_name'),
+                    'bio': user_data.get('bio'),
+                    'created_at': user_data.get('created_at'),
+                    'status': iracing_status or 'Online',
+                    'is_online': True,  # Current user is always online
+                    'is_friend': False  # Can't be friends with yourself
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching current user data: {e}")
+            return None
+    
+    def get_current_user_iracing_status(self) -> str:
+        """Get the current user's iRacing status from telemetry."""
+        try:
+            # Try to get global iRacing API
+            global_iracing_api = None
+            
+            # Look for global iRacing API in different ways
+            try:
+                from PyQt6.QtWidgets import QApplication
+                for widget in QApplication.topLevelWidgets():
+                    if hasattr(widget, 'get_shared_iracing_api'):
+                        global_iracing_api = widget.get_shared_iracing_api()
+                        break
+                    elif hasattr(widget, 'global_iracing_api'):
+                        global_iracing_api = widget.global_iracing_api
+                        break
+            except:
+                pass
+            
+            # Alternative: try to import and get global API
+            if not global_iracing_api:
+                try:
+                    import new_ui
+                    if hasattr(new_ui, 'get_global_iracing_api'):
+                        global_iracing_api = new_ui.get_global_iracing_api()
+                except:
+                    pass
+            
+            if global_iracing_api and hasattr(global_iracing_api, 'ir') and global_iracing_api.ir:
+                ir = global_iracing_api.ir
+                if ir and ir.is_connected:
+                    # Get current session info
+                    try:
+                        weekend_info = ir['WeekendInfo']
+                        driver_info = ir['DriverInfo']
+                        session_info = ir['SessionInfo']
+                        
+                        track_name = weekend_info.get('TrackDisplayName', 'Unknown Track')
+                        
+                        # Get car name from player's driver info
+                        drivers = driver_info.get('Drivers', [])
+                        player_car_idx = driver_info.get('DriverCarIdx', 0)
+                        car_name = 'Unknown Car'
+                        
+                        if 0 <= player_car_idx < len(drivers):
+                            car_name = drivers[player_car_idx].get('CarScreenName', 'Unknown Car')
+                        
+                        # Get session type
+                        sessions = session_info.get('Sessions', [])
+                        current_session_num = session_info.get('CurrentSessionNum', 0)
+                        session_type = 'Practice'
+                        
+                        if 0 <= current_session_num < len(sessions):
+                            session_type = sessions[current_session_num].get('SessionType', 'Practice')
+                        
+                        # Format the status based on session type
+                        if session_type == 'Race':
+                            return f"Racing - {track_name}"
+                        elif session_type == 'Practice':
+                            return f"Practicing - {track_name}"
+                        elif session_type == 'Qualify':
+                            return f"Qualifying - {track_name}"
+                        elif session_type == 'Warmup':
+                            return f"Warming up - {track_name}"
+                        else:
+                            return f"In session - {track_name}"
+                            
+                    except Exception as e:
+                        logger.debug(f"Error getting detailed iRacing session info: {e}")
+                        return "In iRacing"
+                else:
+                    # Not connected to iRacing but TrackPro is running
+                    return "Online"
+            else:
+                # No iRacing API available
+                return "Online"
+                
+        except Exception as e:
+            logger.debug(f"Error getting iRacing status: {e}")
+            return "Online"
+    
     def format_join_date(self) -> str:
         """Format the join date for display."""
-        # For now, use mock data. In real implementation, this would come from user_data
-        # or be fetched from the database
         join_date = self.user_data.get('created_at')
         if join_date:
             try:
@@ -528,7 +665,7 @@ class UserProfilePopup(QDialog):
             except:
                 pass
         
-        # Fallback to mock date
+        # Fallback to mock date if no real data available
         return "January 15, 2024"
     
     def update_button_states(self):

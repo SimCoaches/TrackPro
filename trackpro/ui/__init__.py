@@ -1,7 +1,7 @@
 """UI module for TrackPro - reorganized into separate components."""
 
 # Import the main window class
-from .main_window import MainWindow
+from .modern.main_window import ModernMainWindow as MainWindow
 
 # Import chart widgets
 from .chart_widgets import DraggableChartView, IntegratedCalibrationChart

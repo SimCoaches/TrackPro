@@ -30,4 +30,4 @@ from .pedals.output import VirtualJoystick
 # Import race_coach module for the Race Coach feature
 from .race_coach import RaceCoachWidget
 
-from .main import main 
+from .modern_main import main 

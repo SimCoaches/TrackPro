@@ -189,6 +189,12 @@ def create_menu_bar(main_window):
     optimize_action = QAction("Optimize Performance", main_window)
     optimize_action.triggered.connect(main_window.optimize_performance)
     help_menu.addAction(optimize_action)
+    
+    # Add authentication refresh option
+    help_menu.addSeparator()
+    refresh_auth_action = QAction("Refresh Authentication State", main_window)
+    refresh_auth_action.triggered.connect(lambda: force_refresh_login_state(main_window))
+    help_menu.addAction(refresh_auth_action)
 
 
 def toggle_minimize_to_tray_from_menu(main_window, checked):
@@ -200,35 +206,48 @@ def toggle_minimize_to_tray_from_menu(main_window, checked):
 
 def force_refresh_login_state(main_window):
     """Force a refresh of the authentication state."""
-    # Import here to avoid circular imports
-    from ..database import supabase
-    
     logger.info("Manually refreshing authentication state")
     
-    # Restore session from file first to ensure we have the latest data
-    if hasattr(supabase, '_restore_session'):
-        supabase._restore_session()
+    # Try modern UI method first
+    if hasattr(main_window, 'force_auth_refresh_after_login'):
+        logger.info("Using modern UI force refresh method")
+        success = main_window.force_auth_refresh_after_login()
+        if success:
+            QMessageBox.information(main_window, "Login State Refreshed", "Authentication state refreshed successfully!")
+            return
+    
+    # Fallback to legacy method
+    try:
+        from ..database import supabase
         
-    # Force processEvents to update the UI
-    from PyQt6.QtWidgets import QApplication
-    QApplication.processEvents()
-    
-    # Update the authentication state
-    main_window.update_auth_state()
-    
-    # Force processEvents again to ensure UI updates
-    QApplication.processEvents()
-    
-    # Get the current user for a message
-    user = supabase.get_user()
-    if user and ((hasattr(user, 'user') and user.user) or hasattr(user, 'email')):
-        user_email = None
-        if hasattr(user, 'email'):
-            user_email = user.email
-        elif hasattr(user, 'user') and hasattr(user.user, 'email'):
-            user_email = user.user.email
+        # Restore session from file first to ensure we have the latest data
+        if hasattr(supabase, '_restore_session'):
+            supabase._restore_session()
+            
+        # Force processEvents to update the UI
+        from PyQt6.QtWidgets import QApplication
+        QApplication.processEvents()
         
-        message = f"Refreshed authentication state. Logged in as: {user_email}"
-        QMessageBox.information(main_window, "Login State Refreshed", message)
-    else:
-        QMessageBox.information(main_window, "Login State Refreshed", "Refreshed authentication state. No user is currently logged in.") 
+        # Update the authentication state
+        if hasattr(main_window, 'update_auth_state'):
+            main_window.update_auth_state()
+        
+        # Force processEvents again to ensure UI updates
+        QApplication.processEvents()
+        
+        # Get the current user for a message
+        user = supabase.get_user()
+        if user and ((hasattr(user, 'user') and user.user) or hasattr(user, 'email')):
+            user_email = None
+            if hasattr(user, 'email'):
+                user_email = user.email
+            elif hasattr(user, 'user') and hasattr(user.user, 'email'):
+                user_email = user.user.email
+            
+            message = f"Refreshed authentication state. Logged in as: {user_email}"
+            QMessageBox.information(main_window, "Login State Refreshed", message)
+        else:
+            QMessageBox.information(main_window, "Login State Refreshed", "Refreshed authentication state. No user is currently logged in.")
+    except Exception as e:
+        logger.error(f"Error in force_refresh_login_state: {e}")
+        QMessageBox.warning(main_window, "Refresh Error", f"Error refreshing authentication state: {str(e)}") 

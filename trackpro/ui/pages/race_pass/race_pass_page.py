@@ -37,7 +37,10 @@ class RacePassPage(BasePage):
         """Initialize the main Race Pass widget with all functionality."""
         try:
             # Import the existing Race Pass widget
-            from trackpro.gamification.ui.race_pass_view import RacePassViewWidget
+            try:
+                from future.gamification.trackpro_gamification.ui.race_pass_view import RacePassViewWidget
+            except ImportError:
+                from trackpro.ui.shared_imports import RacePassViewWidget
             
             # Create the race pass widget
             self.race_pass_widget = RacePassViewWidget(self)
