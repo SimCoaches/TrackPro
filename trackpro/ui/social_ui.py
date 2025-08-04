@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
-from ..social import (
+from trackpro.social import (
     enhanced_user_manager, friends_manager, messaging_manager, 
     activity_manager, community_manager, achievements_manager, 
     reputation_manager, content_manager

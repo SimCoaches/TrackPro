@@ -8,6 +8,8 @@ from .performance_manager import PerformanceManager, ThreadPriorityManager, CPUC
 # Import only what we need immediately to avoid circular imports
 from ..pages.home import HomePage
 from ..pages.community import CommunityPage
+# App tracking
+from trackpro.utils.app_tracker import start_app_tracking, stop_app_tracking, update_user_online_status
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +41,100 @@ class ModernMainWindow(QMainWindow):
         self.custom_title_bar = None
         self.drag_position = QPoint()
         
+        # PERFORMANCE: Prevent multiple auth checks during startup
+        self._startup_auth_check_completed = False
+        self._cached_user_info = None
+        
         self.init_performance_optimization()
         self.init_global_managers()
         self.init_modern_ui()
         
+        # Start app tracking
+        self.start_app_tracking()
+        
         logger.info("🚀 Modern TrackPro UI initialized with modular architecture")
+    
+    def start_app_tracking(self, user_id: str = None):
+        """Start tracking the app session."""
+        try:
+            # Get current user ID if not provided
+            if not user_id:
+                current_user = self.get_current_user_info()
+                user_id = current_user.get('id') if current_user else None
+            
+            # Start app tracking
+            success = start_app_tracking(user_id)
+            if success:
+                logger.info(f"✅ App tracking started for user: {user_id}")
+            else:
+                logger.warning("⚠️ Failed to start app tracking (this is normal if Supabase is not available)")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error starting app tracking: {e}")
+            return False
+    
+    def stop_app_tracking(self):
+        """Stop tracking the app session."""
+        try:
+            success = stop_app_tracking()
+            if success:
+                logger.info("✅ App tracking stopped")
+            else:
+                logger.warning("⚠️ Failed to stop app tracking")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error stopping app tracking: {e}")
+            return False
+    
+    def update_user_online_status(self, user_id: str, is_online: bool = True):
+        """Update user's online status."""
+        try:
+            success = update_user_online_status(user_id, is_online)
+            if success:
+                logger.debug(f"Updated online status: {is_online} for user {user_id}")
+            else:
+                logger.warning(f"Failed to update online status for user {user_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error updating online status: {e}")
+            return False
+    
+    def get_online_users(self):
+        """Get list of currently online users."""
+        try:
+            from trackpro.utils.app_tracker import get_online_users
+            online_users = get_online_users()
+            logger.debug(f"Retrieved {len(online_users)} online users")
+            return online_users
+        except Exception as e:
+            logger.error(f"Error getting online users: {e}")
+            return []
+    
+    def get_user_session_stats(self, user_id: str = None):
+        """Get session statistics for a user."""
+        try:
+            from trackpro.utils.app_tracker import get_user_stats
+            if not user_id:
+                current_user = self.get_current_user_info()
+                user_id = current_user.get('id') if current_user else None
+            
+            if user_id:
+                stats = get_user_stats(user_id)
+                logger.debug(f"Retrieved session stats for user {user_id}")
+                return stats
+            else:
+                logger.warning("No user ID provided for session stats")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"Error getting user session stats: {e}")
+            return {}
     
     def enable_dark_title_bar(self):
         """Enable dark title bar on Windows 10/11."""
@@ -241,18 +332,15 @@ class ModernMainWindow(QMainWindow):
     
     def init_global_managers(self):
         try:
-            from ...pedals.hardware_input import HardwareInput
+            from trackpro.pedals.hardware_input import HardwareInput
             self.global_managers.hardware = HardwareInput()
             logger.info("✅ Hardware input manager initialized")
         except Exception as e:
             logger.error(f"Failed to initialize hardware manager: {e}")
         
-        try:
-            from ...race_coach.simple_iracing import SimpleIRacingAPI
-            self.global_managers.iracing = SimpleIRacingAPI()
-            logger.info("✅ iRacing monitor initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize iRacing monitor: {e}")
+        # Defer iRacing API initialization to when global API is ready
+        # This prevents early access attempts that fail during startup
+        self.global_managers.iracing = None
         
         self.global_managers.auth = self.oauth_handler
         logger.info("✅ Global managers initialized")
@@ -438,7 +526,12 @@ class ModernMainWindow(QMainWindow):
         """Create the online users sidebar."""
         sidebar = OnlineUsersSidebar()
         sidebar.user_selected.connect(self.on_user_selected)
+        sidebar.private_message_requested.connect(self.on_private_message_requested)
         sidebar.sidebar_toggled.connect(self.on_sidebar_toggled)
+        
+        # Connect authentication state changes to sidebar
+        self.auth_state_changed.connect(sidebar.on_authentication_changed)
+        
         return sidebar
     
     def create_pages(self):
@@ -506,7 +599,7 @@ class ModernMainWindow(QMainWindow):
         # Special handling for account page - check authentication first
         if page_name == "account":
             try:
-                from ...database.supabase_client import get_supabase_client
+                from trackpro.database.supabase_client import get_supabase_client
                 supabase_client = get_supabase_client()
                 is_authenticated = False
                 
@@ -881,7 +974,7 @@ class ModernMainWindow(QMainWindow):
                 
                 # Try to get user info
                 try:
-                    from ...database.supabase_client import supabase
+                    from trackpro.database.supabase_client import supabase
                     user = supabase.get_user()
                     if user and hasattr(user, 'user') and user.user:
                         email = user.user.email or "No email available"
@@ -944,7 +1037,7 @@ class ModernMainWindow(QMainWindow):
         """Save user profile information to the database."""
         try:
             from PyQt6.QtWidgets import QMessageBox
-            from ...database.supabase_client import supabase
+            from trackpro.database.supabase_client import supabase
             
             # Get form data
             first_name = self.first_name_input.text().strip()
@@ -1018,7 +1111,7 @@ class ModernMainWindow(QMainWindow):
     def load_user_profile(self):
         """Load user profile information from the database."""
         try:
-            from ...database.supabase_client import supabase
+            from trackpro.database.supabase_client import supabase
             
             # Get current user
             user = supabase.get_user()
@@ -1058,12 +1151,22 @@ class ModernMainWindow(QMainWindow):
     def show_login_dialog(self):
         """Show the login dialog."""
         try:
-            from ...auth.login_dialog import LoginDialog
+            from trackpro.auth.login_dialog import LoginDialog
             
             login_dialog = LoginDialog(self, oauth_handler=self.oauth_handler)
             result = login_dialog.exec()
             
             if result == 1:  # Dialog was accepted (user logged in)
+                # Get user info and start app tracking
+                user_info = self.get_current_user_info()
+                if user_info and user_info.get('id'):
+                    self.start_app_tracking(user_info['id'])
+                    self.update_user_online_status(user_info['id'], True)
+                    
+                    # Force refresh sidebar to show current user
+                    if hasattr(self, 'online_users_sidebar'):
+                        self.online_users_sidebar.force_refresh()
+                
                 # Update authentication state immediately
                 self.update_auth_state(True)
                 logger.info("🔐 User successfully logged in - updating navigation")
@@ -1084,12 +1187,22 @@ class ModernMainWindow(QMainWindow):
     def show_signup_dialog(self):
         """Show the signup dialog."""
         try:
-            from ...auth.signup_dialog import SignupDialog
+            from trackpro.auth.signup_dialog import SignupDialog
             
             signup_dialog = SignupDialog(self, oauth_handler=self.oauth_handler)
             result = signup_dialog.exec()
             
             if result == 1:  # Dialog was accepted (user signed up)
+                # Get user info and start app tracking
+                user_info = self.get_current_user_info()
+                if user_info and user_info.get('id'):
+                    self.start_app_tracking(user_info['id'])
+                    self.update_user_online_status(user_info['id'], True)
+                    
+                    # Force refresh sidebar to show current user
+                    if hasattr(self, 'online_users_sidebar'):
+                        self.online_users_sidebar.force_refresh()
+                
                 # Update authentication state immediately
                 self.update_auth_state(True)
                 logger.info("🔐 User successfully signed up - updating navigation")
@@ -1122,13 +1235,20 @@ class ModernMainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Stop app tracking before logout
+                self.stop_app_tracking()
+                
                 # Perform logout
-                from ...database.supabase_client import supabase
+                from trackpro.database.supabase_client import supabase
                 supabase.sign_out()
                 
                 # Update UI immediately
                 self.update_auth_state(False)
                 logger.info("🔐 User successfully logged out - updating navigation")
+                
+                # Navigate to home page after logout
+                self.switch_to_page("home")
+                logger.info("🏠 Navigated to home page after logout")
                 
                 # Show confirmation
                 QMessageBox.information(
@@ -1149,12 +1269,23 @@ class ModernMainWindow(QMainWindow):
     def update_auth_state(self, authenticated):
         """Update the entire UI based on authentication state."""
         try:
+            # PERFORMANCE: Skip if this is a duplicate call during startup
+            if not self._startup_auth_check_completed and hasattr(self, '_last_auth_state'):
+                if self._last_auth_state == authenticated:
+                    logger.debug("🔄 Skipping duplicate auth state update during startup")
+                    return
+            
             logger.info(f"🔐 Updating UI auth state: {authenticated}")
             
-            # Get user information if authenticated
+            # Cache the auth state to prevent duplicate calls
+            self._last_auth_state = authenticated
+            
+            # Get user information if authenticated (cache it to avoid repeated calls)
             user_info = None
             if authenticated:
-                user_info = self.get_current_user_info()
+                if self._cached_user_info is None:
+                    self._cached_user_info = self.get_current_user_info()
+                user_info = self._cached_user_info
             
             # Update navigation with authentication state
             if hasattr(self, 'navigation') and hasattr(self.navigation, 'update_authentication_state'):
@@ -1168,13 +1299,33 @@ class ModernMainWindow(QMainWindow):
                 # Call the method directly
                 self.update_account_page_auth_status(authenticated)
             
+            # Update menu bar logout action visibility
+            if hasattr(self, 'logout_action'):
+                self.logout_action.setVisible(authenticated)
+            
+            # Update menu bar logout button visibility
+            if hasattr(self, 'logout_btn'):
+                self.logout_btn.setVisible(authenticated)
+            
+            # Update menu bar login/signup button visibility
+            if hasattr(self, 'login_btn'):
+                self.login_btn.setVisible(not authenticated)
+            if hasattr(self, 'signup_btn'):
+                self.signup_btn.setVisible(not authenticated)
+            
             # Emit signal for other components
             self.auth_state_changed.emit(authenticated)
+            
+            # Force refresh sidebar when authentication state changes
+            self.force_refresh_sidebar()
             
             # Update all pages that need authentication state
             for page_name, page in self.pages.items():
                 if hasattr(page, 'on_auth_state_changed'):
                     page.on_auth_state_changed()
+            
+            # Mark startup auth check as completed
+            self._startup_auth_check_completed = True
             
         except Exception as e:
             logger.error(f"Error updating auth state: {e}")
@@ -1182,7 +1333,7 @@ class ModernMainWindow(QMainWindow):
     def refresh_auth_state(self):
         """Manually refresh authentication state - useful for fixing sync issues."""
         try:
-            from ...database.supabase_client import get_supabase_client
+            from trackpro.database.supabase_client import get_supabase_client
             supabase_client = get_supabase_client()
             
             if supabase_client:
@@ -1200,24 +1351,21 @@ class ModernMainWindow(QMainWindow):
             else:
                 # If Supabase client is not available, try to initialize it
                 logger.info("🔄 Supabase client not available, attempting to initialize...")
-                from ...database.supabase_client import supabase
-                if hasattr(supabase, 'initialize'):
-                    supabase.initialize()
-                    # Get the client again after initialization (no recursive call)
-                    supabase_client = get_supabase_client()
-                    if supabase_client:
-                        user_response = supabase_client.auth.get_user()
-                        session = supabase_client.auth.get_session()
-                        
-                        is_authenticated = bool(
-                            (user_response and user_response.user) or 
-                            (session and session.user)
-                        )
-                        
-                        logger.info(f"🔄 Auth state refresh after init: authenticated={is_authenticated}")
-                        self.update_auth_state(is_authenticated)
-                    else:
-                        logger.warning("⚠️ Supabase client still not available after initialization")
+                # The client should auto-initialize on first access, so just try again
+                supabase_client = get_supabase_client()
+                if supabase_client:
+                    user_response = supabase_client.auth.get_user()
+                    session = supabase_client.auth.get_session()
+                    
+                    is_authenticated = bool(
+                        (user_response and user_response.user) or 
+                        (session and session.user)
+                    )
+                    
+                    logger.info(f"🔄 Auth state refresh after init: authenticated={is_authenticated}")
+                    self.update_auth_state(is_authenticated)
+                else:
+                    logger.info("ℹ️ Supabase client not available - continuing without authentication")
                 
         except Exception as e:
             logger.error(f"Error refreshing auth state: {e}")
@@ -1228,15 +1376,13 @@ class ModernMainWindow(QMainWindow):
             logger.info("🔄 Force refreshing authentication state after login...")
             
             # First, ensure Supabase client is initialized
-            from ...database.supabase_client import get_supabase_client
+            from trackpro.database.supabase_client import get_supabase_client
             supabase_client = get_supabase_client()
             
             if not supabase_client:
-                logger.warning("⚠️ Supabase client not available, trying to initialize...")
-                from ...database.supabase_client import supabase
-                if hasattr(supabase, 'initialize'):
-                    supabase.initialize()
-                    supabase_client = get_supabase_client()
+                logger.info("ℹ️ Supabase client not available, trying to initialize...")
+                # The client should auto-initialize on first access, so just try again
+                supabase_client = get_supabase_client()
             
             if supabase_client:
                 # Force a session refresh
@@ -1259,8 +1405,12 @@ class ModernMainWindow(QMainWindow):
             
             # Fallback: try user manager
             try:
-                from ...auth.user_manager import get_current_user
+                from trackpro.auth.user_manager import get_current_user
                 current_user = get_current_user()
+                if current_user is None:
+                    # User manager not ready yet - skip authentication check
+                    logger.info("🔍 User manager not ready yet - skipping authentication check")
+                    return False
                 if current_user and current_user.is_authenticated:
                     logger.info("✅ Found authenticated user via user manager")
                     self.update_auth_state(True)
@@ -1278,16 +1428,16 @@ class ModernMainWindow(QMainWindow):
     def get_current_user_info(self):
         """Get current user information from the authentication system and profile database."""
         try:
-            from ...database.supabase_client import get_supabase_client
+            from trackpro.database.supabase_client import get_supabase_client
             supabase_client = get_supabase_client()
             if not supabase_client:
-                logger.warning("🔍 DEBUG: No Supabase client available, trying user manager fallback...")
                 # Fallback to user manager if Supabase client isn't available
                 try:
-                    from ...auth.user_manager import get_current_user
+                    from trackpro.auth.user_manager import get_current_user
                     current_user = get_current_user()
+                    if current_user is None:
+                        return None
                     if current_user and current_user.is_authenticated:
-                        logger.info(f"🔍 DEBUG: Got user from user manager: {current_user.name}")
                         return {
                             'email': current_user.email,
                             'name': current_user.name,
@@ -1302,27 +1452,20 @@ class ModernMainWindow(QMainWindow):
             
             # Also try to get session info as fallback
             if not user_response or not user_response.user:
-                logger.warning("🔍 DEBUG: No user in auth.get_user(), trying session...")
                 session = supabase_client.auth.get_session()
                 if session and session.user:
                     user_response = session
-                    logger.info("🔍 DEBUG: Got user from session instead")
-            
-            logger.info(f"🔍 DEBUG: user_response = {user_response}")
             
             if user_response and hasattr(user_response, 'user') and user_response.user:
                 user = user_response.user
-                logger.info(f"🔍 DEBUG: user object = {user}")
                 
                 email = user.email or "No email available"
                 user_id = user.id
-                logger.info(f"🔍 DEBUG: email = {email}, user_id = {user_id}")
                 
                 name = "User"  # Default fallback
                 
                 # First, try to get name from user metadata (fastest and already available)
                 metadata = getattr(user, 'user_metadata', {})
-                logger.info(f"🔍 DEBUG: user_metadata = {metadata}")
                 
                 # Try different metadata fields for name
                 if metadata.get('full_name'):
@@ -1351,58 +1494,39 @@ class ModernMainWindow(QMainWindow):
                 elif metadata.get('preferred_username'):
                     name = metadata['preferred_username']
                 
-                logger.info(f"✅ Got user name from metadata: {name}")
-                
                 # If no name from metadata, fallback to user_details table
                 if name == "User":
                     try:
-                        logger.info("📝 No name in metadata, checking database...")
                         profile_result = supabase_client.table('user_details').select('first_name, last_name').eq('user_id', user_id).execute()
                         
                         if profile_result.data and len(profile_result.data) > 0:
                             profile = profile_result.data[0]
-                            logger.info(f"🔍 DEBUG: profile data = {profile}")
                             
                             # Combine first and last name from user_details table
                             if profile.get('first_name') and profile.get('last_name'):
                                 name = f"{profile['first_name']} {profile['last_name']}"
                             elif profile.get('first_name'):
                                 name = profile['first_name']
-                            
-                            logger.info(f"✅ Got user name from database: {name}")
-                        
-                    except Exception as profile_error:
-                        logger.error(f"Error fetching user profile: {profile_error}")
-                        # Continue with final fallback below
+                    except Exception as db_error:
+                        logger.debug(f"Could not get user details from database: {db_error}")
                 
-                # Final fallback: use email username if still no name
-                if name == "User" and email and email != "No email available":
-                    name = email.split('@')[0]
-                    logger.info(f"🔍 DEBUG: Using email fallback name: {name}")
-                
-                user_info = {
+                return {
                     'email': email,
-                    'name': name or "User",
+                    'name': name,
                     'user_id': user_id
                 }
-                
-                logger.info(f"🔍 DEBUG: Final user_info = {user_info}")
-                return user_info
-            else:
-                logger.warning(f"🔍 DEBUG: No valid user in response: {user_response}")
+            
+            return None
             
         except Exception as e:
             logger.error(f"Error getting current user info: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-        
-        return None
+            return None
     
 
     def check_authentication_on_account_click(self):
         """Check authentication when account page is requested."""
         try:
-            from ...database.supabase_client import get_supabase_client
+            from trackpro.database.supabase_client import get_supabase_client
             supabase_client = get_supabase_client()
             
             is_authenticated = False
@@ -1418,7 +1542,7 @@ class ModernMainWindow(QMainWindow):
             # Fallback to user manager
             if not is_authenticated:
                 try:
-                    from ...auth.user_manager import get_current_user
+                    from trackpro.auth.user_manager import get_current_user
                     current_user = get_current_user()
                     is_authenticated = current_user and current_user.is_authenticated
                     logger.info(f"🔍 Account click auth check via user manager: {is_authenticated}")
@@ -1442,9 +1566,27 @@ class ModernMainWindow(QMainWindow):
         # Eventually this will open a chat window or user profile
         # For now, just log the selection
     
+    def on_private_message_requested(self, user_data):
+        """Handle private message request from sidebar."""
+        logger.info(f"Private message requested for user: {user_data.get('display_name', 'Unknown')}")
+        
+        # Switch to community page and start private conversation
+        self.switch_to_page("community")
+        
+        # Get the community page and start private conversation
+        community_page = self.get_page("community")
+        if community_page and hasattr(community_page, 'start_private_conversation_with_user'):
+            community_page.start_private_conversation_with_user(user_data)
+    
     def on_sidebar_toggled(self, is_expanded):
         """Handle online users sidebar toggle."""
         logger.info(f"📱 Online users sidebar {'expanded' if is_expanded else 'collapsed'}")
+    
+    def force_refresh_sidebar(self):
+        """Force refresh the online users sidebar."""
+        if hasattr(self, 'online_users_sidebar'):
+            self.online_users_sidebar.force_refresh()
+            logger.info("🔄 Forced refresh of online users sidebar")
         # Could save preference or adjust layout here if needed
     
     def setup_keyboard_shortcuts(self):
@@ -1551,6 +1693,9 @@ class ModernMainWindow(QMainWindow):
         logger.info("🧹 Window close event triggered...")
         
         try:
+            # Stop app tracking before cleanup
+            self.stop_app_tracking()
+            
             # Call our cleanup method
             self.cleanup()
         except Exception as e:

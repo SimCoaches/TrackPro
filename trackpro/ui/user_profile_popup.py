@@ -25,13 +25,14 @@ class UserProfilePopup(QDialog):
     # Signals
     view_profile_requested = pyqtSignal(str)  # Emits user_id
     friend_request_sent = pyqtSignal(str)  # Emits user_id
+    private_message_requested = pyqtSignal(dict)  # Emits user_data
     
     def __init__(self, user_data: Dict[str, Any], current_user_id: str, parent=None):
         super().__init__(parent)
         self.user_data = user_data
         self.current_user_id = current_user_id
         self.setModal(False)  # Change to non-modal for better click-outside handling
-        self.setFixedSize(320, 420)  # Increased height to prevent text clipping
+        self.setFixedSize(520, 420)  # Increased width for header image, height to prevent text clipping
         self.click_outside_enabled = False  # Disable click-outside initially
         self.setup_ui()
         self.load_user_data()
@@ -365,6 +366,33 @@ class UserProfilePopup(QDialog):
         self.friend_request_btn.clicked.connect(self.on_send_friend_request)
         actions_layout.addWidget(self.friend_request_btn)
         
+        # Send Private Message button
+        self.private_message_btn = QPushButton("Send Private Message")
+        self.private_message_btn.setFixedHeight(36)
+        self.private_message_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3ba55c;
+                border: none;
+                border-radius: 4px;
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 0px 16px;
+            }
+            QPushButton:hover {
+                background-color: #2d7d46;
+            }
+            QPushButton:pressed {
+                background-color: #1f5f35;
+            }
+            QPushButton:disabled {
+                background-color: #4f545c;
+                color: #72767d;
+            }
+        """)
+        self.private_message_btn.clicked.connect(self.on_send_private_message)
+        actions_layout.addWidget(self.private_message_btn)
+        
         parent_layout.addWidget(actions_container)
     
     def is_user_authenticated(self) -> bool:
@@ -372,9 +400,12 @@ class UserProfilePopup(QDialog):
         try:
             from ..auth.user_manager import get_current_user
             user = get_current_user()
+            if user is None:
+                # User manager not ready yet - return False
+                return False
             return user and user.is_authenticated and user.name != "Anonymous User"
         except Exception as e:
-            logger.warning(f"Failed to check authentication status: {e}")
+            logger.error(f"Error checking authentication: {e}")
             return False
     
     def update_auth_state(self):
@@ -428,7 +459,7 @@ class UserProfilePopup(QDialog):
                 is_self = self.user_data.get('user_id') == self.current_user_id
                 
                 if is_self:
-                    self.friend_request_btn.setText("That's You!")
+                    self.friend_request_btn.setText("Edit Profile")
                     self.friend_request_btn.setEnabled(False)
                 elif is_friend:
                     self.friend_request_btn.setText("Already Friends")
@@ -436,6 +467,59 @@ class UserProfilePopup(QDialog):
                 else:
                     self.friend_request_btn.setText("Send Friend Request")
                     self.friend_request_btn.setEnabled(True)
+        
+        # Update private message button based on authentication
+        if hasattr(self, 'private_message_btn'):
+            if not is_authenticated or not self.current_user_id:
+                # Not authenticated - always show sign in message
+                self.private_message_btn.setText("Sign in to message")
+                self.private_message_btn.setEnabled(False)
+                # Reset to disabled style
+                self.private_message_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #72767d;
+                        border: none;
+                        border-radius: 4px;
+                        color: #dcddde;
+                        font-size: 13px;
+                        font-weight: 600;
+                        padding: 0px 16px;
+                    }
+                """)
+            else:
+                # Authenticated - restore normal button styling first
+                self.private_message_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #3ba55c;
+                        border: none;
+                        border-radius: 4px;
+                        color: #ffffff;
+                        font-size: 13px;
+                        font-weight: 600;
+                        padding: 0px 16px;
+                    }
+                    QPushButton:hover {
+                        background-color: #2d7d46;
+                    }
+                    QPushButton:pressed {
+                        background-color: #1f5f35;
+                    }
+                    QPushButton:disabled {
+                        background-color: #4f545c;
+                        color: #72767d;
+                    }
+                """)
+                
+                # Then use normal button logic
+                is_friend = self.user_data.get('is_friend', False)
+                is_self = self.user_data.get('user_id') == self.current_user_id
+                
+                if is_self:
+                    self.private_message_btn.setText("Account Settings")
+                    self.private_message_btn.setEnabled(False)
+                else:
+                    self.private_message_btn.setText("Send Private Message")
+                    self.private_message_btn.setEnabled(True)
     
     def create_avatar(self, size: int = 64) -> QPixmap:
         """Create a circular avatar with user initials."""
@@ -449,7 +533,8 @@ class UserProfilePopup(QDialog):
             if first_name or last_name:
                 name = f"{first_name} {last_name}".strip()
         
-        initials = ''.join([word[0].upper() for word in name.split()][:2])
+        # Generate initials from the name
+        initials = self._generate_initials(name)
         
         # Create pixmap for avatar
         pixmap = QPixmap(size, size)
@@ -542,13 +627,24 @@ class UserProfilePopup(QDialog):
             if not client or not self.current_user_id:
                 return None
             
-            # Fetch user profile from database
-            response = client.table("user_profiles").select(
-                "user_id, username, display_name, email, first_name, last_name, bio, created_at"
-            ).eq("user_id", self.current_user_id).single().execute()
+            # Fetch user profile from database - handle missing columns gracefully
+            try:
+                # Try to fetch with all fields first
+                response = client.table("user_profiles").select(
+                    "user_id, username, display_name, email, first_name, last_name, bio, created_at"
+                ).eq("user_id", self.current_user_id).single().execute()
+            except Exception as column_error:
+                # If first_name column doesn't exist, try without it
+                logger.warning(f"Some columns may not exist, trying fallback query: {column_error}")
+                response = client.table("user_profiles").select(
+                    "user_id, username, display_name, email, bio, created_at"
+                ).eq("user_id", self.current_user_id).single().execute()
             
             if response.data:
                 user_data = response.data
+                
+                # Generate display name from real data
+                display_name = self._generate_display_name(user_data)
                 
                 # Get current iRacing status if available
                 iracing_status = self.get_current_user_iracing_status()
@@ -556,10 +652,10 @@ class UserProfilePopup(QDialog):
                 return {
                     'user_id': user_data['user_id'],
                     'username': user_data.get('username', 'currentuser'),
-                    'display_name': user_data.get('display_name') or user_data.get('first_name', 'You'),
+                    'display_name': display_name,
                     'email': user_data.get('email'),
-                    'first_name': user_data.get('first_name'),
-                    'last_name': user_data.get('last_name'),
+                    'first_name': user_data.get('first_name', ''),  # Safe fallback
+                    'last_name': user_data.get('last_name', ''),    # Safe fallback
                     'bio': user_data.get('bio'),
                     'created_at': user_data.get('created_at'),
                     'status': iracing_status or 'Online',
@@ -572,6 +668,49 @@ class UserProfilePopup(QDialog):
         except Exception as e:
             logger.error(f"Error fetching current user data: {e}")
             return None
+    
+    def _generate_display_name(self, user_data: Dict[str, Any]) -> str:
+        """Generate display name from user data."""
+        # Try first_name + last_name first
+        first_name = user_data.get('first_name', '')
+        last_name = user_data.get('last_name', '')
+        if first_name or last_name:
+            full_name = f"{first_name} {last_name}".strip()
+            if full_name:
+                return full_name
+        
+        # Fallback to display_name
+        display_name = user_data.get('display_name', '')
+        if display_name:
+            return display_name
+        
+        # Fallback to username
+        username = user_data.get('username', '')
+        if username:
+            return username
+        
+        # Final fallback
+        return 'User'
+    
+    def _generate_initials(self, name: str) -> str:
+        """Generate initials from a name."""
+        if not name or name.strip() == '':
+            return 'U'
+        
+        # Split name and get first letter of each word
+        words = name.strip().split()
+        if not words:
+            return 'U'
+        
+        # Get first letter of first word
+        first_initial = words[0][0].upper() if words[0] else 'U'
+        
+        # Get first letter of last word if different from first word
+        if len(words) > 1 and words[-1] != words[0]:
+            last_initial = words[-1][0].upper() if words[-1] else ''
+            return f"{first_initial}{last_initial}"
+        else:
+            return first_initial
     
     def get_current_user_iracing_status(self) -> str:
         """Get the current user's iRacing status from telemetry."""
@@ -679,17 +818,48 @@ class UserProfilePopup(QDialog):
         is_self = self.user_data.get('user_id') == self.current_user_id
         
         if is_self:
-            # Can't send friend request to yourself
+            # For own profile, show more useful actions
             self.friend_request_btn.setEnabled(False)
-            self.friend_request_btn.setText("That's You!")
+            self.friend_request_btn.setText("Edit Profile")
+            self.friend_request_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4f545c;
+                    border: none;
+                    border-radius: 4px;
+                    color: #72767d;
+                    font-size: 13px;
+                    font-weight: 600;
+                    padding: 0px 16px;
+                }
+            """)
+            # Can't send private message to yourself
+            self.private_message_btn.setEnabled(False)
+            self.private_message_btn.setText("Account Settings")
+            self.private_message_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4f545c;
+                    border: none;
+                    border-radius: 4px;
+                    color: #72767d;
+                    font-size: 13px;
+                    font-weight: 600;
+                    padding: 0px 16px;
+                }
+            """)
         elif is_friend:
             # Already friends
             self.friend_request_btn.setEnabled(False)
             self.friend_request_btn.setText("Already Friends")
+            # Can send private message to friends
+            self.private_message_btn.setEnabled(True)
+            self.private_message_btn.setText("Send Private Message")
         else:
             # Can send friend request
             self.friend_request_btn.setEnabled(True)
             self.friend_request_btn.setText("Send Friend Request")
+            # Can send private message to any user
+            self.private_message_btn.setEnabled(True)
+            self.private_message_btn.setText("Send Private Message")
     
     def on_view_profile(self):
         """Handle view profile button click."""
@@ -720,7 +890,7 @@ class UserProfilePopup(QDialog):
         
         try:
             # Import the friends manager
-            from ..social.friends_manager import FriendsManager
+            from trackpro.social.friends_manager import FriendsManager
             
             friends_manager = FriendsManager()
             result = friends_manager.send_friend_request(self.current_user_id, user_id)
@@ -742,6 +912,22 @@ class UserProfilePopup(QDialog):
         except Exception as e:
             logger.error(f"Error sending friend request: {e}")
             QMessageBox.critical(self, "Error", "An error occurred while sending the friend request.")
+    
+    def on_send_private_message(self):
+        """Handle send private message button click."""
+        if not self.is_user_authenticated():
+            QMessageBox.information(self, "Authentication Required", 
+                                  "Please sign in to send private messages.")
+            return
+        
+        if not self.current_user_id:
+            QMessageBox.information(self, "Authentication Required", 
+                                  "Please sign in to send private messages.")
+            return
+        
+        # Emit the signal with user data
+        self.private_message_requested.emit(self.user_data)
+        self.close()
     
     def mousePressEvent(self, event):
         """Handle mouse press to close popup when clicking outside."""

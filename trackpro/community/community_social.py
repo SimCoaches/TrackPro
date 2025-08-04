@@ -372,7 +372,7 @@ class CommunitySocialMixin:
                     messages = self.db_managers['social_manager'].get_messages(self.current_conversation_id)
                     
                     for msg in messages[:5]: # Show last 5 messages
-                        sender_name = msg['sender']['display_name'] if msg.get('sender') else 'Unknown'
+                        sender_name = msg['user_profiles']['display_name'] if msg.get('user_profiles') else 'Unknown'
                         note_item = self.create_quick_note_item(
                             sender_name,
                             msg['content'],

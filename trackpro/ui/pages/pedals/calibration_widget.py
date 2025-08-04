@@ -5,6 +5,233 @@ from ...modern.shared.base_page import GlobalManagers
 
 logger = logging.getLogger(__name__)
 
+# Try to import pyqtgraph, but don't fail if it's not available
+try:
+    import pyqtgraph as pg
+    PYTQTGRAPH_AVAILABLE = True
+except ImportError:
+    PYTQTGRAPH_AVAILABLE = False
+    pg = None
+
+class DraggablePlotWidget:
+    """A simple wrapper for pyqtgraph PlotWidget with drag functionality."""
+    
+    def __init__(self, parent=None):
+        if not PYTQTGRAPH_AVAILABLE:
+            raise ImportError("pyqtgraph is required for the calibration chart")
+        
+        self.plot_widget = pg.PlotWidget(parent)
+        self.dragging = False
+        self.dragging_point = None
+        self.dragging_original_coords = None  # Store original coordinates
+        self.curve_x = []
+        self.curve_y = []
+        self.scatter = None
+        self.curve_line = None
+        self.on_point_moved = None
+        self.pg = pg  # Store pg reference
+        
+        # Override mouse events
+        self.plot_widget.mousePressEvent = self.mousePressEvent
+        self.plot_widget.mouseMoveEvent = self.mouseMoveEvent
+        self.plot_widget.mouseReleaseEvent = self.mouseReleaseEvent
+        
+    def set_curve_data(self, x, y, on_point_moved=None):
+        """Set the curve data and callback for when points are moved."""
+        self.curve_x = list(x)
+        self.curve_y = list(y)
+        self.on_point_moved = on_point_moved
+        
+        # Validate curve monotonicity (only log if actually fixing)
+        if not self._is_monotonic_curve(self.curve_x, self.curve_y):
+            # logger.warning("Non-monotonic curve detected, resetting to linear")
+            self._reset_to_linear()
+        
+        # Clear existing items
+        self.plot_widget.clear()
+        
+        # Plot the line
+        self.curve_line = self.plot_widget.plot(self.curve_x, self.curve_y, 
+                                               pen=self.pg.mkPen('#fba43b', width=2))
+        
+        # Create scatter points
+        self.scatter = self.pg.ScatterPlotItem(x=self.curve_x, y=self.curve_y,
+                                          symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                                          pen=self.pg.mkPen('#00ff00', width=2))
+        self.plot_widget.addItem(self.scatter)
+    
+    def _reset_to_linear(self):
+        """Reset the curve to a safe linear response."""
+        self.curve_x = [0, 25, 50, 75, 100]
+        self.curve_y = [0, 25, 50, 75, 100]
+        # logger.info("Reset curve to linear response")
+        
+    def find_nearest_point(self, mouse_x, mouse_y):
+        """Find the nearest control point to the mouse position."""
+        if not self.curve_x:
+            return -1
+            
+        min_distance = float('inf')
+        nearest_point = -1
+        
+        for i, (x, y) in enumerate(zip(self.curve_x, self.curve_y)):
+            distance = ((mouse_x - x) ** 2 + (mouse_y - y) ** 2) ** 0.5
+            if distance < min_distance:
+                min_distance = distance
+                nearest_point = i
+        
+        # Use a threshold of 8 units (8% of chart size)
+        threshold = 8.0
+        if min_distance <= threshold:
+            return nearest_point
+        return -1
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press events."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Get mouse position in chart coordinates
+            pos = event.pos()
+            view_box = self.plot_widget.getViewBox()
+            # Convert QPoint to QPointF
+            pos_f = QPointF(pos.x(), pos.y())
+            chart_pos = view_box.mapSceneToView(pos_f)
+            
+            # Find nearest point
+            nearest_point = self.find_nearest_point(chart_pos.x(), chart_pos.y())
+            
+            if nearest_point >= 0:
+                self.dragging = True
+                self.dragging_point = nearest_point
+                # Store original coordinates for this point
+                self.dragging_original_coords = (self.curve_x[nearest_point], self.curve_y[nearest_point])
+                # Only log in debug mode if needed
+                # logger.debug(f"Started dragging point {nearest_point} at ({self.dragging_original_coords[0]:.1f}, {self.dragging_original_coords[1]:.1f})")
+                event.accept()
+                return
+                
+        # If we didn't handle it, pass to parent
+        super(self.plot_widget.__class__, self.plot_widget).mousePressEvent(event)
+        
+    def mouseMoveEvent(self, event):
+        """Handle mouse move events."""
+        if self.dragging and self.dragging_point is not None:
+            # Get mouse position in chart coordinates
+            pos = event.pos()
+            view_box = self.plot_widget.getViewBox()
+            # Convert QPoint to QPointF
+            pos_f = QPointF(pos.x(), pos.y())
+            chart_pos = view_box.mapSceneToView(pos_f)
+            
+            # Constrain to chart bounds (0-100)
+            x = max(0, min(100, chart_pos.x()))
+            y = max(0, min(100, chart_pos.y()))
+            
+            # Apply constraints to prevent crossing over other dots
+            constrained_x, constrained_y = self.constrain_point_position(self.dragging_point, x, y)
+            
+            # Update the point directly using the dragging_point index
+            if self.dragging_point < len(self.curve_x):
+                self.curve_x[self.dragging_point] = constrained_x
+                self.curve_y[self.dragging_point] = constrained_y
+                
+                # Update the scatter plot
+                self.scatter.setData(self.curve_x, self.curve_y)
+                
+                # Update the line
+                self.curve_line.setData(self.curve_x, self.curve_y)
+                
+                # Call callback if provided
+                if self.on_point_moved:
+                    self.on_point_moved(self.curve_x, self.curve_y)
+                    
+                # Only log in debug mode if needed
+                # logger.debug(f"Dragged point {self.dragging_point} to ({constrained_x:.1f}, {constrained_y:.1f})")
+            
+            event.accept()
+            return
+            
+        # If we didn't handle it, pass to parent
+        super(self.plot_widget.__class__, self.plot_widget).mouseMoveEvent(event)
+        
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release events."""
+        if self.dragging:
+            # Call callback if provided
+            if self.on_point_moved:
+                self.on_point_moved(self.curve_x, self.curve_y)
+            
+            self.dragging = False
+            self.dragging_point = None
+            self.dragging_original_coords = None
+            # Only log in debug mode if needed
+            # logger.debug("Stopped dragging")
+            event.accept()
+            return
+            
+        # If we didn't handle it, pass to parent
+        super(self.plot_widget.__class__, self.plot_widget).mouseReleaseEvent(event)
+        
+    def constrain_point_position(self, point_index, x, y):
+        """Constrain a point's position to maintain a monotonic curve."""
+        if len(self.curve_x) < 2:
+            return x, y
+            
+        # Special constraints for first and last points
+        if point_index == 0:
+            # First point must stay at x=0
+            return 0, max(0, min(100, y))
+        elif point_index == len(self.curve_x) - 1:
+            # Last point must stay at x=100
+            return 100, max(0, min(100, y))
+        
+        # Get the x-coordinates of all other points
+        other_x_coords = [self.curve_x[i] for i in range(len(self.curve_x)) if i != point_index]
+        
+        # Find the closest points on either side
+        left_points = [cx for cx in other_x_coords if cx < x]
+        right_points = [cx for cx in other_x_coords if cx > x]
+        
+        # Constrain x position to prevent crossing over
+        min_x = max(left_points) if left_points else 0
+        max_x = min(right_points) if right_points else 100
+        
+        # Apply constraints with a small buffer
+        buffer = 2.0  # 2% buffer to prevent overlap
+        constrained_x = max(min_x + buffer, min(max_x - buffer, x))
+        
+        # Constrain y to reasonable bounds
+        constrained_y = max(0, min(100, y))
+        
+        # Additional validation: ensure the curve remains monotonic
+        # Create a temporary list with the new position
+        temp_x = self.curve_x.copy()
+        temp_y = self.curve_y.copy()
+        temp_x[point_index] = constrained_x
+        temp_y[point_index] = constrained_y
+        
+        # Check if this creates a valid monotonic curve
+        if not self._is_monotonic_curve(temp_x, temp_y):
+            # If not monotonic, revert to original position
+            # logger.warning(f"Point {point_index} movement would create non-monotonic curve, reverting")
+            return self.curve_x[point_index], self.curve_y[point_index]
+        
+        return constrained_x, constrained_y
+    
+    def _is_monotonic_curve(self, x_coords, y_coords):
+        """Check if the curve is monotonically increasing."""
+        if len(x_coords) < 2:
+            return True
+            
+        # Sort by x-coordinate to check monotonicity
+        sorted_points = sorted(zip(x_coords, y_coords), key=lambda p: p[0])
+        
+        # Check if y-values are monotonically increasing
+        for i in range(1, len(sorted_points)):
+            if sorted_points[i][1] < sorted_points[i-1][1]:
+                return False
+                
+        return True
+
 class PedalCalibrationWidget(QWidget):
     calibration_updated = pyqtSignal(dict)
     
@@ -26,15 +253,14 @@ class PedalCalibrationWidget(QWidget):
         self.curve_selector = None
         self.calibration_chart = None
         
-        # Dragging state
-        self.dragging = False
-        self.dragging_point = None
-        
         # Curve data
         self.curve_x = [0, 25, 50, 75, 100]
         self.curve_y = [0, 25, 50, 75, 100]
         self.curve_line = None
         self.scatter = None
+        
+        # Flag to prevent recursive validation
+        self._is_fixing_curve = False
         
         self.init_ui()
         
@@ -67,6 +293,9 @@ class PedalCalibrationWidget(QWidget):
         self.create_curve_selector(group_layout)
         
         layout.addWidget(group)
+        
+        # Update deadzone visualization after UI is created
+        self.update_deadzone_visualization()
     
     def create_input_monitor(self, parent_layout):
         input_group = QGroupBox("Input Monitor")
@@ -176,8 +405,14 @@ class PedalCalibrationWidget(QWidget):
         chart_layout = QVBoxLayout()
         
         try:
-            import pyqtgraph as pg
-            self.calibration_chart = pg.PlotWidget()
+            if not PYTQTGRAPH_AVAILABLE:
+                raise ImportError("pyqtgraph not available")
+            
+            # Create our custom draggable plot widget
+            self.draggable_plot = DraggablePlotWidget()
+            self.calibration_chart = self.draggable_plot.plot_widget
+            
+            # Configure the chart
             self.calibration_chart.setLabel('left', 'Output %')
             self.calibration_chart.setLabel('bottom', 'Input %')
             self.calibration_chart.setTitle(f'{self.pedal_name.title()} Response Curve')
@@ -187,43 +422,205 @@ class PedalCalibrationWidget(QWidget):
             self.calibration_chart.getAxis('left').setTextPen('#fefefe')
             self.calibration_chart.getAxis('bottom').setTextPen('#fefefe')
             
-            # Set axis ranges
+            # Set axis ranges and lock them to prevent zooming/panning
             self.calibration_chart.setXRange(0, 100)
             self.calibration_chart.setYRange(0, 100)
+            self.calibration_chart.setLimits(xMin=0, xMax=100, yMin=0, yMax=100)
             
             # Add grid
             self.calibration_chart.showGrid(x=True, y=True, alpha=0.3)
             
-            # Plot the line
-            self.curve_line = self.calibration_chart.plot(self.curve_x, self.curve_y, pen=pg.mkPen('#fba43b', width=2))
+            # Initialize deadzone visualization
+            self.min_deadzone_rect = None
+            self.max_deadzone_rect = None
             
-            # Create draggable scatter points
-            self.scatter = pg.ScatterPlotItem(x=self.curve_x, y=self.curve_y, 
-                                            symbol='o', symbolBrush='#00ff00', symbolSize=12,
-                                            pen=pg.mkPen('#00ff00', width=2))
-            self.calibration_chart.addItem(self.scatter)
+            # Set up the curve data with callback
+            self.draggable_plot.set_curve_data(self.curve_x, self.curve_y, self.on_curve_points_changed)
             
             # Disable chart dragging/zooming
             self.calibration_chart.setMouseEnabled(x=False, y=False)
             
-            # Install event filter
-            self.calibration_chart.installEventFilter(self)
-            logger.debug(f"🔍 INSTALLED event filter on {self.pedal_name} chart")
-            
-            # Test if event filter is working by adding a simple mouse press handler
-            self.calibration_chart.mousePressEvent = lambda event: logger.debug(f"🔍 MOUSE PRESS EVENT on {self.pedal_name} chart: {event.button()}")
-            
             chart_layout.addWidget(self.calibration_chart)
-            logger.info(f"Created pyqtgraph chart for {self.pedal_name}")
+            # logger.info(f"Created draggable pyqtgraph chart for {self.pedal_name}")
         except ImportError:
             chart_placeholder = QLabel("Chart not available - pyqtgraph not installed")
             chart_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chart_placeholder.setMinimumHeight(200)
             chart_layout.addWidget(chart_placeholder)
-            logger.warning(f"No charting library available for {self.pedal_name}")
+            # logger.warning(f"No charting library available for {self.pedal_name}")
         
         chart_group.setLayout(chart_layout)
         parent_layout.addWidget(chart_group)
+    
+    def on_curve_points_changed(self, x, y):
+        """Callback when curve points are moved."""
+        self.curve_x = list(x)
+        self.curve_y = list(y)
+        
+        # Validate and fix non-monotonic curves (only if not already fixing)
+        if not self._is_fixing_curve and not self._is_monotonic_curve(self.curve_x, self.curve_y):
+            # logger.warning(f"Non-monotonic curve detected for {self.pedal_name}, attempting to fix")
+            self._fix_monotonic_curve()
+        
+        self.emit_calibration_update()
+        # Only log in debug mode if needed
+        # logger.debug(f"Curve points changed for {self.pedal_name}")
+    
+    def _is_monotonic_curve(self, x_coords, y_coords):
+        """Check if the curve is monotonically increasing."""
+        if len(x_coords) < 2:
+            return True
+            
+        # Sort by x-coordinate to check monotonicity
+        sorted_points = sorted(zip(x_coords, y_coords), key=lambda p: p[0])
+        
+        # Check if y-values are monotonically increasing
+        for i in range(1, len(sorted_points)):
+            if sorted_points[i][1] < sorted_points[i-1][1]:
+                return False
+                
+        return True
+    
+    def _fix_monotonic_curve(self):
+        """Fix a non-monotonic curve by adjusting y-values to be monotonically increasing."""
+        if len(self.curve_x) < 2 or self._is_fixing_curve:
+            return
+            
+        self._is_fixing_curve = True
+        
+        try:
+            # Sort points by x-coordinate
+            sorted_points = sorted(zip(self.curve_x, self.curve_y), key=lambda p: p[0])
+            
+            # Fix y-values to be monotonically increasing
+            fixed_y = [sorted_points[0][1]]  # Start with first y-value
+            
+            for i in range(1, len(sorted_points)):
+                current_y = sorted_points[i][1]
+                prev_y = fixed_y[-1]
+                
+                # Ensure current y is not less than previous y
+                if current_y < prev_y:
+                    current_y = prev_y  # Make it equal to previous to maintain monotonicity
+                
+                fixed_y.append(current_y)
+            
+            # Update the curve data with fixed values
+            self.curve_x = [p[0] for p in sorted_points]
+            self.curve_y = fixed_y
+            
+            # Update the chart directly without triggering validation
+            if hasattr(self, 'draggable_plot') and self.draggable_plot:
+                # Temporarily disable the callback to prevent recursion
+                original_callback = self.draggable_plot.on_point_moved
+                self.draggable_plot.on_point_moved = None
+                
+                # Update the chart data
+                self.draggable_plot.curve_x = self.curve_x.copy()
+                self.draggable_plot.curve_y = self.curve_y.copy()
+                
+                # Clear and redraw
+                self.draggable_plot.plot_widget.clear()
+                self.draggable_plot.curve_line = self.draggable_plot.plot_widget.plot(
+                    self.curve_x, self.curve_y, 
+                    pen=self.draggable_plot.pg.mkPen('#fba43b', width=2)
+                )
+                self.draggable_plot.scatter = self.draggable_plot.pg.ScatterPlotItem(
+                    x=self.curve_x, y=self.curve_y,
+                    symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                    pen=self.draggable_plot.pg.mkPen('#00ff00', width=2)
+                )
+                self.draggable_plot.plot_widget.addItem(self.draggable_plot.scatter)
+                
+                # Restore the callback
+                self.draggable_plot.on_point_moved = original_callback
+            
+            # logger.info(f"Fixed non-monotonic curve for {self.pedal_name}")
+            
+        finally:
+            self._is_fixing_curve = False
+    
+    def update_deadzone_visualization(self):
+        """Update the deadzone visualization on the chart."""
+        if not hasattr(self, 'calibration_chart') or not self.calibration_chart:
+            return
+            
+        try:
+            if not PYTQTGRAPH_AVAILABLE:
+                return
+            
+            # Remove existing deadzone rectangles
+            if hasattr(self, 'min_deadzone_rect') and self.min_deadzone_rect:
+                self.calibration_chart.removeItem(self.min_deadzone_rect)
+                self.min_deadzone_rect = None
+            if hasattr(self, 'max_deadzone_rect') and self.max_deadzone_rect:
+                self.calibration_chart.removeItem(self.max_deadzone_rect)
+                self.max_deadzone_rect = None
+            
+            # Get deadzone values from the deadzone widget
+            deadzone_widget = None
+            try:
+                if hasattr(self.parent(), 'layout') and self.parent() is not None:
+                    layout = self.parent().layout()
+                    if layout:
+                        for i in range(layout.count()):
+                            item = layout.itemAt(i)
+                            if item and item.widget():
+                                widget = item.widget()
+                                if hasattr(widget, 'pedal_name') and widget.pedal_name == self.pedal_name:
+                                    if hasattr(widget, 'layout'):
+                                        widget_layout = widget.layout()
+                                        if widget_layout:
+                                            for j in range(widget_layout.count()):
+                                                child_item = widget_layout.itemAt(j)
+                                                if child_item and child_item.widget():
+                                                    child_widget = child_item.widget()
+                                                    if hasattr(child_widget, 'get_deadzone_values'):
+                                                        deadzone_widget = child_widget
+                                                        break
+                                    break
+            except Exception as e:
+                logger.debug(f"Error finding deadzone widget: {e}")
+                deadzone_widget = None
+            
+            if deadzone_widget:
+                try:
+                    deadzone_values = deadzone_widget.get_deadzone_values()
+                    min_deadzone = deadzone_values.get('min_deadzone', 0)
+                    max_deadzone = deadzone_values.get('max_deadzone', 0)
+                except Exception as e:
+                    logger.debug(f"Error getting deadzone values: {e}")
+                    min_deadzone = 0
+                    max_deadzone = 0
+                
+                # Add min deadzone rectangle
+                if min_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
+                    self.min_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
+                        values=[0, min_deadzone],
+                        orientation='vertical',
+                        brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
+                        pen=self.draggable_plot.pg.mkPen(200, 50, 50)
+                    )
+                    self.calibration_chart.addItem(self.min_deadzone_rect)
+                
+                # Add max deadzone rectangle
+                if max_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
+                    self.max_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
+                        values=[100 - max_deadzone, 100],
+                        orientation='vertical',
+                        brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
+                        pen=self.draggable_plot.pg.mkPen(200, 50, 50)
+                    )
+                    self.calibration_chart.addItem(self.max_deadzone_rect)
+                
+                # Only log in debug mode if needed
+                # logger.debug(f"Updated deadzone visualization for {self.pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
+                
+        except ImportError:
+            pass
+        except Exception as e:
+            # logger.error(f"Error updating deadzone visualization: {e}")
+            pass
     
     def create_calibration_controls(self, parent_layout):
         controls_group = QGroupBox("Calibration Controls")
@@ -442,16 +839,21 @@ class PedalCalibrationWidget(QWidget):
         normalized_input = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
         normalized_input = max(0, min(100, normalized_input))
         
+        # Sort points by x-coordinate for proper interpolation
+        points = list(zip(self.curve_x, self.curve_y))
+        points.sort(key=lambda p: p[0])
+        sorted_x, sorted_y = zip(*points)
+        
         # Interpolate between curve points
         if normalized_input <= 0:
-            return self.curve_y[0]
+            return sorted_y[0]
         elif normalized_input >= 100:
-            return self.curve_y[-1]
+            return sorted_y[-1]
         else:
             # Find the two points to interpolate between
-            for i in range(len(self.curve_x) - 1):
-                x1, y1 = self.curve_x[i], self.curve_y[i]
-                x2, y2 = self.curve_x[i + 1], self.curve_y[i + 1]
+            for i in range(len(sorted_x) - 1):
+                x1, y1 = sorted_x[i], sorted_y[i]
+                x2, y2 = sorted_x[i + 1], sorted_y[i + 1]
                 
                 if x1 <= normalized_input <= x2:
                     # Linear interpolation
@@ -481,192 +883,54 @@ class PedalCalibrationWidget(QWidget):
             self.min_label.setText(f"Min: {self.min_value}")
         if self.max_label:
             self.max_label.setText(f"Max: {self.max_value}")
+        
+        # Reset curve to safe linear state
+        self.curve_x = [0, 25, 50, 75, 100]
+        self.curve_y = [0, 25, 50, 75, 100]
+        
+        # Update the chart if available
+        if hasattr(self, 'draggable_plot') and self.draggable_plot:
+            self.draggable_plot.set_curve_data(self.curve_x, self.curve_y, self.on_curve_points_changed)
+        
         self.emit_calibration_update()
+        # logger.info(f"Reset calibration for {self.pedal_name}")
     
     def on_curve_changed(self, curve_name: str):
-        logger.info(f"Curve changed for {self.pedal_name}: {curve_name}")
+        # logger.info(f"Curve changed for {self.pedal_name}: {curve_name}")
         
         # Get the points for this curve
         curve_points = self.get_curve_points(curve_name)
         
         # Apply to chart if available
-        if self.calibration_chart and hasattr(self.calibration_chart, 'clear'):
+        if hasattr(self, 'draggable_plot') and self.draggable_plot:
             try:
-                import pyqtgraph as pg
-                
                 # Extract x and y coordinates
                 x = [point[0] for point in curve_points]
                 y = [point[1] for point in curve_points]
+                
+                # Validate curve monotonicity before applying
+                if not self._is_monotonic_curve(x, y):
+                    # logger.warning(f"Non-monotonic curve '{curve_name}' detected for {self.pedal_name}, using linear fallback")
+                    # Use linear curve as fallback
+                    x = [0, 25, 50, 75, 100]
+                    y = [0, 25, 50, 75, 100]
                 
                 # Update curve data
                 self.curve_x = x
                 self.curve_y = y
                 
-                # Clear existing items
-                self.calibration_chart.clear()
+                # Update the draggable plot
+                self.draggable_plot.set_curve_data(x, y, self.on_curve_points_changed)
                 
-                # Plot the line
-                self.curve_line = self.calibration_chart.plot(x, y, pen=pg.mkPen('#fba43b', width=2))
+                # Update deadzone visualization
+                self.update_deadzone_visualization()
                 
-                # Create new draggable scatter points
-                self.scatter = pg.ScatterPlotItem(x=x, y=y, 
-                                                symbol='o', symbolBrush='#00ff00', symbolSize=12,
-                                                pen=pg.mkPen('#00ff00', width=2))
-                self.calibration_chart.addItem(self.scatter)
-                
-                # Reinstall event filter
-                self.calibration_chart.installEventFilter(self)
-                
-                logger.debug(f"Applied {len(x)} points to {self.pedal_name} chart")
+                # Only log in debug mode if needed
+                # logger.debug(f"Applied {len(x)} points to {self.pedal_name} chart")
             except ImportError:
                 pass
         
         self.emit_calibration_update()
-    
-    def find_nearest_point(self, mouse_x: float, mouse_y: float) -> int:
-        """Find the nearest control point to the mouse position."""
-        logger.debug(f"🔍 FIND_NEAREST: mouse=({mouse_x:.2f}, {mouse_y:.2f})")
-        
-        if not self.scatter:
-            logger.debug("🔍 No scatter plot available")
-            return -1
-        
-        min_distance = float('inf')
-        nearest_point = -1
-        
-        logger.debug(f"🔍 Current curve points: {list(zip(self.curve_x, self.curve_y))}")
-        
-        for i, (x, y) in enumerate(zip(self.curve_x, self.curve_y)):
-            distance = ((mouse_x - x) ** 2 + (mouse_y - y) ** 2) ** 0.5
-            logger.debug(f"🔍 Point {i}: ({x}, {y}) - distance: {distance:.2f}")
-            if distance < min_distance:
-                min_distance = distance
-                nearest_point = i
-        
-        # Use a reasonable threshold for chart coordinates
-        threshold = 10.0  # 10% of chart size
-        logger.debug(f"🔍 Min distance: {min_distance:.2f}, threshold: {threshold}")
-        
-        if min_distance <= threshold:
-            logger.debug(f"🔍 Found nearest point: {nearest_point}")
-            return nearest_point
-        else:
-            logger.debug(f"🔍 No point within threshold")
-            return -1
-    
-    def eventFilter(self, obj, event):
-        """Handle mouse events for dragging points."""
-        # Debug: Log all events - this should show up for ANY event
-        logger.debug(f"🔍 EVENT: obj={type(obj).__name__}, event_type={event.type()}, dragging={self.dragging}")
-        
-        # Check if this is the right object
-        if obj == self.calibration_chart:
-            logger.debug(f"🔍 CORRECT OBJECT: {self.pedal_name} chart")
-        else:
-            logger.debug(f"🔍 WRONG OBJECT: expected calibration_chart, got {type(obj).__name__}")
-        
-        if obj == self.calibration_chart and hasattr(self, 'calibration_chart'):
-            try:
-                import pyqtgraph as pg
-                
-                if event.type() == QEvent.Type.MouseButtonPress:
-                    logger.debug("🔍 MOUSE PRESS DETECTED")
-                    if event.button() == Qt.MouseButton.LeftButton:
-                        logger.debug("🔍 LEFT BUTTON PRESS")
-                        # Get mouse position in chart coordinates
-                        pos = event.pos()
-                        logger.debug(f"🔍 Raw mouse pos: ({pos.x()}, {pos.y()})")
-                        
-                        view_box = self.calibration_chart.getViewBox()
-                        logger.debug(f"🔍 ViewBox: {view_box}")
-                        
-                        # Convert QPoint to QPointF for pyqtgraph compatibility
-                        pos_f = QPointF(pos.x(), pos.y())
-                        logger.debug(f"🔍 Converted to QPointF: ({pos_f.x()}, {pos_f.y()})")
-                        
-                        try:
-                            chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos_f))
-                            logger.debug(f"🔍 Chart coordinates: ({chart_pos.x():.2f}, {chart_pos.y():.2f})")
-                        except Exception as e:
-                            logger.error(f"🔍 Error in coordinate conversion: {e}")
-                            return False
-                        
-                        # Find nearest point
-                        nearest_point = self.find_nearest_point(chart_pos.x(), chart_pos.y())
-                        logger.debug(f"🔍 Nearest point: {nearest_point}")
-                        
-                        if nearest_point >= 0:
-                            logger.debug(f"🔍 STARTING DRAG for point {nearest_point}")
-                            self.dragging = True
-                            self.dragging_point = nearest_point
-                            return True
-                        else:
-                            logger.debug("🔍 No nearby point found")
-                    else:
-                        logger.debug(f"🔍 Wrong button: {event.button()}")
-                
-                elif event.type() == QEvent.Type.MouseMove:
-                    logger.debug(f"🔍 MOUSE MOVE - dragging={self.dragging}")
-                    if self.dragging:
-                        logger.debug("🔍 DRAGGING - processing move")
-                        # Get mouse position in chart coordinates
-                        pos = event.pos()
-                        view_box = self.calibration_chart.getViewBox()
-                        # Convert QPoint to QPointF for pyqtgraph compatibility
-                        pos_f = QPointF(pos.x(), pos.y())
-                        chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos_f))
-                        
-                        # Constrain to chart bounds (0-100)
-                        x = max(0, min(100, chart_pos.x()))
-                        y = max(0, min(100, chart_pos.y()))
-                        logger.debug(f"🔍 Dragging to: ({x:.2f}, {y:.2f})")
-                        
-                        # Update the curve data
-                        if self.dragging_point is not None and self.dragging_point < len(self.curve_x):
-                            logger.debug(f"🔍 Updating point {self.dragging_point}")
-                            self.curve_x[self.dragging_point] = x
-                            self.curve_y[self.dragging_point] = y
-                            
-                            # Sort points by x-coordinate to maintain order
-                            points = list(zip(self.curve_x, self.curve_y))
-                            points.sort(key=lambda p: p[0])
-                            self.curve_x, self.curve_y = zip(*points)
-                            
-                            # Update the scatter plot
-                            self.scatter.setData(self.curve_x, self.curve_y)
-                            
-                            # Update the line
-                            self.curve_line.setData(self.curve_x, self.curve_y)
-                            logger.debug(f"🔍 Updated chart with new data")
-                        
-                        return True
-                    else:
-                        logger.debug("🔍 Mouse move but not dragging")
-                
-                elif event.type() == QEvent.Type.MouseButtonRelease:
-                    logger.debug("🔍 MOUSE RELEASE")
-                    if self.dragging:
-                        logger.debug("🔍 STOPPING DRAG")
-                        # Stop dragging
-                        self.dragging = False
-                        self.dragging_point = None
-                        self.emit_calibration_update()
-                        return True
-                    else:
-                        logger.debug("🔍 Mouse release but not dragging")
-                
-                else:
-                    logger.debug(f"🔍 Other event type: {event.type()}")
-                        
-            except ImportError:
-                logger.error("🔍 ImportError in eventFilter")
-                pass
-            except Exception as e:
-                logger.error(f"🔍 Error in eventFilter: {e}")
-        else:
-            logger.debug(f"🔍 Event not from calibration chart: obj={type(obj).__name__}")
-        
-        return super().eventFilter(obj, event)
     
     def emit_calibration_update(self):
         data = {

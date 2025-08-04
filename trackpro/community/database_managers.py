@@ -339,7 +339,7 @@ class SocialManager(CommunityDatabaseManager):
                 
                 # Get latest message
                 latest_message = self.supabase.from_("messages") \
-                    .select("*, sender:user_profiles(username)") \
+                    .select("*, sender_id") \
                     .eq("conversation_id", conv['id']) \
                     .order("created_at", desc=True) \
                     .limit(1) \
@@ -375,7 +375,7 @@ class SocialManager(CommunityDatabaseManager):
         """Get messages for a conversation."""
         try:
             response = self.supabase.from_("messages") \
-                .select("*, sender:user_profiles(username, display_name, avatar_url)") \
+                .select("*, sender_id") \
                 .eq("conversation_id", conversation_id) \
                 .order("created_at", desc=True) \
                 .limit(limit) \

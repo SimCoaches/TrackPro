@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
 from .social_ui import SocialTheme
-from ..social import enhanced_user_manager, friends_manager, achievements_manager, reputation_manager
+from trackpro.social import enhanced_user_manager, friends_manager, achievements_manager, reputation_manager
 from ..config import config
 
 # Add Twilio import at the top
@@ -968,58 +968,58 @@ class UserAccountMainWidget(QWidget):
         
         actions_layout.addWidget(change_password_btn)
         
-        # Two-Factor Authentication Section
-        twofa_group = QGroupBox("Two-Factor Authentication")
-        twofa_layout = QVBoxLayout(twofa_group)
+        # Two-Factor Authentication Section - temporarily disabled
+        # twofa_group = QGroupBox("Two-Factor Authentication")
+        # twofa_layout = QVBoxLayout(twofa_group)
         
-        if not TWILIO_AVAILABLE or not config.twilio_enabled:
-            # Show disabled message if Twilio is not available
-            disabled_label = QLabel("SMS 2FA is currently unavailable. Please contact support to enable this feature.")
-            disabled_label.setStyleSheet(f"color: {SocialTheme.COLORS['text_secondary']}; font-style: italic;")
-            disabled_label.setWordWrap(True)
-            twofa_layout.addWidget(disabled_label)
-        else:
-            # Phone number input section
-            phone_layout = QFormLayout()
+        # if not TWILIO_AVAILABLE or not config.twilio_enabled:
+        #     # Show disabled message if Twilio is not available
+        #     disabled_label = QLabel("SMS 2FA is currently unavailable. Please contact support to enable this feature.")
+        #     disabled_label.setStyleSheet(f"color: {SocialTheme.COLORS['text_secondary']}; font-style: italic;")
+        #     disabled_label.setWordWrap(True)
+        #     twofa_layout.addWidget(disabled_label)
+        # else:
+        #     # Phone number input section
+        #     phone_layout = QFormLayout()
             
-            self.phone_input = QLineEdit()
-            self.phone_input.setPlaceholderText("Enter phone number (e.g. +15551234567)")
-            self.phone_input.textChanged.connect(self.on_phone_number_changed)
+        #     self.phone_input = QLineEdit()
+        #     self.phone_input.setPlaceholderText("Enter phone number (e.g. +15551234567)")
+        #     self.phone_input.textChanged.connect(self.on_phone_number_changed)
             
-            self.send_code_btn = QPushButton("Send Code")
-            self.send_code_btn.clicked.connect(self.send_verification_code)
+        #     self.send_code_btn = QPushButton("Send Code")
+        #     self.send_code_btn.clicked.connect(self.send_verification_code)
             
-            phone_layout.addRow("Phone Number:", self.phone_input)
-            phone_layout.addRow("", self.send_code_btn)
+        #     phone_layout.addRow("Phone Number:", self.phone_input)
+        #     phone_layout.addRow("", self.send_code_btn)
             
-            # Code verification section (initially hidden)
-            self.code_input = QLineEdit()
-            self.code_input.setMaxLength(6)
-            self.code_input.setPlaceholderText("Enter 6-digit code")
-            self.code_input.hide()
+        #     # Code verification section (initially hidden)
+        #     self.code_input = QLineEdit()
+        #     self.code_input.setMaxLength(6)
+        #     self.code_input.setPlaceholderText("Enter 6-digit code")
+        #     self.code_input.hide()
             
-            self.verify_code_btn = QPushButton("Verify Code")
-            self.verify_code_btn.clicked.connect(self.verify_code)
-            self.verify_code_btn.hide()
+        #     self.verify_code_btn = QPushButton("Verify Code")
+        #     self.verify_code_btn.clicked.connect(self.verify_code)
+        #     self.verify_code_btn.hide()
             
-            phone_layout.addRow("Verification Code:", self.code_input)
-            phone_layout.addRow("", self.verify_code_btn)
+        #     phone_layout.addRow("Verification Code:", self.code_input)
+        #     phone_layout.addRow("", self.verify_code_btn)
             
-            # 2FA toggle (initially disabled)
-            self.twofa_checkbox = QCheckBox("Enable Two-Factor Authentication")
-            self.twofa_checkbox.setEnabled(False)
-            self.twofa_checkbox.stateChanged.connect(self.on_2fa_toggled)
+        #     # 2FA toggle (initially disabled)
+        #     self.twofa_checkbox = QCheckBox("Enable Two-Factor Authentication")
+        #     self.twofa_checkbox.setEnabled(False)
+        #     self.twofa_checkbox.stateChanged.connect(self.on_2fa_toggled)
             
-            twofa_layout.addLayout(phone_layout)
-            twofa_layout.addWidget(self.twofa_checkbox)
+        #     twofa_layout.addLayout(phone_layout)
+        #     twofa_layout.addWidget(self.twofa_checkbox)
             
-            # Load existing 2FA settings
-            self.load_2fa_settings()
+        #     # Load existing 2FA settings
+        #     self.load_2fa_settings()
         
         layout.addWidget(title_label)
         layout.addWidget(info_group)
         layout.addWidget(actions_group)
-        layout.addWidget(twofa_group)
+        # layout.addWidget(twofa_group)  # 2FA section temporarily disabled
         layout.addStretch()
         
         return widget

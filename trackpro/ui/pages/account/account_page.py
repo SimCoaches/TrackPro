@@ -8,6 +8,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QPen, QBrush
 
+# Import user management functions
+from trackpro.auth.user_manager import is_current_user_dev
+
 logger = logging.getLogger(__name__)
 
 class ModernCard(QFrame):
@@ -274,6 +277,14 @@ class AccountPage(QWidget):
             ("privacy", "D", "Privacy & Data")
         ]
         
+        # Add admin management for dev users
+        if is_current_user_dev():
+            nav_items.append(("admin", "A", "Admin Management"))
+        
+        # Add hierarchy management for dev users
+        if is_current_user_dev():
+            nav_items.append(("hierarchy", "H", "Hierarchy"))
+        
         for section_id, icon, title in nav_items:
             btn = QPushButton(f"{icon}  {title}")
             btn.setCheckable(True)
@@ -321,6 +332,11 @@ class AccountPage(QWidget):
             "connections": self.create_connections_section(),
             "privacy": self.create_privacy_section()
         }
+        
+        # Add admin management for dev users
+        if is_current_user_dev():
+            self.sections["admin"] = self.create_admin_section()
+            self.sections["hierarchy"] = self.create_hierarchy_section()
         
         for section in self.sections.values():
             self.content_stack.addWidget(section)
@@ -888,53 +904,6 @@ class AccountPage(QWidget):
         iracing_card.content_layout.addLayout(iracing_layout)
         layout.addWidget(iracing_card)
         
-        # Discord Integration Card
-        discord_card = ModernCard("Discord Integration")
-        discord_layout = QVBoxLayout()
-        
-        # Discord status
-        self.discord_status_label = QLabel("Status: Not Connected")
-        self.discord_status_label.setStyleSheet(self.iracing_status_label.styleSheet())
-        discord_layout.addWidget(self.discord_status_label)
-        
-        # Discord features
-        self.discord_rich_presence_check = QCheckBox("Enable Discord Rich Presence")
-        self.discord_community_check = QCheckBox("Join TrackPro Discord Community")
-        
-        checkbox_style = """
-            QCheckBox {
-                color: #dcddde;
-                font-size: 14px;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-            }
-            QCheckBox::indicator:unchecked {
-                background-color: #40444b;
-                border: 2px solid #72767d;
-                border-radius: 3px;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #5865f2;
-                border: 2px solid #5865f2;
-                border-radius: 3px;
-            }
-        """
-        
-        for checkbox in [self.discord_rich_presence_check, self.discord_community_check]:
-            checkbox.setStyleSheet(checkbox_style)
-            discord_layout.addWidget(checkbox)
-        
-        # Discord connect button
-        self.connect_discord_btn = ModernButton("Connect Discord", "secondary")
-        self.connect_discord_btn.clicked.connect(self.connect_discord)
-        discord_layout.addWidget(self.connect_discord_btn)
-        
-        discord_card.content_layout.addLayout(discord_layout)
-        layout.addWidget(discord_card)
-        
         # Save Connections Button
         save_connections_btn = ModernButton("Save Connection Settings", "primary")
         save_connections_btn.clicked.connect(self.save_connection_settings)
@@ -1496,7 +1465,7 @@ Last updated: Just now"""
         try:
             # Load profile from Supabase
             from ....database.supabase_client import get_supabase_client
-            from ...social.user_manager import enhanced_user_manager
+            from ....social import enhanced_user_manager
             
             # Check if user is authenticated
             supabase_client = get_supabase_client()
@@ -1556,6 +1525,26 @@ Last updated: Just now"""
                 self.email_input.setText(self.user_data.get("email", ""))
                 self.bio_input.setText(self.user_data.get("bio", ""))
                 
+                # Handle date of birth
+                if hasattr(self, 'dob_input'):
+                    dob_str = self.user_data.get("date_of_birth", "")
+                    if dob_str:
+                        try:
+                            # Parse the date string and set it in the date input
+                            from PyQt6.QtCore import QDate
+                            dob_date = QDate.fromString(dob_str, "yyyy-MM-dd")
+                            if dob_date.isValid():
+                                self.dob_input.setDate(dob_date)
+                            else:
+                                # Fallback to default date if parsing fails
+                                self.dob_input.setDate(QDate.currentDate().addYears(-25))
+                        except Exception as e:
+                            logger.warning(f"Error parsing date of birth '{dob_str}': {e}")
+                            self.dob_input.setDate(QDate.currentDate().addYears(-25))
+                    else:
+                        # Set default date if no date of birth is stored
+                        self.dob_input.setDate(QDate.currentDate().addYears(-25))
+                
                 # Update avatar initials
                 first_initial = self.user_data.get("first_name", "U")[0].upper()
                 last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
@@ -1585,7 +1574,7 @@ Last updated: Just now"""
             
             # Save to Supabase using enhanced user manager
             from ....database.supabase_client import get_supabase_client
-            from ...social.user_manager import enhanced_user_manager
+            from ....social import enhanced_user_manager
             
             # Check if user is authenticated
             supabase_client = get_supabase_client()
@@ -1651,18 +1640,27 @@ Last updated: Just now"""
         
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                # TODO: Implement actual logout functionality
                 logger.info("User logout initiated")
                 
                 # Get main window and trigger logout
                 main_window = self.parent()
-                while main_window and not hasattr(main_window, 'handle_logout'):
+                while main_window and not hasattr(main_window, 'logout_user'):
                     main_window = main_window.parent()
                 
-                if main_window and hasattr(main_window, 'handle_logout'):
-                    main_window.handle_logout()
+                if main_window and hasattr(main_window, 'logout_user'):
+                    main_window.logout_user()
                 else:
-                    QMessageBox.information(self, "Logout", "Logout functionality not available")
+                    # Fallback: try to find the main window by looking for ModernMainWindow
+                    while main_window and not hasattr(main_window, '__class__'):
+                        main_window = main_window.parent()
+                    
+                    if main_window and 'ModernMainWindow' in main_window.__class__.__name__:
+                        if hasattr(main_window, 'logout_user'):
+                            main_window.logout_user()
+                        else:
+                            QMessageBox.information(self, "Logout", "Logout functionality not available")
+                    else:
+                        QMessageBox.information(self, "Logout", "Logout functionality not available")
                 
             except Exception as e:
                 logger.error(f"Error during logout: {e}")
@@ -1727,7 +1725,7 @@ Last updated: Just now"""
             
             # Import required modules
             from ....database.supabase_client import get_supabase_client
-            from ...social.user_manager import enhanced_user_manager
+            from ....social import enhanced_user_manager
             import uuid
             import mimetypes
             
@@ -2088,7 +2086,7 @@ Last updated: Just now"""
             
             # Save to user preferences
             from ....database.supabase_client import get_supabase_client
-            from ...social.user_manager import enhanced_user_manager
+            from ....social import enhanced_user_manager
             
             supabase_client = get_supabase_client()
             if not supabase_client:
@@ -2192,22 +2190,7 @@ Last updated: Just now"""
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Failed to disconnect iRacing: {str(e)}")
     
-    def connect_discord(self):
-        """Connect to Discord."""
-        try:
-            # TODO: Implement Discord OAuth integration
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                self,
-                "Discord Connection",
-                "Discord integration will be implemented soon."
-            )
-            logger.info("Discord connection requested")
-            
-        except Exception as e:
-            logger.error(f"Error connecting to Discord: {e}")
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Error", f"Failed to connect to Discord: {str(e)}")
+
     
     def save_privacy_settings(self):
         """Save privacy preferences."""
@@ -2223,7 +2206,7 @@ Last updated: Just now"""
             
             # Save to user profile
             from ....database.supabase_client import get_supabase_client
-            from ...social.user_manager import enhanced_user_manager
+            from ....social import enhanced_user_manager
             
             supabase_client = get_supabase_client()
             if not supabase_client:
@@ -2277,7 +2260,7 @@ Last updated: Just now"""
             
             # Collect profile data
             from ....database.supabase_client import get_supabase_client
-            from ...social.user_manager import enhanced_user_manager
+            from ....social import enhanced_user_manager
             
             supabase_client = get_supabase_client()
             if not supabase_client:
@@ -2401,3 +2384,283 @@ Last updated: Just now"""
         except Exception as e:
             logger.error(f"Error loading data usage: {e}")
             self.data_usage_text.setPlainText("• Error loading data usage statistics")
+    
+    def create_admin_section(self):
+        """Create the admin management section (dev users only)."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: #36393f;
+                border: none;
+            }
+        """)
+        
+        # Import and create admin management widget
+        from .admin_management_widget import AdminManagementWidget
+        admin_widget = AdminManagementWidget()
+        admin_widget.admin_updated.connect(self.on_admin_updated)
+        
+        scroll_area.setWidget(admin_widget)
+        return scroll_area
+    
+    def on_admin_updated(self):
+        """Handle admin list updates."""
+        logger.info("Admin list updated")
+        # Refresh the navigation if needed
+        self.refresh_navigation()
+    
+    def create_hierarchy_section(self):
+        """Create the hierarchy management section (dev users only)."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: #36393f;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #2f3136;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5865f2;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+        """)
+        
+        content_widget = QWidget()
+        content_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        layout = QVBoxLayout(content_widget)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(20)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Header
+        header_label = QLabel("User Hierarchy Management")
+        header_label.setStyleSheet("""
+            QLabel {
+                color: #ffffff;
+                font-size: 24px;
+                font-weight: 700;
+                margin-bottom: 8px;
+                border: none;
+                background: transparent;
+            }
+        """)
+        layout.addWidget(header_label)
+        
+        subtitle_label = QLabel("Manage user roles, permissions, and hierarchy levels")
+        subtitle_label.setStyleSheet("""
+            QLabel {
+                color: #b9bbbe;
+                font-size: 14px;
+                margin-bottom: 16px;
+                border: none;
+                background: transparent;
+            }
+        """)
+        layout.addWidget(subtitle_label)
+        
+        # Current user info
+        current_user_card = ModernCard("Your Permissions")
+        current_user_layout = QVBoxLayout()
+        
+        from trackpro.auth.user_manager import get_current_user, get_current_user_hierarchy_level, is_current_user_dev, is_current_user_moderator
+        
+        current_user = get_current_user()
+        if current_user:
+            user_info = QLabel(f"Email: {current_user.email}")
+            user_info.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            current_user_layout.addWidget(user_info)
+            
+            level_info = QLabel(f"Hierarchy Level: {get_current_user_hierarchy_level()}")
+            level_info.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            current_user_layout.addWidget(level_info)
+            
+            dev_info = QLabel(f"Dev Permissions: {'Yes' if is_current_user_dev() else 'No'}")
+            dev_info.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            current_user_layout.addWidget(dev_info)
+            
+            mod_info = QLabel(f"Moderator Permissions: {'Yes' if is_current_user_moderator() else 'No'}")
+            mod_info.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            current_user_layout.addWidget(mod_info)
+        
+        current_user_card.layout().addLayout(current_user_layout)
+        layout.addWidget(current_user_card)
+        
+        # User search and management
+        search_card = ModernCard("Manage Users")
+        search_layout = QVBoxLayout()
+        
+        # Search input
+        search_input_layout = QHBoxLayout()
+        self.user_search_input = ModernInput("Enter user email to search...")
+        search_btn = ModernButton("Search", "primary")
+        search_btn.clicked.connect(self.search_user)
+        search_input_layout.addWidget(self.user_search_input)
+        search_input_layout.addWidget(search_btn)
+        search_layout.addLayout(search_input_layout)
+        
+        # User results
+        self.user_results_widget = QWidget()
+        self.user_results_layout = QVBoxLayout(self.user_results_widget)
+        search_layout.addWidget(self.user_results_widget)
+        
+        search_card.layout().addLayout(search_layout)
+        layout.addWidget(search_card)
+        
+        # Hierarchy levels info
+        levels_card = ModernCard("Hierarchy Levels")
+        levels_layout = QVBoxLayout()
+        
+        levels_info = QLabel("""
+        <b>TEAM</b> - Full system access, can manage all users and content<br>
+        <b>SPONSORED_DRIVERS</b> - Premium users with enhanced features<br>
+        <b>DRIVERS</b> - Standard users with basic features<br>
+        <b>PADDOCK</b> - New users with limited access
+        """)
+        levels_info.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+        levels_info.setWordWrap(True)
+        levels_layout.addWidget(levels_info)
+        
+        levels_card.layout().addLayout(levels_layout)
+        layout.addWidget(levels_card)
+        
+        scroll_area.setWidget(content_widget)
+        return scroll_area
+    
+    def search_user(self):
+        """Search for a user by email."""
+        email = self.user_search_input.text().strip()
+        if not email:
+            return
+        
+        try:
+            from trackpro.auth.hierarchy_manager import hierarchy_manager
+            from trackpro.database.supabase_client import get_supabase_client
+            
+            # Search for user by email
+            supabase = get_supabase_client()
+            response = supabase.table("user_profiles").select("user_id, email, display_name").eq("email", email).execute()
+            
+            if response.data:
+                user_data = response.data[0]
+                self.display_user_management(user_data)
+            else:
+                # Clear previous results
+                self.clear_user_results()
+                no_user_label = QLabel("User not found")
+                no_user_label.setStyleSheet("color: #ed4245; font-size: 14px;")
+                self.user_results_layout.addWidget(no_user_label)
+                
+        except Exception as e:
+            logger.error(f"Error searching for user: {e}")
+    
+    def display_user_management(self, user_data):
+        """Display user management interface."""
+        # Clear previous results
+        self.clear_user_results()
+        
+        # User info
+        user_info = QLabel(f"User: {user_data.get('display_name', 'Unknown')} ({user_data.get('email', 'No email')})")
+        user_info.setStyleSheet("color: #ffffff; font-size: 16px; font-weight: bold;")
+        self.user_results_layout.addWidget(user_info)
+        
+        # Get current hierarchy
+        from trackpro.auth.hierarchy_manager import hierarchy_manager
+        hierarchy = hierarchy_manager.get_user_hierarchy(user_data['user_id'])
+        
+        if hierarchy:
+            current_level = QLabel(f"Current Level: {hierarchy.hierarchy_level.value}")
+            current_level.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            self.user_results_layout.addWidget(current_level)
+            
+            dev_status = QLabel(f"Dev Permissions: {'Yes' if hierarchy.is_dev else 'No'}")
+            dev_status.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            self.user_results_layout.addWidget(dev_status)
+            
+            mod_status = QLabel(f"Moderator Permissions: {'Yes' if hierarchy.is_moderator else 'No'}")
+            mod_status.setStyleSheet("color: #b9bbbe; font-size: 14px;")
+            self.user_results_layout.addWidget(mod_status)
+        
+        # Hierarchy level selector
+        level_group = QGroupBox("Change Hierarchy Level")
+        level_layout = QVBoxLayout()
+        
+        self.level_combo = QComboBox()
+        self.level_combo.addItems(["PADDOCK", "DRIVERS", "SPONSORED_DRIVERS", "TEAM"])
+        if hierarchy:
+            current_index = self.level_combo.findText(hierarchy.hierarchy_level.value)
+            if current_index >= 0:
+                self.level_combo.setCurrentIndex(current_index)
+        
+        level_layout.addWidget(self.level_combo)
+        
+        # Permission checkboxes
+        self.dev_checkbox = QCheckBox("Dev Permissions")
+        self.mod_checkbox = QCheckBox("Moderator Permissions")
+        
+        if hierarchy:
+            self.dev_checkbox.setChecked(hierarchy.is_dev)
+            self.mod_checkbox.setChecked(hierarchy.is_moderator)
+        
+        level_layout.addWidget(self.dev_checkbox)
+        level_layout.addWidget(self.mod_checkbox)
+        
+        # Update button
+        update_btn = ModernButton("Update User", "primary")
+        update_btn.clicked.connect(lambda: self.update_user_hierarchy(user_data['user_id']))
+        level_layout.addWidget(update_btn)
+        
+        level_group.setLayout(level_layout)
+        self.user_results_layout.addWidget(level_group)
+    
+    def clear_user_results(self):
+        """Clear the user results area."""
+        while self.user_results_layout.count():
+            child = self.user_results_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+    
+    def update_user_hierarchy(self, user_id):
+        """Update user hierarchy."""
+        try:
+            from trackpro.auth.hierarchy_manager import hierarchy_manager, HierarchyLevel
+            from trackpro.auth.user_manager import get_current_user
+            
+            current_user = get_current_user()
+            if not current_user:
+                return
+            
+            # Get selected values
+            level_text = self.level_combo.currentText()
+            hierarchy_level = HierarchyLevel(level_text)
+            is_dev = self.dev_checkbox.isChecked()
+            is_moderator = self.mod_checkbox.isChecked()
+            
+            # Update hierarchy
+            result = hierarchy_manager.update_user_hierarchy(
+                target_id=user_id,
+                modifier_id=current_user.id,
+                hierarchy_level=hierarchy_level,
+                is_dev=is_dev,
+                is_moderator=is_moderator
+            )
+            
+            if result['success']:
+                QMessageBox.information(self, "Success", "User hierarchy updated successfully!")
+                # Refresh the display
+                self.search_user()
+            else:
+                QMessageBox.warning(self, "Error", f"Failed to update user hierarchy: {result['message']}")
+                
+        except Exception as e:
+            logger.error(f"Error updating user hierarchy: {e}")
+            QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")

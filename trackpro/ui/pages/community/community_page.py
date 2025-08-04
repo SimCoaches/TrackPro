@@ -5,7 +5,8 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QWidget, QFrame, 
     QSizePolicy, QPushButton, QListWidget, QListWidgetItem, QTextEdit,
-    QSplitter, QTabWidget, QLineEdit, QComboBox, QSlider, QCheckBox
+    QSplitter, QTabWidget, QLineEdit, QComboBox, QSlider, QCheckBox,
+    QMessageBox, QDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QBrush
@@ -19,6 +20,7 @@ import json
 import numpy as np
 
 from ...modern.shared.base_page import BasePage
+from ....community.private_messaging_widget import PrivateConversationListItem, PrivateConversationWidget
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +28,22 @@ logger = logging.getLogger(__name__)
 PYAUDIO_AVAILABLE = False
 try:
     import pyaudio
+    import numpy as np
     PYAUDIO_AVAILABLE = True
 except ImportError:
     logger.warning("pyaudio not available - voice chat functionality will be disabled")
 except Exception as e:
     logger.warning(f"Error importing pyaudio: {e} - voice chat functionality will be disabled")
+
+# Import high-quality voice components
+try:
+    from .voice_settings_dialog import VoiceSettingsDialog
+    from .high_quality_voice_manager import HighQualityVoiceManager
+    from trackpro.voice_server_manager import start_voice_server, stop_voice_server, is_voice_server_running
+    VOICE_COMPONENTS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Voice components not available: {e}")
+    VOICE_COMPONENTS_AVAILABLE = False
 
 # Role colors for Discord-inspired design
 ROLE_COLORS = {
@@ -48,6 +61,7 @@ class VoiceChatManager(QObject):
     user_joined_voice = pyqtSignal(str)
     user_left_voice = pyqtSignal(str)
     voice_error = pyqtSignal(str)
+    audio_level_changed = pyqtSignal(float)
     
     def __init__(self):
         super().__init__()
@@ -57,7 +71,19 @@ class VoiceChatManager(QObject):
         self.websocket = None
         self.voice_thread = None
         
-        # Audio settings
+        # Use high-quality voice manager if available
+        if VOICE_COMPONENTS_AVAILABLE:
+            try:
+                self.voice_manager = HighQualityVoiceManager()
+                self.use_high_quality = True
+                logger.info("Using high-quality voice chat manager")
+            except Exception as e:
+                logger.error(f"Failed to initialize high-quality voice manager: {e}")
+                self.use_high_quality = False
+        else:
+            self.use_high_quality = False
+        
+        # Fallback audio settings
         self.CHUNK = 1024
         self.FORMAT = None
         self.CHANNELS = 1
@@ -83,20 +109,41 @@ class VoiceChatManager(QObject):
             self.voice_error.emit("Voice chat not available - pyaudio not installed")
             return
             
-        try:
-            self.voice_thread = threading.Thread(
-                target=self._run_voice_client,
-                args=(server_url, channel_id)
-            )
-            self.voice_thread.daemon = True
-            self.voice_thread.start()
-        except Exception as e:
-            self.voice_error.emit(f"Failed to start voice chat: {str(e)}")
+        if self.use_high_quality:
+            # Use high-quality voice manager
+            self.voice_manager.start_voice_chat(server_url, channel_id)
+            # Connect signals
+            self.voice_manager.voice_data_received.connect(self.voice_data_received.emit)
+            self.voice_manager.user_joined_voice.connect(self.user_joined_voice.emit)
+            self.voice_manager.user_left_voice.connect(self.user_left_voice.emit)
+            self.voice_manager.voice_error.connect(self.voice_error.emit)
+            self.voice_manager.audio_level_changed.connect(self.audio_level_changed.emit)
+        else:
+            # Use fallback implementation
+            try:
+                self.voice_thread = threading.Thread(
+                    target=self._run_voice_client,
+                    args=(server_url, channel_id)
+                )
+                self.voice_thread.daemon = True
+                self.voice_thread.start()
+            except Exception as e:
+                self.voice_error.emit(f"Failed to start voice chat: {str(e)}")
+    
+    def update_voice_settings(self, settings: dict):
+        """Update voice chat settings."""
+        if self.use_high_quality:
+            self.voice_manager.update_settings(settings)
+    
+    def get_available_devices(self):
+        """Get available audio devices."""
+        if self.use_high_quality:
+            return self.voice_manager.get_available_devices()
+        return {'input': [], 'output': []}
     
     def _run_voice_client(self, server_url: str, channel_id: str):
-        """Run voice client in separate thread."""
+        """Run voice client in separate thread (fallback)."""
         try:
-            # Create new event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._voice_client_loop(server_url, channel_id))
@@ -107,7 +154,7 @@ class VoiceChatManager(QObject):
                 loop.close()
     
     async def _voice_client_loop(self, server_url: str, channel_id: str):
-        """Voice client WebSocket loop."""
+        """Voice client WebSocket loop (fallback)."""
         try:
             async with websockets.connect(f"{server_url}/voice/{channel_id}") as websocket:
                 self.websocket = websocket
@@ -132,7 +179,7 @@ class VoiceChatManager(QObject):
             self.voice_error.emit(f"WebSocket error: {str(e)}")
     
     def _start_recording(self):
-        """Start audio recording."""
+        """Start audio recording (fallback)."""
         if not PYAUDIO_AVAILABLE or not self.audio:
             self.voice_error.emit("Audio recording not available - pyaudio not installed")
             return
@@ -154,12 +201,11 @@ class VoiceChatManager(QObject):
             self.voice_error.emit(f"Failed to start recording: {str(e)}")
     
     def _record_audio(self):
-        """Record audio and send to WebSocket."""
+        """Record audio and send to WebSocket (fallback)."""
         while self.is_recording:
             try:
                 data = self.stream_in.read(self.CHUNK)
                 if self.websocket:
-                    # Use the current event loop instead of asyncio.run
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         loop.create_task(self.websocket.send(json.dumps({
@@ -171,7 +217,7 @@ class VoiceChatManager(QObject):
                 break
     
     def _start_playback(self):
-        """Start audio playback."""
+        """Start audio playback (fallback)."""
         if not PYAUDIO_AVAILABLE or not self.audio:
             self.voice_error.emit("Audio playback not available - pyaudio not installed")
             return
@@ -190,24 +236,27 @@ class VoiceChatManager(QObject):
     
     def stop_voice_chat(self):
         """Stop voice chat."""
-        self.is_recording = False
-        self.is_playing = False
-        
-        if hasattr(self, 'stream_in'):
-            self.stream_in.stop_stream()
-            self.stream_in.close()
-        
-        if hasattr(self, 'stream_out'):
-            self.stream_out.stop_stream()
-            self.stream_out.close()
-        
-        if self.websocket:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.websocket.close())
-            except Exception as e:
-                logger.error(f"Error closing websocket: {e}")
+        if self.use_high_quality:
+            self.voice_manager.stop_voice_chat()
+        else:
+            self.is_recording = False
+            self.is_playing = False
+            
+            if hasattr(self, 'stream_in'):
+                self.stream_in.stop_stream()
+                self.stream_in.close()
+            
+            if hasattr(self, 'stream_out'):
+                self.stream_out.stop_stream()
+                self.stream_out.close()
+            
+            if self.websocket:
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self.websocket.close())
+                except Exception as e:
+                    logger.error(f"Error closing websocket: {e}")
     
     def __del__(self):
         """Cleanup audio resources."""
@@ -222,6 +271,14 @@ class ChatMessageWidget(QWidget):
         super().__init__()
         self.message_data = message_data
         self.user_role = user_role
+        
+        # Debug logging to see the message data structure
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔍 ChatMessageWidget received message_data: {message_data}")
+        logger.info(f"🔍 Message sender_name: {message_data.get('sender_name', 'NOT_FOUND')}")
+        logger.info(f"🔍 Message user_profiles: {message_data.get('user_profiles', 'NOT_FOUND')}")
+        
         self.setup_ui()
     
     def create_avatar(self):
@@ -233,7 +290,40 @@ class ChatMessageWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw circle background
-        name = self.message_data.get('sender_name', 'U')
+        # Handle both flat sender_name and nested sender structure
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        name = self.message_data.get('sender_name')
+        logger.info(f"🔍 Avatar creation - sender_name: {name}")
+        
+        # Try to get name from user_profiles first
+        if not name and self.message_data.get('user_profiles'):
+            user_profile = self.message_data['user_profiles']
+            name = user_profile.get('display_name') or user_profile.get('username') or 'U'
+            logger.info(f"🔍 Avatar creation - from user_profiles: {name}")
+        
+        # If still no name, try to get from current user context
+        if not name:
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated:
+                    # Check if this is the current user's message
+                    if self.message_data.get('sender_id') == user.id:
+                        name = user.name or user.email or 'You'
+                        logger.info(f"🔍 Avatar creation - current user: {name}")
+                    else:
+                        name = 'U'
+                        logger.info(f"🔍 Avatar creation - unknown user: {name}")
+                else:
+                    name = 'U'
+                    logger.info(f"🔍 Avatar creation - no current user: {name}")
+            except Exception as e:
+                logger.debug(f"Could not get current user for avatar: {e}")
+                name = 'U'
+                logger.info(f"🔍 Avatar creation - using fallback: {name}")
+            
         colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
         color_index = hash(name) % len(colors)
         painter.setBrush(QBrush(QColor(colors[color_index])))
@@ -269,7 +359,41 @@ class ChatMessageWidget(QWidget):
         content_layout.setSpacing(2)
         
         # Username with role color
-        username_label = QLabel(self.message_data.get('sender_name', 'Unknown'))
+        # Handle both flat sender_name and nested sender structure
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        sender_name = self.message_data.get('sender_name')
+        logger.info(f"🔍 Username display - sender_name: {sender_name}")
+        
+        # Try to get name from user_profiles first
+        if not sender_name and self.message_data.get('user_profiles'):
+            user_profile = self.message_data['user_profiles']
+            sender_name = user_profile.get('display_name') or user_profile.get('username') or 'Unknown'
+            logger.info(f"🔍 Username display - from user_profiles: {sender_name}")
+        
+        # If still no name, try to get from current user context
+        if not sender_name:
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated:
+                    # Check if this is the current user's message
+                    if self.message_data.get('sender_id') == user.id:
+                        sender_name = user.name or user.email or 'You'
+                        logger.info(f"🔍 Username display - current user: {sender_name}")
+                    else:
+                        sender_name = 'Unknown'
+                        logger.info(f"🔍 Username display - unknown user: {sender_name}")
+                else:
+                    sender_name = 'Unknown'
+                    logger.info(f"🔍 Username display - no current user: {sender_name}")
+            except Exception as e:
+                logger.debug(f"Could not get current user for username: {e}")
+                sender_name = 'Unknown'
+                logger.info(f"🔍 Username display - using fallback: {sender_name}")
+            
+        username_label = QLabel(sender_name)
         role_color = ROLE_COLORS.get(self.user_role, ROLE_COLORS['newbie'])
         username_label.setStyleSheet(f"color: {role_color}; font-weight: bold; font-size: 14px;")
         
@@ -439,6 +563,27 @@ class VoiceChannelWidget(QWidget):
         """)
         controls_layout.addWidget(self.volume_slider)
         
+        # Voice Settings button
+        self.settings_button = QPushButton("⚙️ Settings")
+        self.settings_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+        """)
+        self.settings_button.clicked.connect(self.open_voice_settings)
+        controls_layout.addWidget(self.settings_button)
+        
         # Join/Leave button
         self.join_button = QPushButton("Join Channel")
         self.join_button.setStyleSheet("""
@@ -456,6 +601,11 @@ class VoiceChannelWidget(QWidget):
         """)
         self.join_button.clicked.connect(self.toggle_join_channel)
         controls_layout.addWidget(self.join_button)
+        
+        # Audio Level Meter
+        self.audio_level_label = QLabel("🎤")
+        self.audio_level_label.setStyleSheet("color: #666; font-size: 16px;")
+        controls_layout.addWidget(self.audio_level_label)
         
         self.layout().addLayout(controls_layout)
     
@@ -487,19 +637,53 @@ class VoiceChannelWidget(QWidget):
                 QMessageBox.information(self, "Voice Chat", 
                                       "Voice chat requires pyaudio to be installed.\n\nThis is a demo feature - voice chat will be available in future updates.")
                 return
+            
+            # Ensure voice server is running
+            if VOICE_COMPONENTS_AVAILABLE and not is_voice_server_running():
+                try:
+                    start_voice_server()
+                    logger.info("Voice server started for voice chat")
+                except Exception as e:
+                    logger.error(f"Failed to start voice server: {e}")
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(self, "Voice Chat Error", 
+                                      f"Failed to start voice server: {str(e)}")
+                    return
                 
             # Start voice chat connection
-            self.voice_manager.start_voice_chat(
-                server_url="ws://localhost:8080",  # Replace with your WebSocket server
-                channel_id=self.channel_data.get('id', '')
-            )
-            logger.info(f"Successfully joined voice channel: {self.channel_data.get('id', '')}")
+            server_url = "ws://localhost:8080"
+            channel_id = self.channel_data.get('id', '')
+            
+            self.voice_manager.start_voice_chat(server_url, channel_id)
+            
+            # Connect audio level signal
+            if hasattr(self.voice_manager, 'audio_level_changed'):
+                self.voice_manager.audio_level_changed.connect(self.update_audio_level)
+            
+            logger.info(f"Successfully joined voice channel: {channel_id}")
+            
+            # Update UI
+            self.join_button.setText("Leave Channel")
+            self.join_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #e74c3c;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    color: #ffffff;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #c0392b;
+                }
+            """)
+            
         except Exception as e:
             logger.error(f"Failed to join voice channel: {e}")
             # Show error to user
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Voice Chat Error", 
-                              f"Failed to join voice channel: {str(e)}\n\nVoice chat requires a WebSocket server running on localhost:8080")
+                              f"Failed to join voice channel: {str(e)}")
     
     def add_sample_participants(self):
         """Add sample participants to the voice channel."""
@@ -574,6 +758,53 @@ class VoiceChannelWidget(QWidget):
     def leave_voice_channel(self):
         """Leave the voice channel."""
         self.voice_manager.stop_voice_chat()
+    
+    def open_voice_settings(self):
+        """Open voice settings dialog."""
+        if not VOICE_COMPONENTS_AVAILABLE:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Voice Settings", 
+                                  "Voice settings require additional components.\n\n"
+                                  "Please ensure pyaudio and numpy are installed for full voice chat functionality.")
+            return
+            
+        try:
+            dialog = VoiceSettingsDialog(self)
+            dialog.settings_changed.connect(self.on_voice_settings_changed)
+            dialog.exec()
+        except Exception as e:
+            logger.error(f"Failed to open voice settings: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Failed to open voice settings: {str(e)}")
+    
+    def on_voice_settings_changed(self, settings: dict):
+        """Handle voice settings changes."""
+        try:
+            # Update voice manager settings
+            if hasattr(self, 'voice_manager') and self.voice_manager:
+                self.voice_manager.update_voice_settings(settings)
+                logger.info("Voice settings updated successfully")
+        except Exception as e:
+            logger.error(f"Failed to update voice settings: {e}")
+    
+    def update_audio_level(self, level: float):
+        """Update audio level meter display."""
+        try:
+            # Convert level (0-1) to visual indicator
+            if level > 0.7:
+                self.audio_level_label.setText("🔴")  # High level
+                self.audio_level_label.setStyleSheet("color: #ff4444; font-size: 16px;")
+            elif level > 0.3:
+                self.audio_level_label.setText("🟡")  # Medium level
+                self.audio_level_label.setStyleSheet("color: #ffaa00; font-size: 16px;")
+            elif level > 0.1:
+                self.audio_level_label.setText("🟢")  # Low level
+                self.audio_level_label.setStyleSheet("color: #44ff44; font-size: 16px;")
+            else:
+                self.audio_level_label.setText("🎤")  # No audio
+                self.audio_level_label.setStyleSheet("color: #666; font-size: 16px;")
+        except Exception as e:
+            logger.error(f"Failed to update audio level: {e}")
 
 
 class ChatChannelWidget(QWidget):
@@ -704,7 +935,7 @@ class CommunityPage(BasePage):
             
             # Initialize community manager
             try:
-                from ...community.community_manager import CommunityManager
+                from ....community.community_manager import CommunityManager
                 self.community_manager = CommunityManager()
                 
                 # Connect signals
@@ -715,6 +946,7 @@ class CommunityPage(BasePage):
                 
                 # Set current user
                 self.set_current_user()
+                
             except Exception as e:
                 logger.error(f"Failed to initialize community manager: {e}")
                 self.community_manager = None
@@ -776,7 +1008,65 @@ class CommunityPage(BasePage):
         
         server_layout.addWidget(header_widget)
         
-        # Channel list
+        # Create scroll area for channels and private messages
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: #1e1e1e;
+                border: none;
+            }
+        """)
+        
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(0)
+        
+        # Voice channels section
+        voice_header = QLabel("Voice Channels")
+        voice_header.setStyleSheet("""
+            color: #888888; 
+            font-size: 12px; 
+            font-weight: bold; 
+            padding: 8px 16px 4px 16px;
+            background-color: #1e1e1e;
+        """)
+        scroll_layout.addWidget(voice_header)
+        
+        # Voice channels list
+        self.voice_channels_list = QListWidget()
+        self.voice_channels_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1e1e1e;
+                border: none;
+                color: #ffffff;
+            }
+            QListWidget::item {
+                padding: 8px 16px;
+                border: none;
+            }
+            QListWidget::item:selected {
+                background-color: #252525;
+            }
+            QListWidget::item:hover {
+                background-color: #2d2d2d;
+            }
+        """)
+        scroll_layout.addWidget(self.voice_channels_list)
+        
+        # Text channels section
+        text_header = QLabel("Text Channels")
+        text_header.setStyleSheet("""
+            color: #888888; 
+            font-size: 12px; 
+            font-weight: bold; 
+            padding: 8px 16px 4px 16px;
+            background-color: #1e1e1e;
+        """)
+        scroll_layout.addWidget(text_header)
+        
+        # Text channels list
         self.channel_list = QListWidget()
         self.channel_list.setStyleSheet("""
             QListWidget {
@@ -795,12 +1085,73 @@ class CommunityPage(BasePage):
                 background-color: #2d2d2d;
             }
         """)
+        scroll_layout.addWidget(self.channel_list)
         
-        # Load channels from database
+        # Private messages section
+        private_header = QLabel("PRIVATE MESSAGES")
+        private_header.setStyleSheet("""
+            color: #888888; 
+            font-size: 12px; 
+            font-weight: bold; 
+            padding: 8px 16px 4px 16px;
+            background-color: #1e1e1e;
+        """)
+        scroll_layout.addWidget(private_header)
+        
+        # New Private Message button
+        self.new_private_message_btn = QPushButton("+ New Private Message")
+        self.new_private_message_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3ba55c;
+                border: none;
+                border-radius: 4px;
+                color: #ffffff;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 6px 12px;
+                margin: 4px 16px;
+            }
+            QPushButton:hover {
+                background-color: #2d7d46;
+            }
+            QPushButton:pressed {
+                background-color: #1f5f35;
+            }
+        """)
+        self.new_private_message_btn.clicked.connect(self.on_new_private_message_clicked)
+        scroll_layout.addWidget(self.new_private_message_btn)
+        
+        # Private messages list
+        self.private_messages_list = QListWidget()
+        self.private_messages_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1e1e1e;
+                border: none;
+                color: #ffffff;
+            }
+            QListWidget::item {
+                padding: 0px;
+                border: none;
+            }
+            QListWidget::item:selected {
+                background-color: #252525;
+            }
+            QListWidget::item:hover {
+                background-color: #2d2d2d;
+            }
+        """)
+        scroll_layout.addWidget(self.private_messages_list)
+        
+        scroll_area.setWidget(scroll_content)
+        server_layout.addWidget(scroll_area)
+        
+        # Load channels and private messages
         self.load_channels_from_database()
+        self.load_private_messages()
         
         self.channel_list.itemClicked.connect(self.on_channel_selected)
-        server_layout.addWidget(self.channel_list)
+        self.voice_channels_list.itemClicked.connect(self.on_channel_selected)
+        self.private_messages_list.itemClicked.connect(self.on_private_message_selected)
         
         parent_layout.addWidget(server_widget)
     
@@ -813,8 +1164,8 @@ class CommunityPage(BasePage):
             }
         """)
         
-        # Default to general channel
-        self.show_channel("general")
+        # Don't show any channel by default - let auto-selection handle it
+        # self.show_channel("general")  # This was causing the UUID error
         
         parent_layout.addWidget(self.content_stack, 1)
     
@@ -852,9 +1203,29 @@ class CommunityPage(BasePage):
             import traceback
             logger.error(f"📋 Traceback: {traceback.format_exc()}")
     
+    def get_channel_name(self, channel_id):
+        """Get the friendly name for a channel ID."""
+        try:
+            if not self.community_manager:
+                return channel_id
+            
+            # Get all channels and find the matching one
+            channels = self.community_manager.get_channels()
+            for channel in channels:
+                if channel['channel_id'] == channel_id:
+                    return channel['name']
+            
+            # Fallback to channel_id if not found
+            return channel_id
+            
+        except Exception as e:
+            logger.error(f"Error getting channel name for {channel_id}: {e}")
+            return channel_id
+    
     def show_channel(self, channel_id):
         """Show a specific channel."""
-        logger.info(f"🔄 Switching to channel: {channel_id}")
+        channel_name = self.get_channel_name(channel_id)
+        logger.info(f"🔄 Switching to channel: {channel_name} ({channel_id})")
         
         try:
             # Create a completely new content widget each time
@@ -918,10 +1289,11 @@ class CommunityPage(BasePage):
         try:
             if channel_id.startswith('voice'):
                 # Voice channel
-                logger.info(f"🔊 Creating voice channel widget for: {channel_id}")
+                channel_name = self.get_channel_name(channel_id)
+                logger.info(f"🔊 Creating voice channel widget for: {channel_name} ({channel_id})")
                 voice_widget = VoiceChannelWidget({
                     'id': channel_id,
-                    'name': channel_id.replace('voice-', '').title(),
+                    'name': channel_name,
                     'participant_count': 0
                 })
                 logger.info(f"✅ Voice channel widget created, adding to layout")
@@ -938,33 +1310,41 @@ class CommunityPage(BasePage):
                     voice_widget.voice_manager.voice_error.connect(self.on_voice_error)
             else:
                 # Text channel
-                logger.info(f"💬 Creating chat channel widget for: {channel_id}")
+                channel_name = self.get_channel_name(channel_id)
+                logger.info(f"💬 Creating chat channel widget for: {channel_name} ({channel_id})")
                 chat_widget = ChatChannelWidget({
                     'id': channel_id,
-                    'name': channel_id
+                    'name': channel_name
                 })
                 chat_widget.message_sent.connect(self.on_message_sent)
                 logger.info(f"✅ Chat channel widget created, adding to layout")
                 layout.addWidget(chat_widget)
                 
-                # Load messages from database if community manager is available
+                # Store reference to current chat widget for real-time updates
+                self.current_chat_widget = chat_widget
+                
+                # Update input field state based on authentication
+                self.update_input_field_state()
+                
+                # Load messages for this channel
                 if self.community_manager:
                     try:
                         messages = self.community_manager.get_messages(channel_id)
-                        self.chat_history[channel_id] = messages
-                        
-                        # Add messages to the chat widget
-                        logger.info(f"📨 Adding {len(messages)} messages to chat")
                         for message in messages:
                             chat_widget.add_message(message)
-                        logger.info(f"✅ Chat channel widget created and populated successfully")
+                        logger.info(f"✅ Loaded {len(messages)} messages for channel {channel_id}")
                     except Exception as e:
-                        logger.error(f"Error loading messages from database: {e}")
-                        # Use empty messages list as fallback
-                        self.chat_history[channel_id] = []
+                        logger.error(f"Error loading messages for channel {channel_id}: {e}")
                 else:
-                    logger.warning("Community manager not available, using empty chat history")
-                    self.chat_history[channel_id] = []
+                    # Fallback: load from local chat history
+                    if channel_id in self.chat_history:
+                        for message in self.chat_history[channel_id]:
+                            chat_widget.add_message(message)
+                        logger.info(f"✅ Loaded {len(self.chat_history[channel_id])} local messages for channel {channel_id}")
+                    else:
+                        # Initialize empty chat history for this channel
+                        self.chat_history[channel_id] = []
+                        logger.info(f"✅ Initialized empty chat history for channel {channel_id}")
         except Exception as e:
             logger.error(f"❌ Error creating channel widget: {e}")
             import traceback
@@ -983,6 +1363,55 @@ class CommunityPage(BasePage):
             logger.warning("No current channel selected")
             return
         
+        # Check if user is authenticated before allowing message sending
+        try:
+            from trackpro.auth.user_manager import get_current_user
+            user = get_current_user()
+            
+            if not user or not user.is_authenticated:
+                # Try to get user from Supabase session directly
+                from trackpro.database.supabase_client import get_supabase_client
+                client = get_supabase_client()
+                if client and hasattr(client, 'auth') and client.auth.get_session():
+                    session = client.auth.get_session()
+                    if session and hasattr(session, 'user'):
+                        logger.info("User authenticated via Supabase session")
+                    else:
+                        logger.warning("User not authenticated - cannot send message")
+                        # Show error message to user
+                        from PyQt6.QtWidgets import QMessageBox
+                        QMessageBox.warning(
+                            self, 
+                            "Authentication Required", 
+                            "You must be logged in to send messages in the community."
+                        )
+                        return
+                else:
+                    logger.warning("User not authenticated - cannot send message")
+                    # Show error message to user
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        self, 
+                        "Authentication Required", 
+                        "You must be logged in to send messages in the community."
+                    )
+                    return
+            else:
+                logger.info(f"User authenticated: {user.email}")
+        except Exception as e:
+            logger.error(f"Error checking authentication: {e}")
+            # Show error message to user
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, 
+                "Authentication Error", 
+                "Unable to verify authentication. Please log in to send messages."
+            )
+            return
+        
+        # Ensure current user is set before sending message
+        self.refresh_user_state()
+        
         # Send message to database if community manager is available
         if self.community_manager:
             try:
@@ -990,35 +1419,68 @@ class CommunityPage(BasePage):
                 
                 if not success:
                     logger.error("Failed to send message to database")
-                    # Fallback to local storage
-                    self._add_message_locally(message_text)
+                    # Show error to user
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        self, 
+                        "Message Error", 
+                        "Failed to send message. Please try again."
+                    )
             except Exception as e:
                 logger.error(f"Error sending message to database: {e}")
-                # Fallback to local storage
-                self._add_message_locally(message_text)
+                # Show error to user
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, 
+                    "Message Error", 
+                    "Failed to send message. Please try again."
+                )
         else:
-            logger.warning("Community manager not available, using local storage")
-            self._add_message_locally(message_text)
+            logger.warning("Community manager not available")
+            # Show error to user
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, 
+                "Connection Error", 
+                "Unable to connect to community server. Please try again later."
+            )
     
     def _add_message_locally(self, message_text):
         """Add message to local storage as fallback."""
         try:
-            # Get current user info
-            user_name = "You"  # Default for authenticated user
+            # Get current user info - simplified approach
+            user_name = "You"  # Default fallback
+            
+            # Try to get user from user manager first
             try:
-                from ...auth.user_manager import get_current_user
+                from trackpro.auth.user_manager import get_current_user
                 user = get_current_user()
                 if user and user.is_authenticated:
-                    user_name = user.name or "You"
+                    user_name = user.name or user.email or "You"
+                    logger.info(f"Using user name from user manager: {user_name}")
+                else:
+                    # Try Supabase session directly
+                    from trackpro.database.supabase_client import get_supabase_client
+                    client = get_supabase_client()
+                    if client and hasattr(client, 'auth') and client.auth.get_session():
+                        session = client.auth.get_session()
+                        if session and hasattr(session, 'user'):
+                            user_data = session.user
+                            user_name = user_data.user_metadata.get('name', user_data.email) or "You"
+                            logger.info(f"Using user name from Supabase session: {user_name}")
             except Exception as e:
                 logger.debug(f"Could not get user name: {e}")
+                user_name = "You"
             
-            # Create new message
+            # Create new message with proper structure that matches database format
             new_message = {
                 'sender_name': user_name,
                 'content': message_text,
-                'created_at': datetime.now().isoformat()
+                'created_at': datetime.now().isoformat(),
+                'message_type': 'text'
             }
+            
+            logger.info(f"Created local message with sender_name: {user_name}")
             
             # Save to chat history
             if self.current_channel not in self.chat_history:
@@ -1036,9 +1498,105 @@ class CommunityPage(BasePage):
         """Initialize the page."""
         pass
     
+    def update_input_field_state(self):
+        """Update the message input field state based on authentication."""
+        try:
+            # Check if user is authenticated
+            from trackpro.auth.user_manager import get_current_user
+            user = get_current_user()
+            
+            is_authenticated = False
+            if user and user.is_authenticated:
+                is_authenticated = True
+            else:
+                # Try to get user from Supabase session directly
+                try:
+                    from trackpro.database.supabase_client import get_supabase_client
+                    client = get_supabase_client()
+                    if client and hasattr(client, 'auth') and client.auth.get_session():
+                        session = client.auth.get_session()
+                        if session and hasattr(session, 'user'):
+                            is_authenticated = True
+                except Exception as e:
+                    logger.debug(f"Could not check Supabase session: {e}")
+            
+            # Update input field state
+            if hasattr(self, 'current_chat_widget') and self.current_chat_widget:
+                if hasattr(self.current_chat_widget, 'message_input'):
+                    input_field = self.current_chat_widget.message_input
+                    if is_authenticated:
+                        input_field.setEnabled(True)
+                        input_field.setPlaceholderText(f"Message #{self.get_channel_name(self.current_channel) if self.current_channel else 'general'}")
+                        input_field.setStyleSheet("""
+                            QLineEdit {
+                                background-color: #2d2d2d;
+                                border: 1px solid #2d2d2d;
+                                border-radius: 4px;
+                                color: #ffffff;
+                                padding: 8px;
+                                font-size: 13px;
+                            }
+                            QLineEdit:focus {
+                                border: 1px solid #3498db;
+                            }
+                        """)
+                    else:
+                        input_field.setEnabled(False)
+                        input_field.setPlaceholderText("Please log in to send messages")
+                        input_field.setStyleSheet("""
+                            QLineEdit {
+                                background-color: #1a1a1a;
+                                border: 1px solid #2d2d2d;
+                                border-radius: 4px;
+                                color: #666666;
+                                padding: 8px;
+                                font-size: 13px;
+                            }
+                        """)
+                    logger.info(f"Updated input field state - authenticated: {is_authenticated}")
+        except Exception as e:
+            logger.error(f"Error updating input field state: {e}")
+    
     def on_page_activated(self):
         """Called when page is activated."""
-        pass
+        # Refresh user state and set current user for community manager
+        self.refresh_user_state()
+        
+        # Update input field state based on authentication
+        self.update_input_field_state()
+        
+        # Start voice server if not running
+        if VOICE_COMPONENTS_AVAILABLE and not is_voice_server_running():
+            try:
+                start_voice_server()
+                logger.info("Voice server started automatically")
+            except Exception as e:
+                logger.error(f"Failed to start voice server: {e}")
+        
+        # Load channels and messages
+        self.load_channels_from_database()
+        self.load_private_messages()
+    
+    def refresh_user_state(self):
+        """Refresh user authentication state and set current user."""
+        try:
+            # Force refresh of user manager state
+            from trackpro.auth.user_manager import get_current_user
+            user = get_current_user()
+            
+            if user and user.is_authenticated:
+                logger.info(f"User authenticated: {user.email}")
+            else:
+                logger.info("User not authenticated or user manager not ready")
+            
+            # Set current user in community manager
+            self.set_current_user()
+            
+            # Update input field state based on new authentication state
+            self.update_input_field_state()
+            
+        except Exception as e:
+            logger.warning(f"Failed to refresh user state: {e}")
     
     def on_voice_error(self, error_message):
         """Handle voice chat errors."""
@@ -1057,6 +1615,16 @@ class CommunityPage(BasePage):
                         logger.error(f"Error leaving voice channel: {e}")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
+        
+        # Cleanup real-time subscriptions
+        try:
+            if hasattr(self, 'community_manager') and self.community_manager:
+                if hasattr(self.community_manager, 'client') and self.community_manager.client:
+                    # Unsubscribe from real-time updates
+                    self.community_manager.client.remove_all_subscriptions()
+                    logger.info("✅ Cleaned up real-time subscriptions")
+        except Exception as e:
+            logger.error(f"Error cleaning up real-time subscriptions: {e}")
     
     def set_current_user(self):
         """Set the current authenticated user in the community manager."""
@@ -1065,23 +1633,65 @@ class CommunityPage(BasePage):
                 logger.warning("Community manager not available")
                 return
                 
-            from ...auth.user_manager import get_current_user
+            from trackpro.auth.user_manager import get_current_user
             user = get_current_user()
+            
+            if user is None:
+                # Try to get user from Supabase session directly
+                try:
+                    from trackpro.database.supabase_client import get_supabase_client
+                    client = get_supabase_client()
+                    if client and hasattr(client, 'auth') and client.auth.get_session():
+                        session = client.auth.get_session()
+                        if session and hasattr(session, 'user'):
+                            user_data = session.user
+                            # Create a temporary user object
+                            from trackpro.auth.user_manager import User
+                            temp_user = User(
+                                id=user_data.id,
+                                email=user_data.email,
+                                name=user_data.user_metadata.get('name', user_data.email),
+                                is_authenticated=True
+                            )
+                            self.community_manager.set_current_user(temp_user.id)
+                            logger.info(f"Set current user from Supabase session: {temp_user.email}")
+                            return
+                except Exception as e:
+                    logger.debug(f"Could not get user from Supabase session: {e}")
+                
+                # User manager not ready yet - skip setting current user
+                logger.info("🔍 User manager not ready yet - skipping current user setting")
+                return
+                
             if user and user.is_authenticated:
                 self.community_manager.set_current_user(user.id)
+                logger.info(f"Set current user: {user.email}")
+            else:
+                logger.warning("User not authenticated")
+                
         except Exception as e:
             logger.warning(f"Failed to set current user: {e}")
     
     def on_message_received(self, message_data):
         """Handle new message received from database."""
         channel_id = message_data.get('channel_id')
-        if channel_id and channel_id in self.chat_history:
+        logger.info(f"🔄 Real-time message received for channel: {channel_id}")
+        
+        # Initialize chat history for this channel if it doesn't exist
+        if channel_id and channel_id not in self.chat_history:
+            self.chat_history[channel_id] = []
+        
+        if channel_id:
             # Add message to chat history
             self.chat_history[channel_id].append(message_data)
+            logger.info(f"✅ Added message to chat history for channel: {channel_id}")
             
             # Update UI if this channel is currently displayed
             if self.current_channel == channel_id:
+                logger.info(f"🔄 Updating UI for current channel: {channel_id}")
                 self.add_message_to_ui(message_data)
+            else:
+                logger.info(f"📝 Message received for different channel (current: {self.current_channel}, message: {channel_id})")
     
     def on_user_joined_channel(self, channel_id, user_data):
         """Handle user joining a voice channel."""
@@ -1103,8 +1713,17 @@ class CommunityPage(BasePage):
     
     def add_message_to_ui(self, message_data):
         """Add a message to the current chat UI."""
-        if hasattr(self, 'current_chat_widget') and self.current_chat_widget:
-            self.current_chat_widget.add_message(message_data)
+        try:
+            if hasattr(self, 'current_chat_widget') and self.current_chat_widget:
+                logger.info(f"📨 Adding message to UI: {message_data.get('content', '')[:50]}...")
+                logger.info(f"📨 Message sender_name: {message_data.get('sender_name', 'NOT_FOUND')}")
+                logger.info(f"📨 Message user_profiles: {message_data.get('user_profiles', 'NOT_FOUND')}")
+                self.current_chat_widget.add_message(message_data)
+                logger.info("✅ Message added to UI successfully")
+            else:
+                logger.warning("⚠️ No current chat widget available for real-time message")
+        except Exception as e:
+            logger.error(f"❌ Error adding message to UI: {e}")
     
     def load_channels_from_database(self):
         """Load channels from database instead of hardcoded list."""
@@ -1116,6 +1735,7 @@ class CommunityPage(BasePage):
                 
             channels = self.community_manager.get_channels()
             self.channel_list.clear()
+            self.voice_channels_list.clear()
             
             for channel in channels:
                 channel_name = channel['name']
@@ -1124,8 +1744,10 @@ class CommunityPage(BasePage):
                 # Format display name
                 if channel_type == 'text':
                     display_name = f"# {channel_name}"
+                    target_list = self.channel_list
                 else:
                     display_name = f"🔊 {channel_name}"
+                    target_list = self.voice_channels_list
                 
                 item = QListWidgetItem(display_name)
                 item.setData(Qt.ItemDataRole.UserRole, {
@@ -1133,7 +1755,18 @@ class CommunityPage(BasePage):
                     'name': channel_name,
                     'type': channel_type
                 })
-                self.channel_list.addItem(item)
+                target_list.addItem(item)
+            
+            # Auto-select the first text channel if no channel is currently selected
+            if self.channel_list.count() > 0 and not self.current_channel:
+                first_item = self.channel_list.item(0)
+                if first_item:
+                    channel_data = first_item.data(Qt.ItemDataRole.UserRole)
+                    if channel_data and channel_data['type'] == 'text':
+                        self.current_channel = channel_data['id']
+                        self.channel_list.setCurrentItem(first_item)
+                        self.show_channel(channel_data['id'])
+                        logger.info(f"Auto-selected first channel: {channel_data['id']}")
                 
         except Exception as e:
             logger.error(f"Error loading channels from database: {e}")
@@ -1142,20 +1775,321 @@ class CommunityPage(BasePage):
     
     def load_fallback_channels(self):
         """Load fallback channels when database is unavailable."""
-        channels = [
-            ("# general", "general", "text"),
-            ("# racing", "racing", "text"),
-            ("# tech-support", "tech-support", "text"),
-            ("# events", "events", "text"),
-            ("🔊 Voice General", "voice-general", "voice"),
-            ("🔊 Voice Racing", "voice-racing", "voice")
+        # Text channels
+        text_channels = [
+            ("# general", "fallback-general", "text"),
+            ("# racing", "fallback-racing", "text"),
+            ("# tech-support", "fallback-tech-support", "text"),
+            ("# events", "fallback-events", "text")
         ]
         
-        for channel_name, channel_id, channel_type in channels:
+        for channel_name, channel_id, channel_type in text_channels:
             item = QListWidgetItem(channel_name)
             item.setData(Qt.ItemDataRole.UserRole, {
                 'id': channel_id,
                 'name': channel_name.replace('# ', '').replace('🔊 ', ''),
                 'type': channel_type
             })
-            self.channel_list.addItem(item) 
+            self.channel_list.addItem(item)
+        
+        # Voice channels
+        voice_channels = [
+            ("🔊 Voice General", "fallback-voice-general", "voice"),
+            ("🔊 Voice Racing", "fallback-voice-racing", "voice")
+        ]
+        
+        for channel_name, channel_id, channel_type in voice_channels:
+            item = QListWidgetItem(channel_name)
+            item.setData(Qt.ItemDataRole.UserRole, {
+                'id': channel_id,
+                'name': channel_name.replace('# ', '').replace('🔊 ', ''),
+                'type': channel_type
+            })
+            self.voice_channels_list.addItem(item)
+        
+        # Auto-select the first text channel if no channel is currently selected
+        if self.channel_list.count() > 0 and not self.current_channel:
+            first_item = self.channel_list.item(0)
+            if first_item:
+                channel_data = first_item.data(Qt.ItemDataRole.UserRole)
+                if channel_data and channel_data['type'] == 'text':
+                    self.current_channel = channel_data['id']
+                    self.channel_list.setCurrentItem(first_item)
+                    self.show_channel(channel_data['id'])
+                    logger.info(f"Auto-selected first fallback channel: {channel_data['id']}")
+    
+    def load_private_messages(self):
+        """Load private messages/conversations."""
+        try:
+            if not self.community_manager:
+                logger.warning("Community manager not available, using fallback private messages")
+                self.load_fallback_private_messages()
+                return
+                
+            conversations = self.community_manager.get_private_conversations()
+            self.private_messages_list.clear()
+            
+            for conversation in conversations:
+                # Create conversation list item widget
+                conversation_widget = PrivateConversationListItem(conversation)
+                conversation_widget.conversation_selected.connect(self.on_private_conversation_selected)
+                
+                item = QListWidgetItem()
+                item.setSizeHint(conversation_widget.sizeHint())
+                
+                self.private_messages_list.addItem(item)
+                self.private_messages_list.setItemWidget(item, conversation_widget)
+                
+        except Exception as e:
+            logger.error(f"Error loading private messages: {e}")
+            self.load_fallback_private_messages()
+    
+    def load_fallback_private_messages(self):
+        """Load fallback private messages when database is unavailable."""
+        # For now, we'll show a placeholder message
+        placeholder_item = QListWidgetItem("No private messages yet")
+        # Note: QListWidgetItem doesn't have setStyleSheet, styling is done via the widget
+        self.private_messages_list.addItem(placeholder_item)
+    
+    def on_private_message_selected(self, item):
+        """Handle private message selection."""
+        logger.info(f"Private message selected: {item.text()}")
+    
+    def on_private_conversation_selected(self, conversation_id):
+        """Handle private conversation selection."""
+        logger.info(f"Private conversation selected: {conversation_id}")
+        
+        try:
+            # Get conversation data
+            if not self.community_manager:
+                logger.warning("Community manager not available")
+                return
+            
+            # Get conversation details and messages
+            messages = self.community_manager.get_private_messages(conversation_id)
+            
+            # Create conversation widget
+            # Get conversation data from the list
+            conversation_data = None
+            for i in range(self.private_messages_list.count()):
+                item = self.private_messages_list.item(i)
+                widget = self.private_messages_list.itemWidget(item)
+                if hasattr(widget, 'conversation_id') and widget.conversation_id == conversation_id:
+                    conversation_data = widget.conversation_data
+                    break
+            
+            if not conversation_data:
+                logger.warning(f"Conversation data not found for ID: {conversation_id}")
+                return
+            
+            conversation_widget = PrivateConversationWidget(conversation_data)
+            conversation_widget.message_sent.connect(lambda text: self.on_private_message_sent(conversation_id, text))
+            
+            # Add messages to the conversation
+            current_user_id = None
+            try:
+                from ...auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated:
+                    current_user_id = user.id
+            except Exception as e:
+                logger.debug(f"Could not get current user: {e}")
+            
+            for message in messages:
+                is_own_message = current_user_id and message.get('user_profiles', {}).get('user_id') == current_user_id
+                conversation_widget.add_message(message, is_own_message)
+            
+            # Show the conversation
+            self.show_private_conversation(conversation_widget)
+            
+        except Exception as e:
+            logger.error(f"Error showing private conversation: {e}")
+    
+    def on_private_message_sent(self, conversation_id, message_text):
+        """Handle private message sent."""
+        logger.info(f"Private message sent to conversation {conversation_id}: {message_text}")
+        
+        try:
+            if not self.community_manager:
+                logger.warning("Community manager not available")
+                return
+            
+            # Send message to database
+            success = self.community_manager.send_private_message(conversation_id, message_text)
+            
+            if success:
+                logger.info("Private message sent successfully")
+                # Refresh the private messages list
+                self.load_private_messages()
+            else:
+                logger.error("Failed to send private message")
+                
+        except Exception as e:
+            logger.error(f"Error sending private message: {e}")
+    
+    def on_new_private_message_clicked(self):
+        """Handle new private message button click."""
+        try:
+            # Show a dialog to select a user to message
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("New Private Message")
+            dialog.setFixedSize(400, 200)
+            dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #2f3136;
+                    color: #dcddde;
+                }
+                QLabel {
+                    color: #dcddde;
+                    font-size: 14px;
+                }
+                QLineEdit {
+                    background-color: #40444b;
+                    border: 1px solid #202225;
+                    border-radius: 4px;
+                    color: #dcddde;
+                    padding: 8px;
+                    font-size: 14px;
+                }
+                QPushButton {
+                    background-color: #5865f2;
+                    border: none;
+                    border-radius: 4px;
+                    color: #ffffff;
+                    padding: 8px 16px;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: #4752c4;
+                }
+                QPushButton:disabled {
+                    background-color: #4f545c;
+                    color: #72767d;
+                }
+            """)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Title
+            title_label = QLabel("Enter username to start a private conversation:")
+            layout.addWidget(title_label)
+            
+            # Username input
+            self.username_input = QLineEdit()
+            self.username_input.setPlaceholderText("Enter username...")
+            layout.addWidget(self.username_input)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_btn)
+            
+            start_btn = QPushButton("Start Conversation")
+            start_btn.clicked.connect(lambda: self.start_private_conversation(dialog))
+            button_layout.addWidget(start_btn)
+            
+            layout.addLayout(button_layout)
+            
+            # Show dialog
+            result = dialog.exec()
+            
+        except Exception as e:
+            logger.error(f"Error showing new private message dialog: {e}")
+    
+    def start_private_conversation(self, dialog):
+        """Start a new private conversation with the entered username."""
+        try:
+            username = self.username_input.text().strip()
+            if not username:
+                QMessageBox.warning(dialog, "Error", "Please enter a username.")
+                return
+            
+            # Get user by username
+            if not self.community_manager:
+                QMessageBox.warning(dialog, "Error", "Community manager not available.")
+                return
+            
+            # For now, we'll create a mock conversation
+            # In a real implementation, you'd look up the user in the database
+            conversation_id = self.community_manager.get_or_create_conversation(username)
+            
+            if conversation_id:
+                dialog.accept()
+                # Load and show the conversation
+                self.on_private_conversation_selected(conversation_id)
+            else:
+                QMessageBox.warning(dialog, "Error", f"Could not find user '{username}' or create conversation.")
+                
+        except Exception as e:
+            logger.error(f"Error starting private conversation: {e}")
+            QMessageBox.critical(dialog, "Error", f"An error occurred: {str(e)}")
+    
+    def start_private_conversation_with_user(self, user_data):
+        """Start a private conversation with a specific user."""
+        try:
+            if not self.community_manager:
+                logger.error("Community manager not available")
+                return
+            
+            user_id = user_data.get('user_id')
+            if not user_id:
+                logger.error("No user ID provided")
+                return
+            
+            # Get or create conversation
+            conversation_id = self.community_manager.get_or_create_conversation(user_id)
+            
+            if conversation_id:
+                # Load and show the conversation
+                self.on_private_conversation_selected(conversation_id)
+            else:
+                logger.error(f"Could not create conversation with user {user_id}")
+                
+        except Exception as e:
+            logger.error(f"Error starting private conversation with user: {e}")
+    
+    def show_private_conversation(self, conversation_widget):
+        """Show a private conversation in the main content area."""
+        try:
+            # Create a completely new content widget
+            new_content = QWidget()
+            new_content.setStyleSheet("""
+                QWidget {
+                    background-color: #1e1e1e;
+                }
+            """)
+            
+            layout = QVBoxLayout(new_content)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            
+            # Replace the old content_stack with the new one
+            if hasattr(self, 'content_stack') and self.content_stack:
+                parent_layout = self.layout()
+                if parent_layout:
+                    for i in range(parent_layout.count()):
+                        item = parent_layout.itemAt(i)
+                        if item.widget() == self.content_stack:
+                            stretch = parent_layout.stretch(i)
+                            parent_layout.removeItem(item)
+                            self.content_stack.setParent(None)
+                            self.content_stack.deleteLater()
+                            
+                            parent_layout.addWidget(new_content, stretch)
+                            break
+            
+            # Update the content_stack reference
+            self.content_stack = new_content
+            
+            # Add the conversation widget
+            layout.addWidget(conversation_widget)
+            
+        except Exception as e:
+            logger.error(f"Error showing private conversation: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}") 

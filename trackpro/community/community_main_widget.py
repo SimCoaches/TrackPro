@@ -23,11 +23,11 @@ from .community_account import CommunityAccountMixin
 
 # Import existing UI components
 try:
-    from trackpro.ui.community_ui import CommunityMainWidget as CommunityTabWidget
-    from trackpro.ui.content_management_ui import ContentManagementMainWidget
-    from trackpro.ui.social_ui import SocialMainWidget
-    from trackpro.ui.achievements_ui import GamificationMainWidget
-    from trackpro.ui.user_account_ui import UserAccountMainWidget
+    from ..ui.community_ui import CommunityMainWidget as CommunityTabWidget
+    from ..ui.content_management_ui import ContentManagementMainWidget
+    from ..ui.social_ui import SocialMainWidget
+    from ..ui.achievements_ui import GamificationMainWidget
+    from ..ui.user_account_ui import UserAccountMainWidget
 except ImportError as e:
     print(f"Warning: Could not import some community UI components: {e}")
     # Create placeholder widgets if imports fail
@@ -82,10 +82,6 @@ class CommunityNotificationManager(QObject):
         """Get total notification count"""
         return sum(self.notification_counts.values())
     
-    def check_discord_notifications(self):
-        """NO FAKE DATA - real Discord notifications come from JavaScript monitoring only"""
-        pass
-    
     def check_general_notifications(self):
         """NO FAKE DATA - real notifications come from actual user activity only"""
         pass
@@ -93,10 +89,6 @@ class CommunityNotificationManager(QObject):
     def clear_notifications(self, section_id: str):
         """Clear notifications for a specific section"""
         self.update_notification_count(section_id, 0)
-    
-    def mark_discord_read(self):
-        """Mark Discord notifications as read"""
-        self.clear_notifications("discord")
     
     def mark_social_read(self):
         """Mark social notifications as read"""
@@ -166,7 +158,6 @@ class CommunityNavigationWidget(QWidget):
         # Navigation items
         nav_items = [
             ("social", "👥 Social", "Live racing achievements and friends"),
-            ("discord", "🎮 Discord", "Server chat and voice channels"),
             ("community", "🏁 Community", "Teams, clubs, and events"),
             ("content", "📁 Content", "Share setups, media, and guides"),
             ("achievements", "🏆 Achievements", "XP, levels, and gamification"),
@@ -391,6 +382,9 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             self.db_managers = create_community_managers(self.supabase_client)
             # Get current user ID from the managers
             self.user_id = self.db_managers['user_manager'].get_current_user_id()
+            if self.user_id is None:
+                # User manager not ready yet - skip user ID setting
+                logger.info("🔍 User manager not ready yet - skipping user ID setting")
         else:
             self.db_managers = {}
             self.user_id = None
@@ -444,7 +438,6 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         
         # Initialize widget references to None - they'll be created when needed
         self.social_widget = None
-        self.discord_widget = None
         self.community_widget = None
         self.content_widget = None
         self.achievements_widget = None
@@ -480,7 +473,6 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         # Section-specific message
         section_messages = {
             "social": "Connect with fellow racers and share achievements",
-            "discord": "Set up Discord integration for real-time communication",
             "community": "Join racing teams, clubs, and community events", 
             "content": "Share and discover car setups, guides, and media",
             "achievements": "Track your racing progress and unlock achievements",
@@ -611,35 +603,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         
         return widget
     
-    def create_discord_widget(self):
-        """Create Discord integration widget."""
-        try:
-            # Create the Discord integration widget
-            discord_widget = DiscordIntegrationWidget(self)
-            
-            # Connect notification manager to Discord widget
-            if hasattr(self, 'notification_manager'):
-                discord_widget.set_notification_manager(self.notification_manager)
-            
-            # Wrapper with padding for better visual integration
-            wrapper = QWidget()
-            layout = QVBoxLayout(wrapper)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(0)
-            
-            # Add the Discord widget
-            layout.addWidget(discord_widget)
-            
-            # Store reference for notification testing
-            self.discord_widget_instance = discord_widget
-            
-            # Notification testing panel REMOVED for production to save screen space
-            
-            return wrapper
-            
-        except Exception as e:
-            print(f"Error creating Discord widget: {e}")
-            return self.create_placeholder_widget("Discord integration temporarily unavailable")
+
 
     def open_login_dialog(self):
         """Open the login dialog from the placeholder"""
@@ -667,7 +631,6 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         # Map section IDs to widget references
         widget_mapping = {
             "social": self.social_widget,
-            "discord": self.discord_widget,
             "community": self.community_widget,
             "content": self.content_widget,
             "achievements": self.achievements_widget,
@@ -705,8 +668,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                 # Assign to the appropriate section
                 if section_id == "social":
                     self.social_widget = login_widget
-                elif section_id == "discord":
-                    self.discord_widget = login_widget
+
                 elif section_id == "community":
                     self.community_widget = login_widget
                 elif section_id == "content":
@@ -720,8 +682,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                 print(f"User authenticated, loading real content for {section_id}")
                 if section_id == "social":
                     self.social_widget = self.create_modern_social_widget()
-                elif section_id == "discord":
-                    self.discord_widget = self.create_discord_widget()
+
                 elif section_id == "community":
                     self.community_widget = self.create_modern_community_widget()
                 elif section_id == "content":
@@ -852,8 +813,8 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                 self.user_id = user_id
                 print(f"🔑 Community widget: User ID set to {self.user_id}")
 
-                from trackpro.database.supabase_client import get_supabase_client
-                from trackpro.community.database_managers import create_community_managers
+                from ..database.supabase_client import get_supabase_client
+                from .database_managers import create_community_managers
                 
                 supabase_client = get_supabase_client()
                 if supabase_client:
@@ -963,7 +924,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             if not success:
                 try:
                     # Import and check if there's a global lap saver instance
-                    from trackpro.race_coach.iracing_lap_saver import IRacingLapSaver
+                    from ..race_coach.iracing_lap_saver import IRacingLapSaver
                     
                     # Check if we can find an active lap saver instance
                     parent_widget = self.parent()
@@ -1242,255 +1203,14 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
     
     def clear_all_notifications(self):
         """Clear all notifications"""
-        for section in ["social", "discord", "community", "content", "achievements", "account"]:
+        for section in ["social", "community", "content", "achievements", "account"]:
             self.notification_manager.clear_notifications(section)
-    
-    def start_immediate_discord_monitoring(self):
-        """DISABLED: Background monitoring for performance reasons.
-        
-        Discord loading is too slow and laggy when running background monitoring.
-        Notifications will only work when users visit the Discord tab directly.
-        """
-        print("⚡ Background Discord monitoring DISABLED for performance - notifications will work when Discord tab is visited")
-    
-    def on_background_discord_loaded(self, success):
-        """Handle when background Discord monitor finishes loading."""
-        if success:
-            print("✅ Background Discord monitor loaded - injecting monitoring script...")
-            # Wait for Discord to initialize, then inject monitoring
-            QTimer.singleShot(7000, self.inject_background_discord_monitoring)
-        else:
-            print("❌ Background Discord monitor failed to load")
-    
-    def inject_background_discord_monitoring(self):
-        """Inject monitoring script into background Discord view."""
-        try:
-            print("🔧 Injecting background Discord monitoring script...")
-            
-            # Load Discord server ID from config
-            import os
-            import json
-            discord_config_path = os.path.join(os.path.dirname(__file__), "discord_config.json")
-            discord_server_id = "680606980875747344"  # Default fallback
-            
-            if os.path.exists(discord_config_path):
-                try:
-                    with open(discord_config_path, 'r') as f:
-                        config = json.load(f)
-                        discord_server_id = config.get('server_id', discord_server_id)
-                except Exception as e:
-                    print(f"⚠️ Error loading Discord config for monitoring: {e}")
-            
-            # SIMPLIFIED monitoring script for better performance
-            background_monitoring_script = """
-            console.log('TrackPro: Lightweight Discord monitoring starting...');
-            
-            // Lightweight notification detection - ONLY for Sim Coaches server
-            var bgSeenNotifications = new Set();
-            var targetServerId = '""" + str(discord_server_id) + """';  // Only monitor this server
-            
-            function isInTargetServer() {
-                // Check if we're in the correct server context
-                var currentUrl = window.location.href;
-                return currentUrl.includes('/channels/' + targetServerId);
-            }
-            
-            function checkBackgroundNotifications() {
-                try {
-                    // SIMPLIFIED: Quick check for any notification badges
-                    if (!window.location.href.includes('/channels/' + targetServerId)) {
-                        return; // Not in target server
-                    }
-                    
-                    // Simple badge check - look for any obvious notification indicators
-                    var badges = document.querySelectorAll('[class*="numberBadge"]:not([class*="inactive"])');
-                    
-                    if (badges.length > 0) {
-                        var totalNotifications = 0;
-                        
-                        badges.forEach(function(badge) {
-                            var text = badge.textContent ? badge.textContent.trim() : '';
-                            if (text && /^\\d+$/.test(text)) {
-                                totalNotifications += parseInt(text);
-                            } else if (text) {
-                                totalNotifications += 1; // Non-numeric badges count as 1
-                            }
-                        });
-                        
-                        if (totalNotifications > 0) {
-                            window.trackproBgNotification = {
-                                type: 'simple',
-                                content: totalNotifications.toString(),
-                                server: targetServerId,
-                                timestamp: Date.now()
-                            };
-                        }
-                    }
-                    
-                } catch(e) {
-                    console.log('TrackPro BG: Monitor error:', e);
-                }
-            }
-            
-            // Start monitoring immediately
-            checkBackgroundNotifications();
-            
-            // Continue monitoring every 10 seconds (reduced frequency for performance)
-            setInterval(checkBackgroundNotifications, 10000);
-            
-            // Add debug info to page (temporarily)
-            var debugDiv = document.createElement('div');
-            debugDiv.style.cssText = 'position: fixed; top: 5px; left: 5px; background: rgba(255,0,0,0.8); color: white; padding: 5px; z-index: 99999; font-size: 10px;';
-            debugDiv.innerHTML = 'TrackPro Background Monitor: ACTIVE';
-            document.body.appendChild(debugDiv);
-            
-            setTimeout(function() {
-                if (debugDiv.parentNode) {
-                    debugDiv.parentNode.removeChild(debugDiv);
-                }
-            }, 3000);
-            
-            console.log('TrackPro: Background Discord monitoring is now active');
-            """
-            
-            # Inject the script
-            self.background_discord_monitor.page().runJavaScript(background_monitoring_script)
-            
-            # Start polling for background notifications
-            if not hasattr(self, 'background_notification_timer'):
-                self.background_notification_timer = QTimer()
-                self.background_notification_timer.timeout.connect(self.check_background_discord_notifications)
-                self.background_notification_timer.start(2000)  # Check every 2 seconds
-                
-            print("✅ Background Discord monitoring script injected and polling started")
-            
-        except Exception as e:
-            print(f"❌ Error injecting background monitoring: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def check_background_discord_notifications(self):
-        """Check for notifications from background Discord monitor."""
-        if hasattr(self, 'background_discord_monitor') and self.background_discord_monitor:
-            try:
-                # Poll for background notifications
-                self.background_discord_monitor.page().runJavaScript(
-                    """
-                    if (window.trackproBgNotification) {
-                        var notif = window.trackproBgNotification;
-                        window.trackproBgNotification = null; // Clear it
-                        notif;
-                    } else {
-                        null;
-                    }
-                    """,
-                    self.handle_background_discord_notification
-                )
-            except Exception as e:
-                # Don't spam the console with errors
-                pass
-    
-    def handle_background_discord_notification(self, notification_data):
-        """Handle notification from background Discord monitor."""
-        if notification_data and self.notification_manager:
-            try:
-                content = notification_data.get('content', 'Unknown')
-                notif_type = notification_data.get('type', 'unknown')
-                server_id = notification_data.get('server', '')
-                
-                # CRITICAL: Only process notifications from our Sim Coaches server
-                import os
-                import json
-                discord_config_path = os.path.join(os.path.dirname(__file__), "discord_config.json")
-                expected_server_id = None
-                
-                if os.path.exists(discord_config_path):
-                    try:
-                        with open(discord_config_path, 'r') as f:
-                            config = json.load(f)
-                            expected_server_id = config.get('server_id')
-                    except Exception as e:
-                        print(f"⚠️ Error loading Discord config: {e}")
-                
-                # Validate server ID matches our configuration
-                if expected_server_id and server_id != expected_server_id:
-                    print(f"🚫 Ignoring notification from other server: {server_id} (expected: {expected_server_id})")
-                    return
-                
-                print(f"🔔 Background Discord notification from Sim Coaches server: {notif_type} - {content}")
-                
-                # Increment Discord notifications
-                current = self.notification_manager.get_notification_count("discord")
-                
-                # Give different weights based on notification type
-                if notif_type == 'new_badge' or 'NEW' in content:
-                    increment = 2  # NEW badges are important
-                elif notif_type == 'badge' and content.isdigit():
-                    increment = int(content) if int(content) <= 10 else 10  # Cap at 10
-                else:
-                    increment = 1  # Default increment
-                
-                self.notification_manager.update_notification_count("discord", current + increment)
-                
-                # CRITICAL: Emit signal to update main UI badge immediately
-                total_notifications = self.notification_manager.get_total_notifications()
-                print(f"📊 Total notifications: {total_notifications} - Emitting signal to main UI")
-                self.notification_count_changed.emit(total_notifications)
-                
-                # Also try to directly update main window if accessible
-                if hasattr(self, 'parent') and self.parent():
-                    main_window = self.parent()
-                    if hasattr(main_window, 'update_community_notification_badge'):
-                        print(f"🎯 Directly updating main window badge: {total_notifications}")
-                        main_window.update_community_notification_badge(total_notifications)
-                
-            except Exception as e:
-                print(f"❌ Error handling background notification: {e}")
-    
-    def check_discord_notifications(self):
-        """Manually check Discord for new notifications"""
-        if hasattr(self, 'discord_widget_instance'):
-            try:
-                # Get the Discord web view
-                discord_web_view = None
-                if hasattr(self.discord_widget_instance, 'discord_web_view'):
-                    discord_web_view = self.discord_widget_instance.discord_web_view
-                
-                if discord_web_view:
-                    # Call the manual check function in JavaScript
-                    discord_web_view.page().runJavaScript("""
-                        console.log('TrackPro: Manual check requested from Qt');
-                        if (window.trackproManualCheck) {
-                            window.trackproManualCheck();
-                        } else {
-                            console.log('TrackPro: Manual check function not available - monitoring may not be initialized');
-                        }
-                    """)
-                    
-                    # Also trigger status check for debugging
-                    discord_web_view.page().runJavaScript("""
-                        if (window.trackproStatus) {
-                            window.trackproStatus();
-                        }
-                    """)
-                    
-                    print("✅ Manual Discord check triggered")
-                else:
-                    print("❌ Discord web view not available")
-                    
-            except Exception as e:
-                print(f"❌ Error triggering Discord check: {e}")
-        else:
-            print("❌ Discord widget not available")
-            # Fallback: directly update notification for testing
-            current = self.notification_manager.get_notification_count("discord")
-            self.notification_manager.update_notification_count("discord", current + 1)
 
     def force_auth_refresh(self):
         """Force refresh of authentication state - called by main app after successful login"""
         try:
             print("Community widget: Force refreshing authentication state...")
-            from trackpro.database.supabase_client import get_supabase_client
+            from ..database.supabase_client import get_supabase_client
             
             # Get the authenticated client
             supabase_client = get_supabase_client()

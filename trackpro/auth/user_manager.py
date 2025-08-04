@@ -7,6 +7,7 @@ Provides functions to get and manage the current user.
 import logging
 import uuid
 from dataclasses import dataclass
+from typing import Optional
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ class User:
     email: str = None
     name: str = None
     is_authenticated: bool = False
+    hierarchy_level: str = "PADDOCK"
+    is_dev: bool = False
+    is_moderator: bool = False
 
 # Global variable to store the current user
 _current_user = None
@@ -39,28 +43,63 @@ def get_current_user():
                 session = client.auth.get_session()
                 if session and hasattr(session, 'user'):
                     user_data = session.user
+                    
+                    # Get hierarchy information
+                    hierarchy_info = _get_user_hierarchy_info(user_data.id)
+                    
                     _current_user = User(
                         id=user_data.id,
                         email=user_data.email,
                         name=user_data.user_metadata.get('name', user_data.email),
-                        is_authenticated=True
+                        is_authenticated=True,
+                        hierarchy_level=hierarchy_info.get('hierarchy_level', 'PADDOCK'),
+                        is_dev=hierarchy_info.get('is_dev', False),
+                        is_moderator=hierarchy_info.get('is_moderator', False)
                     )
-                    logger.info(f"Found authenticated user from Supabase: {_current_user.email}")
+                    logger.info(f"Found authenticated user from Supabase: {_current_user.email} (Level: {_current_user.hierarchy_level})")
                     return _current_user
         except Exception as e:
             logger.warning(f"Error getting user from Supabase: {e}")
         
-        # If no user is found, create a dummy user with a temporary ID
-        temp_id = str(uuid.uuid4())
-        _current_user = User(
-            id=temp_id,
-            email="anonymous@trackpro.local",
-            name="Anonymous User",
-            is_authenticated=False
-        )
-        logger.warning(f"Created anonymous user with temporary ID: {temp_id}")
+        # Don't create anonymous user during startup - return None instead
+        # This prevents early authentication checks that slow down startup
+        return None
     
     return _current_user
+
+def _get_user_hierarchy_info(user_id: str) -> dict:
+    """Get user hierarchy information from database.
+    
+    Args:
+        user_id: User ID
+        
+    Returns:
+        Dictionary with hierarchy information
+    """
+    try:
+        from .hierarchy_manager import hierarchy_manager
+        hierarchy = hierarchy_manager.get_user_hierarchy(user_id)
+        
+        if hierarchy:
+            return {
+                'hierarchy_level': hierarchy.hierarchy_level.value,
+                'is_dev': hierarchy.is_dev,
+                'is_moderator': hierarchy.is_moderator
+            }
+        
+        return {
+            'hierarchy_level': 'PADDOCK',
+            'is_dev': False,
+            'is_moderator': False
+        }
+        
+    except Exception as e:
+        logger.warning(f"Error getting user hierarchy info: {e}")
+        return {
+            'hierarchy_level': 'PADDOCK',
+            'is_dev': False,
+            'is_moderator': False
+        }
 
 def set_current_user(user):
     """Set the current user.
@@ -87,4 +126,67 @@ def logout_current_user():
             client.sign_out(force_clear=True, respect_remember_me=False)
             logger.info("Signed out from Supabase (forced clear for explicit logout)")
     except Exception as e:
-        logger.warning(f"Error signing out from Supabase: {e}") 
+        logger.warning(f"Error signing out from Supabase: {e}")
+
+def is_current_user_dev() -> bool:
+    """Check if the current user has dev permissions.
+    
+    Returns:
+        True if current user is a dev, False otherwise
+    """
+    user = get_current_user()
+    if not user:
+        return False
+    
+    try:
+        from .hierarchy_manager import hierarchy_manager
+        return hierarchy_manager.is_user_dev(user.id, user.email)
+    except Exception as e:
+        logger.warning(f"Error checking dev status: {e}")
+        return user.is_dev if user else False
+
+def is_current_user_moderator() -> bool:
+    """Check if the current user has moderator permissions.
+    
+    Returns:
+        True if current user is a moderator, False otherwise
+    """
+    user = get_current_user()
+    if not user:
+        return False
+    
+    try:
+        from .hierarchy_manager import hierarchy_manager
+        return hierarchy_manager.is_user_moderator(user.id, user.email)
+    except Exception as e:
+        logger.warning(f"Error checking moderator status: {e}")
+        return user.is_moderator if user else False
+
+def get_current_user_hierarchy_level() -> str:
+    """Get the current user's hierarchy level.
+    
+    Returns:
+        User's hierarchy level (defaults to PADDOCK)
+    """
+    user = get_current_user()
+    return user.hierarchy_level if user else "PADDOCK"
+
+def check_current_user_permission(permission: str) -> bool:
+    """Check if the current user has a specific permission.
+    
+    Args:
+        permission: Permission to check
+        
+    Returns:
+        True if user has permission, False otherwise
+    """
+    user = get_current_user()
+    if not user:
+        return False
+    
+    try:
+        from .hierarchy_manager import hierarchy_manager
+        return hierarchy_manager.check_permission(user.id, permission, user.email)
+    except Exception as e:
+        logger.warning(f"Error checking user permission: {e}")
+        return False 

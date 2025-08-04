@@ -107,10 +107,10 @@ class DiscordNavigation(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        # State tracking
+        self.parent = parent
         self.is_expanded = False
-        self.is_animating = False
+        self.buttons = []
+        self.current_page = "home"
         
         # Dimensions
         self.collapsed_width = 56  # Narrower, more professional width for centered 44px buttons
@@ -119,14 +119,21 @@ class DiscordNavigation(QWidget):
         # Animation
         self.animation = None
         self.animation_duration = 300
+        self.is_animating = False
         
-        # Buttons
-        self.buttons = []
+        # Button group
         self.button_group = None
         
-        # Setup UI
+        # PERFORMANCE: Cache auth state to prevent duplicate calls
+        self._cached_auth_state = None
+        self._cached_user_info = None
+        
         self.setup_ui()
         self.setup_menu_items()
+        self.setup_user_profile()
+        self.setup_iracing_status()
+        
+        # Start with collapsed state
         self.set_collapsed_state()
         
     def setup_ui(self):
@@ -186,8 +193,7 @@ class DiscordNavigation(QWidget):
         self.main_layout.addWidget(self.buttons_container)
         self.main_layout.addStretch()
         
-        # User profile section at bottom
-        self.setup_user_profile()
+        # User profile section at bottom - will be called from __init__
         
     def setup_menu_items(self):
         """Setup the navigation menu items."""
@@ -299,30 +305,9 @@ class DiscordNavigation(QWidget):
                         button.h_layout.addWidget(button)
                         button.h_layout.addStretch()
         
-        # Update iRacing status layout during animation
-        if hasattr(self, 'iracing_status_layout') and hasattr(self, 'iracing_status_dot'):
-            # Clear the iRacing status layout
-            while self.iracing_status_layout.count():
-                child = self.iracing_status_layout.takeAt(0)
-                if child.widget():
-                    child.widget().setParent(None)
-            
-            if is_expanding:
-                # Expanding: show dot + label aligned left
-                self.iracing_status_layout.setContentsMargins(8, 4, 8, 4)
-                self.iracing_status_layout.addWidget(self.iracing_status_dot)
-                if hasattr(self, 'iracing_status_label'):
-                    self.iracing_status_layout.addWidget(self.iracing_status_label)
-                    self.iracing_status_label.setVisible(True)
-                self.iracing_status_layout.addStretch()
-            else:
-                # Collapsing: center the dot only
-                self.iracing_status_layout.setContentsMargins(0, 4, 0, 4)
-                self.iracing_status_layout.addStretch()
-                self.iracing_status_layout.addWidget(self.iracing_status_dot)
-                self.iracing_status_layout.addStretch()
-                if hasattr(self, 'iracing_status_label'):
-                    self.iracing_status_label.setVisible(False)
+        # Update iRacing status visibility during animation (but don't rebuild layout)
+        if hasattr(self, 'iracing_status_label'):
+            self.iracing_status_label.setVisible(is_expanding)
             
     def on_animation_finished(self):
         """Handle animation completion."""
@@ -332,9 +317,6 @@ class DiscordNavigation(QWidget):
         
     def setup_user_profile(self):
         """Setup the user profile section at the bottom."""
-        # iRacing connection status indicator
-        self.setup_iracing_status()
-        
         # User profile container
         self.user_profile_container = QWidget()
         self.user_profile_layout = QHBoxLayout(self.user_profile_container)
@@ -436,6 +418,14 @@ class DiscordNavigation(QWidget):
         
     def setup_iracing_monitoring(self):
         """Setup real-time iRacing connection monitoring."""
+        # Defer iRacing monitoring setup until the API is actually ready
+        # This prevents early access attempts that fail during startup
+        from PyQt6.QtCore import QTimer
+        timer = QTimer()
+        timer.singleShot(2000, self._setup_iracing_monitoring_delayed)
+        
+    def _setup_iracing_monitoring_delayed(self):
+        """Setup iRacing monitoring after a delay to ensure API is ready."""
         try:
             # Import the global iRacing API access function
             from new_ui import get_global_iracing_api
@@ -461,7 +451,7 @@ class DiscordNavigation(QWidget):
             else:
                 import logging
                 logger = logging.getLogger(__name__)
-                logger.warning("⚠️ Global iRacing API not available for connection monitoring")
+                logger.debug("ℹ️ Global iRacing API not ready yet - monitoring will be retried later")
                 
         except Exception as e:
             import logging
@@ -545,32 +535,29 @@ class DiscordNavigation(QWidget):
         import logging
         logger = logging.getLogger(__name__)
         
-        logger.info(f"🔍 NAV DEBUG: update_authentication_state called with is_authenticated={is_authenticated}, user_info={user_info}")
+        # PERFORMANCE: Cache auth state to prevent duplicate calls
+        if self._cached_auth_state == is_authenticated and self._cached_user_info == user_info:
+            return
+        self._cached_auth_state = is_authenticated
+        self._cached_user_info = user_info
         
         if is_authenticated and user_info:
             # User is logged in - show their name and initials
             username = user_info.get('name', 'User')
             email = user_info.get('email', '')
             
-            logger.info(f"🔍 NAV DEBUG: username from user_info = {username}")
-            logger.info(f"🔍 NAV DEBUG: email from user_info = {email}")
-            
             # If no name but has email, use email as display name
             if username == 'User' and email:
                 username = email.split('@')[0]  # Use part before @ as display name
-                logger.info(f"🔍 NAV DEBUG: username from email = {username}")
             
             # Generate avatar initials from name
             avatar_text = self._generate_avatar_initials(username)
-            logger.info(f"🔍 NAV DEBUG: avatar_text = {avatar_text}")
             
             # Update the display
-            logger.info(f"🔍 NAV DEBUG: Calling set_user_info with username={username}, avatar_text={avatar_text}")
             self.set_user_info(username, avatar_text)
             
         else:
             # User is not logged in - show default
-            logger.info(f"🔍 NAV DEBUG: Setting default User/U (not authenticated or no user_info)")
             self.set_user_info("User", "U")
     
     def _generate_avatar_initials(self, name: str) -> str:

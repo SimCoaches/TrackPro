@@ -60,7 +60,7 @@ class VirtualJoystick:
         
         if test_mode:
             logger.info("Running in test mode - virtual joystick simulation")
-            self.vjoy_device_id = 1
+            self.vjoy_device_id = 4
             self.vjoy_acquired = True
             return
             
@@ -77,14 +77,14 @@ class VirtualJoystick:
             raise RuntimeError("vJoy is not enabled")
             
         # Default device ID
-        self.vjoy_device_id = 1
+        self.vjoy_device_id = 4
         self.vjoy_acquired = False
         
         # Try multiple device IDs if enabled
-        device_ids_to_try = [1]  # Default device ID
+        device_ids_to_try = [4]  # Start with device 4 as primary
         if use_alt_devices:
-            # Add alternative device IDs to try
-            device_ids_to_try.extend([2, 3, 4])
+            # Add alternative device IDs to try (5, 6, 7)
+            device_ids_to_try.extend([5, 6, 7])
         
         # Try to acquire a vJoy device
         acquired = False
@@ -143,7 +143,7 @@ class VirtualJoystick:
             logger.warning(f"Could not acquire vJoy device: {last_error}")
             logger.info("Falling back to test mode - vJoy output will be simulated")
             self.test_mode = True
-            self.vjoy_device_id = 1
+            self.vjoy_device_id = 4
             self.vjoy_acquired = False
     
     def update_axis(self, throttle: int, brake: int, clutch: int, handbrake: int = 0):

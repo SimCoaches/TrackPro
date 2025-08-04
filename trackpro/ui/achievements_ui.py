@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
 from .social_ui import SocialTheme
-from ..social import achievements_manager, reputation_manager
+from trackpro.social import achievements_manager, reputation_manager
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +367,7 @@ class XPProgressWidget(QFrame):
     def load_xp_data(self):
         """Load and display XP data."""
         try:
-            from ..social.user_manager import enhanced_user_manager
+            from trackpro.social import enhanced_user_manager
             user_profile = enhanced_user_manager.get_complete_user_profile(self.current_user_id)
             
             if user_profile:

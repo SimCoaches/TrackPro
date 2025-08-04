@@ -44,45 +44,37 @@ class EnhancedUserManager(DatabaseManager):
                     return None
                 user_id = user_response.user.id
             
-            # First try to get from the view for complete profile data
-            response = self.supabase.from_("user_profile_complete").select("*").eq("user_id", user_id).limit(1).execute()
+            # Get data from both user_profiles and user_details tables
+            profile_data = {}
             
-            if response.data:
-                return response.data[0]
+            # Try to get from user_profiles table
+            try:
+                profile_response = self.supabase.from_("user_profiles").select("*").eq("user_id", user_id).limit(1).execute()
+                if profile_response.data:
+                    profile_data.update(profile_response.data[0])
+                    logger.info(f"Found user {user_id} in user_profiles table")
+            except Exception as e:
+                logger.warning(f"Error querying user_profiles table: {e}")
             
-            # If view returns empty (user not in user_profiles), try to get from user_details as fallback
-            logger.info(f"User {user_id} not found in user_profile_complete view, checking user_details table")
+            # Try to get from user_details table
+            try:
+                details_response = self.supabase.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
+                if details_response.data:
+                    profile_data.update(details_response.data[0])
+                    logger.info(f"Found user {user_id} in user_details table")
+                else:
+                    logger.info(f"User {user_id} not found in user_details table")
+            except Exception as e:
+                logger.warning(f"Error querying user_details table: {e}")
             
-            details_response = self.supabase.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
+            # If we have any data, return it
+            if profile_data:
+                # Ensure we have the user_id
+                profile_data['user_id'] = user_id
+                return profile_data
             
-            if details_response.data:
-                # Return minimal profile data with 2FA info from user_details
-                user_details = details_response.data[0]
-                logger.info(f"Found user {user_id} in user_details with twilio_verified={user_details.get('twilio_verified')}")
-                
-                # Create minimal profile data compatible with existing code
-                return {
-                    'user_id': user_id,
-                    'phone_number': user_details.get('phone_number'),
-                    'twilio_verified': user_details.get('twilio_verified', False),
-                    'is_2fa_enabled': user_details.get('is_2fa_enabled', False),
-                    # Add default values for fields that might be accessed
-                    'username': None,
-                    'display_name': None,
-                    'email': None,
-                    'level': 1,
-                    'reputation_score': 0,
-                    'total_laps': 0,
-                    'total_distance_km': 0,
-                    'total_time_seconds': 0,
-                    'best_lap_time': None,
-                    'consistency_rating': 0,
-                    'improvement_rate': 0,
-                    'last_active': None
-                }
-            
-            # If user not found in either place, return None
-            logger.warning(f"User {user_id} not found in either user_profile_complete view or user_details table")
+            # If no data found in either table, return None
+            logger.warning(f"User {user_id} not found in either user_profiles or user_details table")
             return None
             
         except Exception as e:
@@ -106,22 +98,34 @@ class EnhancedUserManager(DatabaseManager):
                 'avatar_frame_id', 'profile_theme', 'privacy_settings', 'preferences'
             }
             
-            # 2FA fields belong in user_details table
+            # User details fields belong in user_details table
             details_fields = {
-                'phone_number', 'twilio_verified', 'is_2fa_enabled'
+                'first_name', 'last_name', 'date_of_birth', 'phone_number', 
+                'twilio_verified', 'is_2fa_enabled'
             }
             
             profile_update = {k: v for k, v in profile_data.items() if k in profile_fields}
             details_update = {k: v for k, v in profile_data.items() if k in details_fields}
             
             if profile_update:
-                response = self.client.from_("user_profiles").update(profile_update).eq("user_id", user_id).execute()
+                # Get current user email for user_profiles table
+                user_response = self.supabase.auth.get_user()
+                if user_response and user_response.user:
+                    profile_update['email'] = user_response.user.email
+                
+                # Use upsert for user_profiles to handle cases where the record doesn't exist yet
+                profile_update['user_id'] = user_id
+                response = self.supabase.from_("user_profiles").upsert(profile_update).execute()
                 if not response.data:
+                    logger.error(f"Failed to upsert user_profiles for user {user_id}")
                     return False
                     
             if details_update:
-                response = self.client.from_("user_details").upsert({**details_update, 'user_id': user_id}).execute()
+                # Use upsert for user_details to handle cases where the record doesn't exist yet
+                details_update['user_id'] = user_id
+                response = self.supabase.from_("user_details").upsert(details_update).execute()
                 if not response.data:
+                    logger.error(f"Failed to upsert user_details for user {user_id}")
                     return False
             
             # Update user stats if provided
@@ -134,7 +138,7 @@ class EnhancedUserManager(DatabaseManager):
             
             if stats_update:
                 stats_update['updated_at'] = datetime.utcnow().isoformat()
-                response = self.client.from_("user_stats").upsert(
+                response = self.supabase.from_("user_stats").upsert(
                     {**stats_update, 'user_id': user_id}
                 ).execute()
                 if not response.data:
@@ -158,7 +162,7 @@ class EnhancedUserManager(DatabaseManager):
         """
         try:
             # Check if frame exists and user has unlocked it
-            frame_response = self.client.from_("avatar_frames").select("*").eq("id", frame_id).single().execute()
+            frame_response = self.supabase.from_("avatar_frames").select("*").eq("id", frame_id).single().execute()
             if not frame_response.data:
                 logger.warning(f"Avatar frame {frame_id} not found")
                 return False
@@ -173,7 +177,7 @@ class EnhancedUserManager(DatabaseManager):
                     return False
             
             # Update user profile
-            response = self.client.from_("user_profiles").update({
+            response = self.supabase.from_("user_profiles").update({
                 'avatar_frame_id': frame_id
             }).eq("user_id", user_id).execute()
             
@@ -193,7 +197,7 @@ class EnhancedUserManager(DatabaseManager):
         """
         try:
             # Get all frames
-            response = self.client.from_("avatar_frames").select("*").execute()
+            response = self.supabase.from_("avatar_frames").select("*").execute()
             if not response.data:
                 return []
             
@@ -279,7 +283,7 @@ class EnhancedUserManager(DatabaseManager):
         """
         try:
             # Search by username or display name
-            response = self.client.from_("user_profiles").select(
+            response = self.supabase.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, level, reputation_score"
             ).or_(
                 f"username.ilike.%{query}%,display_name.ilike.%{query}%"
@@ -300,7 +304,7 @@ class EnhancedUserManager(DatabaseManager):
             User data or None
         """
         try:
-            response = self.client.from_("user_profiles").select("*").eq("username", username).single().execute()
+            response = self.supabase.from_("user_profiles").select("*").eq("username", username).single().execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting user by username: {e}")
@@ -327,7 +331,7 @@ class EnhancedUserManager(DatabaseManager):
             user_level = user_profile.get('level', 1)
             level_range = 5
             
-            response = self.client.from_("user_profiles").select(
+            response = self.supabase.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, level, reputation_score"
             ).gte("level", user_level - level_range).lte("level", user_level + level_range).neq("user_id", user_id).limit(limit).execute()
             
@@ -360,7 +364,7 @@ class EnhancedUserManager(DatabaseManager):
             stats_update['updated_at'] = datetime.utcnow().isoformat()
             stats_update['last_active'] = datetime.utcnow().isoformat()
             
-            response = self.client.from_("user_stats").upsert(
+            response = self.supabase.from_("user_stats").upsert(
                 {**stats_update, 'user_id': user_id}
             ).execute()
             
@@ -379,7 +383,7 @@ class EnhancedUserManager(DatabaseManager):
             User statistics or None
         """
         try:
-            response = self.client.from_("user_stats").select("*").eq("user_id", user_id).single().execute()
+            response = self.supabase.from_("user_stats").select("*").eq("user_id", user_id).single().execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting user stats: {e}")
@@ -459,7 +463,7 @@ class EnhancedUserManager(DatabaseManager):
             True if successful, False otherwise
         """
         try:
-            response = self.client.from_("user_profiles").update({
+            response = self.supabase.from_("user_profiles").update({
                 'privacy_settings': settings
             }).eq("user_id", user_id).execute()
             
@@ -479,7 +483,7 @@ class EnhancedUserManager(DatabaseManager):
             True if successful, False otherwise
         """
         try:
-            response = self.client.from_("user_profiles").update({
+            response = self.supabase.from_("user_profiles").update({
                 'preferences': preferences
             }).eq("user_id", user_id).execute()
             
@@ -498,7 +502,7 @@ class EnhancedUserManager(DatabaseManager):
             Privacy settings dictionary
         """
         try:
-            response = self.client.from_("user_profiles").select("privacy_settings").eq("user_id", user_id).single().execute()
+            response = self.supabase.from_("user_profiles").select("privacy_settings").eq("user_id", user_id).single().execute()
             return response.data.get('privacy_settings', {}) if response.data else {}
         except Exception as e:
             logger.error(f"Error getting privacy settings: {e}")
@@ -550,7 +554,7 @@ class EnhancedUserManager(DatabaseManager):
             List of friends
         """
         try:
-            response = self.client.from_("user_friends").select("*").eq("user_id", user_id).execute()
+            response = self.supabase.from_("user_friends").select("*").eq("user_id", user_id).execute()
             return response.data or []
         except Exception as e:
             logger.error(f"Error getting user friends: {e}")
@@ -567,7 +571,7 @@ class EnhancedUserManager(DatabaseManager):
             True if available, False otherwise
         """
         try:
-            query = self.client.from_("user_profiles").select("user_id").eq("username", username)
+            query = self.supabase.from_("user_profiles").select("user_id").eq("username", username)
             
             if exclude_user_id:
                 query = query.neq("user_id", exclude_user_id)

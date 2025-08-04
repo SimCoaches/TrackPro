@@ -58,6 +58,12 @@ def get_supabase_client():
                     _supabase_manager = type('DummyManager', (), {'client': None})()
                     return None
             
+            # Force initialization if needed
+            if _supabase_manager and hasattr(_supabase_manager, '_initialization_deferred') and _supabase_manager._initialization_deferred:
+                logger.info("🔄 Force initializing Supabase client on first access")
+                _supabase_manager._initialization_deferred = False
+                _supabase_manager.initialize()
+            
             # Return the client
             return _supabase_manager.client if _supabase_manager else None
         finally:
@@ -768,6 +774,11 @@ class SupabaseManager:
         if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
             logger.info("🚀 STARTUP OPTIMIZATION: Performing deferred Supabase initialization on first access")
             self._initialization_deferred = False
+            self.initialize()
+        
+        # Force initialization if client is None but we're not in offline mode
+        if self._client is None and not self._offline_mode:
+            logger.info("🔄 Force initializing Supabase client")
             self.initialize()
         
         return self._client

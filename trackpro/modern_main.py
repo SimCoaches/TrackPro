@@ -14,7 +14,7 @@ from PyQt6.QtCore import QTimer, Qt
 
 # Import authentication and database components
 from .database import supabase
-from .auth import oauth_handler
+from .auth.oauth_handler import OAuthHandler
 from .ui.modern import ModernMainWindow
 
 logger = logging.getLogger(__name__)
@@ -23,13 +23,17 @@ logger = logging.getLogger(__name__)
 class ModernTrackProApp:
     """Modern TrackPro application with complete authentication system."""
     
-    def __init__(self, oauth_handler=None, start_time=None):
+    def __init__(self, oauth_handler=None, start_time=None, app=None):
         """Initialize the modern TrackPro application."""
         self.start_time = start_time
         self.oauth_handler = oauth_handler
         self.window = None
-        self.app = QApplication.instance()
+        self.app = app or QApplication.instance()
         self.cleanup_completed = False
+        
+        # Initialize OAuth callback server attributes early
+        self.oauth_callback_server = None
+        self.oauth_port = None
         
         # Global system references
         self.global_iracing_api = None
@@ -40,6 +44,9 @@ class ModernTrackProApp:
         self.global_handbrake_data_queue = None
         
         if not self.app:
+            # Set OpenGL context sharing attribute before creating QApplication
+            from PyQt6.QtCore import Qt
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
             self.app = QApplication(sys.argv)
         
         # Set up URL scheme handling for OAuth redirects (like original app)
@@ -47,10 +54,7 @@ class ModernTrackProApp:
         
         # Initialize the OAuth handler
         if not self.oauth_handler:
-            self.oauth_handler = oauth_handler.OAuthHandler()
-        
-        # Set up OAuth callback server (like original app)
-        self.setup_oauth_callback_server()
+            self.oauth_handler = OAuthHandler()
         
         # Create the modern main window with OAuth handler
         self.create_main_window()
@@ -92,6 +96,10 @@ class ModernTrackProApp:
     
     def setup_oauth_callback_server(self):
         """Set up OAuth callback server (adapted from original TrackProApp)."""
+        # Skip if already set up
+        if self.oauth_callback_server is not None:
+            return
+            
         try:
             import socket
             
@@ -112,9 +120,15 @@ class ModernTrackProApp:
             
             if selected_port:
                 self.oauth_port = selected_port
-                self.oauth_callback_server = self.oauth_handler.setup_callback_server(port=self.oauth_port)
-                self.oauth_handler.oauth_port = self.oauth_port
-                logger.info(f"✅ OAuth callback server started on port {self.oauth_port}")
+                # Let the oauth_handler.setup_callback_server handle port selection internally
+                self.oauth_callback_server = self.oauth_handler.setup_callback_server(port=selected_port)
+                if self.oauth_callback_server:
+                    self.oauth_handler.oauth_port = self.oauth_port
+                    logger.info(f"✅ OAuth callback server started on port {self.oauth_port}")
+                else:
+                    logger.error("❌ OAuth callback server failed to start")
+                    self.oauth_callback_server = None
+                    self.oauth_port = None
             else:
                 logger.warning("⚠️ No available ports for OAuth callback server")
                 self.oauth_callback_server = None
@@ -124,6 +138,12 @@ class ModernTrackProApp:
             logger.error(f"❌ Error setting up OAuth callback server: {e}")
             self.oauth_callback_server = None
             self.oauth_port = None
+    
+    def ensure_oauth_server_ready(self):
+        """Ensure OAuth callback server is ready when needed."""
+        if self.oauth_callback_server is None:
+            logger.info("🔄 Setting up OAuth callback server on demand...")
+            self.setup_oauth_callback_server()
     
     def create_main_window(self):
         """Create the main window with authentication support."""
@@ -142,13 +162,12 @@ class ModernTrackProApp:
             if hasattr(self.oauth_handler, 'auth_completed'):
                 self.oauth_handler.auth_completed.connect(self.handle_auth_state_change)
             
-            # Check initial authentication state and update UI immediately
+            # Ensure OAuth callback server is ready immediately
+            self.ensure_oauth_server_ready()
+            
+            # PERFORMANCE: Single auth check during startup
             is_authenticated = supabase.is_authenticated()
             self.handle_auth_state_change(is_authenticated)
-            
-            # Also update the navigation immediately with current auth state
-            if hasattr(self.window, 'update_auth_state'):
-                self.window.update_auth_state(is_authenticated)
             
             # Connect window closing to cleanup
             self.window.destroyed.connect(self.cleanup)

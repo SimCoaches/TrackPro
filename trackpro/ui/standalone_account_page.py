@@ -301,7 +301,7 @@ class AccountPage(QWidget):
         # Add modern sections
         content_layout.addWidget(self.create_modern_profile_section())
         content_layout.addWidget(self.create_modern_security_section())
-        content_layout.addWidget(self.create_modern_2fa_section())
+        # content_layout.addWidget(self.create_modern_2fa_section())  # 2FA temporarily disabled
         content_layout.addWidget(self.create_modern_actions_section())
         
         content_layout.addStretch()
@@ -1891,10 +1891,14 @@ class AccountPage(QWidget):
             
             if main_window:
                 # Update authentication state in the main window
-                main_window.update_auth_state()
+                if hasattr(main_window, 'update_auth_state'):
+                    main_window.update_auth_state(False)  # Pass False to indicate logged out
                 
-                # Navigate back to the main pedal configuration page
-                if hasattr(main_window, 'open_pedal_config'):
+                # Navigate to home page after logout
+                if hasattr(main_window, 'switch_to_page'):
+                    main_window.switch_to_page("home")
+                # Fallback to pedal config if switch_to_page is not available
+                elif hasattr(main_window, 'open_pedal_config'):
                     main_window.open_pedal_config()
                 
                 # Show logout confirmation with modern styling

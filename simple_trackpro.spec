@@ -16,15 +16,12 @@ binaries_list = []
 # Add Qt WebEngine Process and DLLs - CRITICAL for web functionality
 if pyqt6_path:
     qt_bin_path = os.path.join(pyqt6_path, 'bin')
-    qt_resources_path = os.path.join(pyqt6_path, 'resources')
     
-    # Essential Qt WebEngine binaries
+    # Essential Qt WebEngine binaries only
     webengine_files = [
         'QtWebEngineProcess.exe',
         'Qt6WebEngineCore.dll',
         'Qt6WebEngineWidgets.dll',
-        'Qt6WebEngineQuick.dll',
-        'Qt6WebEngineQuickDelegatesQml.dll'
     ]
     
     for webengine_file in webengine_files:
@@ -59,7 +56,7 @@ for hidhide_path in hidhide_paths:
         binaries_list.append((hidhide_path, '.'))
         print(f"Found HidHide executable: {hidhide_path}")
 
-# Build datas list with Qt WebEngine resources
+# Build datas list - minimal and essential only
 datas_list = [
     # Core TrackPro files
     ('trackpro', 'trackpro'),
@@ -69,30 +66,15 @@ datas_list = [
     *([('.env', '.')] if os.path.exists('.env') else []),
     ('trackpro/resources/terms_of_service.txt', 'trackpro/resources'),
     ('trackpro/database/migrations', 'trackpro/database/migrations'),
-    # Explicitly include all resource files
+    # Core resources only
     ('trackpro/resources', 'trackpro/resources'),
-    # Explicitly include individual image files for safety
-    ('trackpro/resources/images/splash_background.png', 'trackpro/resources/images'),
-    ('trackpro/resources/images/trackpro_logo_small.png', 'trackpro/resources/images'),
-    ('trackpro/resources/images/2_pedal_set.png', 'trackpro/resources/images'),
-    ('trackpro/resources/images/3_pedal_set.png', 'trackpro/resources/images'),
-    ('trackpro/resources/images/trackpro_logo.png', 'trackpro/resources/images'),
-    ('trackpro/resources/icons/trackpro_tray.ico', 'trackpro/resources/icons'),
+    ('ai_coach_volume.json', '.'),
+    ('centerline_track_map.json', '.'),
+    ('data.txt', '.'),
+    ('future', 'future'),
+    ('ui_resources', 'ui_resources'),
     ('Supabase', 'Supabase'),
 ]
-
-# Debug: Print what files we're including
-print("="*50)
-print("SPEC FILE: Including these data files:")
-for src, dst in datas_list:
-    if os.path.exists(src):
-        if os.path.isfile(src):
-            print(f"  FILE: {src} -> {dst}")
-        else:
-            print(f"  DIR:  {src} -> {dst}")
-    else:
-        print(f"  MISSING: {src}")
-print("="*50)
 
 # Add Qt WebEngine resources if available
 if pyqt6_path:
@@ -106,12 +88,6 @@ if pyqt6_path:
         if os.path.exists(v8_context_file):
             datas_list.append((v8_context_file, '.'))
             print("Added V8 context snapshot")
-    
-    # Add Qt WebEngine translations
-    qt_translations_path = os.path.join(pyqt6_path, 'translations')
-    if os.path.exists(qt_translations_path):
-        datas_list.append((qt_translations_path, 'PyQt6/Qt6/translations'))
-        print("Added Qt WebEngine translations")
 
 a = Analysis(
     ['new_ui.py'],
@@ -119,28 +95,120 @@ a = Analysis(
     binaries=binaries_list,
     datas=datas_list,
     hiddenimports=[
-        # Core TrackPro modules
+        # Core TrackPro modules only
         'trackpro',
         'trackpro.modern_main',
         'trackpro.config',
         'trackpro.logging_config',
+        'trackpro.updater',
         
-        # Essential PyQt6 modules for TrackPro
+        # Authentication system
+        'trackpro.auth',
+        'trackpro.auth.oauth_handler',
+        'trackpro.auth.user_manager',
+        'trackpro.auth.login_dialog',
+        'trackpro.auth.signup_dialog',
+        'trackpro.auth.base_dialog',
+        'trackpro.auth.secure_session',
+        
+        # Pedal system
+        'trackpro.pedals',
+        'trackpro.pedals.handbrake_input',
+        'trackpro.pedals.output',
+        'trackpro.pedals.hardware_input',
+        'trackpro.pedals.hidhide',
+        'trackpro.pedals.calibration',
+        'trackpro.pedals.calibration_chart',
+        'trackpro.pedals.curve_cache',
+        
+        # Race coach and telemetry
+        'trackpro.race_coach',
+        'trackpro.race_coach.simple_iracing',
+        'trackpro.race_coach.iracing_lap_saver',
+        'trackpro.race_coach.iracing_session_monitor',
+        'trackpro.race_coach.analysis',
+        'trackpro.race_coach.connection_manager',
+        'trackpro.race_coach.utils',
+        'trackpro.race_coach.utils.data_processing',
+        'trackpro.race_coach.utils.telemetry_validation',
+        'trackpro.race_coach.utils.telemetry_worker',
+        'trackpro.race_coach.widgets',
+        'trackpro.race_coach.widgets.brake_graph',
+        'trackpro.race_coach.widgets.gaze_graph',
+        'trackpro.race_coach.widgets.gear_graph',
+        'trackpro.race_coach.ui',
+        'trackpro.race_coach.ui.coaching_data_manager',
+        'trackpro.race_coach.ui.ai_coach_volume_widget',
+        'trackpro.race_coach.ai_coach',
+        'trackpro.race_coach.ai_coach.ai_coach',
+        'trackpro.race_coach.ai_coach.elevenlabs_client',
+        'trackpro.race_coach.pyirsdk',
+        'trackpro.race_coach.pyirsdk.irsdk',
+        
+        # Future modules
+        'future',
+        'future.eye_tracking',
+        'future.eye_tracking.eye_tracking_manager',
+        'future.eye_tracking.eye_tracking_overlay',
+        'future.eye_tracking.eye_tracking_settings',
+        'future.gamification',
+        'future.gamification.trackpro_gamification',
+        'future.gamification.trackpro_gamification.stripe_integration',
+        'future.gamification.trackpro_gamification.supabase_gamification',
+        'future.gamification.trackpro_gamification.ui',
+        'future.gamification.trackpro_gamification.ui.enhanced_quest_view',
+        'future.gamification.trackpro_gamification.ui.notifications',
+        'future.gamification.trackpro_gamification.ui.overview_elements',
+        
+        # Database
+        'trackpro.database',
+        'trackpro.database.supabase',
+        'trackpro.database.supabase_client',
+        'trackpro.database.base',
+        'trackpro.database.user_manager',
+        'trackpro.database.calibration_manager',
+        
+        # UI components
+        'trackpro.ui',
+        'trackpro.ui.modern',
+        'trackpro.ui.pages',
+        'trackpro.ui.pages.pedals',
+        'trackpro.ui.pages.race_pass',
+        'trackpro.ui.pages.support',
+        'trackpro.ui.shared_imports',
+        'trackpro.ui.theme',
+        'trackpro.ui.theme_engine',
+        
+        # Community system
+        'trackpro.community',
+        'trackpro.community.community_manager',
+        'trackpro.community.community_main_widget',
+        
+        # Social system
+        'trackpro.social',
+        'trackpro.social.achievements_manager',
+        'trackpro.social.activity_manager',
+        
+        # Utils
+        'trackpro.utils',
+        'trackpro.utils.app_tracker',
+        'trackpro.utils.performance_optimizer',
+        
+        # Essential PyQt6 modules for TrackPro only
         'PyQt6.QtCore',
         'PyQt6.QtGui', 
         'PyQt6.QtWidgets',
-        'PyQt6.QtWebChannel',  # Required by TrackPro
-        'PyQt6.QtWebEngineCore',    # Web engine core
-        'PyQt6.QtWebEngineWidgets', # Web engine widgets
-        'PyQt6.QtWebEngineQuick',   # Quick web engine
-        'PyQt6.QtNetwork',     # For network communication
-        'PyQt6.QtMultimedia',  # For audio/sound effects
-        'PyQt6.QtOpenGL',      # For 3D graphics/charts
-        'PyQt6.QtOpenGLWidgets', # For OpenGL widgets
-        'PyQt6.QtPrintSupport', # For printing reports
-        'PyQt6.QtSvg',         # For vector graphics
-        'PyQt6.QtSvgWidgets',  # For SVG widgets
-        'PyQt6.QtCharts',      # For telemetry charts
+        'PyQt6.QtWebChannel',
+        'PyQt6.QtWebEngineCore',
+        'PyQt6.QtWebEngineWidgets',
+        'PyQt6.QtNetwork',
+        'PyQt6.QtMultimedia',
+        'PyQt6.QtOpenGL',
+        'PyQt6.QtOpenGLWidgets',
+        'PyQt6.QtPrintSupport',
+        'PyQt6.QtSvg',
+        'PyQt6.QtSvgWidgets',
+        'PyQt6.QtCharts',
         'PyQt6.sip',
         
         # Core scientific computing
@@ -150,18 +218,24 @@ a = Analysis(
         'numpy.core.umath',
         'numpy.lib',
         'requests',
+        'urllib3',
+        'certifi',
+        'charset_normalizer',
+        'idna',
         
-                 # Matplotlib for charts and graphs
-         'matplotlib',
-         'matplotlib.pyplot',
-         'matplotlib.backends',
-         'matplotlib.backends.backend_qt5agg',
-         'matplotlib.backends.backend_agg',
-         'matplotlib.figure',
+        # Matplotlib for charts and graphs
+        'matplotlib',
+        'matplotlib.pyplot',
+        'matplotlib.backends',
+        'matplotlib.backends.backend_qt5agg',
+        'matplotlib.backends.backend_agg',
+        'matplotlib.figure',
         
         # Audio/game essentials
         'pygame',
         'pygame.mixer',
+        'pygame.joystick',
+        'pygame.event',
         
         # Windows API
         'win32api',
@@ -170,23 +244,101 @@ a = Analysis(
         
         # Database essentials
         'supabase',
+        'supabase.lib',
+        'supabase.lib.client_options',
+        'supabase.lib.realtime',
+        'supabase.lib.auth',
         'sqlite3',
-        'numpy.core.overrides',
         
         # Essential modules for TrackPro
         'psutil',
         'json',
+        'threading',
+        'queue',
+        'concurrent.futures',
+        'time',
+        'pathlib',
+        'hashlib',
+        'ctypes',
+        'ctypes.wintypes',
+        'logging',
+        'traceback',
+        'subprocess',
+        'shutil',
+        'os',
+        'sys',
+        're',
+        'glob',
+        'datetime',
+        'calendar',
+        'math',
+        'statistics',
+        'random',
+        'uuid',
+        'base64',
+        'zlib',
+        'pickle',
+        'copy',
+        'collections',
+        'itertools',
+        'functools',
+        'operator',
+        'typing',
+        'typing_extensions',
+        'asyncio',
+        'aiohttp',
+        'ssl',
+        'socket',
+        'http',
+        'http.client',
+        'urllib',
+        'urllib.parse',
+        'webbrowser',
+        'tempfile',
+        'platform',
+        'getpass',
+        'locale',
+        'codecs',
+        'struct',
+        'binascii',
+        'array',
+        'mmap',
+        'select',
+        'signal',
+        'errno',
+        'fcntl',
+        'pwd',
+        'grp',
+        'crypt',
+        'termios',
+        'tty',
+        'pty',
+        'resource',
+        'pipes',
+        'posix',
+        'posixpath',
+        'nt',
+        'ntpath',
+        'stat',
+        'time',
+        'calendar',
+        'datetime',
+        'email',
+        'email.mime',
+        'email.mime.text',
+        'email.mime.multipart',
+        'email.mime.base',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-         excludes=[
-                 # Remove massive unnecessary packages
-         'scipy', 'sklearn', 'scikit-learn', 'pandas',
-         'matplotlib.backends.backend_pdf',
-         'matplotlib.backends.backend_ps', 
-         'matplotlib.backends.backend_svg',
-         'matplotlib.tests',
+    excludes=[
+        # Remove massive unnecessary packages
+        'scipy', 'sklearn', 'scikit-learn', 'pandas',
+        'matplotlib.backends.backend_pdf',
+        'matplotlib.backends.backend_ps', 
+        'matplotlib.backends.backend_svg',
+        'matplotlib.tests',
         'scipy.spatial.transform',
         'scipy.optimize',
         'scipy.interpolate', 

@@ -1,6 +1,7 @@
 import logging
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QScrollArea, QPushButton
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QScrollArea, QPushButton, QLabel
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QColor
 from ...modern.shared.base_page import BasePage
 from .calibration_widget import PedalCalibrationWidget
 from .deadzone_widget import DeadzoneWidget
@@ -15,13 +16,15 @@ class PedalsPage(BasePage):
     def __init__(self, global_managers=None):
         self.pedal_widgets = {}
         self.pedal_tabs = None
+        self.connection_status_label = None
+        self.connection_timer = None
         super().__init__("pedals", global_managers)
     
     def init_page(self):
         layout = QVBoxLayout()
         self.setLayout(layout)
         
-        # Add calibration wizard button
+        # Add calibration wizard button and connection status
         wizard_layout = QHBoxLayout()
         wizard_btn = QPushButton("🧙 Calibration Wizard")
         wizard_btn.setMaximumWidth(180)  # Make button much smaller
@@ -42,8 +45,29 @@ class PedalsPage(BasePage):
         """)
         wizard_btn.clicked.connect(self.open_calibration_wizard)
         wizard_layout.addWidget(wizard_btn)  # Left-aligned (no stretch before)
+        
+        # Add connection status indicator
+        self.connection_status_label = QLabel()
+        self.connection_status_label.setStyleSheet("""
+            QLabel {
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: bold;
+                color: white;
+            }
+        """)
+        wizard_layout.addWidget(self.connection_status_label)
         wizard_layout.addStretch()  # Stretch after to push button left
         layout.addLayout(wizard_layout)
+        
+        # Setup connection status timer
+        self.connection_timer = QTimer()
+        self.connection_timer.timeout.connect(self.update_connection_status)
+        self.connection_timer.start(1000)  # Update every second
+        
+        # Initial connection status update
+        self.update_connection_status()
         
         # Side-by-side pedal layout
         pedals_layout = QHBoxLayout()
@@ -53,6 +77,53 @@ class PedalsPage(BasePage):
         
         if self.performance_manager:
             self.performance_manager.ui_update_ready.connect(self.handle_hardware_update)
+    
+    def update_connection_status(self):
+        """Update the connection status indicator."""
+        if not self.connection_status_label:
+            return
+            
+        if hasattr(self, 'global_managers') and self.global_managers and hasattr(self.global_managers, 'hardware'):
+            hardware = self.global_managers.hardware
+            if hasattr(hardware, 'pedals_connected') and hardware.pedals_connected:
+                # Pedals connected
+                self.connection_status_label.setText("🟢 Pedals Connected")
+                self.connection_status_label.setStyleSheet("""
+                    QLabel {
+                        background-color: #22c55e;
+                        color: white;
+                        padding: 6px 12px;
+                        border-radius: 4px;
+                        font-size: 11px;
+                        font-weight: bold;
+                    }
+                """)
+            else:
+                # Pedals disconnected
+                self.connection_status_label.setText("🔴 Pedals Disconnected")
+                self.connection_status_label.setStyleSheet("""
+                    QLabel {
+                        background-color: #ef4444;
+                        color: white;
+                        padding: 6px 12px;
+                        border-radius: 4px;
+                        font-size: 11px;
+                        font-weight: bold;
+                    }
+                """)
+        else:
+            # Hardware manager not available
+            self.connection_status_label.setText("⚪ Hardware Unavailable")
+            self.connection_status_label.setStyleSheet("""
+                QLabel {
+                    background-color: #6b7280;
+                    color: white;
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+            """)
     
     def create_side_by_side_pedals(self, parent_layout):
         pedals = ['throttle', 'brake', 'clutch']
@@ -127,6 +198,11 @@ class PedalsPage(BasePage):
             if hasattr(chart, 'set_deadzones'):
                 chart.set_deadzones(min_deadzone, max_deadzone)
                 logger.debug(f"Applied deadzone to chart for {pedal_name}")
+        
+        # Update the deadzone visualization on the pyqtgraph chart
+        if hasattr(calibration_widget, 'update_deadzone_visualization'):
+            calibration_widget.update_deadzone_visualization()
+            logger.debug(f"Updated deadzone visualization for {pedal_name}")
     
     def on_calibration_complete(self, calibration_data):
         logger.info(f"Calibration completed with data: {calibration_data}")
@@ -164,3 +240,15 @@ class PedalsPage(BasePage):
                 if hasattr(calibration_widget, 'get_calibration_data'):
                     return calibration_widget.get_calibration_data()
         return None
+    
+    def cleanup(self):
+        """Clean up resources when the page is destroyed."""
+        if self.connection_timer:
+            self.connection_timer.stop()
+            self.connection_timer.deleteLater()
+            self.connection_timer = None
+    
+    def closeEvent(self, event):
+        """Handle widget close event."""
+        self.cleanup()
+        super().closeEvent(event) if hasattr(super(), 'closeEvent') else None

@@ -12,7 +12,7 @@ import re
 from urllib.parse import urlparse, parse_qs
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal, QTimer
-from ..database.supabase_client import supabase
+from ..database.supabase_client import get_supabase_client
 # Import User model and setter function
 from ..auth.user_manager import User, set_current_user 
 
@@ -102,17 +102,13 @@ class OAuthHandler(QObject):
             # Use a simpler OAuth approach without PKCE since we keep having issues with code verifiers
             logger.info(f"Starting Discord auth with simplified flow, redirect to {redirect_url}")
             
-            # Add more debugging and validation
-            if not supabase or not hasattr(supabase, 'client') or not supabase.client:
-                logger.warning("Discord auth: Supabase client not initialized, forcing initialization...")
-                # Force initialization by accessing the client property
-                from ..database.supabase_client import get_supabase_client
-                client = get_supabase_client()
-                if not client:
-                    logger.error("Discord auth failed: Supabase client not initialized")
-                    raise ValueError("Supabase client not initialized")
+            # Get the Supabase client using the proper function
+            supabase_client = get_supabase_client()
+            if not supabase_client:
+                logger.error("Discord auth failed: Supabase client not initialized")
+                raise ValueError("Supabase client not initialized")
             
-            if not hasattr(supabase.client, 'auth'):
+            if not hasattr(supabase_client, 'auth'):
                 logger.error("Discord auth failed: Supabase client auth module not available")
                 raise ValueError("Supabase client auth module not available")
             
@@ -124,8 +120,8 @@ class OAuthHandler(QObject):
             # Add extra logging for debugging
             logger.info(f"Starting Discord OAuth flow with provider='discord', options={options}")
             
-            # Access the underlying client's auth module
-            response = supabase.client.auth.sign_in_with_oauth({
+            # Use the Supabase client's auth module
+            response = supabase_client.auth.sign_in_with_oauth({
                 "provider": "discord",
                 "options": options
             })
@@ -171,22 +167,18 @@ class OAuthHandler(QObject):
             
             logger.info(f"Starting Google auth with simplified flow, redirect to {redirect_url}")
             
-            # Ensure Supabase client is initialized
-            if not supabase or not hasattr(supabase, 'client') or not supabase.client:
-                logger.warning("Supabase client not initialized, forcing initialization...")
-                # Force initialization by accessing the client property
-                from ..database.supabase_client import get_supabase_client
-                client = get_supabase_client()
-                if not client:
-                    logger.error("Cannot sign in with Google - Supabase is not connected")
-                    raise ValueError("Supabase client could not be initialized")
+            # Get the Supabase client using the proper function
+            supabase_client = get_supabase_client()
+            if not supabase_client:
+                logger.error("Cannot sign in with Google - Supabase is not connected")
+                raise ValueError("Supabase client could not be initialized")
             
             options = {
                 "redirect_to": redirect_url,
             }
             
-            # Access the underlying client's auth module
-            response = supabase.client.auth.sign_in_with_oauth({
+            # Use the Supabase client's auth module
+            response = supabase_client.auth.sign_in_with_oauth({
                 "provider": "google",
                 "options": options
             })
@@ -238,7 +230,12 @@ class OAuthHandler(QObject):
                     
                     # Ensure we access auth via client
                     try:
-                        result = supabase.client.auth.exchange_code_for_session(params)
+                        supabase_client = get_supabase_client()
+                        if not supabase_client:
+                            logger.error("Supabase client not available for code exchange")
+                            self.auth_completed.emit(False, None)
+                            return False
+                        result = supabase_client.auth.exchange_code_for_session(params)
                     except Exception as e:
                         logger.error(f"Error exchanging code for session: {e}", exc_info=True)
                         self.auth_completed.emit(False, None)
@@ -696,12 +693,6 @@ class OAuthHandler(QObject):
                             logger.error(f"Error setting session in client: {e}")
                     else:
                         logger.warning("Supabase client not available - session will be saved for later restoration")
-                        # Force initialization by temporarily disabling fast startup
-                        import os
-                        was_fast_startup = os.environ.get('TRACKPRO_FAST_STARTUP')
-                        if was_fast_startup:
-                            del os.environ['TRACKPRO_FAST_STARTUP']
-                        
                         # Try to get client again
                         client = get_supabase_client() 
                         if client:
@@ -710,10 +701,6 @@ class OAuthHandler(QObject):
                                 logger.info("Successfully set session after forcing Supabase initialization")
                             except Exception as e:
                                 logger.error(f"Error setting session after forced init: {e}")
-                        
-                        # Restore fast startup mode if it was set
-                        if was_fast_startup:
-                            os.environ['TRACKPRO_FAST_STARTUP'] = was_fast_startup
                     
                     # Save session and emit success
                     if hasattr(self.parent, '_save_session'):
@@ -745,9 +732,13 @@ class OAuthHandler(QObject):
 
                     # Exchange code for session
                     try:
-                        # Use the global supabase client directly instead of parent.client
-                        from ..database.supabase_client import supabase
-                        result = supabase.client.auth.exchange_code_for_session({
+                        # Use the proper Supabase client function
+                        supabase_client = get_supabase_client()
+                        if not supabase_client:
+                            logger.error("Supabase client not available for code exchange")
+                            self.parent.auth_completed.emit(False, None)
+                            return
+                        result = supabase_client.auth.exchange_code_for_session({
                             'auth_code': code
                         })
                         logger.info(f"Code exchange successful: {result is not None}")
@@ -812,18 +803,21 @@ class OAuthHandler(QObject):
                                 logger.error(f"Error checking profile completeness: {profile_e}", exc_info=True)
                                 # Continue with auth flow on error
                             
-                            # Ensure session is saved explicitly to the global client as well
-                            if hasattr(supabase, '_save_session'):
-                                logger.info("Explicitly saving session to global client with remember_me=True")
-                                # Always use remember_me=True for OAuth logins since there's no checkbox
-                                supabase._save_session(result, remember_me=True)
-                                
-                                # Verify the session was properly cached
-                                verification = supabase.get_user()
-                                if verification and hasattr(verification, 'user') and verification.user:
-                                    logger.info(f"Session verification successful: {verification.user.email}")
-                                else:
-                                    logger.warning("Session verification failed - user not found after saving")
+                            # Ensure session is saved explicitly to the Supabase client
+                            supabase_client = get_supabase_client()
+                            if supabase_client:
+                                logger.info("Session is already active from OAuth flow")
+                                # Verify the session was properly set
+                                try:
+                                    verification = supabase_client.auth.get_user()
+                                    if verification and hasattr(verification, 'user') and verification.user:
+                                        logger.info(f"Session verification successful: {verification.user.email}")
+                                    else:
+                                        logger.warning("Session verification failed - user not found after OAuth")
+                                except Exception as e:
+                                    logger.error(f"Error verifying session: {e}")
+                            else:
+                                logger.warning("Supabase client not available for session verification")
                             
                             # Show success message in separate thread to avoid blocking
                             QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful", 
@@ -858,22 +852,27 @@ class OAuthHandler(QObject):
                 """Find and update the main window's auth state."""
                 try:
                     # Check if we have a valid user first
-                    # Use the globally imported supabase client instance
-                    user_response = supabase.get_user()
+                    # Use the proper Supabase client function
+                    supabase_client = get_supabase_client()
+                    if not supabase_client:
+                        logger.error("Supabase client not available for user verification")
+                        return
+                    
+                    user_response = supabase_client.auth.get_user()
                     if user_response and hasattr(user_response, 'user') and user_response.user:
                         logger.info(f"User is authenticated: {user_response.user.email}")
 
                         # Save session explicitly to ensure persistence
-                        # Use the globally imported supabase client instance
-                        logger.info("Explicitly saving session to global client with remember_me=True")
-                        supabase._save_session(user_response, remember_me=True) # Always remember OAuth sessions
+                        # Use the proper Supabase client function
+                        logger.info("Explicitly saving session to client with remember_me=True")
+                        # Note: The session is already saved during the OAuth flow
 
                         # Find the main window by looking through top-level widgets
                         from PyQt6.QtWidgets import QApplication, QMessageBox
                         from ..ui.modern.main_window import ModernMainWindow as MainWindow
                         
                         # Force reload of auth state to ensure cache is cleared
-                        supabase._restore_session()
+                        # The session is already active from the OAuth flow
                         
                         main_window = None
                         for widget in QApplication.topLevelWidgets():

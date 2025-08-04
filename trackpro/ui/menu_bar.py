@@ -54,7 +54,7 @@ def create_menu_bar(main_window):
     main_window.signup_action.setEnabled(config.supabase_enabled)
     
     main_window.logout_action = file_menu.addAction("Logout")
-    main_window.logout_action.triggered.connect(main_window.handle_logout)
+    main_window.logout_action.triggered.connect(main_window.logout_user)
     main_window.logout_action.setVisible(False)
 
     # Add Refresh Login State option

@@ -9,7 +9,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QFont
 from .base_dialog import BaseAuthDialog
 from ..database.supabase_client import supabase
 from ..config import config
-from ..social import enhanced_user_manager
+from trackpro.social import enhanced_user_manager
 import logging
 import socket
 import webbrowser
@@ -690,17 +690,18 @@ class LoginDialog(BaseAuthDialog):
                 user_response = supabase.get_user()
                 
                 # Check 2FA before proceeding
+                # 2FA temporarily disabled - commented out for now
                 user_email = user_response.user.email if hasattr(user_response.user, 'email') else 'User'
-                if not self.check_and_handle_2fa(user_response.user.id, user_email):
-                    # 2FA failed, logout and return
-                    try:
-                        supabase.client.auth.sign_out()
-                    except:
-                        pass
-                    # Stop the timer
-                    if hasattr(self, '_google_auth_timer'):
-                        self._google_auth_timer.stop()
-                    return
+                # if not self.check_and_handle_2fa(user_response.user.id, user_email):
+                #     # 2FA failed, logout and return
+                #     try:
+                #         supabase.client.auth.sign_out()
+                #     except:
+                #         pass
+                #     # Stop the timer
+                #     if hasattr(self, '_google_auth_timer'):
+                #         self._google_auth_timer.stop()
+                #     return
                 
                 # Check profile completeness
                 self.check_profile_completeness_and_redirect(user_response.user.id)
@@ -751,21 +752,17 @@ class LoginDialog(BaseAuthDialog):
             logger.error(f"Error checking Google auth status: {e}")
             # Don't stop the timer on error, just keep trying
     
+
+    
     def handle_discord_login(self):
         """Handle login with Discord."""
-        # Disable button immediately to prevent double-clicks
-        self.discord_button.setEnabled(False)
         try:
-            # Set the pending provider
+            # Disable the button to prevent multiple clicks
+            self.discord_button.setEnabled(False)
+            
+            # Set the pending provider for OAuth completion handling
             self.pending_provider = "discord"
             
-            # Make sure we have the shared OAuth handler
-            if not self.oauth_handler:
-                logger.error("OAuth handler not provided to LoginDialog")
-                self.show_error("Internal error: OAuth handler is missing.")
-                self.discord_button.setEnabled(True)
-                return
-
             # Check if OAuth is available and get the port
             oauth_port = getattr(self.oauth_handler, 'oauth_port', 3000) if self.oauth_handler else 3000
             
@@ -856,14 +853,15 @@ class LoginDialog(BaseAuthDialog):
                 user_email = response.email
             
             # Check 2FA before proceeding
+            # 2FA temporarily disabled - commented out for now
             user_id = response.user.id if hasattr(response, 'user') and hasattr(response.user, 'id') else None
-            if user_id and not self.check_and_handle_2fa(user_id, user_email):
-                # 2FA failed, logout and return
-                try:
-                    supabase.client.auth.sign_out()
-                except:
-                    pass
-                return
+            # if user_id and not self.check_and_handle_2fa(user_id, user_email):
+            #     # 2FA failed, logout and return
+            #     try:
+            #         supabase.client.auth.sign_out()
+            #     except:
+            #         pass
+            #     return
             
             # Check profile completeness
             if user_id:
@@ -1170,13 +1168,14 @@ class LoginDialog(BaseAuthDialog):
                     return
 
                 # Check 2FA before proceeding
-                if not self.check_and_handle_2fa(response.user.id, email):
-                    # 2FA failed, logout and return
-                    try:
-                        supabase.client.auth.sign_out()
-                    except:
-                        pass
-                    return
+                # 2FA temporarily disabled - commented out for now
+                # if not self.check_and_handle_2fa(response.user.id, email):
+                #     # 2FA failed, logout and return
+                #     try:
+                #         supabase.client.auth.sign_out()
+                #     except:
+                #         pass
+                #     return
                 
                 # Check profile completeness
                 self.check_profile_completeness_and_redirect(response.user.id)

@@ -9,10 +9,12 @@ import logging
 from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
-    QScrollArea, QFrame, QButtonGroup, QLineEdit, QMessageBox
+    QScrollArea, QFrame, QButtonGroup, QLineEdit, QMessageBox,
+    QMenu
 )
+from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer
-from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor
+from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +23,14 @@ class OnlineUserItem(QWidget):
     """Individual user item widget for the online users list."""
     
     user_clicked = pyqtSignal(dict)  # Emits user data when clicked
+    private_message_requested = pyqtSignal(dict)  # Emits user data for private message
     
     def __init__(self, user_data: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.user_data = user_data
         self.setup_ui()
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
     
     def setup_ui(self):
         """Setup the user item UI."""
@@ -118,7 +123,9 @@ class OnlineUserItem(QWidget):
         
         # Create circular avatar with initials
         name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
-        initials = ''.join([word[0].upper() for word in name.split()][:2])
+        logger.debug(f"Creating avatar for user data: {self.user_data}")
+        logger.debug(f"Selected name for avatar: '{name}'")
+        initials = self._generate_initials(name)
         
         # Create pixmap for avatar 
         pixmap = QPixmap(32, 32)
@@ -128,33 +135,129 @@ class OnlineUserItem(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw circle background
-        colors = ['#7289da', '#99aab5', '#2c2f33', '#23272a', '#f04747', '#faa61a']
-        color_index = hash(name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
+        painter.setBrush(QBrush(QColor("#5865f2")))  # Discord blue
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(0, 0, 32, 32)
         
         # Draw initials
-        painter.setPen(QColor('#ffffff'))
-        painter.setFont(painter.font())
-        font = painter.font()
-        font.setPixelSize(12)
+        painter.setPen(QPen(QColor("#ffffff")))
+        font = QFont()
+        font.setPointSize(12)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+        
+        # Center the text
+        text_rect = painter.boundingRect(0, 0, 32, 32, Qt.AlignmentFlag.AlignCenter, initials)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, initials)
         
         painter.end()
-        
         avatar_label.setPixmap(pixmap)
-        avatar_label.setStyleSheet("border-radius: 16px;")
-        
         return avatar_label
+    
+    def _generate_initials(self, name: str) -> str:
+        """Generate initials from a name."""
+        logger.debug(f"Generating initials for name: '{name}'")
+        
+        if not name or name == 'Unknown User':
+            return "U"
+        
+        # Split by spaces and get first letter of each word
+        words = name.strip().split()
+        logger.debug(f"Split words: {words}")
+        
+        if len(words) == 1:
+            # Single word - take first two letters if available
+            word = words[0]
+            if len(word) >= 2:
+                result = word[:2].upper()
+                logger.debug(f"Single word '{word}' -> '{result}'")
+                return result
+            else:
+                result = word.upper()
+                logger.debug(f"Single word '{word}' -> '{result}'")
+                return result
+        else:
+            # Multiple words - take first letter of first word and first letter of last word
+            first_initial = words[0][0].upper() if words[0] else ""
+            last_initial = words[-1][0].upper() if words[-1] and words[-1] != words[0] else ""
+            
+            logger.debug(f"First word: '{words[0]}', Last word: '{words[-1]}'")
+            logger.debug(f"First initial: '{first_initial}', Last initial: '{last_initial}'")
+            
+            # If first and last are the same, just return first initial
+            if first_initial == last_initial:
+                logger.debug(f"First and last initials are the same, returning: '{first_initial}'")
+                return first_initial
+            
+            result = first_initial + last_initial
+            logger.debug(f"Combined initials: '{result}'")
+            return result
     
     def mousePressEvent(self, event):
         """Handle mouse press for user selection."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.user_clicked.emit(self.user_data)
         super().mousePressEvent(event)
+
+    def show_context_menu(self, position):
+        """Show context menu on right-click."""
+        context_menu = QMenu(self)
+        context_menu.setStyleSheet("""
+            QMenu {
+                background-color: #2f3136;
+                border: 1px solid #202225;
+                border-radius: 4px;
+                padding: 4px 0px;
+            }
+            QMenu::item {
+                background-color: transparent;
+                padding: 8px 16px;
+                color: #dcddde;
+                font-size: 13px;
+            }
+            QMenu::item:selected {
+                background-color: #5865f2;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #40444b;
+                margin: 4px 8px;
+            }
+        """)
+        
+        # Private Message action
+        private_message_action = QAction("Send Private Message", self)
+        private_message_action.triggered.connect(self.on_private_message_requested)
+        context_menu.addAction(private_message_action)
+        
+        # Separator
+        context_menu.addSeparator()
+        
+        # View Profile action
+        view_profile_action = QAction("View Profile", self)
+        view_profile_action.triggered.connect(self.on_view_profile_requested)
+        context_menu.addAction(view_profile_action)
+        
+        # Send Friend Request action
+        friend_request_action = QAction("Send Friend Request", self)
+        friend_request_action.triggered.connect(self.on_friend_request_requested)
+        context_menu.addAction(friend_request_action)
+        
+        # Show menu at cursor position
+        context_menu.exec(self.mapToGlobal(position))
+    
+    def on_private_message_requested(self):
+        """Handle private message request."""
+        self.private_message_requested.emit(self.user_data)
+    
+    def on_view_profile_requested(self):
+        """Handle view profile request."""
+        self.user_clicked.emit(self.user_data)
+    
+    def on_friend_request_requested(self):
+        """Handle friend request request."""
+        # This will be handled by the parent widget
+        pass
 
 
 class OnlineUsersSidebar(QWidget):
@@ -163,17 +266,19 @@ class OnlineUsersSidebar(QWidget):
     # Signals
     sidebar_toggled = pyqtSignal(bool)  # True when expanded, False when collapsed
     user_selected = pyqtSignal(dict)  # Emits user data when user is selected
+    private_message_requested = pyqtSignal(dict)  # Emits user data for private message
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.parent = parent
         
-        # State tracking
+        # State
         self.is_expanded = False
         self.is_animating = False
         
         # Dimensions
-        self.collapsed_width = 44
-        self.expanded_width = 180
+        self.collapsed_width = 60
+        self.expanded_width = 240
         
         # Animation
         self.animation = None
@@ -181,14 +286,17 @@ class OnlineUsersSidebar(QWidget):
         
         # User data
         self.all_users = []
-        self.friends_list = []
         self.current_user_id = None
-        self.user_widgets = []
+        self.user_widgets = []  # Initialize user_widgets list
+        
+        # PERFORMANCE: Cache auth state to prevent duplicate calls
+        self._cached_auth_state = None
+        self._last_refresh_time = 0
         
         # Setup UI
         self.setup_ui()
         
-        # Load current user immediately for instant display
+        # Load current user immediately
         self.load_current_user_instantly()
         
         # Load other users asynchronously
@@ -198,6 +306,11 @@ class OnlineUsersSidebar(QWidget):
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_users_data)
         self.refresh_timer.start(30000)  # Refresh every 30 seconds
+        
+        # Force refresh timer for authentication state
+        self.auth_check_timer = QTimer()
+        self.auth_check_timer.timeout.connect(self.check_authentication_and_load_user)
+        self.auth_check_timer.start(5000)  # Check every 5 seconds
     
     def setup_ui(self):
         """Setup the main UI structure."""
@@ -484,8 +597,9 @@ class OnlineUsersSidebar(QWidget):
             
             # Force layout update
             self.updateGeometry()
-            if self.parent():
-                self.parent().update()
+            parent_widget = self.parent()
+            if parent_widget:
+                parent_widget.update()
         
         # Emit signal
         self.sidebar_toggled.emit(self.is_expanded)
@@ -502,34 +616,212 @@ class OnlineUsersSidebar(QWidget):
         try:
             from ..auth.user_manager import get_current_user
             user = get_current_user()
+            if user is None:
+                # User manager not ready yet - return None
+                return None
             if user and user.is_authenticated:
                 return user.id
+            return None
         except Exception as e:
-            logger.warning(f"Error getting current user: {e}")
-        return None
+            logger.error(f"Error getting current user ID: {e}")
+            return None
     
     def load_current_user_instantly(self):
         """Load current user immediately for instant display."""
         try:
+            # Check if user is authenticated
+            is_authenticated = self.is_user_authenticated()
             self.current_user_id = self.get_current_user_id()
-            if self.current_user_id:
-                # Add current user instantly
-                current_user_data = {
-                    'user_id': self.current_user_id,
-                    'username': 'currentuser',
-                    'display_name': 'You',
-                    'avatar_url': None,
-                    'is_friend': False,
-                    'is_online': True,
-                    'status': 'Online'
-                }
-                self.all_users = [current_user_data]
-                self.refresh_users_list()
-                logger.info("✅ Current user loaded instantly")
+            
+            if is_authenticated and self.current_user_id:
+                # Get real user data for current user
+                current_user_data = self.get_current_user_real_data()
+                if current_user_data:
+                    self.all_users = [current_user_data]
+                    self.refresh_users_list()
+                    logger.info("✅ Current user loaded instantly")
+                else:
+                    # Fallback if we can't get real data
+                    current_user_data = {
+                        'user_id': self.current_user_id,
+                        'username': 'currentuser',
+                        'display_name': 'User',
+                        'avatar_url': None,
+                        'is_friend': False,
+                        'is_online': True,
+                        'status': 'Online'
+                    }
+                    self.all_users = [current_user_data]
+                    self.refresh_users_list()
+                    logger.info("✅ Current user loaded with fallback data")
             else:
-                logger.warning("No authenticated user found")
+                # User not authenticated yet - set up timer to check again
+                logger.info("🔍 User not authenticated yet - will check again later")
+                QTimer.singleShot(2000, self.check_authentication_and_load_user)
         except Exception as e:
             logger.error(f"Error loading current user instantly: {e}")
+    
+    def get_current_user_real_data(self) -> Optional[Dict[str, Any]]:
+        """Get current user's real data from database."""
+        try:
+            from ..database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            
+            if not client or not self.current_user_id:
+                return None
+            
+            # Fetch user profile from database - handle missing columns gracefully
+            try:
+                # Try to fetch with all fields first
+                response = client.table("user_profiles").select(
+                    "user_id, username, display_name, email, first_name, last_name, bio, created_at"
+                ).eq("user_id", self.current_user_id).single().execute()
+            except Exception as column_error:
+                # If first_name column doesn't exist, try without it
+                logger.warning(f"Some columns may not exist, trying fallback query: {column_error}")
+                response = client.table("user_profiles").select(
+                    "user_id, username, display_name, email, bio, created_at"
+                ).eq("user_id", self.current_user_id).single().execute()
+            
+            if response.data:
+                user_data = response.data
+                logger.debug(f"Raw user data from database: {user_data}")
+                
+                # Generate display name from real data
+                display_name = self._generate_display_name(user_data)
+                logger.debug(f"Generated display name: '{display_name}'")
+                
+                # Get current iRacing status if available
+                iracing_status = self._get_current_user_iracing_status()
+                
+                result = {
+                    'user_id': user_data['user_id'],
+                    'username': user_data.get('username', 'currentuser'),
+                    'display_name': display_name,
+                    'email': user_data.get('email'),
+                    'first_name': user_data.get('first_name', ''),  # Safe fallback
+                    'last_name': user_data.get('last_name', ''),    # Safe fallback
+                    'bio': user_data.get('bio'),
+                    'created_at': user_data.get('created_at'),
+                    'status': iracing_status or 'Online',
+                    'is_online': True,  # Current user is always online
+                    'is_friend': False,  # Can't be friends with yourself
+                    'avatar_url': user_data.get('avatar_url')
+                }
+                logger.debug(f"Final user data for sidebar: {result}")
+                return result
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching current user data: {e}")
+            return None
+    
+    def _generate_display_name(self, user_data: Dict[str, Any]) -> str:
+        """Generate display name from user data."""
+        logger.debug(f"Generating display name from user data: {user_data}")
+        
+        # First, try to get name from auth metadata (like the account bubble does)
+        try:
+            from ..database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            if client and hasattr(client, 'auth') and client.auth.get_session():
+                session = client.auth.get_session()
+                if session and hasattr(session, 'user'):
+                    user = session.user
+                    metadata = getattr(user, 'user_metadata', {})
+                    
+                    # Try different metadata fields for name (same logic as account bubble)
+                    if metadata.get('full_name'):
+                        name = metadata['full_name']
+                        logger.debug(f"Using auth metadata full_name: '{name}'")
+                        return name
+                    elif metadata.get('name'):
+                        name = metadata['name']
+                        logger.debug(f"Using auth metadata name: '{name}'")
+                        return name
+                    elif metadata.get('first_name') and metadata.get('last_name'):
+                        first_name = metadata['first_name']
+                        last_name = metadata['last_name']
+                        # Convert to proper case if all caps
+                        if first_name.isupper():
+                            first_name = first_name.title()
+                        if last_name.isupper():
+                            last_name = last_name.title()
+                        name = f"{first_name} {last_name}"
+                        logger.debug(f"Using auth metadata first_name + last_name: '{name}'")
+                        return name
+                    elif metadata.get('first_name'):
+                        first_name = metadata['first_name']
+                        if first_name.isupper():
+                            first_name = first_name.title()
+                        logger.debug(f"Using auth metadata first_name: '{first_name}'")
+                        return first_name
+        except Exception as e:
+            logger.debug(f"Error getting auth metadata: {e}")
+        
+        # Try first_name + last_name from database
+        first_name = user_data.get('first_name', '')
+        last_name = user_data.get('last_name', '')
+        logger.debug(f"First name: '{first_name}', Last name: '{last_name}'")
+        
+        if first_name or last_name:
+            full_name = f"{first_name} {last_name}".strip()
+            if full_name:
+                logger.debug(f"Using full name: '{full_name}'")
+                return full_name
+        
+        # Fallback to display_name
+        display_name = user_data.get('display_name', '')
+        if display_name:
+            logger.debug(f"Using display_name: '{display_name}'")
+            return display_name
+        
+        # Fallback to username
+        username = user_data.get('username', '')
+        if username:
+            logger.debug(f"Using username: '{username}'")
+            return username
+        
+        # Final fallback
+        logger.debug("Using fallback 'User'")
+        return 'User'
+    
+    def check_authentication_and_load_user(self):
+        """Check if user has been authenticated and load them if so."""
+        try:
+            is_authenticated = self.is_user_authenticated()
+            current_user_id = self.get_current_user_id()
+            
+            if is_authenticated and current_user_id:
+                # User is now authenticated - add them to the list
+                self.current_user_id = current_user_id
+                
+                # Get real user data for current user
+                current_user_data = self.get_current_user_real_data()
+                if not current_user_data:
+                    # Fallback if we can't get real data
+                    current_user_data = {
+                        'user_id': current_user_id,
+                        'username': 'currentuser',
+                        'display_name': 'User',
+                        'avatar_url': None,
+                        'is_friend': False,
+                        'is_online': True,
+                        'status': 'Online'
+                    }
+                
+                # Add to existing users if not already there
+                existing_user_ids = [user.get('user_id') for user in self.all_users]
+                if current_user_id not in existing_user_ids:
+                    self.all_users.append(current_user_data)
+                    self.refresh_users_list()
+                    logger.info("✅ Current user loaded after authentication check")
+            else:
+                # Still not authenticated - check again in 2 seconds
+                QTimer.singleShot(2000, self.check_authentication_and_load_user)
+        except Exception as e:
+            logger.error(f"Error checking authentication and loading user: {e}")
     
     def load_users_from_database(self):
         """Load all users from database with friends prioritized."""
@@ -537,22 +829,26 @@ class OnlineUsersSidebar(QWidget):
             # Get current user ID if not already set
             if not self.current_user_id:
                 self.current_user_id = self.get_current_user_id()
+                if self.current_user_id is None:
+                    # User manager not ready yet - skip loading users
+                    logger.info("🔍 User manager not ready yet - skipping users loading")
+                    return
                 if not self.current_user_id:
                     logger.warning("No authenticated user found")
                     return
             
             # Import database managers
-            from ..social.friends_manager import FriendsManager
-            from ..social.user_manager import EnhancedUserManager
+            from trackpro.social.friends_manager import FriendsManager
+            from trackpro.social.user_manager import EnhancedUserManager
             
             # Get friends list (non-blocking)
             friends_manager = FriendsManager()
             self.friends_list = friends_manager.get_friends_list(self.current_user_id, include_online_status=True)
             
-            # Get all users from database (optimized query)
+            # Get all users from database (optimized query with user_stats join)
             user_manager = EnhancedUserManager()
             response = user_manager.client.from_("user_profiles").select(
-                "user_id, username, display_name, avatar_url, last_active"
+                "user_id, username, display_name, avatar_url, user_stats(last_active)"
             ).execute()
             
             # Start with current user (already loaded)
@@ -567,6 +863,10 @@ class OnlineUsersSidebar(QWidget):
                     current_user_in_list = True
                     continue  # Skip current user as it's already loaded
                 
+                # Extract last_active from nested user_stats structure
+                user_stats = user.get('user_stats', {})
+                last_active = user_stats.get('last_active') if user_stats else None
+                
                 user_data = {
                     'user_id': user['user_id'],
                     'username': user.get('username', 'Unknown'),
@@ -574,7 +874,7 @@ class OnlineUsersSidebar(QWidget):
                     'avatar_url': user.get('avatar_url'),
                     'is_friend': user['user_id'] in friends_ids,
                     'is_online': self._simulate_online_status(user['user_id']),
-                    'status': self._get_user_status(user['user_id'], user.get('last_active'))
+                    'status': self._get_user_status(user['user_id'], last_active)
                 }
                 self.all_users.append(user_data)
             
@@ -726,9 +1026,12 @@ class OnlineUsersSidebar(QWidget):
         try:
             from ..auth.user_manager import get_current_user
             user = get_current_user()
+            if user is None:
+                # User manager not ready yet - return False
+                return False
             return user and user.is_authenticated and user.name != "Anonymous User"
         except Exception as e:
-            logger.warning(f"Failed to check authentication status: {e}")
+            logger.error(f"Error checking authentication: {e}")
             return False
     
     def get_current_user_id(self) -> Optional[str]:
@@ -771,7 +1074,7 @@ class OnlineUsersSidebar(QWidget):
         
         try:
             # Import the friends manager
-            from ..social.friends_manager import FriendsManager
+            from ...social.friends_manager import FriendsManager
             
             # First, get the user ID by username
             friends_manager = FriendsManager()
@@ -839,6 +1142,7 @@ class OnlineUsersSidebar(QWidget):
         for user_data in sorted_users:
             user_widget = OnlineUserItem(user_data)
             user_widget.user_clicked.connect(self.on_user_selected)
+            user_widget.private_message_requested.connect(self.on_private_message_requested)
             self.user_widgets.append(user_widget)
             
             # Create container for centering when collapsed
@@ -895,6 +1199,7 @@ class OnlineUsersSidebar(QWidget):
             popup = UserProfilePopup(user_data, self.current_user_id, self)
             popup.view_profile_requested.connect(self.on_view_profile_requested)
             popup.friend_request_sent.connect(self.on_friend_request_sent)
+            popup.private_message_requested.connect(self.on_private_message_requested)
             popup.show()
             
         except Exception as e:
@@ -912,6 +1217,12 @@ class OnlineUsersSidebar(QWidget):
         logger.info(f"Friend request sent to user: {user_id}")
         # Refresh the users list to update friend status
         self.refresh_users_data()
+    
+    def on_private_message_requested(self, user_data: Dict[str, Any]):
+        """Handle private message request from user item."""
+        logger.info(f"Private message requested for user: {user_data.get('display_name', 'Unknown')}")
+        # Emit the signal for the parent to handle
+        self.private_message_requested.emit(user_data)
     
     def add_user(self, user_data: Dict[str, Any]):
         """Add a new user to the list."""
@@ -933,3 +1244,115 @@ class OnlineUsersSidebar(QWidget):
                     user['is_online'] = is_online
                 break
         self.refresh_users_list()
+    
+    def on_authentication_changed(self):
+        """Handle authentication state changes (login/logout)."""
+        # PERFORMANCE: Skip if this is a duplicate call during startup
+        current_auth_state = self.is_user_authenticated()
+        if self._cached_auth_state == current_auth_state:
+            return
+            
+        self._cached_auth_state = current_auth_state
+        logger.info("🔄 Authentication state changed - refreshing user list")
+        
+        # Check if user is now authenticated
+        current_user_id = self.get_current_user_id()
+        
+        if current_auth_state and current_user_id:
+            # User just logged in - add them to the list
+            self.current_user_id = current_user_id
+            
+            # Get real user data for current user
+            current_user_data = self.get_current_user_real_data()
+            if not current_user_data:
+                # Fallback if we can't get real data
+                current_user_data = {
+                    'user_id': current_user_id,
+                    'username': 'currentuser',
+                    'display_name': 'User',
+                    'avatar_url': None,
+                    'is_friend': False,
+                    'is_online': True,
+                    'status': 'Online'
+                }
+            
+            # Add to existing users if not already there
+            existing_user_ids = [user.get('user_id') for user in self.all_users]
+            if current_user_id not in existing_user_ids:
+                self.all_users.append(current_user_data)
+                logger.info("✅ Current user added after authentication change")
+        else:
+            # User just logged out - remove them from the list
+            self.all_users = [user for user in self.all_users if user.get('user_id') != self.current_user_id]
+            self.current_user_id = None
+            logger.info("✅ Current user removed after logout")
+        
+        # Refresh the UI
+        self.refresh_users_list()
+        self.update_add_friend_ui_state()
+    
+    def force_refresh(self):
+        """Force refresh the sidebar - useful for debugging or manual refresh."""
+        # PERFORMANCE: Skip if called too frequently
+        import time
+        current_time = time.time()
+        if current_time - self._last_refresh_time < 1.0:  # Skip if called within 1 second
+            return
+        self._last_refresh_time = current_time
+        
+        logger.info("🔄 Force refreshing online users sidebar")
+        
+        # Check authentication state
+        is_authenticated = self.is_user_authenticated()
+        current_user_id = self.get_current_user_id()
+        
+        if is_authenticated and current_user_id:
+            # Ensure current user is in the list
+            self.current_user_id = current_user_id
+            
+            # Get real user data for current user
+            current_user_data = self.get_current_user_real_data()
+            if not current_user_data:
+                # Fallback if we can't get real data
+                current_user_data = {
+                    'user_id': current_user_id,
+                    'username': 'currentuser',
+                    'display_name': 'User',
+                    'avatar_url': None,
+                    'is_friend': False,
+                    'is_online': True,
+                    'status': 'Online'
+                }
+            
+            # Add to existing users if not already there
+            existing_user_ids = [user.get('user_id') for user in self.all_users]
+            if current_user_id not in existing_user_ids:
+                self.all_users.append(current_user_data)
+                logger.info("✅ Current user added during force refresh")
+        
+        # Refresh the UI
+        self.refresh_users_list()
+        self.update_add_friend_ui_state()
+        
+        # Also reload users from database
+        QTimer.singleShot(100, self.load_users_from_database)
+        
+        # Ensure current user is marked as online in the database
+        if is_authenticated and current_user_id:
+            self._ensure_current_user_online_status()
+    
+    def _ensure_current_user_online_status(self):
+        """Ensure the current user is marked as online in the database."""
+        try:
+            if not self.current_user_id:
+                return
+                
+            from ..utils.app_tracker import update_user_online_status
+            success = update_user_online_status(self.current_user_id, True)
+            if success:
+                logger.debug(f"✅ Ensured current user {self.current_user_id} is marked as online")
+            else:
+                logger.warning(f"⚠️ Failed to mark current user {self.current_user_id} as online")
+                
+        except Exception as e:
+            logger.error(f"Error ensuring current user online status: {e}")

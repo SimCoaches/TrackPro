@@ -482,7 +482,10 @@ def initialize_global_iracing_connection():
                     try:
                         from trackpro.auth.user_manager import get_current_user
                         user = get_current_user()
-                        if user and hasattr(user, 'id') and user.is_authenticated:
+                        if user is None:
+                            # User manager not ready yet - skip user ID setting
+                            logger.info("ℹ️ User manager not ready yet - skipping user ID setting")
+                        elif user and hasattr(user, 'id') and user.is_authenticated:
                             user_id = user.id
                             global_lap_saver.set_user_id(user_id)
                             logger.info(f"✅ Set user ID for global lap saver: {user_id}")
@@ -497,9 +500,12 @@ def initialize_global_iracing_connection():
                         logger.info("✅ Connected global lap saver to iRacing API")
                     
                     # Set up deferred monitoring params for background session monitoring
+                    user_id_for_monitoring = 'anonymous'
+                    if user and hasattr(user, 'id') and user.is_authenticated:
+                        user_id_for_monitoring = user.id
                     global_iracing_api._deferred_monitor_params = {
                         'supabase_client': supabase_client,
-                        'user_id': user.id if user and hasattr(user, 'id') and user.is_authenticated else 'anonymous',
+                        'user_id': user_id_for_monitoring,
                         'lap_saver': global_lap_saver
                     }
                     logger.info("✅ Global telemetry saving configured")
@@ -529,8 +535,6 @@ def initialize_global_iracing_connection():
 def get_global_iracing_api():
     """Get the global iRacing API instance. All screens should use this to access telemetry data."""
     global global_iracing_api
-    if global_iracing_api is None:
-        logger.warning("⚠️ Global iRacing API not initialized yet!")
     return global_iracing_api
 
 def cleanup_global_handbrake_system():
@@ -706,9 +710,6 @@ def main():
     start_time = time.time()
     logger.info("🚀 Starting Modern TrackPro UI with Authentication and iRacing Telemetry...")
     
-    # STARTUP OPTIMIZATION: Enable fast startup mode to skip heavy operations
-    os.environ['TRACKPRO_FAST_STARTUP'] = 'true'
-    
     # Create QApplication
     app = QApplication(sys.argv)
     app.setApplicationName("TrackPro Modern")
@@ -797,7 +798,7 @@ def main():
         
         # Create the modern TrackPro app with authentication and global iRacing access
         logger.info("🏗️ Creating modern TrackPro application with authentication...")
-        trackpro_app = ModernTrackProApp(oauth_handler=oauth_handler_instance, start_time=start_time)
+        trackpro_app = ModernTrackProApp(oauth_handler=oauth_handler_instance, start_time=start_time, app=app)
         
         # Make the global iRacing API available to the app
         if hasattr(trackpro_app, 'set_global_iracing_api'):
@@ -822,10 +823,6 @@ def main():
         # Calculate total startup time
         total_startup_time = time.time() - start_time
         logger.info(f"✅ Modern TrackPro UI launched successfully in {total_startup_time:.2f} seconds!")
-        
-        # STARTUP OPTIMIZATION: Disable fast startup mode now that app is running
-        if 'TRACKPRO_FAST_STARTUP' in os.environ:
-            del os.environ['TRACKPRO_FAST_STARTUP']
         
         # Run the application
         return trackpro_app.run()

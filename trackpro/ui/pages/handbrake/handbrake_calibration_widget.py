@@ -218,9 +218,10 @@ class HandbrakeCalibrationWidget(QWidget):
             # Disable chart dragging/zooming but keep scatter points interactive
             self.calibration_chart.setMouseEnabled(x=False, y=False)
             
-            # Install event filter for mouse events
-            self.calibration_chart.installEventFilter(self)
-            self.scatter.installEventFilter(self)
+            # Override mouse events directly instead of using event filter
+            self.calibration_chart.mousePressEvent = self.chart_mousePressEvent
+            self.calibration_chart.mouseMoveEvent = self.chart_mouseMoveEvent
+            self.calibration_chart.mouseReleaseEvent = self.chart_mouseReleaseEvent
             
             # Enable mouse tracking for better drag detection
             self.calibration_chart.setMouseTracking(True)
@@ -479,95 +480,126 @@ class HandbrakeCalibrationWidget(QWidget):
             return nearest_point
         return -1
     
-    def eventFilter(self, obj, event):
-        """Handle mouse events for dragging points."""
-        # Debug logging for all events
-        logger.debug(f"EventFilter: obj={type(obj).__name__}, event type {event.type()}, dragging={self.dragging}")
+    def chart_mousePressEvent(self, event):
+        """Handle mouse press events for the chart."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            logger.debug("Left mouse button press detected")
+            # Get mouse position in chart coordinates using the view box
+            pos = event.pos()
+            view_box = self.calibration_chart.getViewBox()
+            chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos))
+            
+            logger.debug(f"Mouse press at screen pos ({pos.x()}, {pos.y()}) -> chart pos ({chart_pos.x():.1f}, {chart_pos.y():.1f})")
+            
+            # Find nearest point
+            nearest_point = self.find_nearest_point(chart_pos.x(), chart_pos.y())
+            logger.debug(f"Nearest point: {nearest_point}")
+            
+            if nearest_point >= 0:
+                self.dragging = True
+                self.dragging_point = nearest_point
+                self.drag_start_pos = chart_pos
+                logger.debug(f"Started dragging point {nearest_point}")
+                event.accept()
+                return True
+            else:
+                logger.debug("No nearby point found")
         
-        # Check if the event is from our chart or scatter plot
-        if (obj == self.calibration_chart or obj == self.scatter) and hasattr(self, 'calibration_chart'):
-            try:
-                import pyqtgraph as pg
-                from PyQt6.QtCore import QPointF
-                
-                if event.type() == QEvent.Type.MouseButtonPress:
-                    if event.button() == Qt.MouseButton.LeftButton:
-                        logger.debug("Left mouse button press detected")
-                        # Get mouse position in chart coordinates using the view box
-                        pos = event.pos()
-                        view_box = self.calibration_chart.getViewBox()
-                        chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos))
-                        
-                        logger.debug(f"Mouse press at screen pos ({pos.x()}, {pos.y()}) -> chart pos ({chart_pos.x():.1f}, {chart_pos.y():.1f})")
-                        
-                        # Find nearest point
-                        nearest_point = self.find_nearest_point(chart_pos.x(), chart_pos.y())
-                        logger.debug(f"Nearest point: {nearest_point}")
-                        
-                        if nearest_point >= 0:
-                            self.dragging = True
-                            self.dragging_point = nearest_point
-                            self.drag_start_pos = chart_pos
-                            logger.debug(f"Started dragging point {nearest_point}")
-                            return True
-                        else:
-                            logger.debug("No nearby point found")
-                
-                elif event.type() == QEvent.Type.MouseMove:
-                    if self.dragging:
-                        logger.debug("Mouse move while dragging")
-                        # Get mouse position in chart coordinates
-                        pos = event.pos()
-                        view_box = self.calibration_chart.getViewBox()
-                        chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos))
-                        
-                        # Constrain to chart bounds (0-100)
-                        x = max(0, min(100, chart_pos.x()))
-                        y = max(0, min(100, chart_pos.y()))
-                        
-                        logger.debug(f"Mouse move while dragging: ({x:.1f}, {y:.1f})")
-                        
-                        # Update the curve data
-                        if self.dragging_point is not None and self.dragging_point < len(self.curve_x):
-                            self.curve_x[self.dragging_point] = x
-                            self.curve_y[self.dragging_point] = y
-                            
-                            # Sort points by x-coordinate to maintain order
-                            points = list(zip(self.curve_x, self.curve_y))
-                            points.sort(key=lambda p: p[0])
-                            self.curve_x, self.curve_y = zip(*points)
-                            
-                            # Update the scatter plot
-                            self.scatter.setData(self.curve_x, self.curve_y)
-                            
-                            # Update the line
-                            self.curve_line.setData(self.curve_x, self.curve_y)
-                            
-                            logger.debug(f"Dragged point {self.dragging_point} to ({x:.1f}, {y:.1f})")
-                        
-                        return True
-                    else:
-                        logger.debug("Mouse move but not dragging")
-                
-                elif event.type() == QEvent.Type.MouseButtonRelease:
-                    if self.dragging:
-                        logger.debug("Mouse button release while dragging")
-                        # Stop dragging
-                        self.dragging = False
-                        self.dragging_point = None
-                        self.drag_start_pos = None
-                        self.emit_calibration_update()
-                        logger.debug("Stopped dragging")
-                        return True
-                    else:
-                        logger.debug("Mouse button release but not dragging")
-                        
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.error(f"Error in eventFilter: {e}")
+        # If we didn't handle it, pass to parent
+        super(self.calibration_chart.__class__, self.calibration_chart).mousePressEvent(event)
+        return False
+    
+    def constrain_point_position(self, point_index, x, y):
+        """Constrain a point's position to prevent crossing over other points."""
+        if len(self.curve_x) < 2:
+            return x, y
+            
+        # Special constraints for first and last points
+        if point_index == 0:
+            # First point must stay at x=0
+            return 0, max(0, min(100, y))
+        elif point_index == len(self.curve_x) - 1:
+            # Last point must stay at x=100
+            return 100, max(0, min(100, y))
         
-        return super().eventFilter(obj, event)
+        # Get the x-coordinates of all other points
+        other_x_coords = [self.curve_x[i] for i in range(len(self.curve_x)) if i != point_index]
+        
+        # Find the closest points on either side
+        left_points = [cx for cx in other_x_coords if cx < x]
+        right_points = [cx for cx in other_x_coords if cx > x]
+        
+        # Constrain x position
+        min_x = max(left_points) if left_points else 0
+        max_x = min(right_points) if right_points else 100
+        
+        # Apply constraints with a small buffer
+        buffer = 2.0  # 2% buffer to prevent overlap
+        constrained_x = max(min_x + buffer, min(max_x - buffer, x))
+        
+        # Constrain y to reasonable bounds
+        constrained_y = max(0, min(100, y))
+        
+        return constrained_x, constrained_y
+
+    def chart_mouseMoveEvent(self, event):
+        """Handle mouse move events for the chart."""
+        if self.dragging and self.dragging_point is not None:
+            logger.debug("Mouse move while dragging")
+            # Get mouse position in chart coordinates
+            pos = event.pos()
+            view_box = self.calibration_chart.getViewBox()
+            chart_pos = view_box.mapSceneToView(view_box.mapFromParent(pos))
+            
+            # Constrain to chart bounds (0-100)
+            x = max(0, min(100, chart_pos.x()))
+            y = max(0, min(100, chart_pos.y()))
+            
+            logger.debug(f"Mouse move while dragging: ({x:.1f}, {y:.1f})")
+            
+            # Apply constraints to prevent crossing over other dots
+            constrained_x, constrained_y = self.constrain_point_position(self.dragging_point, x, y)
+            
+            # Update the curve data directly using the dragging_point index
+            if self.dragging_point < len(self.curve_x):
+                self.curve_x[self.dragging_point] = constrained_x
+                self.curve_y[self.dragging_point] = constrained_y
+                
+                # Update the scatter plot
+                self.scatter.setData(self.curve_x, self.curve_y)
+                
+                # Update the line
+                self.curve_line.setData(self.curve_x, self.curve_y)
+                
+                logger.debug(f"Dragged point {self.dragging_point} to ({constrained_x:.1f}, {constrained_y:.1f})")
+            
+            event.accept()
+            return True
+        else:
+            logger.debug("Mouse move but not dragging")
+        
+        # If we didn't handle it, pass to parent
+        super(self.calibration_chart.__class__, self.calibration_chart).mouseMoveEvent(event)
+        return False
+    
+    def chart_mouseReleaseEvent(self, event):
+        """Handle mouse release events for the chart."""
+        if self.dragging:
+            logger.debug("Mouse button release while dragging")
+            # Stop dragging
+            self.dragging = False
+            self.dragging_point = None
+            self.drag_start_pos = None
+            self.emit_calibration_update()
+            logger.debug("Stopped dragging")
+            event.accept()
+            return True
+        else:
+            logger.debug("Mouse button release but not dragging")
+        
+        # If we didn't handle it, pass to parent
+        super(self.calibration_chart.__class__, self.calibration_chart).mouseReleaseEvent(event)
+        return False
     
     def get_handbrake_curves(self):
         """Get available curves for handbrake."""
@@ -611,9 +643,10 @@ class HandbrakeCalibrationWidget(QWidget):
                                                 pen=pg.mkPen('#00ff00', width=2))
                 self.calibration_chart.addItem(self.scatter)
                 
-                # Reinstall event filter
-                self.calibration_chart.installEventFilter(self)
-                self.scatter.installEventFilter(self)
+                # Reinstall mouse event handlers
+                self.calibration_chart.mousePressEvent = self.chart_mousePressEvent
+                self.calibration_chart.mouseMoveEvent = self.chart_mouseMoveEvent
+                self.calibration_chart.mouseReleaseEvent = self.chart_mouseReleaseEvent
                 
                 logger.debug(f"Applied {len(x)} points to {self.handbrake_name} chart")
             except ImportError:
