@@ -11,7 +11,9 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QApplication
 from PyQt6.QtCore import Qt
 import time
+from datetime import datetime, timedelta
 from trackpro.config import Config
+from trackpro.ui.update_notification_dialog import UpdateNotificationDialog
 
 INSTALL_DIR = r"C:\Program Files\TrackPro"
 
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Get the GitHub repository from environment variable or use a default
 GITHUB_REPO = "SimCoaches/TrackPro"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CURRENT_VERSION = "1.5.5"
+CURRENT_VERSION = "1.2.5"
 UPDATE_URL = "https://trackpro.app/api/updates"
 
 class UpdateChecker(QThread):
@@ -128,7 +130,46 @@ class Updater:
         self.is_checking = False
         self.latest_version = None
         self.download_url = None
+        self._load_update_preferences()
         logger.info(f"Updater initialized with current version: {CURRENT_VERSION}")
+        
+    def _load_update_preferences(self):
+        """Load update notification preferences from file."""
+        self.update_preferences_file = os.path.join(os.path.expanduser("~/Documents"), "trackpro_update_preferences.json")
+        try:
+            if os.path.exists(self.update_preferences_file):
+                with open(self.update_preferences_file, 'r') as f:
+                    self.update_preferences = json.load(f)
+            else:
+                self.update_preferences = {}
+        except Exception as e:
+            logger.error(f"Error loading update preferences: {e}")
+            self.update_preferences = {}
+            
+    def _save_update_preferences(self):
+        """Save update notification preferences to file."""
+        try:
+            with open(self.update_preferences_file, 'w') as f:
+                json.dump(self.update_preferences, f)
+        except Exception as e:
+            logger.error(f"Error saving update preferences: {e}")
+            
+    def _should_show_update_notification(self, version):
+        """Check if we should show the update notification based on 24-hour cooldown."""
+        if not self.update_preferences:
+            return True
+            
+        # Check if this version was dismissed recently
+        if version in self.update_preferences:
+            dismissed_time = datetime.fromisoformat(self.update_preferences[version])
+            time_since_dismissed = datetime.now() - dismissed_time
+            
+            # If less than 24 hours have passed, don't show
+            if time_since_dismissed < timedelta(hours=24):
+                logger.info(f"Update notification for v{version} dismissed recently, skipping (dismissed {time_since_dismissed.total_seconds()/3600:.1f} hours ago)")
+                return False
+                
+        return True
 
     def check_for_updates(self, silent=False, manual_check=False):
         """
@@ -165,6 +206,11 @@ class Updater:
         self.latest_version = version
         self.download_url = download_url
         
+        # Check if we should show the notification based on 24-hour cooldown
+        if not self._should_show_update_notification(version):
+            logger.info(f"Skipping update notification for v{version} due to 24-hour cooldown")
+            return
+        
         # If we have a parent window, show the update notification in the UI
         if self.parent:
             if not self.check_silent:
@@ -179,29 +225,29 @@ class Updater:
         
         logger.info(f"Showing update prompt for version v{self.latest_version}")
         
-        # Create message box to notify the user of the update
-        msg = QMessageBox(self.parent)
-        msg.setWindowTitle("Update Available")
-        msg.setText(
-            f"A new version (v{self.latest_version}) of TrackPro is available.\n\n"
-            f"You are currently running v{CURRENT_VERSION}.\n\n"
-            "Would you like to download and install the update now?"
-        )
-        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
-        msg.setIcon(QMessageBox.Icon.Information)
+        # Create custom update notification dialog
+        dialog = UpdateNotificationDialog(self.latest_version, self.parent)
+        dialog.download_clicked.connect(lambda: self._handle_download_choice())
+        dialog.cancel_clicked.connect(lambda: self._handle_cancel_choice())
         
-        choice = msg.exec()
-        
-        if choice == QMessageBox.StandardButton.Yes:
-            logger.info("User chose to update now")
-            # Start the download and installation process
-            self._download_and_install_update(self.download_url)
-        else:
-            logger.info("User chose not to update now")
-            # Just show the notification that an update is available
-            if self.parent:
-                self.parent.show_update_notification(self.latest_version)
+        # Show the dialog
+        dialog.exec()
+    
+    def _handle_download_choice(self):
+        """Handle when user clicks download button."""
+        logger.info("User chose to update now")
+        # Start the download and installation process
+        self._download_and_install_update(self.download_url)
+    
+    def _handle_cancel_choice(self):
+        """Handle when user clicks cancel button."""
+        logger.info("User chose not to update now")
+        # Save the dismissal time for 24-hour cooldown
+        if self.latest_version:
+            self.update_preferences[self.latest_version] = datetime.now().isoformat()
+            self._save_update_preferences()
+            logger.info(f"Update notification for v{self.latest_version} dismissed, will show again in 24 hours")
+        # Close the current dialog - no need to show another notification
     
     def _on_no_update_available(self):
         self.is_checking = False

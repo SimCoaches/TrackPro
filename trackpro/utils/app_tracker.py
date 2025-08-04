@@ -32,7 +32,7 @@ class AppTracker:
             "platform_version": platform.version(),
             "machine": platform.machine(),
             "processor": platform.processor(),
-            "app_version": "1.5.3",  # Update this with your actual version
+            "app_version": "1.2.5",  # Update this with your actual version
         }
     
     def start_session(self, user_id: Optional[str] = None) -> bool:

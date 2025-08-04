@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap, QFont
 from .base_dialog import BaseAuthDialog
-from ..database.supabase_client import supabase
+from ..database.supabase_client import get_supabase_client
 from ..config import config
 from trackpro.social import enhanced_user_manager
 import logging
@@ -150,7 +150,11 @@ class ForgotPasswordDialog(QDialog):
             redirect_url = f"http://localhost:{oauth_port}/auth/reset-password"
             
             # Send the password reset email with our callback URL
-            result = supabase.reset_password_for_email(email, redirect_url)
+            from trackpro.database.supabase_client import _supabase_manager
+            if not _supabase_manager:
+                raise Exception("Supabase manager not initialized.")
+
+            result = _supabase_manager.reset_password_for_email(email, redirect_url)
             
             if result.get("success"):
                 QMessageBox.information(self, "Reset Email Sent", 
@@ -324,10 +328,13 @@ class PasswordResetCompletionDialog(QDialog):
             # Set the session using the tokens from the email link
             if self.access_token and self.refresh_token:
                 # Set the session in Supabase client
-                supabase.client.auth.set_session(self.access_token, self.refresh_token)
+                from trackpro.database.supabase_client import _supabase_manager
+                if not _supabase_manager:
+                    raise Exception("Supabase manager not initialized.")
+                _supabase_manager.client.auth.set_session(self.access_token, self.refresh_token)
                 
                 # Update the password
-                response = supabase.client.auth.update_user({
+                response = _supabase_manager.client.auth.update_user({
                     "password": new_password
                 })
                 
@@ -594,10 +601,16 @@ class LoginDialog(BaseAuthDialog):
                 if self.show_network_error("Cannot connect to server to authenticate with Google."):
                     return
             
+            # Get the Supabase manager (not the client)
+            from trackpro.database.supabase_client import _supabase_manager
+            if not _supabase_manager:
+                self.show_error("Cannot connect to authentication server. Please try again.")
+                return
+            
             # Open Google OAuth flow
             redirect_url = f"http://localhost:{oauth_port}"
             logger.info(f"Starting Google OAuth with redirect URL: {redirect_url}")
-            response = supabase.sign_in_with_google(redirect_url)
+            response = _supabase_manager.sign_in_with_google(redirect_url)
             if response and hasattr(response, 'url'):
                 # Open browser with the URL
                 webbrowser.open(response.url)
@@ -683,6 +696,11 @@ class LoginDialog(BaseAuthDialog):
         """Periodically check if the user has completed Google authentication."""
         try:
             # Check if user is authenticated now
+            supabase = get_supabase_client()
+            if not supabase:
+                logger.error("Supabase client not initialized in check_google_auth_status")
+                return
+
             if supabase.is_authenticated():
                 logger.info("Google authentication detected - user is now authenticated")
                 
@@ -757,10 +775,7 @@ class LoginDialog(BaseAuthDialog):
     def handle_discord_login(self):
         """Handle login with Discord."""
         try:
-            # Disable the button to prevent multiple clicks
-            self.discord_button.setEnabled(False)
-            
-            # Set the pending provider for OAuth completion handling
+            # Set the pending provider
             self.pending_provider = "discord"
             
             # Check if OAuth is available and get the port
@@ -768,62 +783,39 @@ class LoginDialog(BaseAuthDialog):
             
             # Check if the callback server is actually running
             if not self.oauth_handler or not hasattr(self.oauth_handler, 'oauth_port'):
-                self.discord_button.setEnabled(True)
                 self._show_oauth_fallback_error("Discord")
                 return
-
+            
             # Make sure we're connected
             if not self.check_connection():
-                self.discord_button.setEnabled(True)
                 if self.show_network_error("Cannot connect to server to authenticate with Discord."):
                     return
-
-            # Connect to the existing handler's signals
-            # Disconnect first to avoid duplicate connections if called multiple times
-            try:
-                self.oauth_handler.auth_completed.disconnect(self.on_oauth_completed)
-            except TypeError:
-                pass # Signal not connected
-            try:
-                self.oauth_handler.password_reset_required.disconnect(self.on_password_reset_required)
-            except TypeError:
-                pass # Signal not connected
             
-            self.oauth_handler.auth_completed.connect(self.on_oauth_completed)
-            self.oauth_handler.password_reset_required.connect(self.on_password_reset_required)
-
-            # Use the shared handler to start the Discord OAuth flow with PKCE
-            # The server is already running, so we don't need to manage it here
-            logger.info(f"Using shared OAuth handler to start Discord login on port {oauth_port}")
-            try:
-                response = self.oauth_handler.start_discord_auth(f"http://localhost:{oauth_port}")
-
-                if response and hasattr(response, 'url'):
-                    # Open browser with the URL
-                    try:
-                        webbrowser.open(response.url)
-                        
-                        # Show message to the user
-                        self.show_info("A browser window will open for you to sign in with Discord.\n\n"
-                                      "Once completed, you'll be redirected back to the application.")
-                    except Exception as browser_e:
-                        logger.error(f"Error opening browser: {browser_e}")
-                        self.discord_button.setEnabled(True)
-                        self.show_error(f"Could not open web browser: {str(browser_e)}\n\nPlease check your default browser settings.")
-                else:
+            # Get the Supabase manager (not the client)
+            from trackpro.database.supabase_client import _supabase_manager
+            if not _supabase_manager:
+                self.show_error("Cannot connect to authentication server. Please try again.")
+                return
+            
+            # Open Discord OAuth flow
+            redirect_url = f"http://localhost:{oauth_port}"
+            logger.info(f"Starting Discord OAuth with redirect URL: {redirect_url}")
+            response = _supabase_manager.sign_in_with_discord(redirect_url)
+            if response and hasattr(response, 'url'):
+                # Open browser with the URL
+                try:
+                    webbrowser.open(response.url)
+                    
+                    # Show message to the user
+                    self.show_info("A browser window will open for you to sign in with Discord.\n\n"
+                                  "Once completed, you'll be redirected back to the application.")
+                except Exception as browser_e:
+                    logger.error(f"Error opening browser: {browser_e}")
                     self.discord_button.setEnabled(True)
-                    self.show_error("Failed to start Discord authentication flow. The response did not contain a valid authorization URL.")
-            except ValueError as ve:
-                # Specific error messages from the OAuth handler
-                logger.error(f"Discord auth ValueError: {ve}")
+                    self.show_error(f"Could not open web browser: {str(browser_e)}\n\nPlease check your default browser settings.")
+            else:
                 self.discord_button.setEnabled(True)
-                self.show_error(str(ve))
-            except Exception as auth_e:
-                # Generic errors from the OAuth process
-                logger.error(f"Discord auth error: {auth_e}", exc_info=True)
-                self.discord_button.setEnabled(True)
-                self.show_error(f"Discord authentication error: {str(auth_e)}")
-                
+                self.show_error("Failed to start Discord authentication flow. The response did not contain a valid authorization URL.")
         except Exception as e:
             logger.error(f"Discord login error: {e}", exc_info=True)
             self.discord_button.setEnabled(True)
@@ -833,88 +825,66 @@ class LoginDialog(BaseAuthDialog):
         # If there was an error before the OAuth flow started, we've already re-enabled it above
     
     def on_oauth_completed(self, success, response):
-        """Handle OAuth authentication completion."""
-        # Re-enable any disabled buttons
-        if hasattr(self, 'discord_button'):
-            self.discord_button.setEnabled(True)
-        
-        # Stop Google auth timer if running
-        if hasattr(self, '_google_auth_timer') and self._google_auth_timer.isActive():
-            logger.info("Stopping Google auth timer due to OAuth completion")
-            self._google_auth_timer.stop()
-
-        logger.info(f"OAuth completed: success={success}, provider={getattr(response, 'provider', 'unknown') if response else 'none'}")
-        if success and response:
-            # Determine user email for the confirmation message
-            user_email = "User"
-            if hasattr(response, 'user') and hasattr(response.user, 'email'):
-                user_email = response.user.email
-            elif hasattr(response, 'email'):
-                user_email = response.email
+        """Handle OAuth completion."""
+        try:
+            if not success:
+                logger.error("OAuth completion failed")
+                self.show_error("Authentication failed. Please try again.")
+                return
+            
+            if not response:
+                logger.error("OAuth completion failed - no response")
+                self.show_error("Authentication failed. Please try again.")
+                return
+            
+            logger.info(f"OAuth completion successful for provider: {self.pending_provider}")
+            
+            # Get the Supabase manager (not the client)
+            from trackpro.database.supabase_client import _supabase_manager
+            if not _supabase_manager:
+                logger.error("Supabase manager not initialized in on_oauth_completed")
+                return
+            
+            # Get user info
+            user_response = _supabase_manager.get_user()
+            if not user_response or not hasattr(user_response, 'user'):
+                logger.error("Failed to get user info after OAuth completion")
+                self.show_error("Authentication failed. Please try again.")
+                return
+            
+            user = user_response.user
+            user_email = user.email if hasattr(user, 'email') else 'User'
             
             # Check 2FA before proceeding
-            # 2FA temporarily disabled - commented out for now
-            user_id = response.user.id if hasattr(response, 'user') and hasattr(response.user, 'id') else None
-            # if user_id and not self.check_and_handle_2fa(user_id, user_email):
-            #     # 2FA failed, logout and return
-            #     try:
-            #         supabase.client.auth.sign_out()
-            #     except:
-            #         pass
-            #     return
+            if not self.check_and_handle_2fa(user.id, user_email):
+                # 2FA failed, logout and return
+                try:
+                    _supabase_manager.sign_out()
+                except:
+                    pass
+                return
             
             # Check profile completeness
-            if user_id:
-                self.check_profile_completeness_and_redirect(user_id)
+            self.check_profile_completeness_and_redirect(user.id)
             
             # Get remember_me preference if checkbox exists
             remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
             
-            # Authentication successful - emit our own signal
-            logger.info("Authentication successful - emitting auth_completed signal")
-            self.auth_completed.emit(True, response)
-            
             # Force save the session
-            if hasattr(supabase, '_save_session'):
+            if hasattr(_supabase_manager, '_save_session'):
                 logger.info(f"Explicitly saving session after OAuth completion with remember_me={remember_me}")
-                supabase._save_session(response, remember_me=remember_me)
+                _supabase_manager._save_session(user_response, remember_me=remember_me)
             
             # Force the parent window to update if we can
-            try:
-                parent = self.parent()
-                if parent:
-                    from PyQt6.QtWidgets import QApplication
-                    logger.info("Forcing parent window to update authentication state")
-                    QApplication.processEvents()
-                    
-                    # If the parent has update_auth_state method, call it directly
-                    if hasattr(parent, 'update_auth_state'):
-                        logger.info("Parent has update_auth_state method, calling it")
-                        parent.update_auth_state(True)
-                        QApplication.processEvents()
-                    
-                    # Force refresh authentication state after login
-                    if hasattr(parent, 'force_auth_refresh_after_login'):
-                        logger.info("Calling force_auth_refresh_after_login to ensure UI updates")
-                        parent.force_auth_refresh_after_login()
-                        QApplication.processEvents()
-            except Exception as e:
-                logger.error(f"Error updating parent window: {e}")
+            if hasattr(self.parent(), 'force_auth_refresh_after_login'):
+                self.parent().force_auth_refresh_after_login()
             
-            # Close this dialog
+            # Close the dialog
             self.accept()
             
-            # Show a brief confirmation
-            QMessageBox.information(self, "Login Successful", 
-                                   f"You are now logged in as {user_email}")
-        else:
-            logger.error("OAuth authentication failed")
-            # Determine which provider failed
-            provider = "authentication"
-            if hasattr(self, 'pending_provider'):
-                provider = self.pending_provider
-            
-            self.show_error(f"{provider.capitalize()} authentication failed. Please try again.")
+        except Exception as e:
+            logger.error(f"Error in OAuth completion: {e}")
+            self.show_error(f"Authentication error: {str(e)}")
     
     def on_password_reset_required(self, access_token, refresh_token):
         """Handle password reset completion - this follows the exact same pattern as OAuth."""
@@ -955,7 +925,24 @@ class LoginDialog(BaseAuthDialog):
         Returns:
             bool: True if connected, False otherwise
         """
-        return supabase.check_connection()
+        try:
+            supabase = get_supabase_client()
+            if not supabase:
+                logger.error("Supabase client not initialized in check_connection")
+                return False
+            
+            # Try to get the user to test connectivity
+            try:
+                user_response = supabase.auth.get_user()
+                # If we can get a response (even if no user), the connection is working
+                logger.info("✅ Supabase connection test successful")
+                return True
+            except Exception as e:
+                logger.warning(f"Supabase connection test failed: {e}")
+                return False
+        except Exception as e:
+            logger.error(f"Error checking connection: {e}")
+            return False
     
     def check_and_handle_2fa(self, user_id, user_email="User"):
         """Check if user has 2FA enabled and handle the verification process.
@@ -984,6 +971,14 @@ class LoginDialog(BaseAuthDialog):
                 # Allow login to proceed - skip all 2FA checks
                 return True
             
+            supabase = get_supabase_client()
+            if not supabase:
+                logger.error("Supabase client not initialized in check_and_handle_2fa")
+                # Show user-friendly error message
+                QMessageBox.critical(self, "Connection Error", 
+                    "Cannot connect to authentication server. Please check your internet connection and try again.")
+                return False
+
             profile_res = enhanced_user_manager.get_complete_user_profile(user_id)
             
             # The primary condition is whether the user's phone has been verified via Twilio.
@@ -1049,8 +1044,11 @@ class LoginDialog(BaseAuthDialog):
             
             # SIMPLE FIX: Direct query to user_details table instead of using the view
             try:
-                from ..database.supabase_client import supabase
-                response = supabase.client.from_("user_details").select("twilio_verified").eq("user_id", user_id).single().execute()
+                from trackpro.database.supabase_client import _supabase_manager
+                if not _supabase_manager:
+                    logger.error("Supabase manager not initialized in force_phone_verification")
+                    return False
+                response = _supabase_manager.client.from_("user_details").select("twilio_verified").eq("user_id", user_id).single().execute()
                 
                 if response.data and response.data.get('twilio_verified') == True:
                     logger.info(f"Direct query confirmed: User {user_id} is now verified")
@@ -1108,6 +1106,13 @@ class LoginDialog(BaseAuthDialog):
             bool: True if profile is complete or user completed it, False if incomplete
         """
         try:
+            supabase = get_supabase_client()
+            if not supabase:
+                logger.error("Supabase client not initialized in check_profile_completeness_and_redirect")
+                # Allow login to proceed even if profile check fails
+                logger.info("Profile completeness check skipped due to connection issues")
+                return True
+
             profile_res = enhanced_user_manager.get_complete_user_profile(user_id)
             if not profile_res:
                 # No profile, needs to be created (will happen in main app)
@@ -1149,83 +1154,61 @@ class LoginDialog(BaseAuthDialog):
                 return
         
         try:
+            supabase = get_supabase_client()
+            if not supabase:
+                # Try to reinitialize the client once
+                logger.info("Supabase client not available, attempting reinitialization...")
+                try:
+                    from trackpro.database.supabase_client import _supabase_manager
+                    if _supabase_manager:
+                        _supabase_manager.initialize()
+                        supabase = get_supabase_client()
+                except Exception as e:
+                    logger.error(f"Reinitialization failed: {e}")
+                
+                if not supabase:
+                    self.show_error("Cannot connect to authentication server. Please check your internet connection and try again.")
+                    return
+
             # Authenticate user
             response = supabase.client.auth.sign_in_with_password({
                 "email": email,
                 "password": password
             })
             
-            if response and response.user:
-                logger.info(f"User {email} signed in successfully")
+            if response and hasattr(response, 'user') and response.user:
+                logger.info(f"User {email} authenticated successfully")
                 
-                # Check for terms of service acceptance
-                if not check_and_prompt_for_terms(response.user.id, self):
-                    # User declined terms, so abort the login.
+                # Check 2FA before proceeding
+                user_email = response.user.email if hasattr(response.user, 'email') else 'User'
+                if not self.check_and_handle_2fa(response.user.id, user_email):
+                    # 2FA failed, logout and return
                     try:
                         supabase.client.auth.sign_out()
                     except:
                         pass
                     return
-
-                # Check 2FA before proceeding
-                # 2FA temporarily disabled - commented out for now
-                # if not self.check_and_handle_2fa(response.user.id, email):
-                #     # 2FA failed, logout and return
-                #     try:
-                #         supabase.client.auth.sign_out()
-                #     except:
-                #         pass
-                #     return
                 
                 # Check profile completeness
                 self.check_profile_completeness_and_redirect(response.user.id)
                 
-                # Store the remember me preference
-                if hasattr(supabase, '_save_session'):
-                    logger.info(f"Explicitly saving session after login with remember_me={remember_me}")
+                # Get remember_me preference
+                remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
+                
+                # Save session
+                if hasattr(supabase, '_save_session') and response:
+                    logger.info(f"Explicitly saving session with remember_me={remember_me}")
                     supabase._save_session(response, remember_me=remember_me)
                 
-                # Emit our signal
-                self.auth_completed.emit(True, response)
-                
                 # Force the parent window to update if we can
-                try:
-                    parent = self.parent()
-                    if parent:
-                        from PyQt6.QtWidgets import QApplication
-                        logger.info("Forcing parent window to update authentication state")
-                        QApplication.processEvents()
-                        
-                        # If the parent has update_auth_state method, call it directly
-                        if hasattr(parent, 'update_auth_state'):
-                            logger.info("Parent has update_auth_state method, calling it")
-                            parent.update_auth_state(True)
-                            QApplication.processEvents()
-                        
-                        # Force refresh authentication state after login
-                        if hasattr(parent, 'force_auth_refresh_after_login'):
-                            logger.info("Calling force_auth_refresh_after_login to ensure UI updates")
-                            parent.force_auth_refresh_after_login()
-                            QApplication.processEvents()
-                except Exception as e:
-                    logger.error(f"Error updating parent window: {e}")
+                if hasattr(self.parent(), 'force_auth_refresh_after_login'):
+                    self.parent().force_auth_refresh_after_login()
                 
-                # Close this dialog
+                # Close the dialog
                 self.accept()
-                
-                # Show a brief success message
-                QMessageBox.information(self, "Login Successful", 
-                                      f"You are now logged in as {email}")
             else:
+                logger.error("Authentication failed - no user in response")
                 self.show_error("Authentication failed. Please check your credentials.")
-                
-        except socket.gaierror:
-            if self.show_network_error("DNS resolution failed. Check your internet connection."):
-                return
-                
-        except ConnectionError:
-            if self.show_network_error("Connection to server failed. Check your internet connection."):
-                return
                 
         except Exception as e:
             logger.error(f"Error signing in: {e}")

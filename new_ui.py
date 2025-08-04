@@ -712,10 +712,48 @@ def main():
     
     # Create QApplication
     app = QApplication(sys.argv)
-    app.setApplicationName("TrackPro Modern")
+    app.setApplicationName("TrackPro by Sim Coaches")
     app.setApplicationVersion("1.5.5-modern")
     app.setOrganizationName("Sim Coaches")
     app.setOrganizationDomain("simcoaches.com")
+    
+    # Set application icon to prevent Python icon from showing in taskbar
+    try:
+        import os
+        # Try ICO first (user preference)
+        icon_path = os.path.join(os.path.dirname(__file__), "trackpro", "resources", "icons", "trackpro-tray-1.ico")
+        logger.info(f"🔍 Looking for application icon at: {icon_path}")
+        logger.info(f"🔍 File exists: {os.path.exists(icon_path)}")
+        if os.path.exists(icon_path):
+            from PyQt6.QtGui import QIcon
+            icon = QIcon(icon_path)
+            app.setWindowIcon(icon)
+            logger.info(f"✅ Set application icon from: {icon_path}")
+            logger.info(f"✅ Icon is null: {icon.isNull()}")
+            
+            # Also set the icon as a property to ensure it persists
+            app.setProperty("windowIcon", icon)
+            logger.info("✅ Set application icon as property")
+        else:
+            # Try PNG as fallback
+            png_icon_path = os.path.join(os.path.dirname(__file__), "trackpro", "resources", "icons", "trackpro_tray.png")
+            logger.info(f"🔍 Looking for PNG fallback at: {png_icon_path}")
+            if os.path.exists(png_icon_path):
+                from PyQt6.QtGui import QIcon
+                icon = QIcon(png_icon_path)
+                app.setWindowIcon(icon)
+                logger.info(f"✅ Set application icon from: {png_icon_path}")
+                logger.info(f"✅ Icon is null: {icon.isNull()}")
+                
+                # Also set the icon as a property to ensure it persists
+                app.setProperty("windowIcon", icon)
+                logger.info("✅ Set application icon as property")
+            else:
+                logger.warning("⚠️ Could not find application icon")
+    except Exception as e:
+        logger.warning(f"⚠️ Error setting application icon: {e}")
+        import traceback
+        logger.warning(f"⚠️ Traceback: {traceback.format_exc()}")
     
     # PERFORMANCE: Show startup progress to user
     from PyQt6.QtWidgets import QSplashScreen, QLabel
@@ -749,7 +787,7 @@ def main():
         from trackpro.auth import oauth_handler
         oauth_handler_instance = oauth_handler.OAuthHandler()
         
-        # PERFORMANCE OPTIMIZATION: Initialize hardware systems in parallel
+        # PERFORMANCE OPTIMIZATION: Initialize hardware systems in parallel with better error handling
         splash.showMessage("Initializing hardware systems...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
         app.processEvents()
         logger.info("🚀 Starting parallel initialization of hardware systems...")
@@ -757,39 +795,32 @@ def main():
         import concurrent.futures
         import threading
         
-        # Create a thread pool for parallel initialization
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            # Submit all hardware initialization tasks
-            pedal_future = executor.submit(lambda: (
-                logger.info("🎮 Initializing ULTRA-HIGH PERFORMANCE pedal system..."),
-                initialize_global_pedal_system()
-            ))
+        # Create a thread pool for parallel initialization with reduced workers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # Submit hardware initialization tasks (reduced from 3 to 2 workers)
+            pedal_future = executor.submit(initialize_global_pedal_system)
+            handbrake_future = executor.submit(initialize_global_handbrake_system)
             
-            handbrake_future = executor.submit(lambda: (
-                logger.info("🤚 Initializing handbrake system..."),
-                initialize_global_handbrake_system()
-            ))
-            
-            iracing_future = executor.submit(lambda: (
-                logger.info("🏁 Initializing global iRacing telemetry connection..."),
-                initialize_global_iracing_connection()
-            ))
-            
-            # Wait for all systems to complete (with timeout)
+            # Wait for hardware systems to complete (with timeout)
             try:
-                concurrent.futures.wait([pedal_future, handbrake_future, iracing_future], timeout=30)
-                logger.info("✅ All hardware systems initialized in parallel")
+                concurrent.futures.wait([pedal_future, handbrake_future], timeout=20)
+                logger.info("✅ Hardware systems initialized in parallel")
             except concurrent.futures.TimeoutError:
-                logger.warning("⚠️ Some hardware systems took longer than 30 seconds to initialize")
+                logger.warning("⚠️ Hardware systems took longer than 20 seconds to initialize")
             
             # Check for any exceptions
-            for future_name, future in [("pedal", pedal_future), ("handbrake", handbrake_future), ("iracing", iracing_future)]:
+            for future_name, future in [("pedal", pedal_future), ("handbrake", handbrake_future)]:
                 try:
                     future.result(timeout=1)  # Quick check for exceptions
                 except Exception as e:
                     logger.error(f"❌ Error initializing {future_name} system: {e}")
         
-        logger.info("🏁 Parallel hardware initialization completed")
+        # Initialize iRacing connection after hardware systems are ready
+        splash.showMessage("Initializing iRacing connection...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+        app.processEvents()
+        initialize_global_iracing_connection()
+        
+        logger.info("🏁 All systems initialized successfully")
         
         # Import the modern TrackPro app class
         splash.showMessage("Creating main application...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)

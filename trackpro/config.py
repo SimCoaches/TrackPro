@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 import logging
+from typing import Optional
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,9 @@ DEFAULT_CONFIG = {
         'debug_mode': False  # Set to True for additional diagnostic logging
     },
     'ui': {
-        'minimize_to_tray': False  # Whether to minimize to system tray instead of closing
+        'minimize_to_tray': False,  # Whether to minimize to system tray instead of closing
+        'start_with_windows': False,  # Whether to start TrackPro with Windows
+        'start_minimized': True  # Whether to start minimized when starting with Windows
     },
     'eye_tracking': {
         'enabled': False,  # Eye tracking disabled by default
@@ -71,6 +74,23 @@ DEFAULT_CONFIG = {
         'auth_token': '',
         'verify_service_sid': '',
         'debug_mode': False  # Default to disabled
+    },
+    'voice_chat': {
+        'enabled': True,  # Voice chat enabled by default
+        'sample_rate': 48000,  # High quality sample rate
+        'channels': 1,  # Mono - most microphones are mono
+        'bit_depth': 16,  # Reduced bit depth for lower latency
+        'buffer_size': 128,  # Ultra-low latency buffer (was 512)
+        'input_device': None,  # Will be set by user
+        'output_device': None,  # Will be set by user
+        'input_volume': 80,  # Input volume percentage
+        'output_volume': 80,  # Output volume percentage
+        'noise_suppression': False,  # Disabled for lower latency
+        'echo_cancellation': False,  # Disabled for lower latency
+        'automatic_gain': False,  # Disabled for lower latency
+        'ultra_low_latency': True,  # Enable ultra-low latency mode
+        'direct_monitoring': True,  # Enable direct monitoring (hear yourself instantly)
+        'priority_threading': True  # Use high-priority threads for audio processing
     }
 }
 
@@ -239,6 +259,16 @@ class Config:
     def minimize_to_tray(self) -> bool:
         """Check if minimize to tray is enabled."""
         return self.get('ui.minimize_to_tray', False)
+
+    @property
+    def start_with_windows(self) -> bool:
+        """Check if TrackPro should start with Windows."""
+        return self.get('ui.start_with_windows', False)
+
+    @property
+    def start_minimized(self) -> bool:
+        """Check if TrackPro should start minimized when starting with Windows."""
+        return self.get('ui.start_minimized', True)
 
     # Eye tracking configuration properties
     @property
@@ -454,6 +484,83 @@ class Config:
         if os.getenv('TRACKPRO_TWILIO_DEBUG', '').lower() == 'true':
             debug = True
         return debug
+    
+    # Voice Chat Configuration Properties
+    
+    @property
+    def voice_chat_enabled(self) -> bool:
+        """Get voice chat enabled setting."""
+        return self.get('voice_chat.enabled', True)
+    
+    @property
+    def voice_chat_sample_rate(self) -> int:
+        """Get voice chat sample rate."""
+        return self.get('voice_chat.sample_rate', 48000)
+    
+    @property
+    def voice_chat_channels(self) -> int:
+        """Get voice chat channel count."""
+        return self.get('voice_chat.channels', 1)  # Changed from 2 to 1 - most mics are mono
+    
+    @property
+    def voice_chat_bit_depth(self) -> int:
+        """Get voice chat bit depth."""
+        return self.get('voice_chat.bit_depth', 24)
+    
+    @property
+    def voice_chat_buffer_size(self) -> int:
+        """Get voice chat buffer size."""
+        return self.get('voice_chat.buffer_size', 512)
+    
+    @property
+    def voice_chat_input_device(self) -> Optional[int]:
+        """Get voice chat input device index."""
+        return self.get('voice_chat.input_device')
+    
+    @property
+    def voice_chat_output_device(self) -> Optional[int]:
+        """Get voice chat output device index."""
+        return self.get('voice_chat.output_device')
+    
+    @property
+    def voice_chat_input_volume(self) -> int:
+        """Get voice chat input volume percentage."""
+        return self.get('voice_chat.input_volume', 80)
+    
+    @property
+    def voice_chat_output_volume(self) -> int:
+        """Get voice chat output volume percentage."""
+        return self.get('voice_chat.output_volume', 80)
+    
+    @property
+    def voice_chat_noise_suppression(self) -> bool:
+        """Get voice chat noise suppression setting."""
+        return self.get('voice_chat.noise_suppression', True)
+    
+    @property
+    def voice_chat_echo_cancellation(self) -> bool:
+        """Get voice chat echo cancellation setting."""
+        return self.get('voice_chat.echo_cancellation', True)
+    
+    @property
+    def voice_chat_automatic_gain(self) -> bool:
+        """Get voice chat automatic gain setting."""
+        return self.get('voice_chat.automatic_gain', False)  # Disabled for lower latency
+    
+    @property
+    def voice_chat_ultra_low_latency(self) -> bool:
+        """Get voice chat ultra-low latency mode setting."""
+        return self.get('voice_chat.ultra_low_latency', True)
+    
+    @property
+    def voice_chat_direct_monitoring(self) -> bool:
+        """Get voice chat direct monitoring setting."""
+        return self.get('voice_chat.direct_monitoring', True)
+    
+    @property
+    def voice_chat_priority_threading(self) -> bool:
+        """Get voice chat priority threading setting."""
+        return self.get('voice_chat.priority_threading', True)
 
 # Create global config instance
 config = Config() 

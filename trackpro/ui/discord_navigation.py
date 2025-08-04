@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QRect
 )
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter
+from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QBrush, QPen
 from PyQt6.QtSvgWidgets import QSvgWidget
 
 class DiscordNavigationButton(QPushButton):
@@ -320,21 +320,22 @@ class DiscordNavigation(QWidget):
         # User profile container
         self.user_profile_container = QWidget()
         self.user_profile_layout = QHBoxLayout(self.user_profile_container)
-        self.user_profile_layout.setContentsMargins(8, 8, 8, 8)
+        self.user_profile_layout.setContentsMargins(8, 4, 8, 4)
         self.user_profile_layout.setSpacing(8)
-        self.user_profile_container.setFixedHeight(56)  # Fixed height for consistency
+        self.user_profile_container.setFixedHeight(40)
         
-        # User avatar button (clickable for account page)
+        # User avatar button (now supports both text and images)
         self.user_avatar_btn = QPushButton()
         self.user_avatar_btn.setFixedSize(36, 36)  # Slightly smaller to match narrower nav
         self.user_avatar_btn.setStyleSheet("""
             QPushButton {
                 background-color: #5865f2;
-                border: 2px solid #40444b;
+                border: 3px solid #40444b;
                 border-radius: 18px;
                 color: white;
-                font-size: 14px;
+                font-size: 12px;
                 font-weight: bold;
+                text-align: center;
             }
             QPushButton:hover {
                 background-color: #4752c4;
@@ -346,6 +347,9 @@ class DiscordNavigation(QWidget):
         self.user_avatar_btn.setText("U")
         self.user_avatar_btn.setToolTip("Account Settings")
         self.user_avatar_btn.clicked.connect(lambda: self.page_requested.emit("account"))
+        
+        # Store avatar URL for updates
+        self.current_avatar_url = None
         
         # User info label (only shown when expanded)
         self.user_info_label = QLabel("User")
@@ -524,11 +528,83 @@ class DiscordNavigation(QWidget):
                     }
                 """)
         
-    def set_user_info(self, username: str = "User", avatar_text: str = "U"):
+    def set_user_info(self, username: str = "User", avatar_text: str = "U", avatar_url: str = None):
         """Update user profile information."""
         self.user_info_label.setText(username)
-        self.user_avatar_btn.setText(avatar_text)
+        
+        # If we have an avatar URL, load and display the image
+        if avatar_url and avatar_url != self.current_avatar_url:
+            self.load_avatar_from_url(avatar_url)
+        else:
+            # Fallback to initials
+            self.user_avatar_btn.setText(avatar_text)
+            self.user_avatar_btn.setIcon(QIcon())  # Clear any existing icon
+        
         self.user_avatar_btn.setToolTip(f"{username} - Account Settings")
+    
+    def load_avatar_from_url(self, url: str):
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar button size
+                            avatar_size = 36
+                            scaled_pixmap = pixmap.scaled(
+                                avatar_size, avatar_size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(avatar_size, avatar_size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            painter = QPainter(circular_pixmap)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            painter.setBrush(QBrush(scaled_pixmap))
+                            painter.setPen(QPen(Qt.GlobalColor.transparent))
+                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
+                            painter.end()
+                            
+                            # Update avatar display
+                            self.user_avatar_btn.setIcon(QIcon(circular_pixmap))
+                            self.user_avatar_btn.setText("")  # Clear text
+                            self.current_avatar_url = url
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    self.user_avatar_btn.setText("U")
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            self.user_avatar_btn.setText("U")
     
     def update_authentication_state(self, is_authenticated: bool, user_info: dict = None):
         """Update the navigation based on authentication state."""
@@ -545,6 +621,7 @@ class DiscordNavigation(QWidget):
             # User is logged in - show their name and initials
             username = user_info.get('name', 'User')
             email = user_info.get('email', '')
+            avatar_url = user_info.get('avatar_url')  # Get avatar URL if available
             
             # If no name but has email, use email as display name
             if username == 'User' and email:
@@ -553,12 +630,26 @@ class DiscordNavigation(QWidget):
             # Generate avatar initials from name
             avatar_text = self._generate_avatar_initials(username)
             
-            # Update the display
-            self.set_user_info(username, avatar_text)
+            # Update the display with avatar URL if available
+            self.set_user_info(username, avatar_text, avatar_url)
             
         else:
             # User is not logged in - show default
             self.set_user_info("User", "U")
+    
+    def on_avatar_updated(self):
+        """Handle avatar updates specifically - forces refresh of user info."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info("🔄 Avatar updated - refreshing navigation user info")
+        
+        # Clear cached user info to force refresh
+        self._cached_user_info = None
+        
+        # Force refresh by calling update_authentication_state with current state
+        # This will trigger a fresh fetch of user info including the new avatar
+        self.update_authentication_state(self._cached_auth_state, None)
     
     def _generate_avatar_initials(self, name: str) -> str:
         """Generate avatar initials from a name."""

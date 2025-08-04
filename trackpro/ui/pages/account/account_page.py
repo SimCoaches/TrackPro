@@ -5,11 +5,12 @@ from PyQt6.QtWidgets import (
     QComboBox, QCheckBox, QFileDialog, QMessageBox, QSpinBox,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QPen, QBrush
 
 # Import user management functions
 from trackpro.auth.user_manager import is_current_user_dev
+from trackpro.utils.windows_startup import WindowsStartupManager
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,11 @@ class ProfileAvatar(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setText("LT")  # Default initials
         self.setToolTip("Click to change avatar")
+        self.account_page = None  # Will be set by parent
+    
+    def set_account_page(self, account_page):
+        """Set reference to parent account page."""
+        self.account_page = account_page
     
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -184,19 +190,25 @@ class ProfileAvatar(QLabel):
     
     def select_avatar(self):
         """Open file dialog to select new avatar."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Avatar Image",
-            "",
-            "Image files (*.png *.jpg *.jpeg *.gif *.bmp)"
-        )
-        
-        if file_path:
-            # TODO: Implement avatar upload and processing
-            QMessageBox.information(self, "Avatar Upload", f"Avatar upload selected: {file_path}")
+        if self.account_page:
+            self.account_page.upload_avatar()
+        else:
+            # Fallback if no account page reference
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Avatar Image",
+                "",
+                "Image files (*.png *.jpg *.jpeg *.gif *.bmp)"
+            )
+            
+            if file_path:
+                QMessageBox.information(self, "Avatar Upload", f"Avatar upload selected: {file_path}")
 
 class AccountPage(QWidget):
     """Main Account page with sidebar navigation."""
+    
+    # Signal emitted when avatar is uploaded
+    avatar_uploaded = pyqtSignal(str)  # Emits the avatar URL
     
     def __init__(self, global_managers=None):
         super().__init__()
@@ -204,6 +216,10 @@ class AccountPage(QWidget):
         self.current_section = "profile"
         self.user_data = {}
         self.is_initialized = False
+        
+        # Initialize Windows startup manager
+        self.startup_manager = WindowsStartupManager()
+        
         self.init_page()
     
     def init_page(self):
@@ -402,6 +418,7 @@ class AccountPage(QWidget):
         avatar_layout = QHBoxLayout()
         
         self.profile_avatar = ProfileAvatar(80)
+        self.profile_avatar.set_account_page(self)
         avatar_layout.addWidget(self.profile_avatar)
         
         avatar_info_layout = QVBoxLayout()
@@ -492,6 +509,11 @@ class AccountPage(QWidget):
         self.bio_input = ModernTextArea("Tell us about yourself, your racing background, or favorite series...")
         bio_card.content_layout.addWidget(self.bio_input)
         layout.addWidget(bio_card)
+        
+        # Test storage button (for debugging)
+        test_storage_btn = ModernButton("Test Storage Connection", "secondary")
+        test_storage_btn.clicked.connect(self.test_storage_connection)
+        layout.addWidget(test_storage_btn)
         
         # Save button
         save_btn = ModernButton("Save Profile", "primary")
@@ -592,6 +614,73 @@ class AccountPage(QWidget):
         tfa_card.content_layout.addLayout(tfa_layout)
         layout.addWidget(tfa_card)
         
+        # Application Version Card
+        version_card = ModernCard("Application Version")
+        version_layout = QVBoxLayout()
+        
+        # Version info layout
+        version_info_layout = QHBoxLayout()
+        
+        # Current version display
+        version_label = QLabel("Current Version:")
+        version_label.setStyleSheet("""
+            QLabel {
+                color: #dcddde;
+                font-size: 14px;
+                font-weight: 600;
+                padding: 8px 0;
+                border: none;
+                background: transparent;
+            }
+        """)
+        version_info_layout.addWidget(version_label)
+        
+        # Version number
+        from trackpro.updater import CURRENT_VERSION
+        self.version_display = QLabel(f"v{CURRENT_VERSION}")
+        self.version_display.setStyleSheet("""
+            QLabel {
+                color: #5865f2;
+                font-size: 14px;
+                font-weight: 700;
+                padding: 8px 12px;
+                background-color: #2f3136;
+                border-radius: 4px;
+                border: 1px solid #40444b;
+            }
+        """)
+        version_info_layout.addWidget(self.version_display)
+        
+        # Check for updates button
+        self.check_updates_btn = ModernButton("Check for Updates", "secondary")
+        self.check_updates_btn.clicked.connect(self.check_for_updates)
+        version_info_layout.addWidget(self.check_updates_btn)
+        
+        # Download update button (initially hidden)
+        self.download_update_btn = ModernButton("Download Update", "primary")
+        self.download_update_btn.clicked.connect(self.download_update)
+        self.download_update_btn.setVisible(False)
+        version_info_layout.addWidget(self.download_update_btn)
+        
+        version_info_layout.addStretch()
+        version_layout.addLayout(version_info_layout)
+        
+        # Update status
+        self.update_status_label = QLabel("")
+        self.update_status_label.setStyleSheet("""
+            QLabel {
+                color: #b9bbbe;
+                font-size: 12px;
+                padding: 4px 0;
+                border: none;
+                background: transparent;
+            }
+        """)
+        version_layout.addWidget(self.update_status_label)
+        
+        version_card.content_layout.addLayout(version_layout)
+        layout.addWidget(version_card)
+        
         layout.addStretch()
         return widget
     
@@ -674,8 +763,40 @@ class AccountPage(QWidget):
         inapp_card.content_layout.addLayout(inapp_layout)
         layout.addWidget(inapp_card)
         
+        # Startup Settings Card
+        startup_card = ModernCard("Startup Settings")
+        startup_layout = QVBoxLayout()
+        
+        self.start_with_windows_check = QCheckBox("Start TrackPro with Windows")
+        self.start_with_windows_check.setStyleSheet(self.email_notifications_check.styleSheet())
+        startup_layout.addWidget(self.start_with_windows_check)
+        
+        self.start_minimized_check = QCheckBox("Start minimized (recommended)")
+        self.start_minimized_check.setStyleSheet(self.email_notifications_check.styleSheet())
+        startup_layout.addWidget(self.start_minimized_check)
+        
+        self.minimize_to_tray_check = QCheckBox("Always minimize to tray when closing (recommended)")
+        self.minimize_to_tray_check.setStyleSheet(self.email_notifications_check.styleSheet())
+        startup_layout.addWidget(self.minimize_to_tray_check)
+        
+        # Add description
+        startup_desc = QLabel("TrackPro needs to be running for hardware functionality to work properly. When you close the window, TrackPro will continue running in the background.")
+        startup_desc.setStyleSheet("""
+            QLabel {
+                color: #72767d;
+                font-size: 12px;
+                margin-top: 8px;
+                border: none;
+                background: transparent;
+            }
+        """)
+        startup_layout.addWidget(startup_desc)
+        
+        startup_card.content_layout.addLayout(startup_layout)
+        layout.addWidget(startup_card)
+        
         # Save button
-        save_notifications_btn = ModernButton("Save Notification Settings", "primary")
+        save_notifications_btn = ModernButton("Save Settings", "primary")
         save_notifications_btn.clicked.connect(self.save_notification_settings)
         layout.addWidget(save_notifications_btn)
         
@@ -913,97 +1034,67 @@ class AccountPage(QWidget):
         return widget
     
     def create_privacy_section(self):
-        """Create the privacy and data section with improved layout and readability."""
+        """Create a compact and well-organized privacy and data section."""
         widget = QWidget()
-        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(36)
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
         
-        # Header with optimized typography and spacing
-        header_container = QWidget()
-        header_layout = QVBoxLayout(header_container)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(8)
-        
+        # Compact header
         header_label = QLabel("Privacy & Data")
         header_label.setStyleSheet("""
             QLabel {
                 color: #ffffff;
-                font-size: 28px;
+                font-size: 24px;
                 font-weight: 700;
+                margin-bottom: 8px;
+            }
+        """)
+        layout.addWidget(header_label)
+        
+        # Main content area with scroll
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
                 border: none;
                 background: transparent;
-                letter-spacing: -0.5px;
-                margin-bottom: 4px;
+            }
+            QScrollBar:vertical {
+                background: #2f3136;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #40444b;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #5865f2;
             }
         """)
         
-        header_subtitle = QLabel("Manage your privacy settings and data preferences")
-        header_subtitle.setStyleSheet("""
-            QLabel {
-                color: #b9bbbe;
-                font-size: 15px;
-                font-weight: 400;
-                border: none;
-                background: transparent;
-                line-height: 1.3;
-            }
-        """)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setSpacing(20)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
         
-        header_layout.addWidget(header_label)
-        header_layout.addWidget(header_subtitle)
-        layout.addWidget(header_container)
-        
-        # Privacy Controls Card - Optimized layout and spacing
+        # Privacy Settings Card - Compact design
         privacy_card = ModernCard("Privacy Settings")
-        privacy_card.setMinimumHeight(420)
         privacy_layout = QVBoxLayout()
-        privacy_layout.setSpacing(24)
+        privacy_layout.setSpacing(16)
         privacy_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Profile visibility section with optimized organization
-        visibility_section = QWidget()
-        visibility_layout = QVBoxLayout(visibility_section)
-        visibility_layout.setSpacing(14)
-        visibility_layout.setContentsMargins(0, 0, 0, 0)
-        
-        visibility_title = QLabel("Profile Visibility")
-        visibility_title.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-size: 17px;
-                font-weight: 600;
-                border: none;
-                background: transparent;
-            }
-        """)
-        
-        visibility_description = QLabel("Control who can see your profile and racing information")
-        visibility_description.setStyleSheet("""
-            QLabel {
-                color: #b9bbbe;
-                font-size: 13px;
-                font-weight: 400;
-                border: none;
-                background: transparent;
-                line-height: 1.3;
-            }
-        """)
-        
-        visibility_control_layout = QHBoxLayout()
-        visibility_control_layout.setSpacing(16)
+        # Profile visibility - compact layout
+        visibility_layout = QHBoxLayout()
+        visibility_layout.setSpacing(12)
         
         visibility_label = QLabel("Profile Visibility:")
-        visibility_label.setStyleSheet("""
-            QLabel {
-                color: #dcddde;
-                font-weight: 500;
-                font-size: 13px;
-                min-width: 140px;
-            }
-        """)
+        visibility_label.setStyleSheet("color: #dcddde; font-weight: 500; font-size: 13px; min-width: 120px;")
         
         self.profile_visibility_combo = QComboBox()
         self.profile_visibility_combo.addItems(["Public", "Friends Only", "Private"])
@@ -1011,109 +1102,53 @@ class AccountPage(QWidget):
             QComboBox {
                 background-color: #40444b;
                 border: 2px solid #40444b;
-                border-radius: 8px;
-                padding: 10px 16px;
+                border-radius: 6px;
+                padding: 8px 12px;
                 color: #fefefe;
                 font-size: 13px;
-                min-width: 160px;
-                font-weight: 500;
+                min-width: 140px;
             }
             QComboBox:hover {
                 border-color: #5865f2;
-                background-color: #36393f;
-            }
-            QComboBox:focus {
-                border-color: #5865f2;
-                background-color: #36393f;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 24px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-style: solid;
-                border-width: 5px 5px 0px 5px;
-                border-color: #dcddde transparent transparent transparent;
             }
         """)
         
-        visibility_control_layout.addWidget(visibility_label)
-        visibility_control_layout.addWidget(self.profile_visibility_combo)
-        visibility_control_layout.addStretch()
+        visibility_layout.addWidget(visibility_label)
+        visibility_layout.addWidget(self.profile_visibility_combo)
+        visibility_layout.addStretch()
+        privacy_layout.addLayout(visibility_layout)
         
-        visibility_layout.addWidget(visibility_title)
-        visibility_layout.addWidget(visibility_description)
-        visibility_layout.addLayout(visibility_control_layout)
-        privacy_layout.addWidget(visibility_section)
+        # Privacy options - compact checkboxes
+        privacy_options_label = QLabel("Privacy Options:")
+        privacy_options_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 600; margin-top: 8px;")
+        privacy_layout.addWidget(privacy_options_label)
         
-        # Optimized separator with better styling
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setStyleSheet("background-color: #40444b; margin: 10px 0; min-height: 1px;")
-        privacy_layout.addWidget(separator)
-        
-        # Privacy checkboxes with optimized layout and readability
-        privacy_options_section = QWidget()
-        privacy_options_layout = QVBoxLayout(privacy_options_section)
-        privacy_options_layout.setSpacing(14)
-        privacy_options_layout.setContentsMargins(0, 0, 0, 0)
-        
-        privacy_options_title = QLabel("Privacy Options")
-        privacy_options_title.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-size: 17px;
-                font-weight: 600;
-                border: none;
-                background: transparent;
-            }
-        """)
-        
-        privacy_options_description = QLabel("Choose what information you want to share with the community")
-        privacy_options_description.setStyleSheet("""
-            QLabel {
-                color: #b9bbbe;
-                font-size: 13px;
-                font-weight: 400;
-                border: none;
-                background: transparent;
-                line-height: 1.3;
-            }
-        """)
-        
-        privacy_options_layout.addWidget(privacy_options_title)
-        privacy_options_layout.addWidget(privacy_options_description)
-        
-        # Create checkboxes with enhanced spacing and layout
-        self.share_telemetry_check = QCheckBox("Share telemetry data for community insights and analytics")
-        self.show_statistics_check = QCheckBox("Show my racing statistics and achievements publicly")
-        self.allow_friend_requests_check = QCheckBox("Allow friend requests from other users")
-        self.show_online_status_check = QCheckBox("Show when I'm online and available for racing")
+        # Create compact checkboxes
+        self.share_telemetry_check = QCheckBox("Share telemetry data")
+        self.show_statistics_check = QCheckBox("Show racing statistics publicly")
+        self.allow_friend_requests_check = QCheckBox("Allow friend requests")
+        self.show_online_status_check = QCheckBox("Show online status")
         
         checkbox_style = """
             QCheckBox {
                 color: #dcddde;
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 500;
-                spacing: 16px;
-                padding: 14px 18px;
+                spacing: 12px;
+                padding: 8px 12px;
                 background-color: #36393f;
                 border: 1px solid #40444b;
-                border-radius: 8px;
-                min-height: 52px;
-                line-height: 1.3;
+                border-radius: 6px;
+                min-height: 36px;
             }
             QCheckBox:hover {
                 background-color: #40444b;
                 border-color: #5865f2;
-                transform: translateY(-1px);
             }
             QCheckBox::indicator {
-                width: 22px;
-                height: 22px;
-                border-radius: 5px;
-                margin-right: 14px;
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
             }
             QCheckBox::indicator:unchecked {
                 background-color: #40444b;
@@ -1122,13 +1157,6 @@ class AccountPage(QWidget):
             QCheckBox::indicator:checked {
                 background-color: #5865f2;
                 border: 2px solid #5865f2;
-                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOSIgdmlld0JveD0iMCAwIDEyIDkiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0xMC42IDEuNEw0LjIgNy44TDEuNCA1IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
-            }
-            QCheckBox::indicator:checked:hover {
-                background-color: #4752c4;
-            }
-            QCheckBox::indicator:unchecked:hover {
-                border-color: #8e9297;
             }
         """
         
@@ -1141,239 +1169,91 @@ class AccountPage(QWidget):
         
         for checkbox in privacy_checkboxes:
             checkbox.setStyleSheet(checkbox_style)
-            checkbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            privacy_options_layout.addWidget(checkbox)
+            privacy_layout.addWidget(checkbox)
         
-        privacy_layout.addWidget(privacy_options_section)
         privacy_card.content_layout.addLayout(privacy_layout)
-        layout.addWidget(privacy_card)
+        scroll_layout.addWidget(privacy_card)
         
-        # Data Management Card - Optimized layout and spacing
+        # Data Management Card - Compact design
         data_card = ModernCard("Data Management")
-        data_card.setMinimumHeight(480)
         data_layout = QVBoxLayout()
-        data_layout.setSpacing(24)
+        data_layout.setSpacing(16)
         data_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Data export section with optimized organization
-        export_section = QWidget()
-        export_layout = QVBoxLayout(export_section)
-        export_layout.setSpacing(16)
-        export_layout.setContentsMargins(0, 0, 0, 0)
+        # Export buttons - horizontal layout
+        export_layout = QHBoxLayout()
+        export_layout.setSpacing(12)
         
-        export_title = QLabel("Export Your Data")
-        export_title.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-size: 17px;
-                font-weight: 600;
-                border: none;
-                background: transparent;
-            }
-        """)
-        
-        export_description = QLabel("Download your personal data for backup or transfer purposes")
-        export_description.setStyleSheet("""
-            QLabel {
-                color: #b9bbbe;
-                font-size: 13px;
-                font-weight: 400;
-                border: none;
-                background: transparent;
-                line-height: 1.3;
-            }
-        """)
-        
-        export_buttons_layout = QHBoxLayout()
-        export_buttons_layout.setSpacing(16)
-        
-        self.export_profile_btn = ModernButton("Export Profile Data", "secondary")
+        self.export_profile_btn = ModernButton("Export Profile", "secondary")
         self.export_profile_btn.clicked.connect(self.export_profile_data)
-        self.export_profile_btn.setToolTip("Export your profile data, settings, and preferences")
-        self.export_profile_btn.setMinimumWidth(180)
-        self.export_profile_btn.setMinimumHeight(42)
+        self.export_profile_btn.setMinimumWidth(140)
+        self.export_profile_btn.setMinimumHeight(36)
         
-        self.export_telemetry_btn = ModernButton("Export Telemetry Data", "secondary")
+        self.export_telemetry_btn = ModernButton("Export Telemetry", "secondary")
         self.export_telemetry_btn.clicked.connect(self.export_telemetry_data)
-        self.export_telemetry_btn.setToolTip("Export your racing data and telemetry")
-        self.export_telemetry_btn.setMinimumWidth(180)
-        self.export_telemetry_btn.setMinimumHeight(42)
+        self.export_telemetry_btn.setMinimumWidth(140)
+        self.export_telemetry_btn.setMinimumHeight(36)
         
-        export_buttons_layout.addWidget(self.export_profile_btn)
-        export_buttons_layout.addWidget(self.export_telemetry_btn)
-        export_buttons_layout.addStretch()
+        export_layout.addWidget(self.export_profile_btn)
+        export_layout.addWidget(self.export_telemetry_btn)
+        export_layout.addStretch()
+        data_layout.addLayout(export_layout)
         
-        export_layout.addWidget(export_title)
-        export_layout.addWidget(export_description)
-        export_layout.addLayout(export_buttons_layout)
-        data_layout.addWidget(export_section)
+        # Data usage - compact display
+        usage_label = QLabel("Data Usage:")
+        usage_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 600; margin-top: 8px;")
+        data_layout.addWidget(usage_label)
         
-        # Optimized separator
-        separator2 = QFrame()
-        separator2.setFrameShape(QFrame.Shape.HLine)
-        separator2.setStyleSheet("background-color: #40444b; margin: 10px 0; min-height: 1px;")
-        data_layout.addWidget(separator2)
-        
-        # Data usage stats with optimized formatting
-        usage_section = QWidget()
-        usage_layout = QVBoxLayout(usage_section)
-        usage_layout.setSpacing(16)
-        usage_layout.setContentsMargins(0, 0, 0, 0)
-        
-        usage_title = QLabel("Data Usage Statistics")
-        usage_title.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-size: 17px;
-                font-weight: 600;
-                border: none;
-                background: transparent;
-            }
-        """)
-        
-        usage_description = QLabel("Overview of your data storage and usage")
-        usage_description.setStyleSheet("""
-            QLabel {
-                color: #b9bbbe;
-                font-size: 13px;
-                font-weight: 400;
-                border: none;
-                background: transparent;
-                line-height: 1.3;
-            }
-        """)
-        
-        # Create a proper text area for data usage with optimized styling
         self.data_usage_text = QTextEdit()
         self.data_usage_text.setReadOnly(True)
-        self.data_usage_text.setMaximumHeight(150)
-        self.data_usage_text.setMinimumHeight(150)
+        self.data_usage_text.setMaximumHeight(80)
         self.data_usage_text.setStyleSheet("""
             QTextEdit {
                 background-color: #2f3136;
-                border: 2px solid #40444b;
-                border-radius: 8px;
+                border: 1px solid #40444b;
+                border-radius: 6px;
                 color: #b9bbbe;
-                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-                font-size: 12px;
-                line-height: 1.5;
-                padding: 16px;
-                selection-background-color: #5865f2;
-            }
-            QTextEdit:focus {
-                border-color: #5865f2;
+                font-size: 11px;
+                padding: 8px;
             }
         """)
         
-        # Set initial data usage content with enhanced formatting
-        data_usage_content = """📊 Data Usage Summary
-
-• Profile data: ~2.5 KB
-• Racing statistics: ~15.3 KB  
-• Telemetry data: ~127.8 MB
-• Total storage used: ~128.0 MB
-
-Last updated: Just now"""
+        data_usage_content = """Profile: ~2.5 KB | Stats: ~15.3 KB | Telemetry: ~127.8 MB
+Total: ~128.0 MB | Last updated: Just now"""
         self.data_usage_text.setPlainText(data_usage_content)
-        
-        usage_layout.addWidget(usage_title)
-        usage_layout.addWidget(usage_description)
-        usage_layout.addWidget(self.data_usage_text)
-        data_layout.addWidget(usage_section)
+        data_layout.addWidget(self.data_usage_text)
         
         data_card.content_layout.addLayout(data_layout)
-        layout.addWidget(data_card)
+        scroll_layout.addWidget(data_card)
         
-        # Account Deletion Card - Optimized warning design
+        # Account Deletion Card - Compact warning
         deletion_card = ModernCard("Account Deletion")
-        deletion_card.setMinimumHeight(520)
         deletion_layout = QVBoxLayout()
-        deletion_layout.setSpacing(24)
+        deletion_layout.setSpacing(16)
         deletion_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Warning header with optimized visual hierarchy
-        warning_section = QWidget()
-        warning_layout = QHBoxLayout(warning_section)
-        warning_layout.setSpacing(16)
-        warning_layout.setContentsMargins(0, 0, 0, 0)
+        # Warning header
+        warning_layout = QHBoxLayout()
+        warning_layout.setSpacing(8)
         
         warning_icon = QLabel("⚠️")
-        warning_icon.setStyleSheet("font-size: 28px;")
+        warning_icon.setStyleSheet("font-size: 20px;")
         
-        warning_text_container = QWidget()
-        warning_text_layout = QVBoxLayout(warning_text_container)
-        warning_text_layout.setSpacing(4)
-        warning_text_layout.setContentsMargins(0, 0, 0, 0)
-        
-        warning_title = QLabel("Danger Zone")
-        warning_title.setStyleSheet("color: #f04747; font-size: 20px; font-weight: 700;")
-        
-        warning_subtitle = QLabel("Permanent account deletion")
-        warning_subtitle.setStyleSheet("color: #b9bbbe; font-size: 13px; font-weight: 400; line-height: 1.3;")
-        
-        warning_text_layout.addWidget(warning_title)
-        warning_text_layout.addWidget(warning_subtitle)
+        warning_title = QLabel("Danger Zone - Permanent Deletion")
+        warning_title.setStyleSheet("color: #f04747; font-size: 14px; font-weight: 600;")
         
         warning_layout.addWidget(warning_icon)
-        warning_layout.addWidget(warning_text_container)
+        warning_layout.addWidget(warning_title)
         warning_layout.addStretch()
-        deletion_layout.addWidget(warning_section)
+        deletion_layout.addLayout(warning_layout)
         
-        # Warning info with optimized formatting
-        deletion_info = QLabel("Once you delete your account, there is no going back. This action cannot be undone.\n\nDeleting your account will permanently remove all your data and cannot be reversed.")
-        deletion_info.setStyleSheet("""
-            QLabel {
-                color: #b9bbbe;
-                font-size: 13px;
-                line-height: 1.5;
-                border: none;
-                background: transparent;
-            }
-        """)
+        # Compact warning info
+        deletion_info = QLabel("This action cannot be undone. All your data will be permanently deleted.")
+        deletion_info.setStyleSheet("color: #b9bbbe; font-size: 12px; line-height: 1.4;")
         deletion_info.setWordWrap(True)
         deletion_layout.addWidget(deletion_info)
         
-        # Consequences list with optimized styling
-        consequences_container = QWidget()
-        consequences_container.setStyleSheet("""
-            QWidget {
-                background-color: #3c2d2d;
-                border: 1px solid #f04747;
-                border-radius: 8px;
-                padding: 16px;
-            }
-        """)
-        
-        consequences_layout = QVBoxLayout(consequences_container)
-        consequences_layout.setSpacing(10)
-        consequences_layout.setContentsMargins(16, 16, 16, 16)
-        
-        consequences_title = QLabel("What will be deleted:")
-        consequences_title.setStyleSheet("color: #f04747; font-size: 15px; font-weight: 600;")
-        
-        consequences_list = QLabel("• All your profile data and personal information\n• Complete racing statistics and achievements history\n• All telemetry data and session recordings\n• Active subscriptions and premium features\n• Team memberships and community participation\n• All saved settings and preferences")
-        consequences_list.setStyleSheet("""
-            QLabel {
-                color: #f04747;
-                font-size: 13px;
-                line-height: 1.5;
-                border: none;
-                background: transparent;
-            }
-        """)
-        consequences_list.setWordWrap(True)
-        consequences_list.setMinimumHeight(130)
-        
-        consequences_layout.addWidget(consequences_title)
-        consequences_layout.addWidget(consequences_list)
-        deletion_layout.addWidget(consequences_container)
-        
-        # Delete button with optimized styling and positioning
-        delete_button_container = QWidget()
-        delete_button_layout = QHBoxLayout(delete_button_container)
-        delete_button_layout.setContentsMargins(0, 0, 0, 0)
-        delete_button_layout.addStretch()
-        
+        # Delete button
         self.delete_account_btn = ModernButton("Delete Account", "danger")
         self.delete_account_btn.clicked.connect(self.request_account_deletion)
         self.delete_account_btn.setStyleSheet("""
@@ -1381,34 +1261,28 @@ Last updated: Just now"""
                 background-color: #f04747;
                 color: white;
                 border: none;
-                border-radius: 8px;
-                padding: 14px 28px;
-                font-size: 13px;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 12px;
                 font-weight: 600;
-                min-width: 160px;
-                min-height: 44px;
+                min-width: 120px;
+                min-height: 36px;
             }
             QPushButton:hover {
                 background-color: #d73d3d;
             }
-            QPushButton:pressed {
-                background-color: #c73030;
-            }
         """)
         
+        delete_button_layout = QHBoxLayout()
+        delete_button_layout.addStretch()
         delete_button_layout.addWidget(self.delete_account_btn)
         delete_button_layout.addStretch()
-        deletion_layout.addWidget(delete_button_container)
+        deletion_layout.addLayout(delete_button_layout)
         
         deletion_card.content_layout.addLayout(deletion_layout)
-        layout.addWidget(deletion_card)
+        scroll_layout.addWidget(deletion_card)
         
-        # Save Privacy Settings Button - Optimized positioning and styling
-        save_button_container = QWidget()
-        save_button_layout = QHBoxLayout(save_button_container)
-        save_button_layout.setContentsMargins(0, 0, 0, 0)
-        save_button_layout.addStretch()
-        
+        # Save button - compact positioning
         save_privacy_btn = ModernButton("Save Privacy Settings", "primary")
         save_privacy_btn.clicked.connect(self.save_privacy_settings)
         save_privacy_btn.setStyleSheet("""
@@ -1416,26 +1290,27 @@ Last updated: Just now"""
                 background-color: #5865f2;
                 color: white;
                 border: none;
-                border-radius: 8px;
-                padding: 14px 28px;
-                font-size: 13px;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 12px;
                 font-weight: 600;
-                min-width: 200px;
-                min-height: 44px;
+                min-width: 160px;
+                min-height: 36px;
             }
             QPushButton:hover {
                 background-color: #4752c4;
             }
-            QPushButton:pressed {
-                background-color: #3c45a3;
-            }
         """)
         
+        save_button_layout = QHBoxLayout()
+        save_button_layout.addStretch()
         save_button_layout.addWidget(save_privacy_btn)
         save_button_layout.addStretch()
-        layout.addWidget(save_button_container)
+        scroll_layout.addLayout(save_button_layout)
         
-        layout.addStretch()
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area)
+        
         return widget
     
     def switch_section(self, section_id: str):
@@ -1457,6 +1332,8 @@ Last updated: Just now"""
             QTimer.singleShot(100, self.load_racing_statistics)
         elif section_id == "privacy":
             QTimer.singleShot(100, self.load_data_usage_statistics)
+        elif section_id == "notifications":
+            QTimer.singleShot(100, self.load_startup_settings)
         
         logger.info(f"Switched to account section: {section_id}")
     
@@ -1545,15 +1422,48 @@ Last updated: Just now"""
                         # Set default date if no date of birth is stored
                         self.dob_input.setDate(QDate.currentDate().addYears(-25))
                 
-                # Update avatar initials
-                first_initial = self.user_data.get("first_name", "U")[0].upper()
-                last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
-                self.profile_avatar.setText(f"{first_initial}{last_initial}")
+                # Update avatar display
+                avatar_url = self.user_data.get("avatar_url")
+                if avatar_url:
+                    # Load avatar from URL
+                    self.load_avatar_from_url(avatar_url)
+                else:
+                    # Set initials as fallback
+                    first_initial = self.user_data.get("first_name", "U")[0].upper()
+                    last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
+                    self.profile_avatar.setText(f"{first_initial}{last_initial}")
             
             logger.info("User data loaded successfully")
             
         except Exception as e:
             logger.error(f"Error loading user data: {e}")
+    
+    def load_startup_settings(self):
+        """Load startup settings from config and Windows registry."""
+        try:
+            from trackpro.config import Config
+            config = Config()
+            
+            # Load settings from config
+            start_with_windows = config.start_with_windows
+            start_minimized = config.start_minimized
+            minimize_to_tray = config.minimize_to_tray
+            
+            # Check actual Windows registry status
+            actual_startup_enabled = self.startup_manager.is_startup_enabled()
+            
+            # Update checkboxes
+            if hasattr(self, 'start_with_windows_check'):
+                self.start_with_windows_check.setChecked(start_with_windows)
+            if hasattr(self, 'start_minimized_check'):
+                self.start_minimized_check.setChecked(start_minimized)
+            if hasattr(self, 'minimize_to_tray_check'):
+                self.minimize_to_tray_check.setChecked(minimize_to_tray)
+            
+            logger.info(f"Startup settings loaded - Windows: {start_with_windows}, Minimized: {start_minimized}, Tray: {minimize_to_tray}, Registry: {actual_startup_enabled}")
+            
+        except Exception as e:
+            logger.error(f"Error loading startup settings: {e}")
     
     def save_profile(self):
         """Save profile changes."""
@@ -1767,6 +1677,10 @@ Last updated: Just now"""
             
             # Upload to Supabase Storage
             try:
+                # Skip bucket list check since it's not working reliably
+                # The bucket exists in the database, so we'll try direct access
+                logger.info("Skipping bucket list check - proceeding with direct upload")
+                
                 storage_response = supabase_client.storage.from_('avatars').upload(
                     filename,
                     file_data,
@@ -1798,6 +1712,7 @@ Last updated: Just now"""
                     from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.information(self, "Success", "Avatar uploaded successfully!")
                     logger.info(f"Avatar uploaded successfully: {avatar_url}")
+                    self.avatar_uploaded.emit(avatar_url)
                 else:
                     from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.warning(self, "Upload Failed", "Failed to save avatar to profile.")
@@ -1805,8 +1720,22 @@ Last updated: Just now"""
             except Exception as storage_error:
                 progress.close()
                 logger.error(f"Storage upload error: {storage_error}")
+                logger.error(f"Storage error type: {type(storage_error)}")
+                logger.error(f"Storage error details: {str(storage_error)}")
+                
+                # Provide more specific error messages
+                error_message = str(storage_error)
+                if "bucket" in error_message.lower():
+                    error_message = "Storage bucket 'avatars' does not exist. Please create it in your Supabase dashboard."
+                elif "permission" in error_message.lower():
+                    error_message = "Permission denied. Please check your Supabase storage policies."
+                elif "network" in error_message.lower():
+                    error_message = "Network error. Please check your internet connection."
+                else:
+                    error_message = f"Upload failed: {error_message}"
+                
                 from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.critical(self, "Upload Error", f"Failed to upload avatar: {str(storage_error)}")
+                QMessageBox.critical(self, "Upload Error", error_message)
             
         except Exception as e:
             if 'progress' in locals():
@@ -1838,22 +1767,25 @@ Last updated: Just now"""
                         
                         # Scale and crop to circle
                         if not pixmap.isNull():
+                            # Get the avatar size from the profile_avatar widget
+                            avatar_size = self.profile_avatar.width() if hasattr(self, 'profile_avatar') else 80
+                            
                             # Scale to fit avatar size
                             scaled_pixmap = pixmap.scaled(
-                                120, 120, 
+                                avatar_size, avatar_size, 
                                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                 Qt.TransformationMode.SmoothTransformation
                             )
                             
                             # Create circular mask
-                            circular_pixmap = QPixmap(120, 120)
+                            circular_pixmap = QPixmap(avatar_size, avatar_size)
                             circular_pixmap.fill(Qt.GlobalColor.transparent)
                             
                             painter = QPainter(circular_pixmap)
                             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                             painter.setBrush(QBrush(scaled_pixmap))
                             painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, 120, 120)
+                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
                             painter.end()
                             
                             # Update avatar display
@@ -1869,6 +1801,43 @@ Last updated: Just now"""
             
         except Exception as e:
             logger.error(f"Error loading avatar from URL: {e}")
+    
+    def test_storage_connection(self):
+        """Test if Supabase storage is working."""
+        try:
+            from ....database.supabase_client import get_supabase_client
+            from PyQt6.QtWidgets import QMessageBox
+            
+            supabase_client = get_supabase_client()
+            if not supabase_client:
+                logger.error("No Supabase client available")
+                QMessageBox.warning(self, "Storage Test", "No Supabase client available")
+                return False
+            
+            # Test listing buckets
+            buckets = supabase_client.storage.list_buckets()
+            bucket_names = [bucket.name for bucket in buckets]
+            logger.info(f"Available storage buckets: {bucket_names}")
+            
+            if 'avatars' in bucket_names:
+                logger.info("'avatars' bucket exists")
+                QMessageBox.information(self, "Storage Test", f"✅ Storage connection successful!\n\nAvailable buckets: {', '.join(bucket_names)}\n\n'avatars' bucket exists and is ready for uploads.")
+                return True
+            else:
+                logger.warning("'avatars' bucket does not exist")
+                QMessageBox.warning(
+                    self, 
+                    "Storage Test", 
+                    f"⚠️ Storage connection successful, but 'avatars' bucket is missing!\n\n"
+                    f"Available buckets: {', '.join(bucket_names)}\n\n"
+                    f"Please create a storage bucket named 'avatars' in your Supabase dashboard."
+                )
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error testing storage connection: {e}")
+            QMessageBox.critical(self, "Storage Test", f"❌ Storage connection failed!\n\nError: {str(e)}")
+            return False
     
     def remove_avatar(self):
         """Remove the current avatar."""
@@ -1981,8 +1950,111 @@ Last updated: Just now"""
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Failed to toggle 2FA: {str(e)}")
     
+    def check_for_updates(self):
+        """Manually check for updates."""
+        try:
+            # Disable the button during check
+            self.check_updates_btn.setEnabled(False)
+            self.check_updates_btn.setText("Checking...")
+            self.update_status_label.setText("Checking for updates...")
+            
+            # Get the main window to access the updater
+            main_window = self.window()
+            if hasattr(main_window, 'updater'):
+                # Perform manual update check
+                main_window.updater.check_for_updates(silent=False, manual_check=True)
+                
+                # Update status after a short delay
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(2000, self.update_check_status)
+            else:
+                self.update_status_label.setText("Update system not available")
+                self.check_updates_btn.setEnabled(True)
+                self.check_updates_btn.setText("Check for Updates")
+                
+        except Exception as e:
+            self.update_status_label.setText(f"Error checking for updates: {str(e)}")
+            self.check_updates_btn.setEnabled(True)
+            self.check_updates_btn.setText("Check for Updates")
+    
+    def update_check_status(self):
+        """Update the status label after checking for updates."""
+        try:
+            # Get the main window to access the updater
+            main_window = self.window()
+            if hasattr(main_window, 'updater'):
+                # Check if an update is available
+                if hasattr(main_window.updater, 'latest_version'):
+                    latest_version = main_window.updater.latest_version
+                    from trackpro.updater import CURRENT_VERSION
+                    if latest_version and latest_version != CURRENT_VERSION:
+                        self.update_status_label.setText(f"Update available: v{latest_version}")
+                        self.update_status_label.setStyleSheet("""
+                            QLabel {
+                                color: #43b581;
+                                font-size: 12px;
+                                padding: 4px 0;
+                                border: none;
+                                background: transparent;
+                            }
+                        """)
+                        # Show download button
+                        self.download_update_btn.setVisible(True)
+                        self.download_update_btn.setText(f"Download v{latest_version}")
+                    else:
+                        self.update_status_label.setText("You are running the latest version")
+                        self.update_status_label.setStyleSheet("""
+                            QLabel {
+                                color: #b9bbbe;
+                                font-size: 12px;
+                                padding: 4px 0;
+                                border: none;
+                                background: transparent;
+                            }
+                        """)
+                        # Hide download button
+                        self.download_update_btn.setVisible(False)
+                else:
+                    self.update_status_label.setText("No updates available")
+            else:
+                self.update_status_label.setText("Update system not available")
+            
+            # Re-enable the button
+            self.check_updates_btn.setEnabled(True)
+            self.check_updates_btn.setText("Check for Updates")
+            
+        except Exception as e:
+            self.update_status_label.setText(f"Error: {str(e)}")
+            self.check_updates_btn.setEnabled(True)
+            self.check_updates_btn.setText("Check for Updates")
+    
+    def download_update(self):
+        """Download and install the available update."""
+        try:
+            # Get the main window to access the updater
+            main_window = self.window()
+            if hasattr(main_window, 'updater') and hasattr(main_window.updater, 'latest_version'):
+                # Disable the download button during process
+                self.download_update_btn.setEnabled(False)
+                self.download_update_btn.setText("Downloading...")
+                self.update_status_label.setText("Starting download...")
+                
+                # Trigger the download process
+                main_window.updater._handle_download_choice()
+                
+                # The updater will handle the rest (download, installation, app exit)
+            else:
+                self.update_status_label.setText("Update system not available")
+                self.download_update_btn.setEnabled(True)
+                self.download_update_btn.setText("Download Update")
+                
+        except Exception as e:
+            self.update_status_label.setText(f"Error downloading update: {str(e)}")
+            self.download_update_btn.setEnabled(True)
+            self.download_update_btn.setText("Download Update")
+    
     def save_notification_settings(self):
-        """Save notification preferences."""
+        """Save notification preferences and startup settings."""
         try:
             # Get checkbox states
             notification_settings = {
@@ -1994,20 +2066,44 @@ Last updated: Just now"""
                 "social_notifications": self.social_notifications_check.isChecked()
             }
             
-            # TODO: Save to Supabase user preferences
+            # Get startup settings
+            start_with_windows = self.start_with_windows_check.isChecked()
+            start_minimized = self.start_minimized_check.isChecked()
+            minimize_to_tray = self.minimize_to_tray_check.isChecked()
+            
+            # Save startup settings to Windows registry
+            success = self.startup_manager.toggle_startup(start_with_windows, start_minimized)
+            
+            # Save startup settings to config
+            from trackpro.config import Config
+            config = Config()
+            config.set('ui.start_with_windows', start_with_windows)
+            config.set('ui.start_minimized', start_minimized)
+            config.set('ui.minimize_to_tray', minimize_to_tray)
+            config.save()
+            
+            # TODO: Save notification settings to Supabase user preferences
             logger.info(f"Saving notification settings: {notification_settings}")
+            logger.info(f"Startup settings - Windows: {start_with_windows}, Minimized: {start_minimized}, Tray: {minimize_to_tray}")
             
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                self,
-                "Settings Saved",
-                "Your notification preferences have been saved successfully!"
-            )
+            if success:
+                QMessageBox.information(
+                    self,
+                    "Settings Saved",
+                    "Your settings have been saved successfully!"
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Settings Partially Saved",
+                    "Notification settings saved, but there was an issue with startup settings. You may need administrator privileges."
+                )
             
         except Exception as e:
-            logger.error(f"Error saving notification settings: {e}")
+            logger.error(f"Error saving settings: {e}")
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Error", f"Failed to save notification settings: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to save settings: {str(e)}")
     
     def load_racing_statistics(self):
         """Load racing statistics from the database."""

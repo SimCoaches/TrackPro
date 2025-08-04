@@ -230,12 +230,12 @@ class OAuthHandler(QObject):
                     
                     # Ensure we access auth via client
                     try:
-                        supabase_client = get_supabase_client()
-                        if not supabase_client:
-                            logger.error("Supabase client not available for code exchange")
+                        from trackpro.database.supabase_client import _supabase_manager
+                        if not _supabase_manager:
+                            logger.error("Supabase manager not available for code exchange")
                             self.auth_completed.emit(False, None)
                             return False
-                        result = supabase_client.auth.exchange_code_for_session(params)
+                        result = _supabase_manager.exchange_code_for_session(params)
                     except Exception as e:
                         logger.error(f"Error exchanging code for session: {e}", exc_info=True)
                         self.auth_completed.emit(False, None)
@@ -732,13 +732,13 @@ class OAuthHandler(QObject):
 
                     # Exchange code for session
                     try:
-                        # Use the proper Supabase client function
-                        supabase_client = get_supabase_client()
-                        if not supabase_client:
-                            logger.error("Supabase client not available for code exchange")
+                        # Use the Supabase manager instead of the client directly
+                        from trackpro.database.supabase_client import _supabase_manager
+                        if not _supabase_manager:
+                            logger.error("Supabase manager not available for code exchange")
                             self.parent.auth_completed.emit(False, None)
                             return
-                        result = supabase_client.auth.exchange_code_for_session({
+                        result = _supabase_manager.exchange_code_for_session({
                             'auth_code': code
                         })
                         logger.info(f"Code exchange successful: {result is not None}")
@@ -776,19 +776,24 @@ class OAuthHandler(QObject):
                                 # Only query database if metadata doesn't have what we need
                                 if not has_complete_profile:
                                     logger.info(f"Checking profile completeness for user {user_id} (from process_callback)")
-                                    user_details = supabase.client.table('user_details').select('*').eq('user_id', user_id).execute()
-                                    
-                                    if user_details and user_details.data:
-                                        profile_data = user_details.data[0]
-                                        logger.info(f"User profile for {user_id} is {'complete' if profile_data.get('first_name') and profile_data.get('last_name') and profile_data.get('date_of_birth') else 'incomplete'} (from process_callback). Fields found: {profile_data}")
+                                    from trackpro.database.supabase_client import _supabase_manager
+                                    if _supabase_manager and _supabase_manager.client:
+                                        user_details = _supabase_manager.client.table('user_details').select('*').eq('user_id', user_id).execute()
                                         
-                                        has_complete_profile = (
-                                            profile_data.get('first_name') and 
-                                            profile_data.get('last_name') and
-                                            profile_data.get('date_of_birth')
-                                        )
+                                        if user_details and user_details.data:
+                                            profile_data = user_details.data[0]
+                                            logger.info(f"User profile for {user_id} is {'complete' if profile_data.get('first_name') and profile_data.get('last_name') and profile_data.get('date_of_birth') else 'incomplete'} (from process_callback). Fields found: {profile_data}")
+                                            
+                                            has_complete_profile = (
+                                                profile_data.get('first_name') and 
+                                                profile_data.get('last_name') and
+                                                profile_data.get('date_of_birth')
+                                            )
+                                        else:
+                                            logger.info(f"No user_details record found for {user_id}")
+                                            has_complete_profile = False
                                     else:
-                                        logger.info(f"No user_details record found for {user_id}")
+                                        logger.warning("Supabase manager not available for profile check")
                                         has_complete_profile = False
                                 else:
                                     logger.info(f"User profile for {user_id} is complete based on auth metadata")
@@ -804,12 +809,12 @@ class OAuthHandler(QObject):
                                 # Continue with auth flow on error
                             
                             # Ensure session is saved explicitly to the Supabase client
-                            supabase_client = get_supabase_client()
-                            if supabase_client:
+                            from trackpro.database.supabase_client import _supabase_manager
+                            if _supabase_manager:
                                 logger.info("Session is already active from OAuth flow")
                                 # Verify the session was properly set
                                 try:
-                                    verification = supabase_client.auth.get_user()
+                                    verification = _supabase_manager.get_user()
                                     if verification and hasattr(verification, 'user') and verification.user:
                                         logger.info(f"Session verification successful: {verification.user.email}")
                                     else:
@@ -817,7 +822,7 @@ class OAuthHandler(QObject):
                                 except Exception as e:
                                     logger.error(f"Error verifying session: {e}")
                             else:
-                                logger.warning("Supabase client not available for session verification")
+                                logger.warning("Supabase manager not available for session verification")
                             
                             # Show success message in separate thread to avoid blocking
                             QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful", 

@@ -46,8 +46,11 @@ class HierarchyManager:
     def _load_dynamic_admins(self):
         """Load dynamic admin emails from database."""
         try:
-            # Create admin_emails table if it doesn't exist
-            self._ensure_admin_emails_table()
+            # Check if admin_emails table exists
+            if not self._ensure_admin_emails_table():
+                # Table doesn't exist, use empty set
+                self.dynamic_admin_emails = set()
+                return
             
             # Load dynamic admin emails
             response = self.supabase.table("admin_emails").select("email").execute()
@@ -122,6 +125,10 @@ class HierarchyManager:
             if not self.is_admin(added_by):
                 return {"success": False, "message": "Only admins can add other admins"}
             
+            # Check if table exists
+            if not self._ensure_admin_emails_table():
+                return {"success": False, "message": "Admin management table not available"}
+            
             # Add to database
             response = self.supabase.table("admin_emails").insert({
                 "email": email.lower(),
@@ -159,6 +166,10 @@ class HierarchyManager:
             if self.is_hardcoded_admin(email):
                 return {"success": False, "message": "Cannot remove hardcoded admin"}
             
+            # Check if table exists
+            if not self._ensure_admin_emails_table():
+                return {"success": False, "message": "Admin management table not available"}
+            
             # Remove from database
             response = self.supabase.table("admin_emails").delete().eq("email", email.lower()).execute()
             
@@ -181,7 +192,9 @@ class HierarchyManager:
             List of admin emails
         """
         admins = [self.hardcoded_admin_email]
-        admins.extend(list(self.dynamic_admin_emails))
+        # Only add dynamic admins if the table exists
+        if self._ensure_admin_emails_table():
+            admins.extend(list(self.dynamic_admin_emails))
         return admins
     
     def get_dynamic_admin_emails(self) -> List[str]:

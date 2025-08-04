@@ -85,6 +85,8 @@ class PedalsPage(BasePage):
             
         if hasattr(self, 'global_managers') and self.global_managers and hasattr(self.global_managers, 'hardware'):
             hardware = self.global_managers.hardware
+            
+            # Simple check: if pedals_connected is True, then connected
             if hasattr(hardware, 'pedals_connected') and hardware.pedals_connected:
                 # Pedals connected
                 self.connection_status_label.setText("🟢 Pedals Connected")
@@ -252,3 +254,10 @@ class PedalsPage(BasePage):
         """Handle widget close event."""
         self.cleanup()
         super().closeEvent(event) if hasattr(super(), 'closeEvent') else None
+    
+    def __del__(self):
+        """Destructor to ensure proper cleanup."""
+        try:
+            self.cleanup()
+        except Exception as e:
+            logger.debug(f"Error in pedals page destructor: {e}")

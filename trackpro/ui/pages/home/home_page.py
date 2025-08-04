@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QScrollArea, QFrame, QGridLayout, QPushButton)
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor
+from PyQt6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor, QPen
 from ...modern.shared.base_page import BasePage
 
 logger = logging.getLogger(__name__)
@@ -334,6 +334,14 @@ class HomePage(BasePage):
         if not user_data:
             return
             
+        # Check if user has an avatar URL
+        avatar_url = user_data.get('avatar_url')
+        if avatar_url:
+            # Load avatar from URL
+            self.load_avatar_from_url(avatar_url)
+            return
+            
+        # Fallback to initials if no avatar URL
         # Get user name for initials
         name = user_data.get('display_name') or user_data.get('username') or user_data.get('name', 'U')
         
@@ -348,7 +356,65 @@ class HomePage(BasePage):
         
         # Create avatar with initials
         self.create_avatar_with_initials(initials, name)
-        
+    
+    def load_avatar_from_url(self, url: str):
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar size (100x100)
+                            avatar_size = 100
+                            scaled_pixmap = pixmap.scaled(
+                                avatar_size, avatar_size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(avatar_size, avatar_size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            painter = QPainter(circular_pixmap)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            painter.setBrush(QBrush(scaled_pixmap))
+                            painter.setPen(QPen(Qt.GlobalColor.transparent))
+                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
+                            painter.end()
+                            
+                            # Update avatar display
+                            self.avatar_label.setPixmap(circular_pixmap)
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    self.create_avatar_with_initials("U", "User")
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+        except Exception as e:
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            self.create_avatar_with_initials("U", "User")
+            
     def _generate_initials(self, name):
         """Generate initials from a name."""
         if not name:
@@ -393,6 +459,24 @@ class HomePage(BasePage):
     def initialize_avatar(self):
         """Initialize the avatar with current user or default."""
         try:
+            # Try to get complete user profile first (includes avatar_url)
+            try:
+                from ....social import enhanced_user_manager
+                complete_profile = enhanced_user_manager.get_complete_user_profile()
+                if complete_profile:
+                    # Update welcome message
+                    name = complete_profile.get('display_name') or complete_profile.get('username') or complete_profile.get('name', 'User')
+                    self.welcome_label.setText(f"Welcome back, {name}!")
+                    
+                    # Update avatar with complete user data (includes avatar_url)
+                    self.update_user_avatar(complete_profile)
+                    
+                    logger.info(f"✅ Avatar initialized with complete profile: {name}")
+                    return
+            except Exception as profile_error:
+                logger.debug(f"Could not get complete user profile: {profile_error}")
+            
+            # Fallback to basic user manager
             from ....auth.user_manager import get_current_user
             current_user = get_current_user()
             
@@ -484,7 +568,30 @@ class HomePage(BasePage):
     def on_auth_state_changed(self):
         """Handle authentication state changes."""
         try:
-            # Check authentication status
+            # Try to get complete user profile first (includes avatar_url)
+            try:
+                from ....social import enhanced_user_manager
+                complete_profile = enhanced_user_manager.get_complete_user_profile()
+                if complete_profile:
+                    # Update welcome message
+                    name = complete_profile.get('display_name') or complete_profile.get('username') or complete_profile.get('name', 'User')
+                    self.welcome_label.setText(f"Welcome back, {name}!")
+                    
+                    # Update avatar with complete user data (includes avatar_url)
+                    self.update_user_avatar(complete_profile)
+                    
+                    # Hide auth buttons when authenticated
+                    self.auth_buttons_container.setVisible(False)
+                    
+                    logger.info(f"✅ Authenticated with complete profile: {name}")
+                    
+                    self._auth_check_completed = True
+                    self._cached_auth_state = True
+                    return
+            except Exception as profile_error:
+                logger.debug(f"Could not get complete user profile: {profile_error}")
+            
+            # Fallback to basic user manager
             from ....auth.user_manager import get_current_user
             current_user = get_current_user()
             

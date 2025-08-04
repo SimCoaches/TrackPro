@@ -1,6 +1,7 @@
 import logging
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QPushButton, QLabel
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QPushButton, QLabel, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import pyqtSignal, Qt, QPoint
+from PyQt6.QtGui import QIcon, QAction
 from ..discord_navigation import DiscordNavigation
 from ..online_users_sidebar import OnlineUsersSidebar
 from .shared.base_page import GlobalManagers
@@ -51,6 +52,9 @@ class ModernMainWindow(QMainWindow):
         
         # Start app tracking
         self.start_app_tracking()
+        
+        # Initialize updater and check for updates on startup
+        self.init_updater()
         
         logger.info("🚀 Modern TrackPro UI initialized with modular architecture")
     
@@ -209,7 +213,7 @@ class ModernMainWindow(QMainWindow):
         title_layout.setSpacing(5)
         
         # App icon and title
-        title_label = QLabel("TrackPro V1.5.5")
+        title_label = QLabel("TrackPro by Sim Coaches")
         title_label.setStyleSheet("""
             QLabel {
                 color: #fefefe;
@@ -331,19 +335,17 @@ class ModernMainWindow(QMainWindow):
             logger.error(f"Performance optimization setup failed: {e}")
     
     def init_global_managers(self):
-        try:
-            from trackpro.pedals.hardware_input import HardwareInput
-            self.global_managers.hardware = HardwareInput()
-            logger.info("✅ Hardware input manager initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize hardware manager: {e}")
+        """Initialize global managers without duplicating hardware systems."""
+        # Defer hardware initialization until global systems are ready
+        # This prevents creating duplicate HardwareInput instances
+        self.global_managers.hardware = None
         
         # Defer iRacing API initialization to when global API is ready
         # This prevents early access attempts that fail during startup
         self.global_managers.iracing = None
         
         self.global_managers.auth = self.oauth_handler
-        logger.info("✅ Global managers initialized")
+        logger.info("✅ Global managers initialized (hardware deferred)")
     
     def set_global_iracing_api(self, iracing_api):
         """Set the global iRacing API instance."""
@@ -460,6 +462,49 @@ class ModernMainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self.resize(1400, 900)
         
+        # Set window icon to match system tray icon (only if not already set by application)
+        try:
+            # Check if application already set an icon
+            app_icon = QApplication.instance().windowIcon()
+            if app_icon.isNull():
+                import os
+                current_dir = os.path.dirname(__file__)
+                
+                # Try ICO first (user preference)
+                icon_path = os.path.join(current_dir, "..", "..", "resources", "icons", "trackpro-tray-1.ico")
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+                    logger.info(f"✅ Set window icon from: {icon_path}")
+                else:
+                    # Try PNG as fallback
+                    png_icon_path = os.path.join(current_dir, "..", "..", "resources", "icons", "trackpro_tray.png")
+                    if os.path.exists(png_icon_path):
+                        self.setWindowIcon(QIcon(png_icon_path))
+                        logger.info(f"✅ Set window icon from: {png_icon_path}")
+                    else:
+                        logger.warning("⚠️ Could not find window icon, using default")
+        except Exception as e:
+            logger.warning(f"⚠️ Error setting window icon: {e}")
+        
+        # Force taskbar icon update on Windows
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            # Set the application ID for Windows taskbar
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TrackPro.TrackPro")
+            
+            # Force Windows to refresh the taskbar icon
+            hwnd = self.winId().__int__()
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                wintypes.DWORD(0x0001 | 0x0002 | 0x0004 | 0x0040)  # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED
+            )
+            
+            logger.info("✅ Forced taskbar icon update")
+        except Exception as e:
+            logger.warning(f"⚠️ Error forcing taskbar icon update: {e}")
+        
         # Set dark theme for the main window
         self.setStyleSheet("""
             QMainWindow {
@@ -516,6 +561,9 @@ class ModernMainWindow(QMainWindow):
         
         # Set up keyboard shortcuts
         self.setup_keyboard_shortcuts()
+        
+        # Set up system tray
+        self.setup_system_tray()
     
     def create_navigation(self):
         nav_widget = DiscordNavigation()
@@ -532,10 +580,13 @@ class ModernMainWindow(QMainWindow):
         # Connect authentication state changes to sidebar
         self.auth_state_changed.connect(sidebar.on_authentication_changed)
         
+        # Store reference to sidebar for later connections
+        self.online_users_sidebar = sidebar
+        
         return sidebar
     
     def create_pages(self):
-        """PERFORMANCE OPTIMIZATION: Only create Home page immediately, lazy-load others."""
+        """PERFORMANCE OPTIMIZATION: Pre-load commonly used pages, lazy-load others."""
         # Create the actual Home page immediately (it's always the first one shown)
         self.pages["home"] = HomePage(self.global_managers)
         self.content_stack.addWidget(self.pages["home"])
@@ -546,20 +597,65 @@ class ModernMainWindow(QMainWindow):
         
         logger.info("✅ Home page integrated into modern UI")
         
-        # LAZY LOADING: Don't create other pages yet - they'll be created when first accessed
-        # This dramatically speeds up startup time
+        # PRE-LOAD COMMONLY USED PAGES: Create pages that users access frequently
+        # This eliminates the lag when switching between pages for the first time
+        logger.info("🚀 PRE-LOADING: Creating commonly used pages for instant access...")
+        
+        # Pre-load Community page (very commonly used)
+        try:
+            # Check if community page already exists to prevent multiple instances
+            if "community" not in self.pages:
+                logger.info("🏗️ Creating Community page for pre-loading...")
+                self.pages["community"] = CommunityPage(self.global_managers)
+                self.content_stack.addWidget(self.pages["community"])
+                logger.info("✅ Community page pre-loaded")
+            else:
+                logger.warning("⚠️ Community page already exists, skipping pre-loading")
+        except Exception as e:
+            logger.error(f"Failed to pre-load community page: {e}")
+            self.pages["community"] = self.create_placeholder_page("community")
+            self.content_stack.addWidget(self.pages["community"])
+        
+        # Pre-load Race Coach page (commonly used)
+        try:
+            from ..pages.race_coach import CoachPage
+            self.pages["race_coach"] = CoachPage(self.global_managers)
+            self.content_stack.addWidget(self.pages["race_coach"])
+            logger.info("✅ Race Coach page pre-loaded")
+        except Exception as e:
+            logger.error(f"Failed to pre-load race coach page: {e}")
+            self.pages["race_coach"] = self.create_placeholder_page("race_coach")
+            self.content_stack.addWidget(self.pages["race_coach"])
+        
+        # Pre-load Pedals page (commonly used)
+        try:
+            from ..pages.pedals import PedalsPage
+            self.pages["pedals"] = PedalsPage(self.global_managers)
+            self.content_stack.addWidget(self.pages["pedals"])
+            
+            # Connect pedal calibration signal
+            if hasattr(self.pages["pedals"], 'pedal_calibrated'):
+                self.pages["pedals"].pedal_calibrated.connect(
+                    lambda pedal, data: self.calibration_updated.emit(pedal)
+                )
+            logger.info("✅ Pedals page pre-loaded")
+        except Exception as e:
+            logger.error(f"Failed to pre-load pedals page: {e}")
+            self.pages["pedals"] = self.create_placeholder_page("pedals")
+            self.content_stack.addWidget(self.pages["pedals"])
+        
+        # LAZY LOADING: Only lazy-load less frequently used pages
+        # This keeps startup fast while eliminating lag for common pages
         self._lazy_pages = {
-            "pedals": {"class": None, "created": False},  # Dynamic import
-            "race_coach": {"class": None, "created": False},  # Dynamic import
             "overlays": {"class": None, "created": False},  # Dynamic import
             "race_pass": {"class": None, "created": False},  # Dynamic import
             "handbrake": {"class": None, "created": False},  # Special handling needed
             "support": {"class": None, "created": False},  # Special handling needed
-            "community": {"class": CommunityPage, "created": False},
             "account": {"class": None, "created": False}
+            # Note: community page is pre-loaded, not lazy-loaded
         }
         
-        logger.info("🚀 PERFORMANCE: Page lazy-loading configured - pages will be created when accessed")
+        logger.info("🚀 PERFORMANCE: Common pages pre-loaded, less-used pages will be lazy-loaded")
     
     def create_placeholder_page(self, page_name: str):
         from PyQt6.QtWidgets import QLabel
@@ -659,6 +755,11 @@ class ModernMainWindow(QMainWindow):
             logger.warning(f"⚠️ Unknown page requested: {page_name}")
             return
         
+        # Prevent creating pages that are already pre-loaded
+        if page_name in self.pages:
+            logger.info(f"🔄 {page_name} page already exists, skipping lazy creation")
+            return
+        
         page_config = self._lazy_pages[page_name]
         if page_config.get("created", False):
             return  # Already created
@@ -696,6 +797,18 @@ class ModernMainWindow(QMainWindow):
             elif page_name == "account":
                 # Special handling for account page
                 page_widget = self.create_account_page()
+                
+                # Connect avatar upload signal to sidebar refresh
+                if hasattr(self, 'online_users_sidebar') and hasattr(page_widget, 'avatar_uploaded'):
+                    page_widget.avatar_uploaded.connect(self.online_users_sidebar.on_avatar_updated)
+                
+                # Connect avatar upload signal to navigation refresh
+                if hasattr(self, 'navigation') and hasattr(page_widget, 'avatar_uploaded'):
+                    page_widget.avatar_uploaded.connect(self.navigation.on_avatar_updated)
+                
+                # Connect avatar upload signal to home page refresh
+                if hasattr(self, 'pages') and 'home' in self.pages:
+                    page_widget.avatar_uploaded.connect(lambda: self.pages['home'].on_auth_state_changed())
             elif page_config["class"]:
                 # Standard page creation
                 page_widget = page_config["class"](self.global_managers)
@@ -762,6 +875,21 @@ class ModernMainWindow(QMainWindow):
         
         # Store reference for authentication updates
         account_page.update_auth_status = lambda authenticated: self.update_account_page_auth_status(authenticated)
+        
+        # Connect avatar upload signal to refresh navigation
+        account_page.avatar_uploaded.connect(self.on_avatar_uploaded)
+        
+        # Connect avatar upload signal to sidebar refresh
+        if hasattr(self, 'online_users_sidebar'):
+            account_page.avatar_uploaded.connect(self.online_users_sidebar.on_avatar_updated)
+        
+        # Connect avatar upload signal to navigation refresh
+        if hasattr(self, 'navigation'):
+            account_page.avatar_uploaded.connect(self.navigation.on_avatar_updated)
+        
+        # Connect avatar upload signal to home page refresh
+        if hasattr(self, 'pages') and 'home' in self.pages:
+            account_page.avatar_uploaded.connect(lambda: self.pages['home'].on_auth_state_changed())
         
         logger.info("✅ Modern Account page created with sidebar navigation")
         return account_page
@@ -1337,23 +1465,8 @@ class ModernMainWindow(QMainWindow):
             supabase_client = get_supabase_client()
             
             if supabase_client:
-                # Check if we have a valid user
-                user_response = supabase_client.auth.get_user()
-                session = supabase_client.auth.get_session()
-                
-                is_authenticated = bool(
-                    (user_response and user_response.user) or 
-                    (session and session.user)
-                )
-                
-                logger.info(f"🔄 Auth state refresh: authenticated={is_authenticated}")
-                self.update_auth_state(is_authenticated)
-            else:
-                # If Supabase client is not available, try to initialize it
-                logger.info("🔄 Supabase client not available, attempting to initialize...")
-                # The client should auto-initialize on first access, so just try again
-                supabase_client = get_supabase_client()
-                if supabase_client:
+                try:
+                    # Check if we have a valid user
                     user_response = supabase_client.auth.get_user()
                     session = supabase_client.auth.get_session()
                     
@@ -1362,13 +1475,47 @@ class ModernMainWindow(QMainWindow):
                         (session and session.user)
                     )
                     
-                    logger.info(f"🔄 Auth state refresh after init: authenticated={is_authenticated}")
+                    logger.info(f"🔄 Auth state refresh: authenticated={is_authenticated}")
                     self.update_auth_state(is_authenticated)
-                else:
-                    logger.info("ℹ️ Supabase client not available - continuing without authentication")
+                except Exception as e:
+                    logger.error(f"Error checking authentication state: {e}")
+                    # If there's an error, assume not authenticated
+                    self.update_auth_state(False)
+            else:
+                # If Supabase client is not available, try to initialize it
+                logger.info("🔄 Supabase client not available, attempting to initialize...")
+                try:
+                    # Force reinitialization
+                    from trackpro.database.supabase_client import _supabase_manager
+                    if _supabase_manager:
+                        _supabase_manager.initialize()
+                        supabase_client = get_supabase_client()
+                        
+                        if supabase_client:
+                            user_response = supabase_client.auth.get_user()
+                            session = supabase_client.auth.get_session()
+                            
+                            is_authenticated = bool(
+                                (user_response and user_response.user) or 
+                                (session and session.user)
+                            )
+                            
+                            logger.info(f"🔄 Auth state refresh after init: authenticated={is_authenticated}")
+                            self.update_auth_state(is_authenticated)
+                        else:
+                            logger.info("ℹ️ Supabase client still not available after reinitialization")
+                            self.update_auth_state(False)
+                    else:
+                        logger.info("ℹ️ Supabase manager not available - continuing without authentication")
+                        self.update_auth_state(False)
+                except Exception as e:
+                    logger.error(f"Error during Supabase reinitialization: {e}")
+                    self.update_auth_state(False)
                 
         except Exception as e:
             logger.error(f"Error refreshing auth state: {e}")
+            # On error, assume not authenticated
+            self.update_auth_state(False)
     
     def force_auth_refresh_after_login(self):
         """Force refresh authentication state after successful login."""
@@ -1381,8 +1528,14 @@ class ModernMainWindow(QMainWindow):
             
             if not supabase_client:
                 logger.info("ℹ️ Supabase client not available, trying to initialize...")
-                # The client should auto-initialize on first access, so just try again
-                supabase_client = get_supabase_client()
+                try:
+                    # Force reinitialization
+                    from trackpro.database.supabase_client import _supabase_manager
+                    if _supabase_manager:
+                        _supabase_manager.initialize()
+                        supabase_client = get_supabase_client()
+                except Exception as e:
+                    logger.error(f"Error during Supabase reinitialization: {e}")
             
             if supabase_client:
                 # Force a session refresh
@@ -1392,7 +1545,7 @@ class ModernMainWindow(QMainWindow):
                         logger.info("✅ Found valid session, updating UI...")
                         self.update_auth_state(True)
                         
-                                    # Also update all pages that need authentication state
+                        # Also update all pages that need authentication state
                         if "home" in self.pages:
                             self.pages["home"].refresh_header()
                             # Also call the auth state changed method
@@ -1400,35 +1553,30 @@ class ModernMainWindow(QMainWindow):
                                 self.pages["home"].on_auth_state_changed()
                         
                         return True
+                    else:
+                        logger.warning("No valid session found after login")
+                        self.update_auth_state(False)
+                        return False
                 except Exception as session_error:
                     logger.error(f"Error getting session: {session_error}")
-            
-            # Fallback: try user manager
-            try:
-                from trackpro.auth.user_manager import get_current_user
-                current_user = get_current_user()
-                if current_user is None:
-                    # User manager not ready yet - skip authentication check
-                    logger.info("🔍 User manager not ready yet - skipping authentication check")
+                    self.update_auth_state(False)
                     return False
-                if current_user and current_user.is_authenticated:
-                    logger.info("✅ Found authenticated user via user manager")
-                    self.update_auth_state(True)
-                    return True
-            except Exception as user_error:
-                logger.error(f"Error checking user manager: {user_error}")
-            
-            logger.warning("⚠️ Could not verify authentication state")
-            return False
+            else:
+                logger.warning("⚠️ Supabase client not available after login")
+                self.update_auth_state(False)
+                return False
             
         except Exception as e:
             logger.error(f"Error in force_auth_refresh_after_login: {e}")
+            self.update_auth_state(False)
             return False
     
     def get_current_user_info(self):
         """Get current user information from the authentication system and profile database."""
         try:
             from trackpro.database.supabase_client import get_supabase_client
+            from trackpro.social import enhanced_user_manager
+            
             supabase_client = get_supabase_client()
             if not supabase_client:
                 # Fallback to user manager if Supabase client isn't available
@@ -1462,6 +1610,24 @@ class ModernMainWindow(QMainWindow):
                 email = user.email or "No email available"
                 user_id = user.id
                 
+                # Try to get complete user profile first (includes avatar_url)
+                try:
+                    complete_profile = enhanced_user_manager.get_complete_user_profile()
+                    if complete_profile:
+                        # Use complete profile data which includes avatar_url
+                        name = complete_profile.get('display_name') or complete_profile.get('username') or "User"
+                        avatar_url = complete_profile.get('avatar_url')
+                        
+                        return {
+                            'email': email,
+                            'name': name,
+                            'user_id': user_id,
+                            'avatar_url': avatar_url
+                        }
+                except Exception as profile_error:
+                    logger.debug(f"Could not get complete user profile: {profile_error}")
+                
+                # Fallback to basic user info if complete profile fails
                 name = "User"  # Default fallback
                 
                 # First, try to get name from user metadata (fastest and already available)
@@ -1523,6 +1689,20 @@ class ModernMainWindow(QMainWindow):
             return None
     
 
+    def on_avatar_uploaded(self, avatar_url: str):
+        """Handle avatar upload events and refresh navigation."""
+        try:
+            logger.info(f"Avatar uploaded: {avatar_url}")
+            
+            # Clear cached user info to force refresh
+            self._cached_user_info = None
+            
+            # Refresh authentication state to update navigation with new avatar
+            self.refresh_auth_state()
+            
+        except Exception as e:
+            logger.error(f"Error handling avatar upload: {e}")
+    
     def check_authentication_on_account_click(self):
         """Check authentication when account page is requested."""
         try:
@@ -1589,6 +1769,63 @@ class ModernMainWindow(QMainWindow):
             logger.info("🔄 Forced refresh of online users sidebar")
         # Could save preference or adjust layout here if needed
     
+    def debug_sidebar_issues(self):
+        """Debug method to help diagnose sidebar issues."""
+        logger.info("🔍 Debugging sidebar issues...")
+        
+        if hasattr(self, 'online_users_sidebar'):
+            sidebar = self.online_users_sidebar
+            
+            # Check if sidebar is visible
+            logger.info(f"Sidebar visible: {sidebar.isVisible()}")
+            logger.info(f"Sidebar width: {sidebar.width()}")
+            logger.info(f"Sidebar expanded: {getattr(sidebar, 'is_expanded', 'Unknown')}")
+            
+            # Check user data
+            logger.info(f"Number of users in sidebar: {len(getattr(sidebar, 'all_users', []))}")
+            for i, user in enumerate(getattr(sidebar, 'all_users', [])):
+                logger.info(f"User {i+1}: {user.get('display_name', 'Unknown')} - Avatar URL: {user.get('avatar_url', 'None')}")
+            
+            # Force refresh
+            sidebar.force_refresh()
+            logger.info("✅ Sidebar debug completed")
+        else:
+            logger.error("❌ Online users sidebar not found")
+    
+    def show_update_notification(self, version):
+        """Show update notification in the UI."""
+        # This method is called by the updater when an update is available
+        # but the user chose not to download immediately
+        logger.info(f"Update notification shown for version v{version}")
+        
+        # Show the update notification dialog
+        try:
+            from trackpro.ui.update_notification_dialog import UpdateNotificationDialog
+            dialog = UpdateNotificationDialog(version, self)
+            dialog.download_clicked.connect(lambda: self.updater._handle_download_choice())
+            dialog.cancel_clicked.connect(lambda: self.updater._handle_cancel_choice())
+            dialog.show()
+        except Exception as e:
+            logger.error(f"Error showing update notification: {e}")
+    
+    def init_updater(self):
+        """Initialize the updater and check for updates on startup."""
+        try:
+            from trackpro.updater import Updater
+            self.updater = Updater(self)
+            # Check for updates silently on startup
+            self.updater.check_for_updates(silent=True, manual_check=False)
+            logger.info("✅ Updater initialized and checking for updates")
+        except Exception as e:
+            logger.error(f"Error initializing updater: {e}")
+    
+    def check_for_updates(self):
+        """Check for updates manually."""
+        # This method is called from the menu bar
+        if not hasattr(self, 'updater'):
+            self.init_updater()
+        self.updater.check_for_updates(silent=False, manual_check=True)
+    
     def setup_keyboard_shortcuts(self):
         """Set up keyboard shortcuts for the application."""
         try:
@@ -1602,6 +1839,201 @@ class ModernMainWindow(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error setting up keyboard shortcuts: {e}")
+    
+    def setup_system_tray(self):
+        """Set up system tray functionality."""
+        try:
+            import os
+            
+            # Check if system tray is available
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                logger.warning("System tray is not available on this system, but will try to create tray icon anyway")
+                # Don't return - try to create the tray icon anyway
+            
+            # Create system tray icon
+            try:
+                self.tray_icon = QSystemTrayIcon(self)
+                logger.info("✅ System tray icon created successfully")
+            except Exception as e:
+                logger.error(f"Failed to create system tray icon: {e}")
+                return
+            
+            # Set icon - try to use our custom TrackPro tray icon
+            try:
+                # Debug: Check current directory and file paths
+                current_dir = os.path.dirname(__file__)
+                logger.info(f"🔍 Current directory: {current_dir}")
+                
+                # Try multiple paths to find the tray icon (PNG first)
+                possible_paths = [
+                    # PNG first (preferred - same as window icon)
+                    os.path.join(current_dir, "..", "..", "resources", "icons", "trackpro_tray.png"),
+                    # ICO as fallback
+                    os.path.join(current_dir, "..", "..", "resources", "icons", "trackpro_tray.ico"),
+                    # Absolute paths from project root (PNG first)
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))), "trackpro", "resources", "icons", "trackpro_tray.png"),
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))), "trackpro", "resources", "icons", "trackpro_tray.ico"),
+                    # Try resource utils
+                    None  # Will be handled separately
+                ]
+                
+                icon = None
+                icon_path = None
+                
+                # Try each path
+                for path in possible_paths:
+                    if path and os.path.exists(path):
+                        icon = QIcon(path)
+                        icon_path = path
+                        logger.info(f"✅ Loaded custom tray icon from: {icon_path}")
+                        break
+                
+                # If no icon found via paths, try resource utils
+                if not icon:
+                    try:
+                        from trackpro.utils.resource_utils import get_resource_path
+                        resource_path = get_resource_path("trackpro/resources/icons/trackpro_tray.png")
+                        logger.info(f"🔍 Looking via resource utils at: {resource_path}")
+                        if os.path.exists(resource_path):
+                            icon = QIcon(resource_path)
+                            icon_path = resource_path
+                            logger.info(f"✅ Loaded custom tray icon via resource utils: {icon_path}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Resource utils failed: {e}")
+                
+                # If still no icon, use fallbacks
+                if not icon:
+                    # Fallback to window icon
+                    icon = self.windowIcon()
+                    if icon.isNull():
+                        # Final fallback to system icon
+                        icon = self.style().standardIcon(self.style().SP_ComputerIcon)
+                        logger.warning("⚠️ Using system fallback icon for tray")
+                    else:
+                        logger.info("Using window icon for tray")
+                
+                self.tray_icon.setIcon(icon)
+                
+            except Exception as e:
+                logger.warning(f"Could not set tray icon: {e}")
+                # Use a standard system icon as fallback
+                icon = self.style().standardIcon(self.style().SP_ComputerIcon)
+                self.tray_icon.setIcon(icon)
+            
+            # Create tray menu
+            tray_menu = QMenu()
+            
+            # Show/Hide action
+            show_action = QAction("Show TrackPro", self)
+            show_action.triggered.connect(self.show_from_tray)
+            tray_menu.addAction(show_action)
+            
+            tray_menu.addSeparator()
+            
+            # Exit action
+            exit_action = QAction("Exit TrackPro", self)
+            exit_action.triggered.connect(self.force_exit_from_tray)
+            tray_menu.addAction(exit_action)
+            
+            # Set the menu
+            self.tray_icon.setContextMenu(tray_menu)
+            
+            # Connect double-click to show window
+            self.tray_icon.activated.connect(self.tray_icon_activated)
+            
+            # Set tooltip
+            self.tray_icon.setToolTip("TrackPro - Racing Telemetry System")
+            
+            # Show the tray icon
+            self.tray_icon.show()
+            
+            # Verify tray icon is visible
+            if self.tray_icon.isVisible():
+                logger.info("✅ System tray initialized successfully and icon is visible")
+            else:
+                logger.warning("⚠️ System tray initialized but icon is not visible")
+            
+            logger.info("System tray initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error setting up system tray: {e}")
+    
+    def tray_icon_activated(self, reason):
+        """Handle tray icon activation."""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show_from_tray()
+    
+    def show_from_tray(self):
+        """Show the main window from system tray."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        logger.info("Window restored from system tray")
+    
+    def force_exit_from_tray(self):
+        """Force exit the application completely from system tray."""
+        logger.info("FORCE EXIT requested from system tray")
+        
+        # Hide tray icon first
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            self.tray_icon.hide()
+        
+        # Temporarily disable minimize to tray to force actual exit
+        from trackpro.config import Config
+        config = Config()
+        original_setting = config.minimize_to_tray
+        config.set('ui.minimize_to_tray', False)
+        
+        # Force kill all TrackPro processes immediately
+        try:
+            logger.info("🔫 System tray force killing all TrackPro processes...")
+            
+            # Use subprocess utility to hide windows
+            from trackpro.utils.subprocess_utils import run_subprocess
+            
+            kill_commands = [
+                ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
+                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.5.exe'],
+                # More specific PowerShell command that excludes IDEs
+                ['powershell', '-Command', '''Get-Process | Where-Object {
+                    ($_.ProcessName -eq "TrackPro" -or 
+                     $_.ProcessName -like "TrackPro_v*" -or 
+                     $_.ProcessName -like "TrackPro_Setup*") -and
+                    $_.ProcessName -notlike "*Cursor*" -and
+                    $_.ProcessName -notlike "*Code*" -and
+                    $_.ProcessName -notlike "*Visual*" -and
+                    $_.ProcessName -notlike "*Studio*"
+                } | Stop-Process -Force'''],
+            ]
+            
+            for cmd in kill_commands:
+                try:
+                    run_subprocess(cmd, hide_window=True, capture_output=True, text=True, check=False, timeout=3)
+                except:
+                    pass
+                    
+        except Exception as e:
+            logger.warning(f"Error during system tray force kill: {e}")
+        
+        # Clean up lock file
+        try:
+            import tempfile
+            import os
+            lock_file = os.path.join(tempfile.gettempdir(), "trackpro.lock")
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+        except:
+            pass
+        
+        # Force quit application
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                app.quit()
+        except:
+            import sys
+            sys.exit(0)
     
     def cleanup(self):
         """Clean up resources before window closes."""
@@ -1693,27 +2125,26 @@ class ModernMainWindow(QMainWindow):
         logger.info("🧹 Window close event triggered...")
         
         try:
-            # Stop app tracking before cleanup
-            self.stop_app_tracking()
+            # ALWAYS minimize to tray instead of closing the application
+            # This ensures TrackPro stays running in the background
+            logger.info("🔄 Always minimizing to system tray - TrackPro stays running")
             
-            # Call our cleanup method
-            self.cleanup()
+            # Hide the window
+            self.hide()
+            
+            # Ensure tray icon is visible if it exists
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                if not self.tray_icon.isVisible():
+                    self.tray_icon.show()
+                logger.info("✅ Window minimized to system tray")
+            else:
+                logger.warning("⚠️ No system tray icon available")
+            
+            event.ignore()  # Don't close the window
+            return
+            
         except Exception as e:
-            logger.error(f"Error during closeEvent cleanup: {e}")
-        
-        # Accept the close event
-        event.accept()
-        super().closeEvent(event)
-        
-        # Force quit the application to ensure it closes properly
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QTimer
-        app = QApplication.instance()
-        if app:
-            logger.info("🚪 Forcing application quit...")
-            # Schedule application quit to happen after cleanup is complete
-            QTimer.singleShot(100, app.quit)
-            # Also ensure the app exits even if quit() doesn't work
-            QTimer.singleShot(500, lambda: app.exit(0))
-            # Emergency exit if all else fails
-            QTimer.singleShot(2000, self._emergency_exit)
+            logger.error(f"Error during closeEvent: {e}")
+            # Even if there's an error, don't close the app
+            event.ignore()
+            return

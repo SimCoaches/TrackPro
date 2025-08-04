@@ -28,12 +28,16 @@ class OnlineUserItem(QWidget):
     def __init__(self, user_data: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.user_data = user_data
+        logger.debug(f"Creating OnlineUserItem for user: {user_data.get('display_name', 'Unknown')}")
+        logger.debug(f"User data: {user_data}")
         self.setup_ui()
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
     
     def setup_ui(self):
         """Setup the user item UI."""
+        logger.debug(f"Setting up UI for user: {self.user_data.get('display_name', 'Unknown')}")
+        
         self.setFixedHeight(48)
         self.setStyleSheet("""
             OnlineUserItem {
@@ -57,8 +61,10 @@ class OnlineUserItem(QWidget):
         avatar_container_layout.setContentsMargins(0, 0, 0, 0)
         
         # User avatar (circle with initials)
+        logger.debug(f"Creating avatar for user: {self.user_data.get('display_name', 'Unknown')}")
         self.avatar_label = self.create_avatar()
         avatar_container_layout.addWidget(self.avatar_label)
+        logger.debug(f"Avatar created and added to container for user: {self.user_data.get('display_name', 'Unknown')}")
         
         # Online status dot on avatar (positioned absolutely)
         self.avatar_status_dot = QLabel(self.avatar_container)
@@ -121,10 +127,11 @@ class OnlineUserItem(QWidget):
         avatar_label = QLabel()
         avatar_label.setFixedSize(32, 32)
         
-        # Create circular avatar with initials
+        # Get user name for avatar
         name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
-        logger.debug(f"Creating avatar for user data: {self.user_data}")
-        logger.debug(f"Selected name for avatar: '{name}'")
+        logger.debug(f"Creating avatar for user: {name}")
+        
+        # Generate initials
         initials = self._generate_initials(name)
         
         # Create pixmap for avatar 
@@ -134,8 +141,10 @@ class OnlineUserItem(QWidget):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw circle background
-        painter.setBrush(QBrush(QColor("#5865f2")))  # Discord blue
+        # Draw circle background using TrackPro colors
+        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
+        color_index = hash(name) % len(colors)
+        painter.setBrush(QBrush(QColor(colors[color_index])))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(0, 0, 32, 32)
         
@@ -152,7 +161,14 @@ class OnlineUserItem(QWidget):
         
         painter.end()
         avatar_label.setPixmap(pixmap)
+        logger.debug(f"Created avatar with initials: {initials}")
         return avatar_label
+    
+
+    
+
+    
+
     
     def _generate_initials(self, name: str) -> str:
         """Generate initials from a name."""
@@ -327,9 +343,9 @@ class OnlineUsersSidebar(QWidget):
             }
         """)
         
-        # Main layout
+        # Main layout with top margin to avoid overlapping with iRacing disconnection box
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 8, 0, 8)
+        self.main_layout.setContentsMargins(0, 38, 0, 8)  # Increased top margin by 30px
         self.main_layout.setSpacing(4)
         
         # Header with toggle button
@@ -674,7 +690,7 @@ class OnlineUsersSidebar(QWidget):
             try:
                 # Try to fetch with all fields first
                 response = client.table("user_profiles").select(
-                    "user_id, username, display_name, email, first_name, last_name, bio, created_at"
+                    "user_id, username, display_name, email, first_name, last_name, bio, created_at, avatar_url"
                 ).eq("user_id", self.current_user_id).single().execute()
             except Exception as column_error:
                 # If first_name column doesn't exist, try without it
@@ -1119,6 +1135,8 @@ class OnlineUsersSidebar(QWidget):
     
     def refresh_users_list(self):
         """Refresh the users list display with friends prioritized."""
+        logger.debug(f"Refreshing users list with {len(self.all_users)} users")
+        
         # Clear existing widgets from layout completely
         while self.users_layout.count():
             child = self.users_layout.takeAt(0)
@@ -1138,8 +1156,11 @@ class OnlineUsersSidebar(QWidget):
             )
         )
         
+        logger.debug(f"Adding {len(sorted_users)} user widgets to UI")
+        
         # Add user widgets
-        for user_data in sorted_users:
+        for i, user_data in enumerate(sorted_users):
+            logger.debug(f"Creating user widget {i+1}/{len(sorted_users)}: {user_data.get('display_name', 'Unknown')}")
             user_widget = OnlineUserItem(user_data)
             user_widget.user_clicked.connect(self.on_user_selected)
             user_widget.private_message_requested.connect(self.on_private_message_requested)
@@ -1164,12 +1185,15 @@ class OnlineUsersSidebar(QWidget):
                 container_layout.addWidget(user_widget)
             
             self.users_layout.addWidget(container)
+            logger.debug(f"Added user widget to layout: {user_data.get('display_name', 'Unknown')}")
         
         # Update user count - show online users count
         online_count = len([u for u in self.all_users if u.get('is_online', False)])
         total_count = len(self.all_users)
         self.user_count_label.setText(f"{online_count}/{total_count} online")
         self.count_icon.setText(str(online_count))
+        
+        logger.debug(f"Users list refresh complete. Online: {online_count}, Total: {total_count}")
     
     def refresh_users_data(self):
         """Refresh users data including online status from the backend."""
@@ -1324,9 +1348,16 @@ class OnlineUsersSidebar(QWidget):
                     'status': 'Online'
                 }
             
-            # Add to existing users if not already there
+            # Update existing user data or add if not present
             existing_user_ids = [user.get('user_id') for user in self.all_users]
-            if current_user_id not in existing_user_ids:
+            if current_user_id in existing_user_ids:
+                # Update existing user data (important for avatar updates)
+                for i, user in enumerate(self.all_users):
+                    if user.get('user_id') == current_user_id:
+                        self.all_users[i] = current_user_data
+                        logger.info("✅ Current user data updated during force refresh")
+                        break
+            else:
                 self.all_users.append(current_user_data)
                 logger.info("✅ Current user added during force refresh")
         
@@ -1334,12 +1365,73 @@ class OnlineUsersSidebar(QWidget):
         self.refresh_users_list()
         self.update_add_friend_ui_state()
         
+        # Ensure the sidebar is visible and properly sized
+        self.setVisible(True)
+        self.setFixedWidth(self.collapsed_width if not self.is_expanded else self.expanded_width)
+        
         # Also reload users from database
         QTimer.singleShot(100, self.load_users_from_database)
         
         # Ensure current user is marked as online in the database
         if is_authenticated and current_user_id:
             self._ensure_current_user_online_status()
+    
+    def on_avatar_updated(self):
+        """Handle avatar updates specifically - forces immediate refresh of current user data."""
+        logger.info("🔄 Avatar updated - refreshing current user data in sidebar")
+        
+                # Add a small delay to ensure database update is complete
+        def delayed_refresh():
+            current_user_id = self.get_current_user_id()
+            if current_user_id:
+                # Force a fresh database query to get the updated avatar
+                current_user_data = self.get_current_user_real_data()
+                logger.debug(f"🔄 Avatar refresh - got user data: {current_user_data}")
+                if current_user_data:
+                    # Update existing user data
+                    for i, user in enumerate(self.all_users):
+                        if user.get('user_id') == current_user_id:
+                            old_avatar = user.get('avatar_url')
+                            self.all_users[i] = current_user_data
+                            new_avatar = current_user_data.get('avatar_url')
+                            logger.info(f"✅ Current user avatar updated in sidebar: {old_avatar} -> {new_avatar}")
+                            break
+                    
+                    # Force immediate UI refresh
+                    self.refresh_users_list()
+                    
+                    # Also try to refresh existing widgets if they exist
+                    self.refresh_existing_avatars()
+                else:
+                    logger.warning("⚠️ Could not get updated user data for avatar refresh")
+        
+        # Use QTimer to delay the refresh slightly to ensure database update is complete
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, delayed_refresh)
+        
+        # Add a second attempt after a longer delay in case the first one fails
+        QTimer.singleShot(2000, delayed_refresh)
+    
+    def refresh_existing_avatars(self):
+        """Refresh avatars for existing user widgets without recreating them."""
+        current_user_id = self.get_current_user_id()
+        if not current_user_id:
+            return
+            
+        # Find the current user's widget and refresh its avatar
+        for user_widget in self.user_widgets:
+            if user_widget.user_data.get('user_id') == current_user_id:
+                # Get fresh user data
+                fresh_user_data = self.get_current_user_real_data()
+                if fresh_user_data:
+                    # Update the widget's user data
+                    user_widget.user_data = fresh_user_data
+                    
+                    # Refresh the avatar display
+                    user_widget.refresh_avatar()
+                    
+                    logger.info("✅ Refreshed avatar for existing user widget")
+                break
     
     def _ensure_current_user_online_status(self):
         """Ensure the current user is marked as online in the database."""

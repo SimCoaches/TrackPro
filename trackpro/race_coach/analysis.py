@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
 import os
 from pathlib import Path
 import json

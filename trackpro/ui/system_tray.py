@@ -16,27 +16,36 @@ def setup_system_tray(main_window):
     
     # Set icon - try to use our custom TrackPro tray icon
     try:
-        # Try to load our custom tray icon
-        icon_path = os.path.join(os.path.dirname(__file__), "..", "resources", "icons", "trackpro_tray.ico")
-        if os.path.exists(icon_path):
-            icon = QIcon(icon_path)
-            logger.info(f"Loaded custom tray icon from: {icon_path}")
+        # Try PNG first (since that's what we have)
+        png_icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "resources", "icons", "trackpro_tray.png")
+        if os.path.exists(png_icon_path):
+            icon = QIcon(png_icon_path)
+            logger.info(f"✅ Loaded custom tray icon from: {png_icon_path}")
         else:
-            # Try PNG version
-            from trackpro.utils.resource_utils import get_resource_path
-            png_icon_path = get_resource_path("trackpro/resources/icons/trackpro_tray.png")
-            if os.path.exists(png_icon_path):
-                icon = QIcon(png_icon_path)
-                logger.info(f"Loaded custom tray icon (PNG) from: {png_icon_path}")
+            # Try ICO as fallback
+            icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "resources", "icons", "trackpro_tray.ico")
+            if os.path.exists(icon_path):
+                icon = QIcon(icon_path)
+                logger.info(f"✅ Loaded custom tray icon from: {icon_path}")
             else:
-                # Fallback to window icon
-                icon = main_window.windowIcon()
-                if icon.isNull():
-                    # Final fallback to system icon
-                    icon = main_window.style().standardIcon(main_window.style().SP_ComputerIcon)
-                    logger.warning("Using system fallback icon for tray")
-                else:
-                    logger.info("Using window icon for tray")
+                # Try using resource utils as fallback
+                try:
+                    from trackpro.utils.resource_utils import get_resource_path
+                    resource_path = get_resource_path("trackpro/resources/icons/trackpro_tray.png")
+                    if os.path.exists(resource_path):
+                        icon = QIcon(resource_path)
+                        logger.info(f"✅ Loaded custom tray icon via resource utils: {resource_path}")
+                    else:
+                        raise FileNotFoundError("Could not find tray icon via resource utils")
+                except:
+                    # Fallback to window icon
+                    icon = main_window.windowIcon()
+                    if icon.isNull():
+                        # Final fallback to system icon
+                        icon = main_window.style().standardIcon(main_window.style().SP_ComputerIcon)
+                        logger.warning("⚠️ Using system fallback icon for tray")
+                    else:
+                        logger.info("Using window icon for tray")
         
         main_window.tray_icon.setIcon(icon)
         
@@ -58,7 +67,7 @@ def setup_system_tray(main_window):
     settings_menu = tray_menu.addMenu("Settings")
     
     # Minimize to tray toggle
-    main_window.minimize_to_tray_action = QAction("Minimize to tray", main_window)
+    main_window.minimize_to_tray_action = QAction("Always minimize to tray", main_window)
     main_window.minimize_to_tray_action.setCheckable(True)
     main_window.minimize_to_tray_action.setChecked(config.minimize_to_tray)
     main_window.minimize_to_tray_action.triggered.connect(lambda checked: toggle_minimize_to_tray(main_window, checked))

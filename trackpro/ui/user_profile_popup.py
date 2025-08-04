@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QFrame, QMessageBox, QWidget, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
-from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont
+from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont, QPen
 
 logger = logging.getLogger(__name__)
 
@@ -522,7 +522,144 @@ class UserProfilePopup(QDialog):
                     self.private_message_btn.setEnabled(True)
     
     def create_avatar(self, size: int = 64) -> QPixmap:
-        """Create a circular avatar with user initials."""
+        """Create a circular avatar with user initials or load from URL."""
+        # Check if user has an avatar URL
+        avatar_url = self.user_data.get('avatar_url')
+        if avatar_url:
+            # Load avatar from URL
+            return self.load_avatar_from_url(avatar_url, size)
+        
+        # Fallback to initials if no avatar URL
+        # Use real name for current user, fallback to display name or username
+        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
+        
+        # For current user, try to use first and last name if available
+        if self.user_data.get('user_id') == self.current_user_id:
+            first_name = self.user_data.get('first_name', '')
+            last_name = self.user_data.get('last_name', '')
+            if first_name or last_name:
+                name = f"{first_name} {last_name}".strip()
+        
+        # Generate initials from the name
+        initials = self._generate_initials(name)
+        
+        # Create pixmap for avatar
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw circle background using TrackPro colors
+        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
+        color_index = hash(name) % len(colors)
+        painter.setBrush(QBrush(QColor(colors[color_index])))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        
+        # Draw initials
+        painter.setPen(QColor('#ffffff'))
+        font = painter.font()
+        font.setPixelSize(size // 3)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+        
+        # Draw online status indicator
+        is_online = self.user_data.get('is_online', False)
+        if is_online:
+            status_size = size // 5
+            status_x = size - status_size - 2
+            status_y = size - status_size - 2
+            
+            painter.setBrush(QBrush(QColor('#3ba55c')))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(status_x, status_y, status_size, status_size)
+        
+        painter.end()
+        return pixmap
+    
+    def load_avatar_from_url(self, url: str, size: int = 64) -> QPixmap:
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar size
+                            scaled_pixmap = pixmap.scaled(
+                                size, size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(size, size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            painter = QPainter(circular_pixmap)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            painter.setBrush(QBrush(scaled_pixmap))
+                            painter.setPen(QPen(Qt.GlobalColor.transparent))
+                            painter.drawEllipse(0, 0, size, size)
+                            
+                            # Draw online status indicator if needed
+                            is_online = self.user_data.get('is_online', False)
+                            if is_online:
+                                status_size = size // 5
+                                status_x = size - status_size - 2
+                                status_y = size - status_size - 2
+                                
+                                painter.setBrush(QBrush(QColor('#3ba55c')))
+                                painter.setPen(Qt.PenStyle.NoPen)
+                                painter.drawEllipse(status_x, status_y, status_size, status_size)
+                            
+                            painter.end()
+                            
+                            # Update avatar display
+                            self.avatar_label.setPixmap(circular_pixmap)
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    fallback_pixmap = self.create_fallback_avatar(size)
+                    self.avatar_label.setPixmap(fallback_pixmap)
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+            # Return a placeholder pixmap while loading
+            placeholder = QPixmap(size, size)
+            placeholder.fill(Qt.GlobalColor.transparent)
+            return placeholder
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            return self.create_fallback_avatar(size)
+    
+    def create_fallback_avatar(self, size: int = 64) -> QPixmap:
+        """Create a fallback avatar with initials when image loading fails."""
         # Use real name for current user, fallback to display name or username
         name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
         
@@ -621,6 +758,35 @@ class UserProfilePopup(QDialog):
     def get_current_user_data(self) -> Optional[Dict[str, Any]]:
         """Get current user's real data from database."""
         try:
+            # Try to get complete user profile first (includes avatar_url)
+            try:
+                from ....social import enhanced_user_manager
+                complete_profile = enhanced_user_manager.get_complete_user_profile()
+                if complete_profile:
+                    # Generate display name from real data
+                    display_name = self._generate_display_name(complete_profile)
+                    
+                    # Get current iRacing status if available
+                    iracing_status = self.get_current_user_iracing_status()
+                    
+                    return {
+                        'user_id': complete_profile.get('user_id'),
+                        'username': complete_profile.get('username', 'currentuser'),
+                        'display_name': display_name,
+                        'email': complete_profile.get('email'),
+                        'first_name': complete_profile.get('first_name', ''),
+                        'last_name': complete_profile.get('last_name', ''),
+                        'bio': complete_profile.get('bio'),
+                        'created_at': complete_profile.get('created_at'),
+                        'avatar_url': complete_profile.get('avatar_url'),  # Include avatar URL
+                        'status': iracing_status or 'Online',
+                        'is_online': True,  # Current user is always online
+                        'is_friend': False  # Can't be friends with yourself
+                    }
+            except Exception as profile_error:
+                logger.debug(f"Could not get complete user profile: {profile_error}")
+            
+            # Fallback to basic database query
             from ..database.supabase_client import get_supabase_client
             client = get_supabase_client()
             
@@ -631,10 +797,10 @@ class UserProfilePopup(QDialog):
             try:
                 # Try to fetch with all fields first
                 response = client.table("user_profiles").select(
-                    "user_id, username, display_name, email, first_name, last_name, bio, created_at"
+                    "user_id, username, display_name, email, first_name, last_name, bio, created_at, avatar_url"
                 ).eq("user_id", self.current_user_id).single().execute()
             except Exception as column_error:
-                # If first_name column doesn't exist, try without it
+                # If some columns don't exist, try without them
                 logger.warning(f"Some columns may not exist, trying fallback query: {column_error}")
                 response = client.table("user_profiles").select(
                     "user_id, username, display_name, email, bio, created_at"
@@ -658,6 +824,7 @@ class UserProfilePopup(QDialog):
                     'last_name': user_data.get('last_name', ''),    # Safe fallback
                     'bio': user_data.get('bio'),
                     'created_at': user_data.get('created_at'),
+                    'avatar_url': user_data.get('avatar_url'),  # Include avatar URL
                     'status': iracing_status or 'Online',
                     'is_online': True,  # Current user is always online
                     'is_friend': False  # Can't be friends with yourself

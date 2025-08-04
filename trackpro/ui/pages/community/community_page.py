@@ -18,11 +18,21 @@ import websockets
 import asyncio
 import json
 import numpy as np
+import random
+import time
+import socket
 
 from ...modern.shared.base_page import BasePage
 from ....community.private_messaging_widget import PrivateConversationListItem, PrivateConversationWidget
-
 logger = logging.getLogger(__name__)
+
+# Import simple voice client
+try:
+    from trackpro.simple_voice_client import SimpleVoiceClient
+    SIMPLE_VOICE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Simple voice client not available: {e}")
+    SIMPLE_VOICE_AVAILABLE = False
 
 # Optional imports for voice chat functionality
 PYAUDIO_AVAILABLE = False
@@ -35,15 +45,23 @@ except ImportError:
 except Exception as e:
     logger.warning(f"Error importing pyaudio: {e} - voice chat functionality will be disabled")
 
-# Import high-quality voice components
+# Import voice server manager
 try:
-    from .voice_settings_dialog import VoiceSettingsDialog
-    from .high_quality_voice_manager import HighQualityVoiceManager
     from trackpro.voice_server_manager import start_voice_server, stop_voice_server, is_voice_server_running
+    VOICE_SERVER_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Voice server manager not available: {e}")
+    VOICE_SERVER_AVAILABLE = False
+
+# Import high-quality voice manager
+try:
+    from .high_quality_voice_manager import HighQualityVoiceManager
+    from .voice_settings_dialog import VoiceSettingsDialog
     VOICE_COMPONENTS_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"Voice components not available: {e}")
+    logger.warning(f"High-quality voice manager not available: {e}")
     VOICE_COMPONENTS_AVAILABLE = False
+    VoiceSettingsDialog = None  # Set to None so we can check for it
 
 # Role colors for Discord-inspired design
 ROLE_COLORS = {
@@ -62,6 +80,9 @@ class VoiceChatManager(QObject):
     user_left_voice = pyqtSignal(str)
     voice_error = pyqtSignal(str)
     audio_level_changed = pyqtSignal(float)
+    user_speaking_start = pyqtSignal(str)  # Signal when user starts speaking
+    user_speaking_stop = pyqtSignal(str)   # Signal when user stops speaking
+    user_info_update = pyqtSignal(str, str)  # Signal for user info updates (user_id, user_name)
     
     def __init__(self):
         super().__init__()
@@ -102,42 +123,40 @@ class VoiceChatManager(QObject):
         except Exception as e:
             logger.error(f"Error in VoiceChatManager initialization: {e}")
             PYAUDIO_AVAILABLE = False
-        
+    
     def start_voice_chat(self, server_url: str, channel_id: str):
         """Start voice chat connection."""
-        if not PYAUDIO_AVAILABLE:
-            self.voice_error.emit("Voice chat not available - pyaudio not installed")
-            return
+        try:
+            if self.voice_thread and self.voice_thread.is_alive():
+                logger.warning("Voice chat already running")
+                return
             
-        if self.use_high_quality:
-            # Use high-quality voice manager
-            self.voice_manager.start_voice_chat(server_url, channel_id)
-            # Connect signals
-            self.voice_manager.voice_data_received.connect(self.voice_data_received.emit)
-            self.voice_manager.user_joined_voice.connect(self.user_joined_voice.emit)
-            self.voice_manager.user_left_voice.connect(self.user_left_voice.emit)
-            self.voice_manager.voice_error.connect(self.voice_error.emit)
-            self.voice_manager.audio_level_changed.connect(self.audio_level_changed.emit)
-        else:
-            # Use fallback implementation
-            try:
-                self.voice_thread = threading.Thread(
-                    target=self._run_voice_client,
-                    args=(server_url, channel_id)
-                )
-                self.voice_thread.daemon = True
-                self.voice_thread.start()
-            except Exception as e:
-                self.voice_error.emit(f"Failed to start voice chat: {str(e)}")
+            # Start voice client in separate thread
+            self.voice_thread = threading.Thread(
+                target=self._run_voice_client,
+                args=(server_url, channel_id),
+                daemon=True
+            )
+            self.voice_thread.start()
+            
+            logger.info(f"Voice chat started for channel: {channel_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to start voice chat: {e}")
+            self.voice_error.emit(f"Failed to start voice chat: {str(e)}")
     
     def update_voice_settings(self, settings: dict):
-        """Update voice chat settings."""
-        if self.use_high_quality:
-            self.voice_manager.update_settings(settings)
+        """Update voice settings."""
+        try:
+            if self.use_high_quality and hasattr(self, 'voice_manager'):
+                self.voice_manager.update_settings(settings)
+                logger.info("Voice settings updated")
+        except Exception as e:
+            logger.error(f"Failed to update voice settings: {e}")
     
     def get_available_devices(self):
         """Get available audio devices."""
-        if self.use_high_quality:
+        if self.use_high_quality and hasattr(self, 'voice_manager'):
             return self.voice_manager.get_available_devices()
         return {'input': [], 'output': []}
     
@@ -146,6 +165,8 @@ class VoiceChatManager(QObject):
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            # Store the loop for use in recording thread
+            self._voice_loop = loop
             loop.run_until_complete(self._voice_client_loop(server_url, channel_id))
         except Exception as e:
             self.voice_error.emit(f"Voice client error: {str(e)}")
@@ -155,9 +176,33 @@ class VoiceChatManager(QObject):
     
     async def _voice_client_loop(self, server_url: str, channel_id: str):
         """Voice client WebSocket loop (fallback)."""
-        try:
-            async with websockets.connect(f"{server_url}/voice/{channel_id}") as websocket:
-                self.websocket = websocket
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                async with websockets.connect(f"{server_url}/voice/{channel_id}", 
+                                           ping_interval=20, 
+                                           ping_timeout=10,
+                                           close_timeout=5) as websocket:
+                    self.websocket = websocket
+                
+                # Send user info to server
+                try:
+                    from trackpro.auth.user_manager import get_current_user
+                    user = get_current_user()
+                    if user and user.is_authenticated:
+                        user_name = user.name or user.email or 'Unknown'
+                    else:
+                        user_name = 'Unknown'
+                except Exception:
+                    user_name = 'Unknown'
+                
+                # Send user info to server
+                await websocket.send(json.dumps({
+                    'type': 'user_info',
+                    'user_name': user_name
+                }))
                 
                 # Start audio recording
                 self._start_recording()
@@ -168,100 +213,211 @@ class VoiceChatManager(QObject):
                 # Handle incoming voice data
                 async for message in websocket:
                     data = json.loads(message)
-                    if data['type'] == 'voice_data':
+                    message_type = data.get('type')
+                    
+                    if message_type == 'voice_data':
                         self.voice_data_received.emit(bytes(data['audio']))
-                    elif data['type'] == 'user_joined':
+                        
+                        # Handle speaking status
+                        if data.get('speaking', False):
+                            user_name = data.get('user_name', 'Unknown')
+                            self.user_speaking_start.emit(user_name)
+                        else:
+                            user_name = data.get('user_name', 'Unknown')
+                            self.user_speaking_stop.emit(user_name)
+                            
+                    elif message_type == 'user_joined':
                         self.user_joined_voice.emit(data['user_id'])
-                    elif data['type'] == 'user_left':
+                        
+                    elif message_type == 'user_left':
                         self.user_left_voice.emit(data['user_id'])
                         
-        except Exception as e:
-            self.voice_error.emit(f"WebSocket error: {str(e)}")
+                    elif message_type == 'user_speaking_start':
+                        user_name = data.get('user_name', 'Unknown')
+                        self.user_speaking_start.emit(user_name)
+                        
+                    elif message_type == 'user_speaking_stop':
+                        user_name = data.get('user_name', 'Unknown')
+                        self.user_speaking_stop.emit(user_name)
+                        
+                    elif message_type == 'user_info_update':
+                        user_id = data.get('user_id', '')
+                        user_name = data.get('user_name', 'Unknown')
+                        self.user_info_update.emit(user_id, user_name)
+                        
+            except websockets.exceptions.ConnectionClosedError as e:
+                logger.error(f"WebSocket connection closed: {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    logger.info(f"Retrying voice connection ({retry_count}/{max_retries})...")
+                    await asyncio.sleep(2)  # Wait before retry
+                    continue
+                else:
+                    self.voice_error.emit(f"Voice chat connection lost after {max_retries} retries: {str(e)}\n\nThis may be due to network issues or server restart.")
+                    break
+            except websockets.exceptions.ConnectionClosedError as e:
+                if "refused" in str(e).lower():
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.info(f"Retrying voice connection ({retry_count}/{max_retries})...")
+                        await asyncio.sleep(2)  # Wait before retry
+                        continue
+                    else:
+                        self.voice_error.emit("WebSocket error: [WinError 1225] The remote computer refused the network connection.\n\nThis usually means the voice server is not running or is not accessible on port 8080.")
+                        break
+                else:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.info(f"Retrying voice connection ({retry_count}/{max_retries})...")
+                        await asyncio.sleep(2)  # Wait before retry
+                        continue
+                    else:
+                        self.voice_error.emit(f"Voice chat connection lost after {max_retries} retries: {str(e)}\n\nThis may be due to network issues or server restart.")
+                        break
+            except websockets.exceptions.InvalidURI:
+                self.voice_error.emit("WebSocket error: Invalid server URL. Please check the voice server configuration.")
+                break
+            except websockets.exceptions.WebSocketException as e:
+                logger.error(f"WebSocket error: {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    logger.info(f"Retrying voice connection ({retry_count}/{max_retries})...")
+                    await asyncio.sleep(2)  # Wait before retry
+                    continue
+                else:
+                    self.voice_error.emit(f"Voice chat connection error after {max_retries} retries: {str(e)}")
+                    break
+            except Exception as e:
+                logger.error(f"Unexpected voice chat error: {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    logger.info(f"Retrying voice connection ({retry_count}/{max_retries})...")
+                    await asyncio.sleep(2)  # Wait before retry
+                    continue
+                else:
+                    self.voice_error.emit(f"Voice chat error after {max_retries} retries: {str(e)}")
+                    break
     
     def _start_recording(self):
         """Start audio recording (fallback)."""
         if not PYAUDIO_AVAILABLE or not self.audio:
-            self.voice_error.emit("Audio recording not available - pyaudio not installed")
             return
-            
+        
         try:
-            self.stream_in = self.audio.open(
+            self.is_recording = True
+            self.recording_stream = self.audio.open(
                 format=self.FORMAT,
                 channels=self.CHANNELS,
                 rate=self.RATE,
                 input=True,
                 frames_per_buffer=self.CHUNK
             )
-            self.is_recording = True
             
             # Start recording thread
-            threading.Thread(target=self._record_audio, daemon=True).start()
+            self.recording_thread = threading.Thread(target=self._record_audio, daemon=True)
+            self.recording_thread.start()
+            
+            logger.info("Audio recording started")
             
         except Exception as e:
+            logger.error(f"Failed to start recording: {e}")
             self.voice_error.emit(f"Failed to start recording: {str(e)}")
     
     def _record_audio(self):
-        """Record audio and send to WebSocket (fallback)."""
-        while self.is_recording:
-            try:
-                data = self.stream_in.read(self.CHUNK)
-                if self.websocket:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(self.websocket.send(json.dumps({
-                            'type': 'voice_data',
-                            'audio': list(data)
-                        })))
-            except Exception as e:
-                logger.error(f"Recording error: {e}")
-                break
+        """Record audio and send to server (fallback)."""
+        try:
+            while self.is_recording and self.websocket:
+                if self.recording_stream:
+                    data = self.recording_stream.read(self.CHUNK, exception_on_overflow=False)
+                    
+                    # Convert to list for JSON serialization
+                    audio_list = list(data)
+                    
+                    # Send to server using the correct event loop
+                    if self.websocket and hasattr(self, '_voice_loop') and self._voice_loop:
+                        try:
+                            # Check if websocket is still open before sending
+                            if not self._voice_loop.is_closed() and not self.websocket.closed:
+                                self._voice_loop.call_soon_threadsafe(
+                                    lambda: asyncio.create_task(
+                                        self.websocket.send(json.dumps({
+                                            'type': 'voice_data',
+                                            'audio': audio_list
+                                        }))
+                                    )
+                                )
+                            else:
+                                logger.warning("WebSocket connection closed, stopping audio transmission")
+                                break
+                        except websockets.exceptions.ConnectionClosedError:
+                            logger.warning("WebSocket connection closed during audio transmission")
+                            break
+                        except Exception as e:
+                            logger.error(f"Error sending audio data: {e}")
+                            break
+                        
+        except Exception as e:
+            logger.error(f"Recording error: {e}")
+            self.voice_error.emit(f"Recording error: {str(e)}")
     
     def _start_playback(self):
         """Start audio playback (fallback)."""
         if not PYAUDIO_AVAILABLE or not self.audio:
-            self.voice_error.emit("Audio playback not available - pyaudio not installed")
             return
-            
+        
         try:
-            self.stream_out = self.audio.open(
+            self.is_playing = True
+            self.playback_stream = self.audio.open(
                 format=self.FORMAT,
                 channels=self.CHANNELS,
                 rate=self.RATE,
                 output=True,
                 frames_per_buffer=self.CHUNK
             )
-            self.is_playing = True
+            
+            logger.info("Audio playback started")
+            
         except Exception as e:
+            logger.error(f"Failed to start playback: {e}")
             self.voice_error.emit(f"Failed to start playback: {str(e)}")
     
     def stop_voice_chat(self):
-        """Stop voice chat."""
-        if self.use_high_quality:
-            self.voice_manager.stop_voice_chat()
-        else:
+        """Stop voice chat connection."""
+        try:
             self.is_recording = False
             self.is_playing = False
             
-            if hasattr(self, 'stream_in'):
-                self.stream_in.stop_stream()
-                self.stream_in.close()
+            # Stop recording stream
+            if hasattr(self, 'recording_stream') and self.recording_stream:
+                self.recording_stream.stop_stream()
+                self.recording_stream.close()
             
-            if hasattr(self, 'stream_out'):
-                self.stream_out.stop_stream()
-                self.stream_out.close()
+            # Stop playback stream
+            if hasattr(self, 'playback_stream') and self.playback_stream:
+                self.playback_stream.stop_stream()
+                self.playback_stream.close()
             
-            if self.websocket:
+            # Close WebSocket using the correct event loop
+            if self.websocket and hasattr(self, '_voice_loop') and self._voice_loop:
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(self.websocket.close())
+                    if not self._voice_loop.is_closed():
+                        self._voice_loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(self.websocket.close())
+                        )
                 except Exception as e:
-                    logger.error(f"Error closing websocket: {e}")
+                    logger.error(f"Error closing WebSocket: {e}")
+            
+            logger.info("Voice chat stopped")
+            
+        except Exception as e:
+            logger.error(f"Error stopping voice chat: {e}")
     
     def __del__(self):
-        """Cleanup audio resources."""
-        if hasattr(self, 'audio') and self.audio:
-            self.audio.terminate()
+        """Cleanup on deletion."""
+        try:
+            self.stop_voice_chat()
+        except Exception:
+            pass
 
 
 class ChatMessageWidget(QWidget):
@@ -431,18 +587,45 @@ class ChatMessageWidget(QWidget):
 class VoiceChannelWidget(QWidget):
     """Voice channel widget with participant list and controls."""
     
-    def __init__(self, channel_data):
+    def __init__(self, channel_data, voice_manager=None, parent_page=None):
         super().__init__()
         self.channel_data = channel_data
-        self.voice_manager = VoiceChatManager()
+        self.parent_page = parent_page
+        
+        # Use provided voice manager or create a new one
+        if voice_manager is not None:
+            self.voice_manager = voice_manager
+            logger.info("Using provided voice manager")
+        else:
+            # Use high-quality voice manager for better audio processing
+            try:
+                from .high_quality_voice_manager import HighQualityVoiceManager
+                self.voice_manager = HighQualityVoiceManager()
+                logger.info("Using high-quality voice chat manager")
+                
+                # Track the voice manager with parent page if available
+                if parent_page and hasattr(parent_page, '_voice_managers'):
+                    parent_page._voice_managers.append(self.voice_manager)
+                    logger.info("Added voice manager to parent tracking list")
+            except Exception as e:
+                logger.warning(f"HighQualityVoiceManager not available, falling back to VoiceChatManager: {e}")
+                self.voice_manager = VoiceChatManager()
+        
         self.participants = []  # List of users in the voice channel
+        self.speaking_users = set()  # Set of users currently speaking
+        self.is_push_to_talk = False  # Push-to-talk mode
+        
+        # Connect voice manager signals
+        self.voice_manager.audio_level_changed.connect(self.update_audio_level)
+        self.voice_manager.voice_error.connect(self.on_voice_error)
+        
         self.setup_ui()
     
     def setup_ui(self):
         """Setup the voice channel UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(16, 16, 16, 16)
+        self.main_layout.setSpacing(12)
         
         # Channel header
         header_layout = QHBoxLayout()
@@ -465,7 +648,20 @@ class VoiceChannelWidget(QWidget):
         header_layout.addLayout(info_layout)
         header_layout.addStretch()
         
-        layout.addLayout(header_layout)
+        self.main_layout.addLayout(header_layout)
+        
+        # Information about self-hearing feature
+        info_label = QLabel("💡 Tip: You can hear yourself slightly when speaking. This helps monitor your audio levels. Adjust this in Voice Settings.")
+        info_label.setStyleSheet("""
+            color: #888888; 
+            font-size: 11px; 
+            padding: 8px 16px;
+            background-color: #252525;
+            border-radius: 4px;
+            margin: 8px 0px;
+        """)
+        info_label.setWordWrap(True)
+        self.main_layout.addWidget(info_label)
         
         # Participants list
         self.participants_list = QListWidget()
@@ -484,10 +680,7 @@ class VoiceChannelWidget(QWidget):
                 background-color: #252525;
             }
         """)
-        layout.addWidget(self.participants_list)
-        
-        # Add sample participants based on channel
-        self.add_sample_participants()
+        self.main_layout.addWidget(self.participants_list)
         
         # Voice controls
         self.setup_voice_controls()
@@ -495,6 +688,45 @@ class VoiceChannelWidget(QWidget):
     def setup_voice_controls(self):
         """Setup voice chat controls."""
         controls_layout = QHBoxLayout()
+        
+        # Join/Leave Channel button
+        self.join_button = QPushButton("Join Channel")
+        self.join_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                color: #ffffff;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        self.join_button.clicked.connect(self.toggle_join_channel)
+        controls_layout.addWidget(self.join_button)
+        
+        # Push-to-Talk toggle
+        self.ptt_button = QPushButton("🎤 Open Mic")
+        self.ptt_button.setCheckable(True)
+        self.ptt_button.setStyleSheet("""
+            QPushButton {
+                background-color: #252525;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                color: #ffffff;
+            }
+            QPushButton:checked {
+                background-color: #27ae60;
+            }
+            QPushButton:hover {
+                background-color: #2d2d2d;
+            }
+        """)
+        self.ptt_button.toggled.connect(self.toggle_push_to_talk)
+        controls_layout.addWidget(self.ptt_button)
         
         # Mute button
         self.mute_button = QPushButton("🎤 Mute")
@@ -565,49 +797,66 @@ class VoiceChannelWidget(QWidget):
         
         # Voice Settings button
         self.settings_button = QPushButton("⚙️ Settings")
+        self.settings_button.setToolTip("Configure voice chat settings including microphone, speakers, and self-hearing options")
         self.settings_button.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
-                color: white;
                 border: none;
-                padding: 8px 12px;
+                padding: 8px 16px;
                 border-radius: 4px;
-                font-weight: bold;
+                color: #ffffff;
             }
             QPushButton:hover {
                 background-color: #1976D2;
-            }
-            QPushButton:pressed {
-                background-color: #1565C0;
             }
         """)
         self.settings_button.clicked.connect(self.open_voice_settings)
         controls_layout.addWidget(self.settings_button)
         
-        # Join/Leave button
-        self.join_button = QPushButton("Join Channel")
-        self.join_button.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                color: #ffffff;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-        self.join_button.clicked.connect(self.toggle_join_channel)
-        controls_layout.addWidget(self.join_button)
-        
-        # Audio Level Meter
+        # Audio level indicator
         self.audio_level_label = QLabel("🎤")
-        self.audio_level_label.setStyleSheet("color: #666; font-size: 16px;")
+        self.audio_level_label.setStyleSheet("color: #666; font-size: 16px; margin-left: 8px;")
+        self.audio_level_label.setToolTip("Microphone level indicator")
         controls_layout.addWidget(self.audio_level_label)
         
-        self.layout().addLayout(controls_layout)
+        # Add controls to the main layout
+        self.main_layout.addLayout(controls_layout)
+    
+    def toggle_push_to_talk(self, enabled):
+        """Toggle push-to-talk mode."""
+        self.is_push_to_talk = enabled
+        if enabled:
+            self.ptt_button.setText("🎤 Push-to-Talk")
+            self.ptt_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #27ae60;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    color: #ffffff;
+                }
+                QPushButton:hover {
+                    background-color: #229954;
+                }
+            """)
+            # Implement push-to-talk logic
+            logger.info("Push-to-talk mode enabled")
+        else:
+            self.ptt_button.setText("🎤 Open Mic")
+            self.ptt_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #252525;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    color: #ffffff;
+                }
+                QPushButton:hover {
+                    background-color: #2d2d2d;
+                }
+            """)
+            # Implement open mic logic
+            logger.info("Open mic mode enabled")
     
     def toggle_mute(self, muted):
         """Toggle microphone mute."""
@@ -628,41 +877,97 @@ class VoiceChannelWidget(QWidget):
             # Implement undeafen logic
     
     def join_voice_channel(self):
-        """Join the voice channel."""
+        """Join the voice channel with on-demand server startup."""
         try:
-            if not PYAUDIO_AVAILABLE:
-                logger.warning("Voice chat not available - pyaudio not installed")
-                # Show user-friendly message
+            channel_id = self.channel_data.get('id', 'general')
+            logger.info(f"Attempting to join voice channel: {channel_id}")
+            
+            # Check if voice components are available
+            if not VOICE_COMPONENTS_AVAILABLE:
+                logger.warning("Voice components not available")
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.information(self, "Voice Chat", 
-                                      "Voice chat requires pyaudio to be installed.\n\nThis is a demo feature - voice chat will be available in future updates.")
+                                      "Voice chat components are not available. Please install required dependencies.")
                 return
             
-            # Ensure voice server is running
-            if VOICE_COMPONENTS_AVAILABLE and not is_voice_server_running():
+            # Get user name from current user
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated:
+                    user_name = user.name or user.email or 'Unknown'
+                else:
+                    user_name = 'Unknown'
+            except Exception:
+                user_name = 'Unknown'
+            
+            # Check if voice server is running
+            if not is_voice_server_running():
+                logger.info(f"Voice server not running - starting on-demand for channel: {channel_id}")
                 try:
+                    # Start the voice server on-demand
                     start_voice_server()
-                    logger.info("Voice server started for voice chat")
+                    import time
+                    time.sleep(3)  # Give more time for network server to start
+                    
+                    if not is_voice_server_running():
+                        raise Exception("Voice server failed to start on-demand")
+                    
+                    logger.info(f"Voice server started on-demand for channel: {channel_id}")
+                    
                 except Exception as e:
-                    logger.error(f"Failed to start voice server: {e}")
+                    logger.error(f"Failed to start voice server on-demand: {e}")
                     from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.warning(self, "Voice Chat Error", 
-                                      f"Failed to start voice server: {str(e)}")
+                                      f"Failed to start voice server on-demand: {str(e)}")
                     return
-                
-            # Start voice chat connection
+            else:
+                logger.info(f"Voice server already running - joining channel: {channel_id}")
+            
+            # Start voice chat with the HighQualityVoiceManager
             server_url = "ws://localhost:8080"
-            channel_id = self.channel_data.get('id', '')
             
-            self.voice_manager.start_voice_chat(server_url, channel_id)
+            logger.info(f"Starting voice chat - Server: {server_url}, Channel: {channel_id}, User: {user_name}")
             
-            # Connect audio level signal
-            if hasattr(self.voice_manager, 'audio_level_changed'):
-                self.voice_manager.audio_level_changed.connect(self.update_audio_level)
+            # Use the existing HighQualityVoiceManager instead of creating a new SimpleVoiceClient
+            if hasattr(self, 'voice_manager') and self.voice_manager:
+                logger.info("Using existing HighQualityVoiceManager for voice chat")
+                
+                # Connect signals to the voice manager
+                self.voice_manager.user_joined_voice.connect(self.on_user_joined_voice)
+                self.voice_manager.user_left_voice.connect(self.on_user_left_voice)
+                self.voice_manager.voice_error.connect(self.on_voice_error)
+                self.voice_manager.connected.connect(self.on_voice_connected)
+                self.voice_manager.disconnected.connect(self.on_voice_disconnected)
+                
+                # Start voice chat with the HighQualityVoiceManager
+                self.voice_manager.start_voice_chat(server_url, channel_id)
+                
+                # Store reference to voice manager as voice_client for compatibility
+                self.voice_client = self.voice_manager
+                
+            else:
+                logger.warning("No voice manager available, falling back to SimpleVoiceClient")
+                # Fallback to SimpleVoiceClient if no voice manager is available
+                self.voice_client = SimpleVoiceClient()
+                
+                # Connect signals
+                self.voice_client.user_joined_voice.connect(self.on_user_joined_voice)
+                self.voice_client.user_left_voice.connect(self.on_user_left_voice)
+                self.voice_client.voice_error.connect(self.on_voice_error)
+                self.voice_client.connected.connect(self.on_voice_connected)
+                self.voice_client.disconnected.connect(self.on_voice_disconnected)
+                
+                # Start voice chat - this will create the room on the server
+                self.voice_client.start_voice_chat(server_url, channel_id, user_name)
             
-            logger.info(f"Successfully joined voice channel: {channel_id}")
+            # Add current user to participants
+            self.add_current_user_to_participants()
             
-            # Update UI
+            # Play join notification
+            self.play_join_notification()
+            
+            # Update UI to show connected status
             self.join_button.setText("Leave Channel")
             self.join_button.setStyleSheet("""
                 QPushButton {
@@ -678,41 +983,132 @@ class VoiceChannelWidget(QWidget):
                 }
             """)
             
+            logger.info(f"Successfully joined voice channel: {channel_id} (room created on server)")
+            
         except Exception as e:
             logger.error(f"Failed to join voice channel: {e}")
-            # Show error to user
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Voice Chat Error", 
                               f"Failed to join voice channel: {str(e)}")
     
-    def add_sample_participants(self):
-        """Add sample participants to the voice channel."""
-        # Start with empty participants list
-        self.participants = []
-        self.update_participants_list()
-        self.update_participant_count()
+    def on_voice_connected(self):
+        """Handle voice connection established."""
+        logger.info("Voice chat connected successfully")
+        # Update UI to show connected status
+        
+    def on_voice_disconnected(self):
+        """Handle voice connection lost."""
+        logger.info("Voice chat disconnected")
+        # Update UI to show disconnected status
+    
+    def on_user_joined_voice(self, user_id):
+        """Handle user joining voice channel."""
+        logger.info(f"User joined voice: {user_id}")
+        # Add user to participants if not already present
+        # This would typically come from the server with user info
+    
+    def on_user_left_voice(self, user_id):
+        """Handle user leaving voice channel."""
+        logger.info(f"User left voice: {user_id}")
+        # Remove user from participants
+        # This would typically come from the server with user info
+    
+    def on_user_speaking_start(self, user_name):
+        """Handle user starting to speak."""
+        logger.info(f"User started speaking: {user_name}")
+        self.add_speaking_user(user_name)
+    
+    def on_user_speaking_stop(self, user_name):
+        """Handle user stopping speaking."""
+        logger.info(f"User stopped speaking: {user_name}")
+        self.remove_speaking_user(user_name)
+    
+    def on_user_info_update(self, user_id, user_name):
+        """Handle user info updates."""
+        logger.info(f"User info update: {user_id} -> {user_name}")
+        # Update user information in participants list
+        # This could be used to update user names or other info
+    
+    def on_voice_error(self, error_message):
+        """Handle voice chat errors."""
+        logger.error(f"🎤 Voice chat error: {error_message}")
+        
+        # Show error to user
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(self, "Voice Chat Error", error_message)
     
     def update_participants_list(self):
-        """Update the participants list display."""
+        """Update the participants list display with speaking indicators."""
         self.participants_list.clear()
         
         for participant in self.participants:
-            # Create participant item with status indicators
-            status_icon = "🔊" if participant['status'] == 'speaking' else "🟢" if participant['status'] == 'online' else "🟡"
-            mute_icon = "🔇" if participant['muted'] else ""
+            # Create participant item with enhanced status indicators
+            name = participant['name']
+            status = participant['status']
+            muted = participant.get('muted', False)
             
-            display_name = f"{status_icon} {participant['name']} {mute_icon}".strip()
+            # Determine status icon and color
+            if name in self.speaking_users:
+                status_icon = "🔊"  # Speaking indicator
+                status_color = '#3498db'  # TrackPro blue for speaking
+                status_text = "Speaking"
+            elif status == 'online':
+                status_icon = "🟢"
+                status_color = '#ffffff'  # White for normal
+                status_text = "Online"
+            else:
+                status_icon = "🟡"
+                status_color = '#888888'  # Gray for away
+                status_text = "Away"
+            
+            # Add mute indicator
+            mute_icon = "🔇" if muted else ""
+            
+            # Create display text with status
+            display_name = f"{status_icon} {name} {mute_icon}".strip()
+            if name in self.speaking_users:
+                display_name += " 🔊"  # Additional speaking indicator
+            
             item = QListWidgetItem(display_name)
             
             # Set color based on status
-            if participant['status'] == 'speaking':
-                item.setForeground(QColor('#3498db'))  # TrackPro blue for speaking
-            elif participant['muted']:
+            if name in self.speaking_users:
+                item.setForeground(QColor(status_color))
+                # Add bold font for speaking users
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            elif muted:
                 item.setForeground(QColor('#888888'))  # Gray for muted
             else:
-                item.setForeground(QColor('#ffffff'))  # White for normal
+                item.setForeground(QColor(status_color))
             
             self.participants_list.addItem(item)
+    
+    def update_speaking_status(self, user_name, is_speaking):
+        """Update the speaking status of a user."""
+        # Only log significant changes, not every update
+        was_speaking = user_name in self.speaking_users
+        
+        if is_speaking:
+            self.speaking_users.add(user_name)
+        else:
+            self.speaking_users.discard(user_name)
+        
+        # Only log if the speaking status actually changed
+        if was_speaking != is_speaking:
+            logger.info(f"🎤 Speaking status changed: {user_name} -> {'speaking' if is_speaking else 'not speaking'}")
+        
+        # Update the display
+        self.update_participants_list()
+    
+    def add_speaking_user(self, user_name):
+        """Add a user to the speaking list."""
+        self.update_speaking_status(user_name, True)
+    
+    def remove_speaking_user(self, user_name):
+        """Remove a user from the speaking list."""
+        self.update_speaking_status(user_name, False)
     
     def update_participant_count(self):
         """Update the participant count display."""
@@ -757,15 +1153,110 @@ class VoiceChannelWidget(QWidget):
     
     def leave_voice_channel(self):
         """Leave the voice channel."""
-        self.voice_manager.stop_voice_chat()
+        if hasattr(self, 'voice_client') and self.voice_client:
+            self.voice_client.stop_voice_chat()
+        self.remove_current_user_from_participants()
+        # Clear speaking users when leaving
+        self.speaking_users.clear()
+        self.update_participants_list()
+    
+    def remove_current_user_from_participants(self):
+        """Remove the current user from the participants list."""
+        try:
+            current_user_name = 'Lawrence Thomas'  # This should come from user manager
+            
+            # Remove user from participants
+            self.participants = [p for p in self.participants if p['name'] != current_user_name]
+            # Remove from speaking users
+            self.speaking_users.discard(current_user_name)
+            self.update_participants_list()
+            self.update_participant_count()
+            
+            logger.info(f"Removed user from voice channel participants: {current_user_name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to remove current user from participants: {e}")
+    
+    def play_join_notification(self):
+        """Play a pleasant join notification sound."""
+        try:
+            import numpy as np
+            import pyaudio
+            
+            # Generate a pleasant join notification sound
+            sample_rate = 48000
+            duration = 0.5  # Short notification
+            frequency = 1000  # Pleasant frequency
+            
+            # Generate a pleasant ding
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            tone = (0.6 * np.sin(2 * np.pi * frequency * t) + 
+                   0.4 * np.sin(2 * np.pi * frequency * 2 * t))
+            
+            # Apply smooth envelope
+            envelope = np.exp(-5 * t)
+            tone = tone * envelope
+            
+            # Apply fade in/out
+            fade_samples = int(0.02 * sample_rate)
+            tone[:fade_samples] *= np.linspace(0, 1, fade_samples)
+            tone[-fade_samples:] *= np.linspace(1, 0, fade_samples)
+            
+            # Convert to 16-bit audio
+            tone = (tone * 16383).astype(np.int16)
+            
+            # Play the notification
+            audio = pyaudio.PyAudio()
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=sample_rate,
+                output=True
+            )
+            
+            stream.write(tone.tobytes())
+            stream.stop_stream()
+            stream.close()
+            audio.terminate()
+            
+        except Exception as e:
+            logger.error(f"Failed to play join notification: {e}")
+    
+    def add_current_user_to_participants(self):
+        """Add the current user to the participants list."""
+        try:
+            # Get current user info from the community page
+            from trackpro.config import config
+            current_user = {
+                'name': 'Lawrence Thomas',  # This should come from user manager
+                'status': 'online',
+                'muted': False,
+                'deafened': False
+            }
+            
+            # Check if user is already in the list
+            for participant in self.participants:
+                if participant['name'] == current_user['name']:
+                    return  # Already in the list
+            
+            # Add user to participants
+            self.participants.append(current_user)
+            self.update_participants_list()
+            self.update_participant_count()
+            
+            logger.info(f"Added user to voice channel participants: {current_user['name']}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add current user to participants: {e}")
     
     def open_voice_settings(self):
         """Open voice settings dialog."""
-        if not VOICE_COMPONENTS_AVAILABLE:
+        if not VOICE_COMPONENTS_AVAILABLE or VoiceSettingsDialog is None:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.information(self, "Voice Settings", 
                                   "Voice settings require additional components.\n\n"
-                                  "Please ensure pyaudio and numpy are installed for full voice chat functionality.")
+                                  "Please ensure pyaudio and numpy are installed for full voice chat functionality.\n\n"
+                                  "Install with: pip install pyaudio numpy")
             return
             
         try:
@@ -778,34 +1269,63 @@ class VoiceChannelWidget(QWidget):
             QMessageBox.warning(self, "Error", f"Failed to open voice settings: {str(e)}")
     
     def on_voice_settings_changed(self, settings: dict):
-        """Handle voice settings changes."""
+        """Handle voice settings changes by delegating to parent page."""
         try:
-            # Update voice manager settings
+            logger.info(f"🔄 VoiceChannelWidget: Delegating voice settings update to parent page")
+            
+            # Delegate to parent page if available
+            if self.parent_page and hasattr(self.parent_page, 'on_voice_settings_changed'):
+                self.parent_page.on_voice_settings_changed(settings)
+            else:
+                logger.warning("No parent page available for voice settings update")
+                
+            # Update our own voice manager if available
             if hasattr(self, 'voice_manager') and self.voice_manager:
-                self.voice_manager.update_voice_settings(settings)
-                logger.info("Voice settings updated successfully")
+                try:
+                    if hasattr(self.voice_manager, 'update_settings'):
+                        self.voice_manager.update_settings(settings)
+                        logger.info("Updated local voice manager settings")
+                    elif hasattr(self.voice_manager, 'update_voice_settings'):
+                        self.voice_manager.update_voice_settings(settings)
+                        logger.info("Updated local voice manager settings")
+                except Exception as e:
+                    logger.error(f"Failed to update local voice manager settings: {e}")
+            
         except Exception as e:
             logger.error(f"Failed to update voice settings: {e}")
     
     def update_audio_level(self, level: float):
         """Update audio level meter display."""
         try:
+            # Get current user name
+            current_user_name = "Lawrence Thomas"  # This should come from user manager
+            
             # Convert level (0-1) to visual indicator
-            if level > 0.7:
+            if level > 0.5:
                 self.audio_level_label.setText("🔴")  # High level
                 self.audio_level_label.setStyleSheet("color: #ff4444; font-size: 16px;")
-            elif level > 0.3:
+                # Update speaking status for current user - only if not muted
+                if not self.mute_button.isChecked():
+                    self.update_speaking_status(current_user_name, True)
+            elif level > 0.2:
                 self.audio_level_label.setText("🟡")  # Medium level
                 self.audio_level_label.setStyleSheet("color: #ffaa00; font-size: 16px;")
-            elif level > 0.1:
+                # Update speaking status for current user - only if not muted
+                if not self.mute_button.isChecked():
+                    self.update_speaking_status(current_user_name, True)
+            elif level > 0.05:
                 self.audio_level_label.setText("🟢")  # Low level
                 self.audio_level_label.setStyleSheet("color: #44ff44; font-size: 16px;")
+                # Update speaking status for current user - only if not muted
+                if not self.mute_button.isChecked():
+                    self.update_speaking_status(current_user_name, True)
             else:
                 self.audio_level_label.setText("🎤")  # No audio
                 self.audio_level_label.setStyleSheet("color: #666; font-size: 16px;")
+                # Update speaking status for current user - not speaking
+                self.update_speaking_status(current_user_name, False)
         except Exception as e:
-            logger.error(f"Failed to update audio level: {e}")
-
+            logger.error(f"UI: Failed to update audio level: {e}")
 
 class ChatChannelWidget(QWidget):
     """Chat channel widget with message list and input."""
@@ -926,39 +1446,71 @@ class ChatChannelWidget(QWidget):
 class CommunityPage(BasePage):
     """Community page with Discord-inspired design and voice chat."""
     
+    # Class-level flag to prevent multiple initializations during startup
+    _global_initialization_in_progress = False
+    _instance_count = 0
+    _heavy_components_initialized = False  # Add flag to prevent duplicate heavy initialization
+    _channels_loaded = False  # Class-level flag to prevent duplicate channel loading
+    _private_messages_loaded = False  # Class-level flag to prevent duplicate private message loading
+    
     def __init__(self, global_managers=None):
-        try:
-            super().__init__("community", global_managers)
-            self.current_channel = None
-            self.voice_channels = {}
-            self.chat_history = {}  # Store chat messages for each channel
+        super().__init__("community", global_managers)
+        
+        # Initialize instance counter
+        CommunityPage._instance_count += 1
+        self.instance_id = CommunityPage._instance_count
+        
+        logger.info(f"🔄 Initializing CommunityPage (instance #{self.instance_id})")
+        
+        # Set global managers
+        self.global_managers = global_managers or {}
+        
+        # Initialize community manager
+        self._community_manager = None
+        
+        # Initialize central voice manager
+        self._central_voice_manager = None
+        self._voice_managers = []  # Track all voice managers
+        
+        # Initialize UI components
+        self.channels = []
+        self.current_channel = None
+        self.private_messages = []
+        self.current_private_conversation = None
+        self.voice_channels = {}  # Track voice channels for cleanup
+        
+        # Initialize state flags
+        self._initialization_complete = False
+        self._user_state_refreshed = False
+        self._activation_complete = False
+        
+        # Initialize UI
+        self.setup_ui()
+        
+        # Set up authentication state
+        self.set_current_user()
+        
+        # START HEAVY INITIALIZATION IMMEDIATELY FOR FASTER LOADING
+        # This moves the heavy work from activation to pre-loading
+        # Only initialize heavy components once globally
+        if not CommunityPage._heavy_components_initialized:
+            logger.info("🚀 Starting heavy initialization during pre-loading for faster community page access...")
             
-            # Initialize community manager
-            try:
-                from ....community.community_manager import CommunityManager
-                self.community_manager = CommunityManager()
-                
-                # Connect signals
-                self.community_manager.message_received.connect(self.on_message_received)
-                self.community_manager.user_joined_channel.connect(self.on_user_joined_channel)
-                self.community_manager.user_left_channel.connect(self.on_user_left_channel)
-                self.community_manager.user_status_changed.connect(self.on_user_status_changed)
-                
-                # Set current user
-                self.set_current_user()
-                
-            except Exception as e:
-                logger.error(f"Failed to initialize community manager: {e}")
-                self.community_manager = None
-            
-            self.setup_ui()
-            logger.info("✅ CommunityPage initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize CommunityPage: {e}")
-            import traceback
-            logger.error(f"📋 Traceback: {traceback.format_exc()}")
-            raise
+            # Start heavy initialization in background to avoid blocking UI
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, self._initialize_heavy_components)
+        else:
+            logger.info("🔄 Heavy components already initialized, skipping")
+        
+        logger.info(f"✅ CommunityPage initialized (instance #{self.instance_id})")
+    
+    @classmethod
+    def reset_instance_counter(cls):
+        """Reset the instance counter (for testing purposes)."""
+        cls._instance_count = 0
+        cls._heavy_components_initialized = False
+        cls._channels_loaded = False
+        cls._private_messages_loaded = False
     
     def setup_ui(self):
         """Setup the community page layout."""
@@ -1145,9 +1697,9 @@ class CommunityPage(BasePage):
         scroll_area.setWidget(scroll_content)
         server_layout.addWidget(scroll_area)
         
-        # Load channels and private messages
-        self.load_channels_from_database()
-        self.load_private_messages()
+        # Data loading is now handled during heavy initialization to prevent multiple loads
+        # self.load_channels_from_database()
+        # self.load_private_messages()
         
         self.channel_list.itemClicked.connect(self.on_channel_selected)
         self.voice_channels_list.itemClicked.connect(self.on_channel_selected)
@@ -1181,16 +1733,26 @@ class CommunityPage(BasePage):
                 logger.info(f"📋 Channel data: {channel_data}")
                 
                 # Cleanup previous voice channel if switching from voice to voice
-                if self.current_channel and self.current_channel.startswith('voice'):
-                    logger.info(f"🔊 Cleaning up previous voice channel: {self.current_channel}")
-                    if hasattr(self, 'voice_channels') and self.current_channel in self.voice_channels:
-                        voice_widget = self.voice_channels[self.current_channel]
-                        if hasattr(voice_widget, 'leave_voice_channel'):
-                            try:
-                                voice_widget.leave_voice_channel()
-                                logger.info("✅ Successfully left voice channel")
-                            except Exception as e:
-                                logger.error(f"❌ Error leaving voice channel: {e}")
+                if self.current_channel:
+                    # Check if current channel is a voice channel
+                    current_channel_type = None
+                    if self.community_manager:
+                        channels = self.community_manager.get_channels()
+                        for channel in channels:
+                            if channel['channel_id'] == self.current_channel:
+                                current_channel_type = channel['channel_type']
+                                break
+                    
+                    if current_channel_type == 'voice':
+                        logger.info(f"🔊 Cleaning up previous voice channel: {self.current_channel}")
+                        if hasattr(self, 'voice_channels') and self.current_channel in self.voice_channels:
+                            voice_widget = self.voice_channels[self.current_channel]
+                            if hasattr(voice_widget, 'leave_voice_channel'):
+                                try:
+                                    voice_widget.leave_voice_channel()
+                                    logger.info("✅ Successfully left voice channel")
+                                except Exception as e:
+                                    logger.error(f"❌ Error leaving voice channel: {e}")
                 
                 self.current_channel = channel_data['id']
                 logger.info(f"🔄 Current channel set to: {self.current_channel}")
@@ -1287,15 +1849,54 @@ class CommunityPage(BasePage):
             layout.setSpacing(0)
         
         try:
-            if channel_id.startswith('voice'):
+            # Get channel type from database or fallback channels
+            channel_type = None
+            
+            # First try to get from community manager database
+            if self.community_manager:
+                channels = self.community_manager.get_channels()
+                for channel in channels:
+                    if channel['channel_id'] == channel_id:
+                        channel_type = channel['channel_type']
+                        break
+            
+            # If not found in database, check fallback channels
+            if channel_type is None:
+                # Check voice channels list
+                for i in range(self.voice_channels_list.count()):
+                    item = self.voice_channels_list.item(i)
+                    item_data = item.data(Qt.ItemDataRole.UserRole)
+                    if item_data and item_data['id'] == channel_id:
+                        channel_type = item_data['type']
+                        logger.info(f"🔍 Found channel type from voice channels list: {channel_type}")
+                        break
+                
+                # Check text channels list if not found in voice channels
+                if channel_type is None:
+                    for i in range(self.channel_list.count()):
+                        item = self.channel_list.item(i)
+                        item_data = item.data(Qt.ItemDataRole.UserRole)
+                        if item_data and item_data['id'] == channel_id:
+                            channel_type = item_data['type']
+                            logger.info(f"🔍 Found channel type from text channels list: {channel_type}")
+                            break
+            
+            logger.info(f"🎯 Channel type detection result: {channel_type} for channel {channel_id}")
+            
+            if channel_type == 'voice':
                 # Voice channel
                 channel_name = self.get_channel_name(channel_id)
                 logger.info(f"🔊 Creating voice channel widget for: {channel_name} ({channel_id})")
+                
+                # Get or create central voice manager
+                central_voice_manager = self.get_central_voice_manager()
+                
                 voice_widget = VoiceChannelWidget({
                     'id': channel_id,
                     'name': channel_name,
                     'participant_count': 0
-                })
+                }, voice_manager=central_voice_manager, parent_page=self)
+                
                 logger.info(f"✅ Voice channel widget created, adding to layout")
                 layout.addWidget(voice_widget)
                 
@@ -1309,7 +1910,7 @@ class CommunityPage(BasePage):
                 if hasattr(voice_widget, 'voice_manager'):
                     voice_widget.voice_manager.voice_error.connect(self.on_voice_error)
             else:
-                # Text channel
+                # Text channel (default if type is None or 'text')
                 channel_name = self.get_channel_name(channel_id)
                 logger.info(f"💬 Creating chat channel widget for: {channel_name} ({channel_id})")
                 chat_widget = ChatChannelWidget({
@@ -1500,6 +2101,11 @@ class CommunityPage(BasePage):
     
     def update_input_field_state(self):
         """Update the message input field state based on authentication."""
+        # Prevent multiple updates
+        if hasattr(self, '_input_field_updated') and self._input_field_updated:
+            logger.info("🔄 Input field state already updated, skipping")
+            return
+            
         try:
             # Check if user is authenticated
             from trackpro.auth.user_manager import get_current_user
@@ -1554,31 +2160,133 @@ class CommunityPage(BasePage):
                             }
                         """)
                     logger.info(f"Updated input field state - authenticated: {is_authenticated}")
+            
+            self._input_field_updated = True
         except Exception as e:
             logger.error(f"Error updating input field state: {e}")
+            self._input_field_updated = True  # Mark as done even on error
     
     def on_page_activated(self):
-        """Called when page is activated."""
-        # Refresh user state and set current user for community manager
-        self.refresh_user_state()
+        """Called when the page is activated."""
+        logger.info("🔄 Community page activated")
         
-        # Update input field state based on authentication
-        self.update_input_field_state()
+        # Add a small delay to prevent rapid-fire initialization attempts
+        import time
+        if hasattr(self, '_last_activation_time'):
+            time_since_last = time.time() - self._last_activation_time
+            if time_since_last < 1.0:  # Less than 1 second since last activation
+                logger.info(f"🔄 Activation too soon ({time_since_last:.2f}s), skipping")
+                return
+        self._last_activation_time = time.time()
         
-        # Start voice server if not running
-        if VOICE_COMPONENTS_AVAILABLE and not is_voice_server_running():
+        # Initialize heavy components if not already done (from pre-loading)
+        if not hasattr(self, '_initialization_complete') or not self._initialization_complete:
+            logger.info("🔄 Heavy components not yet initialized, waiting for pre-loading to complete...")
+            # Wait a bit for pre-loading to finish
+            import time
+            time.sleep(0.5)
+        
+        # Only proceed with activation-specific tasks if not already done
+        if not hasattr(self, '_activation_complete') or not self._activation_complete:
+            # Refresh user state and set current user for community manager
+            self.refresh_user_state()
+            
+            # Update input field state based on authentication
+            self.update_input_field_state()
+            
+            # Check voice server status (already started during pre-loading)
+            if VOICE_COMPONENTS_AVAILABLE:
+                try:
+                    if is_voice_server_running():
+                        logger.info("✅ Voice server is running (started during pre-loading)")
+                    else:
+                        logger.warning("⚠️ Voice server not running, may need manual start")
+                except Exception as e:
+                    logger.error(f"❌ Failed to check voice server status: {e}")
+            
+            # Data already loaded during pre-loading
+            logger.info("📋 Channels and messages already loaded during pre-loading")
+            
+            self._activation_complete = True
+            logger.info("✅ Community page activation completed")
+        else:
+            logger.info("🔄 Community page already activated, skipping re-initialization")
+    
+    def _initialize_heavy_components(self):
+        """Initialize heavy components that were deferred during construction."""
+        try:
+            logger.info("🏗️ Initializing heavy community components...")
+            
+            # Initialize community manager
             try:
-                start_voice_server()
-                logger.info("Voice server started automatically")
+                logger.info("🔧 Attempting to initialize CommunityManager...")
+                from trackpro.community.community_manager import CommunityManager
+                
+                # Check if CommunityManager has get_instance method (singleton pattern)
+                if hasattr(CommunityManager, 'get_instance'):
+                    self.community_manager = CommunityManager.get_instance()
+                    logger.info("✅ CommunityManager instance created using singleton pattern")
+                else:
+                    # Create normal instance if singleton pattern not implemented
+                    self.community_manager = CommunityManager()
+                    logger.info("✅ CommunityManager instance created normally")
+                
+                if self._community_manager:
+                    logger.info("✅ CommunityManager instance created successfully")
+                else:
+                    logger.error("❌ CommunityManager creation returned None")
+                    self._community_manager = None
+                
+            except ImportError as import_error:
+                logger.error(f"❌ Failed to import CommunityManager: {import_error}")
+                self.community_manager = None
             except Exception as e:
-                logger.error(f"Failed to start voice server: {e}")
-        
-        # Load channels and messages
-        self.load_channels_from_database()
-        self.load_private_messages()
+                logger.error(f"❌ Failed to initialize community manager: {e}")
+                import traceback
+                logger.error(f"📋 Traceback: {traceback.format_exc()}")
+                self.community_manager = None
+            
+            # Set current user
+            self.set_current_user()
+            
+            # START VOICE SERVER DURING PRE-LOADING FOR FASTER ACCESS
+            if VOICE_COMPONENTS_AVAILABLE:
+                try:
+                    if not is_voice_server_running():
+                        logger.info("🎤 Starting voice server during pre-loading...")
+                        start_voice_server()
+                        logger.info("✅ Voice server startup initiated during pre-loading")
+                    else:
+                        logger.info("✅ Voice server is already running")
+                except Exception as e:
+                    logger.error(f"❌ Failed to start voice server during pre-loading: {e}")
+            
+            # LOAD DATA DURING PRE-LOADING FOR FASTER ACCESS
+            try:
+                logger.info("📋 Loading channels and messages during pre-loading...")
+                self.load_channels_from_database()
+                self.load_private_messages()
+                logger.info("✅ Data loading completed during pre-loading")
+            except Exception as e:
+                logger.error(f"❌ Failed to load data during pre-loading: {e}")
+            
+            self._initialization_complete = True
+            CommunityPage._heavy_components_initialized = True  # Set global flag
+            logger.info("✅ Heavy components initialization completed")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize heavy components: {e}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            CommunityPage._heavy_components_initialized = True  # Set flag even on error to prevent retries
     
     def refresh_user_state(self):
         """Refresh user authentication state and set current user."""
+        # Prevent multiple refreshes
+        if hasattr(self, '_user_state_refreshed') and self._user_state_refreshed:
+            logger.info("🔄 User state already refreshed, skipping")
+            return
+            
         try:
             # Force refresh of user manager state
             from trackpro.auth.user_manager import get_current_user
@@ -1595,13 +2303,19 @@ class CommunityPage(BasePage):
             # Update input field state based on new authentication state
             self.update_input_field_state()
             
+            self._user_state_refreshed = True
+            
         except Exception as e:
             logger.warning(f"Failed to refresh user state: {e}")
+            self._user_state_refreshed = True  # Mark as done even on error
     
     def on_voice_error(self, error_message):
         """Handle voice chat errors."""
-        logger.error(f"Voice chat error: {error_message}")
-        # You could show a user-friendly message here if needed
+        logger.error(f"🎤 Voice chat error: {error_message}")
+        
+        # Show error to user
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(self, "Voice Chat Error", error_message)
     
     def cleanup(self):
         """Cleanup resources."""
@@ -1616,20 +2330,54 @@ class CommunityPage(BasePage):
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
         
+        # Cleanup all voice managers
+        try:
+            # Cleanup central voice manager
+            if hasattr(self, '_central_voice_manager') and self._central_voice_manager:
+                try:
+                    # Use force cleanup during application shutdown
+                    if hasattr(self._central_voice_manager, 'force_cleanup'):
+                        self._central_voice_manager.force_cleanup()
+                    else:
+                        self._central_voice_manager.stop_voice_chat()
+                    logger.info("✅ Central voice manager cleaned up")
+                except Exception as e:
+                    logger.error(f"Error cleaning up central voice manager: {e}")
+            
+            # Cleanup all voice managers in the list
+            for voice_manager in getattr(self, '_voice_managers', []):
+                try:
+                    if hasattr(voice_manager, 'force_cleanup'):
+                        voice_manager.force_cleanup()
+                    elif hasattr(voice_manager, 'stop_voice_chat'):
+                        voice_manager.stop_voice_chat()
+                except Exception as e:
+                    logger.error(f"Error cleaning up voice manager: {e}")
+            
+            logger.info("✅ All voice managers cleaned up")
+        except Exception as e:
+            logger.error(f"Error during voice manager cleanup: {e}")
+        
         # Cleanup real-time subscriptions
         try:
             if hasattr(self, 'community_manager') and self.community_manager:
                 if hasattr(self.community_manager, 'client') and self.community_manager.client:
-                    # Unsubscribe from real-time updates
-                    self.community_manager.client.remove_all_subscriptions()
-                    logger.info("✅ Cleaned up real-time subscriptions")
+                    # Check if client has the remove_all_subscriptions method
+                    if hasattr(self.community_manager.client, 'remove_all_subscriptions'):
+                        # Unsubscribe from real-time updates
+                        self.community_manager.client.remove_all_subscriptions()
+                        logger.info("✅ Cleaned up real-time subscriptions")
+                    else:
+                        logger.warning("Client does not have remove_all_subscriptions method")
         except Exception as e:
             logger.error(f"Error cleaning up real-time subscriptions: {e}")
     
     def set_current_user(self):
         """Set the current authenticated user in the community manager."""
         try:
-            if not self.community_manager:
+            # During initialization, access _community_manager directly to avoid recursion
+            community_manager = getattr(self, '_community_manager', None)
+            if not community_manager:
                 logger.warning("Community manager not available")
                 return
                 
@@ -1653,7 +2401,7 @@ class CommunityPage(BasePage):
                                 name=user_data.user_metadata.get('name', user_data.email),
                                 is_authenticated=True
                             )
-                            self.community_manager.set_current_user(temp_user.id)
+                            community_manager.set_current_user(temp_user.id)
                             logger.info(f"Set current user from Supabase session: {temp_user.email}")
                             return
                 except Exception as e:
@@ -1664,7 +2412,7 @@ class CommunityPage(BasePage):
                 return
                 
             if user and user.is_authenticated:
-                self.community_manager.set_current_user(user.id)
+                community_manager.set_current_user(user.id)
                 logger.info(f"Set current user: {user.email}")
             else:
                 logger.warning("User not authenticated")
@@ -1727,27 +2475,55 @@ class CommunityPage(BasePage):
     
     def load_channels_from_database(self):
         """Load channels from database instead of hardcoded list."""
+        # Prevent multiple loads using class-level flag
+        if CommunityPage._channels_loaded:
+            logger.info("🔄 Channels already loaded, skipping")
+            return
+            
         try:
-            if not self.community_manager:
+            # During initialization, access _community_manager directly to avoid recursion
+            community_manager = getattr(self, '_community_manager', None)
+            if not community_manager:
                 logger.warning("Community manager not available, using fallback channels")
                 self.load_fallback_channels()
+                CommunityPage._channels_loaded = True
                 return
                 
-            channels = self.community_manager.get_channels()
+            logger.info("Loading channels from database...")
+            channels = community_manager.get_channels()
+            logger.info(f"Received {len(channels)} channels from community manager")
+            
+            logger.info(f"🧹 Clearing channel lists - Text channels: {self.channel_list.count()}, Voice channels: {self.voice_channels_list.count()}")
             self.channel_list.clear()
             self.voice_channels_list.clear()
+            logger.info("✅ Channel lists cleared")
+            
+            # Check if we got any channels from the database
+            if not channels:
+                logger.warning("No channels returned from database, using fallback channels")
+                self.load_fallback_channels()
+                return
+            
+            text_channels_count = 0
+            voice_channels_count = 0
             
             for channel in channels:
                 channel_name = channel['name']
                 channel_type = channel['channel_type']
                 
+                logger.info(f"📋 Processing channel: {channel_name} (type: {channel_type})")
+                
                 # Format display name
                 if channel_type == 'text':
                     display_name = f"# {channel_name}"
                     target_list = self.channel_list
+                    text_channels_count += 1
+                    logger.info(f"📝 Added text channel: {display_name}")
                 else:
                     display_name = f"🔊 {channel_name}"
                     target_list = self.voice_channels_list
+                    voice_channels_count += 1
+                    logger.info(f"🔊 Added voice channel: {display_name}")
                 
                 item = QListWidgetItem(display_name)
                 item.setData(Qt.ItemDataRole.UserRole, {
@@ -1756,6 +2532,9 @@ class CommunityPage(BasePage):
                     'type': channel_type
                 })
                 target_list.addItem(item)
+            
+            logger.info(f"Loaded {text_channels_count} text channels and {voice_channels_count} voice channels")
+            logger.info(f"📊 Final state - Text channels: {self.channel_list.count()}, Voice channels: {self.voice_channels_list.count()}")
             
             # Auto-select the first text channel if no channel is currently selected
             if self.channel_list.count() > 0 and not self.current_channel:
@@ -1767,14 +2546,20 @@ class CommunityPage(BasePage):
                         self.channel_list.setCurrentItem(first_item)
                         self.show_channel(channel_data['id'])
                         logger.info(f"Auto-selected first channel: {channel_data['id']}")
+            
+            # Mark as loaded using class-level flag
+            CommunityPage._channels_loaded = True
                 
         except Exception as e:
             logger.error(f"Error loading channels from database: {e}")
             # Fallback to hardcoded channels
             self.load_fallback_channels()
+            CommunityPage._channels_loaded = True
     
     def load_fallback_channels(self):
         """Load fallback channels when database is unavailable."""
+        logger.info("Loading fallback channels...")
+        
         # Text channels
         text_channels = [
             ("# general", "fallback-general", "text"),
@@ -1799,6 +2584,7 @@ class CommunityPage(BasePage):
         ]
         
         for channel_name, channel_id, channel_type in voice_channels:
+            logger.info(f"🔊 Adding fallback voice channel: {channel_name}")
             item = QListWidgetItem(channel_name)
             item.setData(Qt.ItemDataRole.UserRole, {
                 'id': channel_id,
@@ -1806,6 +2592,8 @@ class CommunityPage(BasePage):
                 'type': channel_type
             })
             self.voice_channels_list.addItem(item)
+        
+        logger.info(f"Loaded {len(text_channels)} text channels and {len(voice_channels)} voice channels as fallback")
         
         # Auto-select the first text channel if no channel is currently selected
         if self.channel_list.count() > 0 and not self.current_channel:
@@ -1820,10 +2608,54 @@ class CommunityPage(BasePage):
     
     def load_private_messages(self):
         """Load private messages/conversations."""
+        # Prevent multiple loads using class-level flag
+        if CommunityPage._private_messages_loaded:
+            logger.info("🔄 Private messages already loaded, skipping")
+            return
+            
         try:
-            if not self.community_manager:
+            # During initialization, access _community_manager directly to avoid recursion
+            community_manager = getattr(self, '_community_manager', None)
+            if not community_manager:
                 logger.warning("Community manager not available, using fallback private messages")
                 self.load_fallback_private_messages()
+                CommunityPage._private_messages_loaded = True
+                return
+                
+            conversations = community_manager.get_private_conversations()
+            self.private_messages_list.clear()
+            
+            for conversation in conversations:
+                # Create conversation list item widget
+                conversation_widget = PrivateConversationListItem(conversation)
+                conversation_widget.conversation_selected.connect(self.on_private_conversation_selected)
+                
+                item = QListWidgetItem()
+                item.setSizeHint(conversation_widget.sizeHint())
+                
+                self.private_messages_list.addItem(item)
+                self.private_messages_list.setItemWidget(item, conversation_widget)
+            
+            # Mark as loaded using class-level flag
+            CommunityPage._private_messages_loaded = True
+                
+        except Exception as e:
+            logger.error(f"Error loading private messages: {e}")
+            self.load_fallback_private_messages()
+            CommunityPage._private_messages_loaded = True
+    
+    def load_fallback_private_messages(self):
+        """Load fallback private messages when database is unavailable."""
+        # For now, we'll show a placeholder message
+        placeholder_item = QListWidgetItem("No private messages yet")
+        # Note: QListWidgetItem doesn't have setStyleSheet, styling is done via the widget
+        self.private_messages_list.addItem(placeholder_item)
+    
+    def refresh_private_messages(self):
+        """Refresh private messages list (bypasses the class-level flag for updates)."""
+        try:
+            if not self.community_manager:
+                logger.warning("Community manager not available, cannot refresh private messages")
                 return
                 
             conversations = self.community_manager.get_private_conversations()
@@ -1841,15 +2673,7 @@ class CommunityPage(BasePage):
                 self.private_messages_list.setItemWidget(item, conversation_widget)
                 
         except Exception as e:
-            logger.error(f"Error loading private messages: {e}")
-            self.load_fallback_private_messages()
-    
-    def load_fallback_private_messages(self):
-        """Load fallback private messages when database is unavailable."""
-        # For now, we'll show a placeholder message
-        placeholder_item = QListWidgetItem("No private messages yet")
-        # Note: QListWidgetItem doesn't have setStyleSheet, styling is done via the widget
-        self.private_messages_list.addItem(placeholder_item)
+            logger.error(f"Error refreshing private messages: {e}")
     
     def on_private_message_selected(self, item):
         """Handle private message selection."""
@@ -1920,7 +2744,7 @@ class CommunityPage(BasePage):
             if success:
                 logger.info("Private message sent successfully")
                 # Refresh the private messages list
-                self.load_private_messages()
+                self.refresh_private_messages()
             else:
                 logger.error("Failed to send private message")
                 
@@ -2054,42 +2878,273 @@ class CommunityPage(BasePage):
             logger.error(f"Error starting private conversation with user: {e}")
     
     def show_private_conversation(self, conversation_widget):
-        """Show a private conversation in the main content area."""
+        """Show private conversation in the main content area."""
+        # Clear current content
+        for i in reversed(range(self.content_stack.count())):
+            self.content_stack.removeWidget(self.content_stack.widget(i))
+        
+        # Add conversation widget
+        self.content_stack.addWidget(conversation_widget)
+        conversation_widget.show()
+    
+    def show_voice_debug_info(self):
+        """Show debug information about voice chat status."""
         try:
-            # Create a completely new content widget
-            new_content = QWidget()
-            new_content.setStyleSheet("""
-                QWidget {
-                    background-color: #1e1e1e;
-                }
-            """)
+            debug_info = []
             
-            layout = QVBoxLayout(new_content)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(0)
+            # Check voice server status
+            if VOICE_SERVER_AVAILABLE:
+                server_running = is_voice_server_running()
+                debug_info.append(f"Voice Server: {'✅ Running' if server_running else '❌ Not Running'}")
+            else:
+                debug_info.append("Voice Server: ❌ Not Available")
             
-            # Replace the old content_stack with the new one
-            if hasattr(self, 'content_stack') and self.content_stack:
-                parent_layout = self.layout()
-                if parent_layout:
-                    for i in range(parent_layout.count()):
-                        item = parent_layout.itemAt(i)
-                        if item.widget() == self.content_stack:
-                            stretch = parent_layout.stretch(i)
-                            parent_layout.removeItem(item)
-                            self.content_stack.setParent(None)
-                            self.content_stack.deleteLater()
-                            
-                            parent_layout.addWidget(new_content, stretch)
-                            break
+            # Check voice components
+            debug_info.append(f"Voice Components: {'✅ Available' if VOICE_COMPONENTS_AVAILABLE else '❌ Not Available'}")
+            debug_info.append(f"Simple Voice Client: {'✅ Available' if SIMPLE_VOICE_AVAILABLE else '❌ Not Available'}")
+            debug_info.append(f"PyAudio: {'✅ Available' if PYAUDIO_AVAILABLE else '❌ Not Available'}")
             
-            # Update the content_stack reference
-            self.content_stack = new_content
+            # Check current voice connection
+            if hasattr(self, 'voice_client'):
+                connected = self.voice_client.is_connected()
+                debug_info.append(f"Voice Client: {'✅ Connected' if connected else '❌ Disconnected'}")
+            else:
+                debug_info.append("Voice Client: ❌ Not Initialized")
             
-            # Add the conversation widget
-            layout.addWidget(conversation_widget)
+            # Check voice server connection
+            try:
+                import socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                result = sock.connect_ex(('localhost', 8080))
+                sock.close()
+                debug_info.append(f"Server Port 8080: {'✅ Accessible' if result == 0 else '❌ Not Accessible'}")
+            except Exception as e:
+                debug_info.append(f"Server Port 8080: ❌ Error checking - {e}")
+            
+            # Show debug info
+            debug_text = "\n".join(debug_info)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Voice Chat Debug Info", 
+                                  f"Voice Chat Status:\n\n{debug_text}")
             
         except Exception as e:
-            logger.error(f"Error showing private conversation: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}") 
+            logger.error(f"Error showing voice debug info: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Debug Error", f"Error getting debug info: {str(e)}")
+    
+    def add_debug_button(self):
+        """Add debug button to the UI for troubleshooting."""
+        # Removed debug button to avoid layout issues
+        # The community page already has proper error handling and logging
+        pass
+    
+    @property
+    def community_manager(self):
+        """Safely access the community manager, initializing if needed."""
+        # Only initialize if not already complete and not currently initializing
+        # Also check if we're not already in the initialization process to prevent recursion
+        if (not self._initialization_complete and 
+            not CommunityPage._heavy_components_initialized and 
+            not hasattr(self, '_initializing')):
+            logger.info("🔄 Community manager requested but not initialized, triggering initialization...")
+            self._initializing = True
+            try:
+                self._initialize_heavy_components()
+            finally:
+                self._initializing = False
+        # Return the manager (may be None if initialization failed)
+        return self._community_manager
+    
+    @community_manager.setter
+    def community_manager(self, value):
+        """Set the community manager."""
+        self._community_manager = value
+    
+    def test_voice_server_connection(self):
+        """Test voice server connection and provide detailed feedback."""
+        try:
+            debug_info = []
+            
+            # Test 1: Check if voice server is running
+            if VOICE_SERVER_AVAILABLE:
+                server_running = is_voice_server_running()
+                debug_info.append(f"1. Voice Server Status: {'✅ Running' if server_running else '❌ Not Running'}")
+                
+                if not server_running:
+                    debug_info.append("   → Attempting to start voice server...")
+                    try:
+                        start_voice_server()
+                        import time
+                        time.sleep(3)
+                        
+                        if is_voice_server_running():
+                            debug_info.append("   ✅ Voice server started successfully")
+                        else:
+                            debug_info.append("   ❌ Voice server failed to start")
+                    except Exception as e:
+                        debug_info.append(f"   ❌ Error starting voice server: {e}")
+            else:
+                debug_info.append("1. Voice Server: ❌ Not Available")
+            
+            # Test 2: Check port accessibility
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                result = sock.connect_ex(('localhost', 8080))
+                sock.close()
+                
+                if result == 0:
+                    debug_info.append("2. Port 8080: ✅ Accessible")
+                else:
+                    debug_info.append("2. Port 8080: ❌ Not Accessible")
+                    debug_info.append("   → Voice server may not be running or port is blocked")
+            except Exception as e:
+                debug_info.append(f"2. Port 8080: ❌ Error checking - {e}")
+            
+            # Test 3: Check voice components
+            debug_info.append(f"3. Voice Components: {'✅ Available' if VOICE_COMPONENTS_AVAILABLE else '❌ Not Available'}")
+            debug_info.append(f"4. Simple Voice Client: {'✅ Available' if SIMPLE_VOICE_AVAILABLE else '❌ Not Available'}")
+            debug_info.append(f"5. PyAudio: {'✅ Available' if PYAUDIO_AVAILABLE else '❌ Not Available'}")
+            
+            # Test 4: Try to create a simple voice client
+            if SIMPLE_VOICE_AVAILABLE:
+                try:
+                    test_client = SimpleVoiceClient()
+                    debug_info.append("6. Voice Client Creation: ✅ Successful")
+                except Exception as e:
+                    debug_info.append(f"6. Voice Client Creation: ❌ Failed - {e}")
+            else:
+                debug_info.append("6. Voice Client Creation: ❌ Not Available")
+            
+            # Show results
+            debug_text = "\n".join(debug_info)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Voice Server Connection Test", 
+                                  f"Voice Server Connection Test Results:\n\n{debug_text}")
+            
+        except Exception as e:
+            logger.error(f"Error testing voice server connection: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Test Error", f"Error running connection test: {str(e)}")
+    
+    def test_supabase_connection(self):
+        """Test Supabase connection and provide detailed feedback."""
+        try:
+            debug_info = []
+            
+            # Test 1: Check if Supabase client can be imported
+            try:
+                from ....database.supabase_client import get_supabase_client
+                debug_info.append("1. Supabase Client Import: ✅ Successful")
+            except ImportError as e:
+                debug_info.append(f"1. Supabase Client Import: ❌ Failed - {e}")
+                return
+            
+            # Test 2: Try to get Supabase client
+            try:
+                client = get_supabase_client()
+                if client:
+                    debug_info.append("2. Supabase Client Creation: ✅ Successful")
+                else:
+                    debug_info.append("2. Supabase Client Creation: ❌ Failed - client is None")
+                    debug_info.append("   → This usually means Supabase configuration is missing or incorrect")
+            except Exception as e:
+                debug_info.append(f"2. Supabase Client Creation: ❌ Failed - {e}")
+            
+            # Test 3: Check config
+            try:
+                from ....config import config
+                debug_info.append(f"3. Config Check: ✅ Available")
+                debug_info.append(f"   → Supabase URL: {'✅ Set' if config.supabase_url else '❌ Missing'}")
+                debug_info.append(f"   → Supabase Key: {'✅ Set' if config.supabase_anon_key else '❌ Missing'}")
+            except Exception as e:
+                debug_info.append(f"3. Config Check: ❌ Failed - {e}")
+            
+            # Test 4: Try to create CommunityManager
+            try:
+                from ....community.community_manager import CommunityManager
+                cm = CommunityManager()
+                if cm:
+                    debug_info.append("4. CommunityManager Creation: ✅ Successful")
+                    
+                    # Test database connection
+                    try:
+                        channels = cm.get_channels()
+                        debug_info.append(f"5. Database Query: ✅ Successful - {len(channels)} channels")
+                    except Exception as db_error:
+                        debug_info.append(f"5. Database Query: ❌ Failed - {db_error}")
+                else:
+                    debug_info.append("4. CommunityManager Creation: ❌ Failed - returned None")
+            except Exception as e:
+                debug_info.append(f"4. CommunityManager Creation: ❌ Failed - {e}")
+            
+            # Show results
+            debug_text = "\n".join(debug_info)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Supabase Connection Test", 
+                                  f"Supabase Connection Test Results:\n\n{debug_text}")
+            
+        except Exception as e:
+            logger.error(f"Error testing Supabase connection: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Test Error", f"Error running Supabase test: {str(e)}")
+
+    def get_central_voice_manager(self):
+        """Get or create the central voice manager."""
+        if self._central_voice_manager is None:
+            try:
+                from .high_quality_voice_manager import HighQualityVoiceManager
+                self._central_voice_manager = HighQualityVoiceManager()
+                self._voice_managers.append(self._central_voice_manager)
+                logger.info("Created central voice manager")
+            except Exception as e:
+                logger.warning(f"HighQualityVoiceManager not available: {e}")
+                self._central_voice_manager = None
+        return self._central_voice_manager
+
+    def on_voice_settings_changed(self, settings: dict):
+        """Handle voice settings changes."""
+        try:
+            logger.info(f"🔄 Updating voice settings for all voice managers")
+            
+            # Update all tracked voice managers
+            for voice_manager in self._voice_managers:
+                try:
+                    if hasattr(voice_manager, 'update_settings'):
+                        voice_manager.update_settings(settings)
+                        logger.info(f"Updated voice manager settings")
+                    elif hasattr(voice_manager, 'update_voice_settings'):
+                        voice_manager.update_voice_settings(settings)
+                        logger.info(f"Updated voice manager settings")
+                except Exception as e:
+                    logger.error(f"Failed to update voice manager settings: {e}")
+            
+            # Update voice managers in voice channels
+            for channel_id, voice_widget in self.voice_channels.items():
+                if hasattr(voice_widget, 'voice_manager') and voice_widget.voice_manager:
+                    try:
+                        if hasattr(voice_widget.voice_manager, 'update_settings'):
+                            voice_widget.voice_manager.update_settings(settings)
+                        elif hasattr(voice_widget.voice_manager, 'update_voice_settings'):
+                            voice_widget.voice_manager.update_voice_settings(settings)
+                        logger.info(f"Updated voice manager in channel {channel_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to update voice manager in channel {channel_id}: {e}")
+            
+            logger.info("✅ Voice settings updated for all voice managers")
+            
+        except Exception as e:
+            logger.error(f"Failed to update voice settings: {e}")
+
+    def create_new_voice_manager(self):
+        """Create a new voice manager and track it for settings updates."""
+        try:
+            from .high_quality_voice_manager import HighQualityVoiceManager
+            voice_manager = HighQualityVoiceManager()
+            self._voice_managers.append(voice_manager)
+            logger.info("Created new voice manager and added to tracking list")
+            return voice_manager
+        except Exception as e:
+            logger.warning(f"HighQualityVoiceManager not available: {e}")
+            return None

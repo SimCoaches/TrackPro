@@ -11,7 +11,7 @@ from typing import List, Tuple, Dict, Optional, Any
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import QApplication
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from .pyirsdk import irsdk

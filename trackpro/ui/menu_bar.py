@@ -68,7 +68,7 @@ def create_menu_bar(main_window):
     settings_menu = file_menu.addMenu("Settings")
     
     # Minimize to tray toggle
-    main_window.file_minimize_to_tray_action = QAction("Minimize to tray", main_window)
+    main_window.file_minimize_to_tray_action = QAction("Always minimize to tray", main_window)
     main_window.file_minimize_to_tray_action.setCheckable(True)
     main_window.file_minimize_to_tray_action.setChecked(config.minimize_to_tray)
     main_window.file_minimize_to_tray_action.triggered.connect(lambda checked: toggle_minimize_to_tray_from_menu(main_window, checked))

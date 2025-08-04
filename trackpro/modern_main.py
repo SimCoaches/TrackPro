@@ -390,7 +390,17 @@ class ModernTrackProApp:
 def main():
     """Main entry point for the modern TrackPro application."""
     try:
+        # Parse command line arguments
+        import sys
+        start_minimized = "--minimized" in sys.argv
+        
         app = ModernTrackProApp()
+        
+        # If starting minimized, hide the window initially
+        if start_minimized and app.window:
+            app.window.hide()
+            logger.info("🚀 TrackPro starting minimized")
+        
         return app.run()
     except KeyboardInterrupt:
         logger.info("🛑 Modern TrackPro interrupted by user")

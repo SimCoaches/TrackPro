@@ -31,30 +31,43 @@ class CacheEntry:
     is_valid: bool = True
 
 class CurveCache:
-    """
-    Intelligent curve loading cache that tracks file modifications
-    and eliminates redundant file system operations.
-    """
+    """Cache for pedal curves to avoid repeated file I/O."""
     
-    def __init__(self, cache_file: str = "curve_cache.json", ttl_seconds: int = 3600):
-        self.cache_file = Path(cache_file)
-        self.ttl_seconds = ttl_seconds
-        self.cache: Dict[str, Dict[str, CacheEntry]] = {}  # pedal -> {curve_name -> CacheEntry}
-        self.lock = Lock()
-        self._creation_time = time.time()  # Track when cache was created for startup optimizations
-        self._load_cache()
-        logger.info(f"CurveCache initialized with TTL {ttl_seconds}s")
+    _instance = None
+    _initialized = False  # Add global initialization flag
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self):
+        if not CurveCache._initialized:
+            self._cache = {}
+            self._cache_file = os.path.join(os.path.dirname(__file__), 'curve_cache.json')
+            self._ttl = 3600  # 1 hour cache TTL
+            self._load_cache()
+            CurveCache._initialized = True
+            logger.info("CurveCache initialized with TTL 3600s")
+        else:
+            logger.debug("CurveCache already initialized, reusing instance")
+    
+    @classmethod
+    def reset(cls):
+        """Reset the singleton instance (for testing)."""
+        cls._instance = None
+        cls._initialized = False
     
     def _load_cache(self) -> None:
         """Load cache from disk if it exists."""
         try:
-            if self.cache_file.exists():
-                with open(self.cache_file, 'r') as f:
+            if self._cache_file.exists():
+                with open(self._cache_file, 'r') as f:
                     cache_data = json.load(f)
                 
                 # Convert back to CacheEntry objects
                 for pedal, curves in cache_data.items():
-                    self.cache[pedal] = {}
+                    self._cache[pedal] = {}
                     for curve_name, entry_data in curves.items():
                         metadata = CurveMetadata(**entry_data['metadata'])
                         cache_entry = CacheEntry(
@@ -62,21 +75,21 @@ class CurveCache:
                             cached_time=entry_data['cached_time'],
                             is_valid=entry_data.get('is_valid', True)
                         )
-                        self.cache[pedal][curve_name] = cache_entry
+                        self._cache[pedal][curve_name] = cache_entry
                 
-                logger.info(f"Loaded curve cache with {sum(len(curves) for curves in self.cache.values())} entries")
+                logger.info(f"Loaded curve cache with {sum(len(curves) for curves in self._cache.values())} entries")
             else:
                 logger.info("No existing curve cache found, starting fresh")
         except Exception as e:
             logger.error(f"Error loading curve cache: {e}")
-            self.cache = {}
+            self._cache = {}
     
     def _save_cache(self) -> None:
         """Save cache to disk."""
         try:
             # Convert CacheEntry objects to serializable format
             cache_data = {}
-            for pedal, curves in self.cache.items():
+            for pedal, curves in self._cache.items():
                 cache_data[pedal] = {}
                 for curve_name, entry in curves.items():
                     cache_data[pedal][curve_name] = {
@@ -85,7 +98,7 @@ class CurveCache:
                         'is_valid': entry.is_valid
                     }
             
-            with open(self.cache_file, 'w') as f:
+            with open(self._cache_file, 'w') as f:
                 json.dump(cache_data, f, indent=2)
             
             logger.debug("Curve cache saved to disk")
@@ -103,7 +116,7 @@ class CurveCache:
             current_time = time.time()
             
             # Check if we have cached data for this pedal
-            if pedal not in self.cache:
+            if pedal not in self._cache:
                 logger.debug(f"No cache entry for pedal: {pedal}")
                 # Record cache miss
                 try:
@@ -113,7 +126,7 @@ class CurveCache:
                     pass
                 return self._scan_and_cache_curves(pedal, curves_directory), False
             
-            pedal_cache = self.cache[pedal]
+            pedal_cache = self._cache[pedal]
             
             # OPTIMIZATION: During startup (first 30 seconds), be more aggressive about using cache
             # to reduce file system operations that slow down startup
@@ -123,7 +136,7 @@ class CurveCache:
             # Check if cache has expired (use longer TTL during startup)
             if pedal_cache:
                 oldest_entry = min(entry.cached_time for entry in pedal_cache.values())
-                ttl = self.ttl_seconds * 3 if is_startup else self.ttl_seconds  # 3x longer TTL during startup
+                ttl = self._ttl * 3 if is_startup else self._ttl  # 3x longer TTL during startup
                 if current_time - oldest_entry > ttl:
                     logger.debug(f"Cache expired for pedal: {pedal} (startup mode: {is_startup})")
                     if not is_startup:  # Only refresh cache if not in startup mode
@@ -226,7 +239,7 @@ class CurveCache:
         try:
             if not curves_directory.exists():
                 logger.warning(f"Curves directory does not exist: {curves_directory}")
-                self.cache[pedal] = {}
+                self._cache[pedal] = {}
                 self._save_cache()
                 return []
             
@@ -256,7 +269,7 @@ class CurveCache:
                     logger.warning(f"Error processing curve file {curve_file}: {e}")
             
             # Update cache
-            self.cache[pedal] = pedal_cache
+            self._cache[pedal] = pedal_cache
             self._save_cache()
             
             logger.info(f"Scanned and cached {len(curve_names)} curves for pedal: {pedal}")
@@ -269,15 +282,15 @@ class CurveCache:
     def invalidate_pedal(self, pedal: str) -> None:
         """Invalidate cache for a specific pedal."""
         with self.lock:
-            if pedal in self.cache:
-                del self.cache[pedal]
+            if pedal in self._cache:
+                del self._cache[pedal]
                 self._save_cache()
                 logger.info(f"Invalidated cache for pedal: {pedal}")
     
     def invalidate_all(self) -> None:
         """Invalidate entire cache."""
         with self.lock:
-            self.cache.clear()
+            self._cache.clear()
             self._save_cache()
             logger.info("Invalidated entire curve cache")
     

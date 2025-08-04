@@ -18,6 +18,7 @@ class PerformanceManager(QObject):
         self.chart_update_queue = Queue(maxsize=5)
         self.ui_timer = None
         self.chart_timer = None
+        self.perf_timer = None
         self.performance_stats = {
             'ui_updates': 0,
             'chart_updates': 0,
@@ -26,9 +27,15 @@ class PerformanceManager(QObject):
             'avg_ui_time': 0.0
         }
         self.frame_times = []
-        self.setup_performance_monitoring()
+        self._timers_started = False
+        # Defer timer setup until actually needed
+        logger.info("✅ PerformanceManager initialized (timers deferred)")
     
     def setup_performance_monitoring(self):
+        """Setup performance monitoring timers - called when actually needed."""
+        if self._timers_started:
+            return
+            
         self.ui_timer = QTimer()
         self.ui_timer.timeout.connect(self.process_ui_updates)
         self.ui_timer.start(16)
@@ -40,8 +47,15 @@ class PerformanceManager(QObject):
         self.perf_timer = QTimer()
         self.perf_timer.timeout.connect(self.log_performance)
         self.perf_timer.start(5000)
+        
+        self._timers_started = True
+        logger.info("✅ Performance monitoring timers started")
     
     def queue_ui_update(self, pedal_data):
+        """Queue UI update - starts timers if not already started."""
+        if not self._timers_started:
+            self.setup_performance_monitoring()
+            
         try:
             while not self.ui_update_queue.empty():
                 try:
@@ -54,6 +68,10 @@ class PerformanceManager(QObject):
             self.performance_stats['dropped_frames'] += 1
     
     def queue_chart_update(self, chart_data):
+        """Queue chart update - starts timers if not already started."""
+        if not self._timers_started:
+            self.setup_performance_monitoring()
+            
         try:
             while not self.chart_update_queue.empty():
                 try:

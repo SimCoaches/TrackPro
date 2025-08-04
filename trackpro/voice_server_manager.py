@@ -1,7 +1,7 @@
 """
 Voice Server Manager
 
-Automatically starts and manages the high-quality voice chat server.
+Automatically starts and manages the simple voice chat server.
 """
 
 import asyncio
@@ -30,24 +30,54 @@ class VoiceServerManager(QObject):
         self.server_port = 8080
         
     def start_server(self):
-        """Start the voice chat server in a separate process."""
+        """Start the voice chat server in a separate process (on-demand)."""
         try:
-            # Get the path to the voice server script
+            logger.info("Starting network voice server on-demand...")
+            
+            # Get the path to the network voice server script
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            server_script = os.path.join(current_dir, "high_quality_voice_server.py")
+            server_script = os.path.join(current_dir, "network_voice_server.py")
             
             if not os.path.exists(server_script):
-                logger.error(f"Voice server script not found: {server_script}")
-                self.server_error.emit("Voice server script not found")
+                logger.error(f"Network voice server script not found: {server_script}")
+                self.server_error.emit("Network voice server script not found")
                 return
             
             # Start the server process
+            logger.info("Launching network voice server process...")
             self.server_process = subprocess.Popen([
                 sys.executable, server_script
             ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
+            # Wait for the process to start and initialize
+            import time
+            logger.info("Waiting for network voice server to initialize...")
+            time.sleep(3.0)  # Give more time for network server to start
+            
+            # Check if process started successfully
+            if self.server_process.poll() is not None:
+                # Process terminated immediately
+                stdout, stderr = self.server_process.communicate()
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                logger.error(f"Network voice server startup error: {error_msg}")
+                raise Exception(f"Network voice server failed to start: {error_msg}")
+            
+            # Additional check to ensure server is responding
+            try:
+                import socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                result = sock.connect_ex(('localhost', self.server_port))
+                sock.close()
+                if result != 0:
+                    logger.warning("Network voice server may not be fully initialized yet")
+                else:
+                    logger.info("Network voice server is responding on localhost")
+            except Exception as e:
+                logger.warning(f"Could not verify network voice server status: {e}")
+            
             self.is_running = True
-            logger.info("Voice chat server started successfully")
+            logger.info("Network voice chat server started successfully on-demand")
             self.server_started.emit()
             
             # Start monitoring thread
@@ -55,8 +85,8 @@ class VoiceServerManager(QObject):
             self.server_thread.start()
             
         except Exception as e:
-            logger.error(f"Failed to start voice server: {e}")
-            self.server_error.emit(f"Failed to start voice server: {str(e)}")
+            logger.error(f"Failed to start voice server on-demand: {e}")
+            self.server_error.emit(f"Failed to start voice server on-demand: {str(e)}")
     
     def stop_server(self):
         """Stop the voice chat server."""

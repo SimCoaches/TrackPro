@@ -28,9 +28,9 @@ if pyqt6_path:
         webengine_path = os.path.join(qt_bin_path, webengine_file)
         if os.path.exists(webengine_path):
             binaries_list.append((webengine_path, '.'))
-            print(f"Found Qt WebEngine file: {webengine_file}")
+            # print(f"Found Qt WebEngine file: {webengine_file}")
         else:
-            print(f"WARNING: Missing Qt WebEngine file: {webengine_file}")
+            # print(f"WARNING: Missing Qt WebEngine file: {webengine_file}")
 
 # Check for vJoy DLL (optional - don't fail build if not found)
 vjoy_paths = [
@@ -43,18 +43,18 @@ for vjoy_path in vjoy_paths:
     if os.path.exists(vjoy_path):
         binaries_list.append((vjoy_path, '.'))
         vjoy_found = True
-        print(f"Found vJoy DLL: {vjoy_path}")
+        # print(f"Found vJoy DLL: {vjoy_path}")
         break
 
 if not vjoy_found:
-    print("vJoy DLL not found on build machine - this is OK, users will install it via installer")
+    # print("vJoy DLL not found on build machine - this is OK, users will install it via installer")
 
 # Check for HidHide executables (optional)
 hidhide_paths = ['trackpro/pedals/HidHideCLI.exe', 'trackpro/pedals/HidHideClient.exe']
 for hidhide_path in hidhide_paths:
     if os.path.exists(hidhide_path):
         binaries_list.append((hidhide_path, '.'))
-        print(f"Found HidHide executable: {hidhide_path}")
+        # print(f"Found HidHide executable: {hidhide_path}")
 
 # Build datas list - minimal and essential only
 datas_list = [
@@ -81,13 +81,13 @@ if pyqt6_path:
     qt_resources_path = os.path.join(pyqt6_path, 'resources')
     if os.path.exists(qt_resources_path):
         datas_list.append((qt_resources_path, 'PyQt6/Qt6/resources'))
-        print("Added Qt WebEngine resources")
+        # print("Added Qt WebEngine resources")
         
         # Add specific V8 context files that are critical for WebEngine
         v8_context_file = os.path.join(qt_resources_path, 'v8_context_snapshot.bin')
         if os.path.exists(v8_context_file):
             datas_list.append((v8_context_file, '.'))
-            print("Added V8 context snapshot")
+            # print("Added V8 context snapshot")
 
 a = Analysis(
     ['new_ui.py'],
@@ -227,7 +227,7 @@ a = Analysis(
         'matplotlib',
         'matplotlib.pyplot',
         'matplotlib.backends',
-        'matplotlib.backends.backend_qt5agg',
+        'matplotlib.backends.backend_qt6agg',
         'matplotlib.backends.backend_agg',
         'matplotlib.figure',
         
@@ -412,11 +412,12 @@ exe = EXE(
     upx=False,   # Disabled to avoid UPX dependency issues
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=False,
+            icon='trackpro/resources/icons/trackpro-tray-1.ico',
 )

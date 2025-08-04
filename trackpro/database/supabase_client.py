@@ -11,6 +11,8 @@ from supabase import create_client, Client
 from gotrue import AuthResponse
 from ..config import config  # Import the global config instance
 import logging
+from pathlib import Path
+import jwt
 
 # Import secure session manager
 try:
@@ -22,9 +24,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Global instance of SupabaseManager
+# Global variables for singleton pattern
 _supabase_manager = None
 _supabase_manager_lock = threading.Lock()
+_initialization_complete = False  # Add flag to prevent duplicate initialization
+
+# Get Supabase configuration
+SUPABASE_URL = config.supabase_url
+SUPABASE_KEY = config.supabase_key
 
 def get_supabase_client():
     """Get the global Supabase client instance.
@@ -32,10 +39,10 @@ def get_supabase_client():
     Returns:
         Client: The Supabase client instance, or None if not initialized.
     """
-    global _supabase_manager
+    global _supabase_manager, _initialization_complete
     
-    # Fast path: if already initialized, return immediately
-    if _supabase_manager is not None:
+    if _supabase_manager is not None and _initialization_complete:
+        # Get the client from the manager (this will trigger initialization if needed)
         return _supabase_manager.client if _supabase_manager else None
     
     # Slow path: thread-safe initialization with reduced timeout for faster startup
@@ -56,16 +63,33 @@ def get_supabase_client():
                     logger.error(f"Error initializing Supabase manager: {e}")
                     # Create a dummy manager to prevent repeated initialization attempts
                     _supabase_manager = type('DummyManager', (), {'client': None})()
+                    _initialization_complete = True
                     return None
             
-            # Force initialization if needed
+            # Force initialization immediately for authentication operations
             if _supabase_manager and hasattr(_supabase_manager, '_initialization_deferred') and _supabase_manager._initialization_deferred:
                 logger.info("🔄 Force initializing Supabase client on first access")
                 _supabase_manager._initialization_deferred = False
-                _supabase_manager.initialize()
+                try:
+                    _supabase_manager.initialize()
+                    _initialization_complete = True
+                    logger.info("✅ Supabase client initialization completed successfully")
+                except Exception as e:
+                    logger.error(f"Failed to initialize Supabase client: {e}")
+                    _initialization_complete = True
+                    return None
             
-            # Return the client
-            return _supabase_manager.client if _supabase_manager else None
+            # Return the client (this will trigger initialization if needed)
+            client = _supabase_manager.client if _supabase_manager else None
+            if client is None and _supabase_manager:
+                logger.warning("Supabase manager exists but client is None - attempting reinitialization")
+                try:
+                    _supabase_manager.initialize()
+                    client = _supabase_manager.client
+                except Exception as e:
+                    logger.error(f"Reinitialization failed: {e}")
+            
+            return client
         finally:
             _supabase_manager_lock.release()
             
@@ -236,16 +260,15 @@ class SupabaseManager:
         
         return info
     
-    def _restore_session(self):
-        """Restore session from file if available."""
+    def _load_session(self):
+        """Load session from file."""
         try:
             # Try secure session first
             if self._secure_session:
                 auth_data = self._secure_session.load_session()
                 if auth_data and auth_data.get('access_token'):
                     logger.info("Found saved authentication session (encrypted)")
-                    self._saved_auth = auth_data
-                    return True
+                    return auth_data
             
             # Fallback to plaintext session
             if os.path.exists(self._auth_file):
@@ -255,20 +278,104 @@ class SupabaseManager:
                 # Check if we have the minimum required data
                 if auth_data.get('access_token'):
                     logger.info("Found saved authentication session (plaintext)")
-                    self._saved_auth = auth_data
-                    return True
+                    return auth_data
             
             logger.info(f"No saved authentication session found at: {self._auth_file}")
-            # Also check if the directory exists
-            auth_dir = os.path.dirname(self._auth_file)
-            if not os.path.exists(auth_dir):
-                logger.info(f"Auth directory doesn't exist: {auth_dir}")
-            self._saved_auth = None
-            return False
+            return None
         except Exception as e:
-            logger.error(f"Error restoring authentication session: {e}")
-            self._saved_auth = None
+            logger.error(f"Error loading authentication session: {e}")
+            return None
+    
+    def _restore_session(self):
+        """Attempt to restore a saved session."""
+        try:
+            logger.info("Attempting to restore saved session...")
+            
+            # Check if we have a saved session
+            session_data = self._load_session()
+            if not session_data:
+                logger.info("No saved session found")
+                return False
+            
+            # Validate session data before attempting restoration
+            access_token = session_data.get('access_token')
+            refresh_token = session_data.get('refresh_token')
+            
+            if not access_token:
+                logger.warning("No access token found in session data")
+                return False
+            
+            # Check if the access token appears to be corrupted
+            if isinstance(access_token, str) and ('+00:00' in access_token or len(access_token) < 50):
+                logger.warning("Access token appears to be corrupted - clearing session")
+                self._clear_session()
+                return False
+            
+            # Check if session is expired
+            if self._is_token_expired(session_data.get('expires_at')):
+                logger.info("Access token appears to be expired")
+                logger.info("Access token expired or invalid, attempting to refresh session")
+                
+                # Try to refresh the session - only attempt once to avoid multiple failures
+                if not self._attempt_session_refresh(session_data):
+                    logger.warning("Session refresh failed - user will need to re-authenticate")
+                    # Clear the corrupted session data
+                    self._clear_session()
+                    return False
+            
+            # Set the session
+            try:
+                if refresh_token:
+                    self._client.auth.set_session(access_token, refresh_token)
+                else:
+                    # Try with just access token if no refresh token
+                    try:
+                        self._client.auth.set_session(access_token)
+                    except TypeError:
+                        # Fallback to empty refresh token
+                        self._client.auth.set_session(access_token, "")
+                
+                logger.info("Session restored successfully")
+                return True
+            except Exception as e:
+                logger.error(f"Error setting session: {e}")
+                # Clear corrupted session data
+                self._clear_session()
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error restoring session: {e}")
             return False
+    
+    def _attempt_session_refresh(self, session_data):
+        """Attempt to refresh the session - only try once to avoid multiple failures."""
+        refresh_token = session_data.get('refresh_token')
+        if not refresh_token:
+            logger.warning("No refresh token available")
+            return False
+        
+        # Check if refresh token appears to be corrupted
+        if isinstance(refresh_token, str) and ('+00:00' in refresh_token or len(refresh_token) < 50):
+            logger.warning("Refresh token appears to be corrupted")
+            return False
+        
+        # Only try one refresh method to avoid multiple failed attempts
+        try:
+            logger.info("Attempting session refresh using manual_refresh")
+            response = self._client.auth.refresh_session(refresh_token)
+            if response and response.session:
+                logger.info("Session refresh successful")
+                return True
+        except Exception as e:
+            error_msg = str(e)
+            if "Already Used" in error_msg or "invalid" in error_msg.lower():
+                logger.warning(f"Refresh token is invalid or already used: {e}")
+                # Clear the corrupted session data
+                self._clear_session()
+            else:
+                logger.warning(f"Manual session refresh failed: {e}")
+        
+        return False
     
     def _is_token_expired(self, expires_at):
         """Check if a token is expired.
@@ -290,8 +397,20 @@ class SupabaseManager:
                 # Unix timestamp
                 expiry_time = datetime.fromtimestamp(expires_at)
             elif isinstance(expires_at, str):
-                # ISO format timestamp
-                expiry_time = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                # Check if this is a JWT token instead of a timestamp
+                if expires_at.count('.') == 2 and len(expires_at) > 100:
+                    # This appears to be a JWT token, not a timestamp
+                    logger.warning("Received JWT token instead of timestamp for expiration check")
+                    return True  # Assume expired for corrupted tokens
+                
+                # Try to parse as ISO format timestamp
+                try:
+                    # Clean up any corrupted characters that might be in the timestamp
+                    cleaned_timestamp = expires_at.replace('+00:00', '').replace('+00', '')
+                    expiry_time = datetime.fromisoformat(cleaned_timestamp.replace('Z', '+00:00'))
+                except ValueError:
+                    logger.warning(f"Invalid timestamp format: {expires_at}")
+                    return True  # Assume expired for invalid timestamps
             else:
                 return True  # Unknown format, assume expired
             
@@ -608,146 +727,50 @@ class SupabaseManager:
             return False
     
     def initialize(self):
-        """Initialize the Supabase client with retries and DNS caching."""
+        """Initialize the Supabase client."""
         try:
-            # Check if Supabase is enabled
-            logger.info("Checking if Supabase is enabled...")
-            if not config.supabase_enabled:
-                logger.info("Supabase is disabled in configuration")
-                self._offline_mode = True
-                return
-            logger.info("Supabase is enabled in configuration")
-            
-            # Get Supabase configuration
-            url = config.supabase_url
-            key = config.supabase_key
-            
-            # Force refresh config if needed by reading from env directly
-            if "xjpewnaxszuqluhdhusf" in url:
-                # Detected old URL, force refresh from environment
-                logger.warning("Found old Supabase URL, forcing refresh from environment")
-                import os
-                env_url = os.getenv('SUPABASE_URL')
-                env_key = os.getenv('SUPABASE_KEY')
-                if env_url and "xbfotxwpntqplvvsffrr" in env_url:
-                    url = env_url
-                    key = env_key
-                    # Update config for future use
-                    config.set('supabase.url', url)
-                    config.set('supabase.key', key)
-                    logger.info("Updated config with new Supabase credentials")
-            
-            if not url or not key:
-                logger.warning("Supabase credentials not configured")
-                self._offline_mode = True
-                return
-            
-            logger.info(f"Using Supabase URL: {url}")  # Log the full URL for debugging
-            logger.info(f"Got Supabase key: {key[:20]}...")  # Only log first part of key for security
-            
-            # Extract hostname for DNS caching
-            parsed_url = urlparse(url)
-            self._hostname = parsed_url.netloc
-            
-            # Try to resolve hostname in advance
-            logger.info(f"[INIT_DEBUG] Attempting DNS resolution for: {self._hostname}")
-            ips = resolve_hostname(self._hostname)
-            if ips:
-                self._cached_ip = ips[0]
-                logger.info(f"Resolved {self._hostname} to {self._cached_ip}")
-            else:
-                logger.warning(f"[INIT_DEBUG] DNS resolution failed for {self._hostname}")
-            
-            # Create Supabase client
             logger.info("Initializing Supabase client...")
+            
+            # Create the client
+            self._client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            
+            # If client creation was successful, disable offline mode
+            if self._client:
+                self._offline_mode = False
+                logger.info("✅ Supabase client created successfully, disabled offline mode")
+            
+            # Attempt to restore session
             try:
-                # Use retry strategy for client creation
-                def create_and_test_client():
-                    logger.info("[INIT_DEBUG] Attempting create_client...")
-                    # Create client without extra options to avoid 'headers' error
-                    client = create_client(url, key)
-                    logger.info("[INIT_DEBUG] create_client call successful.")
-                    return client
-                
-                # Explicitly clear old client to avoid reusing
-                self._client = None
-                
-                # Create new client
-                self._client = self._retry_strategy.execute(create_and_test_client)
-                logger.info(f"[INIT_DEBUG] Client object created: {self._client is not None}")
-                
-                # If we have a saved session, try to restore it
-                if hasattr(self, '_saved_auth') and self._saved_auth and self._saved_auth.get('access_token'):
-                    logger.info("Attempting to restore saved session...")
-                    try:
-                        # Use the new safe restoration method that properly handles token expiration
-                        session_restored = self._restore_session_safely()
-                        if session_restored:
-                            logger.info("Session restored successfully using safe method")
-                            # Sync auth state with other modules after successful restoration
-                            self._sync_auth_state_with_modules()
-                        else:
-                            logger.info("Session restoration failed, but preserving session data for remember_me users")
-                            # CRITICAL FIX: Don't immediately clear session on restoration failure
-                            # Users with remember_me=True should be able to retry authentication
-                            remember_me = self._saved_auth.get('remember_me', True) if hasattr(self, '_saved_auth') and self._saved_auth else True
-                            if not remember_me:
-                                logger.info("remember_me=False: Clearing failed session")
-                                self._clear_session_conditionally()
-                            else:
-                                logger.info("remember_me=True: Keeping session for future authentication attempts")
-                    except Exception as e:
-                        logger.warning(f"Failed to restore session: {e}")
-                        # CRITICAL FIX: Preserve remember_me sessions even on restoration errors
-                        remember_me = self._saved_auth.get('remember_me', True) if hasattr(self, '_saved_auth') and self._saved_auth else False
-                        if not remember_me:
-                            logger.info("remember_me=False: Clearing session after restoration error")
-                            self._clear_session_conditionally()
-                        else:
-                            logger.info("remember_me=True: Preserving session despite restoration error")
-                
-                # Test connection with a simple operation
-                try:
-                    # Just check if we can access the auth API
-                    logger.info("Testing connection to Supabase...")
-                    logger.info("[INIT_DEBUG] Attempting _client.auth.get_session()...")
-                    session_test = self._client.auth.get_session()
-                    logger.info("[INIT_DEBUG] _client.auth.get_session() successful.")
-                    
-                    # Check if we have an authenticated session
-                    if session_test and hasattr(session_test, 'user') and session_test.user:
-                        logger.info(f"Connected to Supabase with authenticated user: {session_test.user.email}")
-                        self._offline_mode = False
-                        # Ensure auth state is synced after connection test
-                        self._sync_auth_state_with_modules()
-                    else:
-                        logger.info("Connected to Supabase but no active user session")
-                        self._offline_mode = False
-                    
-                    logger.info("Supabase client initialized and connected successfully")
-                except Exception as e:
-                    logger.error(f"[INIT_DEBUG] _client.auth.get_session() failed: {e}")
-                    logger.warning(f"Connected but session retrieval failed: {e}")
-                    # Still consider it a success if we got this far - network issues shouldn't prevent app startup
-                    self._offline_mode = False
-                    logger.info("Supabase client initialized (with limited functionality)")
+                self._restore_session()
             except Exception as e:
-                logger.error(f"[INIT_DEBUG] Client creation/retry failed: {e}")
-                logger.error(f"Failed to create/test Supabase client after retries: {e}")
-                self._offline_mode = True
-                self._client = None
-                return
+                logger.warning(f"Failed to restore session during initialization: {e}")
+            
+            # Test connection
+            try:
+                self.check_connection()
+            except Exception as e:
+                logger.warning(f"Connection test failed during initialization: {e}")
+            
+            logger.info("Supabase client initialized and connected successfully")
             
         except Exception as e:
-            logger.error(f"[INIT_DEBUG] General initialization failure: {e}")
-            logger.error(f"Failed to initialize Supabase client: {e}")
-            self._offline_mode = True
-            self._client = None
+            logger.error(f"Error initializing Supabase client: {e}")
+            # Don't set _client to None on error - keep the client even if some operations fail
+            if self._client is None:
+                logger.info("Supabase client initialization failed - client not available")
+            else:
+                logger.info("Supabase client initialized (with limited functionality)")
     
     def _execute_with_retry(self, func, *args, **kwargs):
         """Execute a function with retry strategy and offline fallback."""
-        if self._offline_mode or not self._client:
-            logger.warning(f"Cannot execute {func.__name__} - Supabase is not connected")
+        if self._offline_mode:
+            logger.warning(f"Cannot execute {func.__name__} - Supabase is in offline mode")
+            return None
+        
+        # Ensure client is available
+        client = self.client
+        if not client:
+            logger.warning(f"Cannot execute {func.__name__} - Supabase client is not available")
             return None
         
         try:
@@ -765,7 +788,7 @@ class SupabaseManager:
         """Get the Supabase client.
         
         Returns:
-            Client: The Supabase client
+            Client: The Supabase client, or None if not available
         """
         if self._offline_mode:
             return None
@@ -774,12 +797,25 @@ class SupabaseManager:
         if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
             logger.info("🚀 STARTUP OPTIMIZATION: Performing deferred Supabase initialization on first access")
             self._initialization_deferred = False
-            self.initialize()
+            try:
+                self.initialize()
+            except Exception as e:
+                logger.error(f"Failed to initialize Supabase client during deferred initialization: {e}")
+                return None
         
         # Force initialization if client is None but we're not in offline mode
         if self._client is None and not self._offline_mode:
             logger.info("🔄 Force initializing Supabase client")
-            self.initialize()
+            try:
+                self.initialize()
+            except Exception as e:
+                logger.error(f"Failed to initialize Supabase client during force initialization: {e}")
+                return None
+        
+        # If we still don't have a client after initialization, something went wrong
+        if self._client is None:
+            logger.warning("Supabase client is None after initialization attempts")
+            return None
         
         return self._client
     
@@ -814,13 +850,14 @@ class SupabaseManager:
         Returns:
             User: The current user, or None if not authenticated
         """
-        if self._offline_mode or not self._client:
+        try:
+            def get_user_func():
+                return self._client.auth.get_user()
+            
+            return self._execute_with_retry(get_user_func)
+        except Exception as e:
+            logger.error(f"Error getting user: {e}")
             return None
-        
-        def get_user_func():
-            return self._client.auth.get_user()
-        
-        return self._execute_with_retry(get_user_func)
     
     def sign_up(self, email: str, password: str, metadata=None, custom_options=None) -> AuthResponse:
         """Sign up a new user.
@@ -1006,24 +1043,36 @@ class SupabaseManager:
         Returns:
             The OAuth response containing URL to redirect to
         """
-        if self._offline_mode or not self._client:
-            logger.warning("Cannot sign in with Google - Supabase is not connected")
-            return None
-        
-        logger.info("Attempting Google OAuth login")
-        
-        def oauth_func():
-            options = {}
-            if redirect_to:
-                options["redirect_to"] = redirect_to
-            
-            response = self._client.auth.sign_in_with_oauth({
-                "provider": "google",
-                "options": options
-            })
-            return response
-        
         try:
+            # Ensure client is initialized
+            if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
+                logger.info("🔐 OAUTH: Triggering deferred Supabase initialization")
+                self._initialization_deferred = False
+                self.initialize()
+            
+            if self._offline_mode:
+                logger.warning("Cannot sign in with Google - Supabase is in offline mode")
+                return None
+            
+            # Get the client (this will initialize if needed)
+            client = self.client
+            if not client:
+                logger.warning("Cannot sign in with Google - Supabase client is not available")
+                return None
+            
+            logger.info("Attempting Google OAuth login")
+            
+            def oauth_func():
+                options = {}
+                if redirect_to:
+                    options["redirect_to"] = redirect_to
+                
+                response = client.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": options
+                })
+                return response
+            
             return self._execute_with_retry(oauth_func)
         except Exception as e:
             logger.error(f"Google OAuth error: {e}")
@@ -1038,24 +1087,36 @@ class SupabaseManager:
         Returns:
             The OAuth response containing URL to redirect to
         """
-        if self._offline_mode or not self._client:
-            logger.warning("Cannot sign in with Discord - Supabase is not connected")
-            return None
-        
-        logger.info("Attempting Discord OAuth login")
-        
-        def oauth_func():
-            options = {}
-            if redirect_to:
-                options["redirect_to"] = redirect_to
-            
-            response = self._client.auth.sign_in_with_oauth({
-                "provider": "discord",
-                "options": options
-            })
-            return response
-        
         try:
+            # Ensure client is initialized
+            if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
+                logger.info("🔐 OAUTH: Triggering deferred Supabase initialization")
+                self._initialization_deferred = False
+                self.initialize()
+            
+            if self._offline_mode:
+                logger.warning("Cannot sign in with Discord - Supabase is in offline mode")
+                return None
+            
+            # Get the client (this will initialize if needed)
+            client = self.client
+            if not client:
+                logger.warning("Cannot sign in with Discord - Supabase client is not available")
+                return None
+            
+            logger.info("Attempting Discord OAuth login")
+            
+            def oauth_func():
+                options = {}
+                if redirect_to:
+                    options["redirect_to"] = redirect_to
+                
+                response = client.auth.sign_in_with_oauth({
+                    "provider": "discord",
+                    "options": options
+                })
+                return response
+            
             return self._execute_with_retry(oauth_func)
         except Exception as e:
             logger.error(f"Discord OAuth error: {e}")
@@ -1070,70 +1131,51 @@ class SupabaseManager:
         Returns:
             AuthResponse: The session response
         """
-        if self._offline_mode or not self._client:
-            logger.warning("Cannot exchange code - Supabase is not connected")
-            return None
-        
-        logger.info("Exchanging OAuth code for session")
-        
-        def exchange_func():
-            # Handle different input formats
-            if isinstance(params, str):
-                # It's a URL string - extract code and use default code verifier
-                logger.warning("Using deprecated URL format for code exchange")
-                from urllib.parse import urlparse, parse_qs
-                parsed_url = urlparse(params)
-                query_params = parse_qs(parsed_url.query)
-                
-                if 'code' in query_params:
-                    code = query_params['code'][0]
-                    logger.info(f"Extracted code from URL: {code[:5]}...")
-                    
-                    # Create exchange params without code verifier (deprecated)
-                    exchange_params = {
-                        "auth_code": code
-                    }
-                elif isinstance(params, dict) and 'auth_code' in params:
-                    # Already formatted correctly
-                    exchange_params = params
-                else:
-                    raise ValueError(f"Invalid params format - no auth code found")
-            elif isinstance(params, dict):
-                # It's already a params object
-                if 'auth_code' not in params:
-                    raise ValueError("Missing auth_code in exchange parameters")
-                
-                exchange_params = params
-                logger.info(f"Using params directly for exchange: auth_code={params['auth_code'][:5]}...")
-                if 'code_verifier' in params:
-                    logger.info(f"With code_verifier: {params['code_verifier'][:10]}...")
-            else:
-                # Unknown format
-                raise ValueError(f"Unsupported params type: {type(params)}")
-            
-            # ONLY use the primary exchange method, remove fallback logic
-            try:
-                logger.info(f"[DEBUG] About to call _client.auth.exchange_code_for_session with: {exchange_params}")
-                response = self._client.auth.exchange_code_for_session(exchange_params)
-            except Exception as e:
-                logger.error(f"Code exchange failed: {e}", exc_info=True)
-                raise e # Re-raise the specific error directly
-            
-            logger.info("Session exchange successful")
-            # Save session for persistence
-            self._save_session(response)
-            
-            # Sync auth state with other modules after successful OAuth exchange
-            self._sync_auth_state_with_modules()
-            
-            # Print user info for debugging
-            if response and hasattr(response, 'user') and response.user:
-                logger.info(f"Authenticated user ID: {response.user.id}")
-                logger.info(f"Authenticated user email: {response.user.email}")
-                
-            return response
-        
         try:
+            # Ensure client is initialized
+            if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
+                logger.info("🔐 OAUTH: Triggering deferred Supabase initialization")
+                self._initialization_deferred = False
+                self.initialize()
+            
+            if self._offline_mode:
+                logger.warning("Cannot exchange code - Supabase is in offline mode")
+                return None
+            
+            # Get the client (this will initialize if needed)
+            client = self.client
+            if not client:
+                logger.warning("Cannot exchange code - Supabase client is not available")
+                return None
+            
+            logger.info("Exchanging OAuth code for session")
+            
+            def exchange_func():
+                # Handle different input formats
+                if isinstance(params, str):
+                    # It's a URL string - extract code and use default code verifier
+                    logger.warning("Using deprecated URL format for code exchange")
+                    from urllib.parse import urlparse, parse_qs
+                    parsed_url = urlparse(params)
+                    query_params = parse_qs(parsed_url.query)
+                    
+                    auth_code = query_params.get('code', [None])[0]
+                    if not auth_code:
+                        raise ValueError("No auth code found in URL")
+                    
+                    # Use default code verifier for backward compatibility
+                    code_verifier = "default_code_verifier_for_backward_compatibility"
+                    
+                    response = client.auth.exchange_code_for_session({
+                        "auth_code": auth_code,
+                        "code_verifier": code_verifier
+                    })
+                else:
+                    # It's already an object with auth_code and code_verifier
+                    response = client.auth.exchange_code_for_session(params)
+                
+                return response
+            
             return self._execute_with_retry(exchange_func)
         except Exception as e:
             logger.error(f"Code exchange error: {e}")

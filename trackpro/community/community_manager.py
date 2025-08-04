@@ -11,17 +11,38 @@ logger = logging.getLogger(__name__)
 class CommunityManager(QObject):
     """Manages community channels and messages with database integration."""
     
+    # Singleton instance
+    _instance = None
+    _initialized = False
+    
     # Signals
     message_received = pyqtSignal(dict)  # New message received
     user_joined_channel = pyqtSignal(str, dict)  # channel_id, user_data
     user_left_channel = pyqtSignal(str, str)  # channel_id, user_id
     user_status_changed = pyqtSignal(str, str, dict)  # channel_id, user_id, status_data
     
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(CommunityManager, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self):
-        super().__init__()
-        self.current_user_id = None
-        self._setup_database_connection()
-        self._setup_realtime_subscriptions()
+        if not self._initialized:
+            super().__init__()
+            self.current_user_id = None
+            self._setup_database_connection()
+            self._setup_realtime_subscriptions()
+            self._initialized = True
+            logger.info("✅ CommunityManager singleton initialized")
+        else:
+            logger.debug("🔄 CommunityManager singleton already initialized, reusing instance")
+    
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton instance (for testing purposes)."""
+        cls._instance = None
+        cls._initialized = False
+        logger.info("🔄 CommunityManager singleton reset")
     
     def _setup_database_connection(self):
         """Setup database connection."""
@@ -41,16 +62,26 @@ class CommunityManager(QObject):
         """Get all available channels."""
         try:
             if not self.client:
+                logger.warning("No Supabase client available, using fallback channels")
                 return self._get_fallback_channels()
             
+            logger.info("Querying community_channels table from Supabase...")
             response = self.client.table("community_channels").select(
                 "channel_id, name, description, channel_type, is_private, created_at"
             ).order("name").execute()
             
-            return response.data or []
+            channels = response.data or []
+            logger.info(f"Retrieved {len(channels)} channels from database")
+            
+            if not channels:
+                logger.warning("No channels found in database, using fallback channels")
+                return self._get_fallback_channels()
+            
+            return channels
             
         except Exception as e:
             logger.error(f"Error getting channels: {e}")
+            logger.info("Falling back to hardcoded channels due to error")
             return self._get_fallback_channels()
     
     def get_messages(self, channel_id: str, limit: int = 50) -> List[Dict[str, Any]]:
@@ -180,15 +211,9 @@ class CommunityManager(QObject):
                 logger.warning("Cannot setup real-time subscriptions: no database connection")
                 return
             
-            # Subscribe to new messages
-            channel = self.client.channel('community-messages')
-            channel.on('postgres_changes', {
-                'event': 'INSERT',
-                'schema': 'public',
-                'table': 'community_messages'
-            }, self._on_message_inserted)
-            channel.subscribe()
-            logger.info("✅ Real-time message subscription setup")
+            # TODO: Implement real-time subscriptions when Supabase real-time is properly configured
+            # For now, we'll use polling or manual refresh instead
+            logger.info("⚠️ Real-time subscriptions disabled - using polling instead")
             
         except Exception as e:
             logger.error(f"Failed to setup real-time subscriptions: {e}")
