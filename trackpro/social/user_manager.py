@@ -56,7 +56,7 @@ class EnhancedUserManager(DatabaseManager):
             except Exception as e:
                 logger.warning(f"Error querying user_profiles table: {e}")
             
-            # Try to get from user_details table
+            # Try to get from user_details table (for additional account details)
             try:
                 details_response = self.supabase.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
                 if details_response.data:
@@ -95,13 +95,13 @@ class EnhancedUserManager(DatabaseManager):
             # Separate profile data, stats data, and details data
             profile_fields = {
                 'username', 'display_name', 'bio', 'location', 'avatar_url',
-                'avatar_frame_id', 'profile_theme', 'privacy_settings', 'preferences'
+                'avatar_frame_id', 'profile_theme', 'privacy_settings', 'preferences',
+                'first_name', 'last_name', 'share_data'
             }
             
             # User details fields belong in user_details table
             details_fields = {
-                'first_name', 'last_name', 'date_of_birth', 'phone_number', 
-                'twilio_verified', 'is_2fa_enabled'
+                'date_of_birth', 'phone_number', 'twilio_verified', 'is_2fa_enabled'
             }
             
             profile_update = {k: v for k, v in profile_data.items() if k in profile_fields}
@@ -115,18 +115,59 @@ class EnhancedUserManager(DatabaseManager):
                 
                 # Use upsert for user_profiles to handle cases where the record doesn't exist yet
                 profile_update['user_id'] = user_id
-                response = self.supabase.from_("user_profiles").upsert(profile_update).execute()
-                if not response.data:
-                    logger.error(f"Failed to upsert user_profiles for user {user_id}")
+                # Add select() to ensure data is returned after upsert
+                response = self.supabase.from_("user_profiles").upsert(profile_update, on_conflict='user_id').select().execute()
+                # Check for errors
+                if hasattr(response, 'error') and response.error:
+                    logger.error(f"Failed to upsert user_profiles for user {user_id}: {response.error}")
                     return False
+                logger.info(f"Successfully upserted user_profiles for user {user_id}")
                     
             if details_update:
                 # Use upsert for user_details to handle cases where the record doesn't exist yet
                 details_update['user_id'] = user_id
-                response = self.supabase.from_("user_details").upsert(details_update).execute()
-                if not response.data:
-                    logger.error(f"Failed to upsert user_details for user {user_id}")
-                    return False
+                try:
+                    # Add select() to ensure data is returned after upsert
+                    response = self.supabase.from_("user_details").upsert(details_update, on_conflict='user_id').select().execute()
+                    # Check for errors
+                    if hasattr(response, 'error') and response.error:
+                        logger.error(f"Failed to upsert user_details for user {user_id}: {response.error}")
+                        return False
+                    logger.info(f"Successfully upserted user_details for user {user_id}")
+                except Exception as e:
+                    if "does not exist" in str(e):
+                        logger.warning(f"user_details table does not exist. Creating it first...")
+                        # Try to create the table
+                        try:
+                            create_table_sql = """
+                            CREATE TABLE IF NOT EXISTS "user_details" (
+                                "user_id" UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+                                "first_name" TEXT,
+                                "last_name" TEXT,
+                                "date_of_birth" DATE,
+                                "phone_number" TEXT,
+                                "twilio_verified" BOOLEAN DEFAULT FALSE,
+                                "is_2fa_enabled" BOOLEAN DEFAULT FALSE,
+                                "terms_accepted" BOOLEAN DEFAULT FALSE,
+                                "terms_version_accepted" TEXT DEFAULT '',
+                                "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+                                "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+                            );
+                            """
+                            self.supabase.client.rpc('exec_sql', {'sql': create_table_sql}).execute()
+                            logger.info("Created user_details table")
+                            
+                            # Now try the upsert again
+                            response = self.supabase.from_("user_details").upsert(details_update, on_conflict='user_id').select().execute()
+                            if hasattr(response, 'error') and response.error:
+                                logger.error(f"Failed to upsert user_details for user {user_id} after table creation: {response.error}")
+                                return False
+                        except Exception as create_error:
+                            logger.error(f"Failed to create user_details table: {create_error}")
+                            return False
+                    else:
+                        logger.error(f"Error upserting user_details: {e}")
+                        return False
             
             # Update user stats if provided
             stats_fields = {
@@ -139,15 +180,18 @@ class EnhancedUserManager(DatabaseManager):
             if stats_update:
                 stats_update['updated_at'] = datetime.utcnow().isoformat()
                 response = self.supabase.from_("user_stats").upsert(
-                    {**stats_update, 'user_id': user_id}
-                ).execute()
-                if not response.data:
+                    {**stats_update, 'user_id': user_id}, on_conflict='user_id'
+                ).select().execute()
+                if hasattr(response, 'error') and response.error:
+                    logger.error(f"Failed to upsert user_stats for user {user_id}: {response.error}")
                     return False
             
             logger.info(f"Updated profile for user {user_id}")
             return True
         except Exception as e:
+            import traceback
             logger.error(f"Error updating user profile: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
     def set_avatar_frame(self, user_id: str, frame_id: str) -> bool:
@@ -282,16 +326,58 @@ class EnhancedUserManager(DatabaseManager):
             List of matching users
         """
         try:
-            # Search by username or display name
+            # Search by username or display name using separate queries
+            username_response = self.supabase.from_("user_profiles").select(
+                "user_id, username, display_name, avatar_url, level, reputation_score"
+            ).ilike("username", f"%{query}%").limit(limit).execute()
+            
+            display_name_response = self.supabase.from_("user_profiles").select(
+                "user_id, username, display_name, avatar_url, level, reputation_score"
+            ).ilike("display_name", f"%{query}%").limit(limit).execute()
+            
+            # Combine results
+            users = []
+            if username_response.data:
+                users.extend(username_response.data)
+            if display_name_response.data:
+                users.extend(display_name_response.data)
+            
+            # Remove duplicates based on user_id
+            seen_ids = set()
+            unique_users = []
+            for user in users:
+                if user['user_id'] not in seen_ids:
+                    seen_ids.add(user['user_id'])
+                    unique_users.append(user)
+            
+            return unique_users[:limit]
+        except Exception as e:
+            logger.error(f"Error searching users: {e}")
+            return []
+    
+    def get_all_users(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get all users from the database.
+        
+        Args:
+            limit: Maximum number of users to return
+            
+        Returns:
+            List of all users
+        """
+        try:
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning empty user list")
+                return []
+            
+            # Get all users from user_profiles table
             response = self.supabase.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, level, reputation_score"
-            ).or_(
-                f"username.ilike.%{query}%,display_name.ilike.%{query}%"
             ).limit(limit).execute()
             
             return response.data or []
+            
         except Exception as e:
-            logger.error(f"Error searching users: {e}")
+            logger.error(f"Error getting all users: {e}")
             return []
     
     def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
@@ -616,6 +702,109 @@ class EnhancedUserManager(DatabaseManager):
         except Exception as e:
             logger.error(f"Error getting user level info: {e}")
             return {}
+    
+    def update_online_status(self, user_id: str, is_online: bool, app_version: str = None, 
+                           platform: str = None, device_info: Dict[str, Any] = None) -> bool:
+        """Update user's online status.
+        
+        Args:
+            user_id: User ID
+            is_online: Whether user is online (1 for online, 0 for offline)
+            app_version: App version
+            platform: Platform (Windows, Mac, etc.)
+            device_info: Device information
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Simple approach: directly update online_status field
+            online_status = 1 if is_online else 0
+            
+            response = self.supabase.from_("user_profiles").update({
+                'online_status': online_status
+            }).eq("user_id", user_id).execute()
+            
+            return bool(response.data)
+        except Exception as e:
+            logger.error(f"Error updating online status: {e}")
+            return False
+    
+    def get_online_users(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get list of online users for public display.
+        
+        Args:
+            limit: Maximum number of users to return
+            
+        Returns:
+            List of online users
+        """
+        try:
+            # Query the public view for online users
+            response = self.supabase.from_("public_user_profiles").select(
+                "user_id, display_name, username, avatar_url, level, is_online, last_seen"
+            ).eq("is_online", True).order("last_seen", desc=True).limit(limit).execute()
+            
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting online users: {e}")
+            return []
+    
+    def get_public_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get public user profile information.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Public user profile data or None
+        """
+        try:
+            response = self.supabase.from_("public_user_profiles").select("*").eq("user_id", user_id).single().execute()
+            return response.data
+        except Exception as e:
+            logger.error(f"Error getting public user profile: {e}")
+            return None
+    
+    def search_public_users(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search for users by username or display name (public search).
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            
+        Returns:
+            List of matching users
+        """
+        try:
+            # Search by username or display name in public profiles using separate queries
+            username_response = self.supabase.from_("public_user_profiles").select(
+                "user_id, display_name, username, avatar_url, level, is_online, last_seen"
+            ).ilike("username", f"%{query}%").limit(limit).execute()
+            
+            display_name_response = self.supabase.from_("public_user_profiles").select(
+                "user_id, display_name, username, avatar_url, level, is_online, last_seen"
+            ).ilike("display_name", f"%{query}%").limit(limit).execute()
+            
+            # Combine results
+            users = []
+            if username_response.data:
+                users.extend(username_response.data)
+            if display_name_response.data:
+                users.extend(display_name_response.data)
+            
+            # Remove duplicates based on user_id
+            seen_ids = set()
+            unique_users = []
+            for user in users:
+                if user['user_id'] not in seen_ids:
+                    seen_ids.add(user['user_id'])
+                    unique_users.append(user)
+            
+            return unique_users[:limit]
+        except Exception as e:
+            logger.error(f"Error searching public users: {e}")
+            return []
 
 # Note: Global instance creation removed to prevent import-time initialization
 # Use trackpro.social.enhanced_user_manager or trackpro.social.get_enhanced_user_manager() instead 

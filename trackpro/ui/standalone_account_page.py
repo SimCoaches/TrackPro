@@ -1883,11 +1883,14 @@ class AccountPage(QWidget):
             # Find the main window parent and update auth state
             parent = self.parent()
             main_window = None
-            while parent:
+            while parent is not None:
                 if hasattr(parent, '__class__') and 'MainWindow' in parent.__class__.__name__:
                     main_window = parent
                     break
-                parent = parent.parent()
+                next_parent = parent.parent()
+                if next_parent is None:
+                    break
+                parent = next_parent
             
             if main_window:
                 # Update authentication state in the main window

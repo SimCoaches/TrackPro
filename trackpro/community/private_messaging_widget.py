@@ -20,26 +20,139 @@ class PrivateMessageWidget(QWidget):
         self.is_own_message = is_own_message
         self.setup_ui()
     
-    def create_avatar(self, user_name):
-        """Create a circular avatar with user initials."""
-        pixmap = QPixmap(32, 32)
+    def create_avatar(self, user_name, user_data=None):
+        """Create a circular avatar with user profile picture or initials."""
+        size = 32
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        # Check if user has an avatar URL
+        avatar_url = None
+        if user_data:
+            avatar_url = user_data.get('avatar_url')
+        
+        # Load avatar from URL if available
+        if avatar_url:
+            return self.load_avatar_from_url(avatar_url, size)
+        
+        # Fallback to initials
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
+        
+        # Create pixmap for avatar
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw circle background using TrackPro colors
+        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
+        color_index = hash(user_name) % len(colors)
+        painter.setBrush(QBrush(QColor(colors[color_index])))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        
+        # Draw initials
+        painter.setPen(QColor('#ffffff'))
+        font = painter.font()
+        font.setPixelSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+        
+        painter.end()
+        return pixmap
+    
+    def load_avatar_from_url(self, url: str, size: int = 32) -> QPixmap:
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar size
+                            scaled_pixmap = pixmap.scaled(
+                                size, size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(size, size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            painter = QPainter(circular_pixmap)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            painter.setBrush(QBrush(scaled_pixmap))
+                            painter.setPen(QPen(Qt.GlobalColor.transparent))
+                            painter.drawEllipse(0, 0, size, size)
+                            painter.end()
+                            
+                            # Update avatar display if this widget is still valid
+                            if hasattr(self, 'avatar_label') and self.avatar_label:
+                                self.avatar_label.setPixmap(circular_pixmap)
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    fallback_pixmap = self.create_fallback_avatar(size, user_name)
+                    if hasattr(self, 'avatar_label') and self.avatar_label:
+                        self.avatar_label.setPixmap(fallback_pixmap)
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+            # Return a placeholder pixmap while loading
+            placeholder = QPixmap(size, size)
+            placeholder.fill(Qt.GlobalColor.transparent)
+            return placeholder
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            return self.create_fallback_avatar(size, user_name)
+    
+    def create_fallback_avatar(self, size: int = 32, user_name: str = 'U') -> QPixmap:
+        """Create a fallback avatar with initials when image loading fails."""
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
+        
+        # Create pixmap for avatar
+        pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw circle background
+        # Draw circle background using TrackPro colors
         colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
         color_index = hash(user_name) % len(colors)
         painter.setBrush(QBrush(QColor(colors[color_index])))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, 32, 32)
+        painter.drawEllipse(0, 0, size, size)
         
         # Draw initials
-        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
         painter.setPen(QColor('#ffffff'))
         font = painter.font()
-        font.setPixelSize(12)
+        font.setPixelSize(size // 3)
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
@@ -86,20 +199,22 @@ class PrivateMessageWidget(QWidget):
             layout.addLayout(content_layout)
             
             # User avatar
-            user_name = self.message_data.get('user_profiles', {}).get('display_name', 'You')
-            avatar_label = QLabel()
-            avatar_label.setFixedSize(32, 32)
-            avatar_label.setPixmap(self.create_avatar(user_name))
-            layout.addWidget(avatar_label)
+            user_profiles = self.message_data.get('user_profiles', {})
+            user_name = user_profiles.get('display_name') or user_profiles.get('username') or 'You'
+            self.avatar_label = QLabel()
+            self.avatar_label.setFixedSize(32, 32)
+            self.avatar_label.setPixmap(self.create_avatar(user_name, user_profiles))
+            layout.addWidget(self.avatar_label)
             
         else:
             # Other's message: avatar on left, content on left
             # User avatar
-            user_name = self.message_data.get('user_profiles', {}).get('display_name', 'User')
-            avatar_label = QLabel()
-            avatar_label.setFixedSize(32, 32)
-            avatar_label.setPixmap(self.create_avatar(user_name))
-            layout.addWidget(avatar_label)
+            user_profiles = self.message_data.get('user_profiles', {})
+            user_name = user_profiles.get('display_name') or user_profiles.get('username') or 'User'
+            self.avatar_label = QLabel()
+            self.avatar_label.setFixedSize(32, 32)
+            self.avatar_label.setPixmap(self.create_avatar(user_name, user_profiles))
+            layout.addWidget(self.avatar_label)
             
             # Message content
             content_layout = QVBoxLayout()
@@ -175,13 +290,13 @@ class PrivateConversationWidget(QWidget):
         
         # Other user info
         other_user = self.conversation_data.get('other_user', {})
-        user_name = other_user.get('display_name', 'Unknown User')
+        user_name = other_user.get('display_name') or other_user.get('username') or 'Unknown User'
         
         # User avatar
-        avatar_label = QLabel()
-        avatar_label.setFixedSize(32, 32)
-        avatar_label.setPixmap(self.create_user_avatar(user_name))
-        header_layout.addWidget(avatar_label)
+        self.avatar_label = QLabel()
+        self.avatar_label.setFixedSize(32, 32)
+        self.avatar_label.setPixmap(self.create_user_avatar(user_name, other_user))
+        header_layout.addWidget(self.avatar_label)
         
         # User name
         name_label = QLabel(user_name)
@@ -243,26 +358,139 @@ class PrivateConversationWidget(QWidget):
         
         layout.addWidget(input_widget)
     
-    def create_user_avatar(self, user_name):
-        """Create a circular avatar with user initials."""
-        pixmap = QPixmap(32, 32)
+    def create_user_avatar(self, user_name, user_data=None):
+        """Create a circular avatar with user profile picture or initials."""
+        size = 32
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        # Check if user has an avatar URL
+        avatar_url = None
+        if user_data:
+            avatar_url = user_data.get('avatar_url')
+        
+        # Load avatar from URL if available
+        if avatar_url:
+            return self.load_avatar_from_url(avatar_url, size)
+        
+        # Fallback to initials
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
+        
+        # Create pixmap for avatar
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw circle background using TrackPro colors
+        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
+        color_index = hash(user_name) % len(colors)
+        painter.setBrush(QBrush(QColor(colors[color_index])))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        
+        # Draw initials
+        painter.setPen(QColor('#ffffff'))
+        font = painter.font()
+        font.setPixelSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+        
+        painter.end()
+        return pixmap
+    
+    def load_avatar_from_url(self, url: str, size: int = 32) -> QPixmap:
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar size
+                            scaled_pixmap = pixmap.scaled(
+                                size, size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(size, size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            painter = QPainter(circular_pixmap)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            painter.setBrush(QBrush(scaled_pixmap))
+                            painter.setPen(QPen(Qt.GlobalColor.transparent))
+                            painter.drawEllipse(0, 0, size, size)
+                            painter.end()
+                            
+                            # Update avatar display if this widget is still valid
+                            if hasattr(self, 'avatar_label') and self.avatar_label:
+                                self.avatar_label.setPixmap(circular_pixmap)
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    fallback_pixmap = self.create_fallback_avatar(size, user_name)
+                    if hasattr(self, 'avatar_label') and self.avatar_label:
+                        self.avatar_label.setPixmap(fallback_pixmap)
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+            # Return a placeholder pixmap while loading
+            placeholder = QPixmap(size, size)
+            placeholder.fill(Qt.GlobalColor.transparent)
+            return placeholder
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            return self.create_fallback_avatar(size, user_name)
+    
+    def create_fallback_avatar(self, size: int = 32, user_name: str = 'U') -> QPixmap:
+        """Create a fallback avatar with initials when image loading fails."""
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
+        
+        # Create pixmap for avatar
+        pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw circle background
+        # Draw circle background using TrackPro colors
         colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
         color_index = hash(user_name) % len(colors)
         painter.setBrush(QBrush(QColor(colors[color_index])))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, 32, 32)
+        painter.drawEllipse(0, 0, size, size)
         
         # Draw initials
-        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
         painter.setPen(QColor('#ffffff'))
         font = painter.font()
-        font.setPixelSize(12)
+        font.setPixelSize(size // 3)
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
@@ -312,12 +540,12 @@ class PrivateConversationListItem(QWidget):
         
         # User avatar
         other_user = self.conversation_data.get('other_user', {})
-        user_name = other_user.get('display_name', 'Unknown User')
+        user_name = other_user.get('display_name') or other_user.get('username') or 'Unknown User'
         
-        avatar_label = QLabel()
-        avatar_label.setFixedSize(40, 40)
-        avatar_label.setPixmap(self.create_user_avatar(user_name))
-        layout.addWidget(avatar_label)
+        self.avatar_label = QLabel()
+        self.avatar_label.setFixedSize(40, 40)
+        self.avatar_label.setPixmap(self.create_user_avatar(user_name, other_user))
+        layout.addWidget(self.avatar_label)
         
         # Conversation info
         info_layout = QVBoxLayout()
@@ -394,26 +622,139 @@ class PrivateConversationListItem(QWidget):
         # Make clickable
         self.mousePressEvent = self.on_click
     
-    def create_user_avatar(self, user_name):
-        """Create a circular avatar with user initials."""
-        pixmap = QPixmap(40, 40)
+    def create_user_avatar(self, user_name, user_data=None):
+        """Create a circular avatar with user profile picture or initials."""
+        size = 40
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        # Check if user has an avatar URL
+        avatar_url = None
+        if user_data:
+            avatar_url = user_data.get('avatar_url')
+        
+        # Load avatar from URL if available
+        if avatar_url:
+            return self.load_avatar_from_url(avatar_url, size)
+        
+        # Fallback to initials
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
+        
+        # Create pixmap for avatar
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw circle background using TrackPro colors
+        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
+        color_index = hash(user_name) % len(colors)
+        painter.setBrush(QBrush(QColor(colors[color_index])))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        
+        # Draw initials
+        painter.setPen(QColor('#ffffff'))
+        font = painter.font()
+        font.setPixelSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+        
+        painter.end()
+        return pixmap
+    
+    def load_avatar_from_url(self, url: str, size: int = 40) -> QPixmap:
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar size
+                            scaled_pixmap = pixmap.scaled(
+                                size, size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(size, size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            painter = QPainter(circular_pixmap)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                            painter.setBrush(QBrush(scaled_pixmap))
+                            painter.setPen(QPen(Qt.GlobalColor.transparent))
+                            painter.drawEllipse(0, 0, size, size)
+                            painter.end()
+                            
+                            # Update avatar display if this widget is still valid
+                            if hasattr(self, 'avatar_label') and self.avatar_label:
+                                self.avatar_label.setPixmap(circular_pixmap)
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    fallback_pixmap = self.create_fallback_avatar(size, user_name)
+                    if hasattr(self, 'avatar_label') and self.avatar_label:
+                        self.avatar_label.setPixmap(fallback_pixmap)
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+            # Return a placeholder pixmap while loading
+            placeholder = QPixmap(size, size)
+            placeholder.fill(Qt.GlobalColor.transparent)
+            return placeholder
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            return self.create_fallback_avatar(size, user_name)
+    
+    def create_fallback_avatar(self, size: int = 40, user_name: str = 'U') -> QPixmap:
+        """Create a fallback avatar with initials when image loading fails."""
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
+        
+        # Create pixmap for avatar
+        pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw circle background
+        # Draw circle background using TrackPro colors
         colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
         color_index = hash(user_name) % len(colors)
         painter.setBrush(QBrush(QColor(colors[color_index])))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, 40, 40)
+        painter.drawEllipse(0, 0, size, size)
         
         # Draw initials
-        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
         painter.setPen(QColor('#ffffff'))
         font = painter.font()
-        font.setPixelSize(14)
+        font.setPixelSize(size // 3)
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)

@@ -130,8 +130,8 @@ class DiscordNavigation(QWidget):
         
         self.setup_ui()
         self.setup_menu_items()
-        self.setup_user_profile()
         self.setup_iracing_status()
+        self.setup_user_profile()
         
         # Start with collapsed state
         self.set_collapsed_state()
@@ -320,22 +320,24 @@ class DiscordNavigation(QWidget):
         # User profile container
         self.user_profile_container = QWidget()
         self.user_profile_layout = QHBoxLayout(self.user_profile_container)
-        self.user_profile_layout.setContentsMargins(8, 4, 8, 4)
+        self.user_profile_layout.setContentsMargins(8, 8, 8, 8)  # Increased margins for larger avatar
         self.user_profile_layout.setSpacing(8)
-        self.user_profile_container.setFixedHeight(40)
+        self.user_profile_container.setFixedHeight(80)  # Much taller to prevent chopping of larger avatar
         
         # User avatar button (now supports both text and images)
         self.user_avatar_btn = QPushButton()
-        self.user_avatar_btn.setFixedSize(36, 36)  # Slightly smaller to match narrower nav
+        self.user_avatar_btn.setFixedSize(45, 45)  # Smaller avatar to fit the narrow sidebar width
         self.user_avatar_btn.setStyleSheet("""
             QPushButton {
                 background-color: #5865f2;
                 border: 3px solid #40444b;
-                border-radius: 18px;
+                border-radius: 22.5px;
                 color: white;
-                font-size: 12px;
+                font-size: 24px;
                 font-weight: bold;
                 text-align: center;
+                padding: 0px;
+                margin: 0px;
             }
             QPushButton:hover {
                 background-color: #4752c4;
@@ -416,6 +418,11 @@ class DiscordNavigation(QWidget):
         
         # Add to main layout (above user profile separator)
         self.main_layout.addWidget(self.iracing_status_container)
+        
+        # Add spacing between iRacing status and user profile
+        spacing_widget = QWidget()
+        spacing_widget.setFixedHeight(8)
+        self.main_layout.addWidget(spacing_widget)
         
         # Initialize iRacing connection monitoring
         self.setup_iracing_monitoring()

@@ -566,7 +566,7 @@ class XPGainNotification(QWidget):
     def show_notification(self):
         """Show the notification with animations"""
         # Position at top-right of parent
-        if self.parent():
+        if self.parent() is not None:
             parent_rect = self.parent().rect()
             self.move(parent_rect.width() - self.width() - 20, 20)
         
@@ -780,7 +780,7 @@ class LevelUpNotification(QWidget):
     def show_notification(self):
         """Show the level up notification with epic animations"""
         # Center on parent
-        if self.parent():
+        if self.parent() is not None:
             parent_rect = self.parent().rect()
             self.move(
                 parent_rect.width() // 2 - self.width() // 2,
@@ -913,7 +913,7 @@ class ToastNotification(QWidget):
     def show_notification(self):
         """Show the toast notification"""
         # Position at bottom-right of parent
-        if self.parent():
+        if self.parent() is not None:
             parent_rect = self.parent().rect()
             self.move(parent_rect.width() - self.width() - 20, parent_rect.height() - self.height() - 20)
         

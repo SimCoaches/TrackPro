@@ -252,9 +252,7 @@ class ActivityManager(DatabaseManager):
                     id, interaction_type, user_id, created_at,
                     user_profiles(username, display_name, avatar_url)
                 )
-            """).in_("user_id", all_user_ids).or_(
-                "privacy_level.eq.public,privacy_level.eq.friends"
-            ).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            """).in_("user_id", all_user_ids).in_("privacy_level", ["public", "friends"]).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
             
             activities = response.data or []
             

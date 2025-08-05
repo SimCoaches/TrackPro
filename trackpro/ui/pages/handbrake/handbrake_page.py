@@ -116,6 +116,12 @@ class HandbrakePage(BasePage):
         curve_manager_widget.curve_changed.connect(
             lambda curve: calibration_widget.update_chart_curve(curve)
         )
+        
+        # Connect curve editing to update calibration widget
+        curve_manager_widget.curve_edited.connect(
+            lambda x_points, y_points: self.update_calibration_curve(calibration_widget, x_points, y_points)
+        )
+        
         deadzone_widget.deadzone_changed.connect(
             lambda handbrake, min_dz, max_dz: self.update_deadzone("handbrake", min_dz, max_dz, calibration_widget)
         )
@@ -149,6 +155,25 @@ class HandbrakePage(BasePage):
             if hasattr(chart, 'set_deadzones'):
                 chart.set_deadzones(min_deadzone, max_deadzone)
                 logger.debug(f"Applied deadzone to chart for {handbrake_name}")
+    
+    def update_calibration_curve(self, calibration_widget, x_points, y_points):
+        """Update the calibration widget with new curve points from the editor."""
+        logger.debug(f"Updating calibration curve with points: {x_points}, {y_points}")
+        
+        if hasattr(calibration_widget, 'curve_x') and hasattr(calibration_widget, 'curve_y'):
+            calibration_widget.curve_x = x_points
+            calibration_widget.curve_y = y_points
+            
+            # Update the chart if available
+            if hasattr(calibration_widget, 'curve_line') and calibration_widget.curve_line:
+                calibration_widget.curve_line.setData(x_points, y_points)
+            
+            if hasattr(calibration_widget, 'scatter') and calibration_widget.scatter:
+                calibration_widget.scatter.setData(x_points, y_points)
+            
+            # Emit calibration update
+            calibration_widget.emit_calibration_update()
+            logger.debug("Updated calibration widget curve points")
     
     def on_calibration_complete(self, calibration_data):
         """Handle calibration completion."""

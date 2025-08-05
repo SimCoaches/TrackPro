@@ -10,7 +10,7 @@ from .performance_manager import PerformanceManager, ThreadPriorityManager, CPUC
 from ..pages.home import HomePage
 from ..pages.community import CommunityPage
 # App tracking
-from trackpro.utils.app_tracker import start_app_tracking, stop_app_tracking, update_user_online_status
+from trackpro.utils.app_tracker import start_app_tracking, stop_app_tracking, update_user_online_status, update_app_tracker_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -1397,16 +1397,32 @@ class ModernMainWindow(QMainWindow):
     def update_auth_state(self, authenticated):
         """Update the entire UI based on authentication state."""
         try:
-            # PERFORMANCE: Skip if this is a duplicate call during startup
+            # PERFORMANCE: Enhanced debouncing to prevent redundant auth state updates
+            import time
+            current_time = time.time()
+            
+            # Skip if this is a duplicate call during startup
             if not self._startup_auth_check_completed and hasattr(self, '_last_auth_state'):
                 if self._last_auth_state == authenticated:
                     logger.debug("🔄 Skipping duplicate auth state update during startup")
                     return
             
+            # Skip if called too frequently (within 100ms)
+            if hasattr(self, '_last_auth_update_time'):
+                if current_time - self._last_auth_update_time < 0.1:
+                    logger.debug("🔄 Skipping auth state update - called too frequently")
+                    return
+            
+            # Skip if auth refresh is in progress
+            if hasattr(self, '_auth_refresh_in_progress') and self._auth_refresh_in_progress:
+                logger.debug("🔄 Skipping auth state update - refresh in progress")
+                return
+            
             logger.info(f"🔐 Updating UI auth state: {authenticated}")
             
-            # Cache the auth state to prevent duplicate calls
+            # Cache the auth state and timestamp to prevent duplicate calls
             self._last_auth_state = authenticated
+            self._last_auth_update_time = current_time
             
             # Get user information if authenticated (cache it to avoid repeated calls)
             user_info = None
@@ -1443,6 +1459,23 @@ class ModernMainWindow(QMainWindow):
             
             # Emit signal for other components
             self.auth_state_changed.emit(authenticated)
+            
+            # Handle app tracking based on authentication state
+            if authenticated and user_info:
+                # Start app tracking for authenticated user
+                user_id = user_info.get('id')
+                if user_id:
+                    logger.info(f"🔐 Starting app tracking for authenticated user: {user_id}")
+                    # Use the global app tracker update function
+                    success = update_app_tracker_user_id(user_id)
+                    if success:
+                        logger.info(f"✅ App tracking started for user: {user_id}")
+                    else:
+                        logger.warning(f"⚠️ Failed to start app tracking for user: {user_id}")
+            else:
+                # Stop app tracking when user logs out
+                logger.info("🔐 Stopping app tracking - user logged out")
+                self.stop_app_tracking()
             
             # Force refresh sidebar when authentication state changes
             self.force_refresh_sidebar()
@@ -1520,9 +1553,35 @@ class ModernMainWindow(QMainWindow):
     def force_auth_refresh_after_login(self):
         """Force refresh authentication state after successful login."""
         try:
+            # PERFORMANCE: Prevent multiple simultaneous auth refreshes
+            if hasattr(self, '_auth_refresh_in_progress') and self._auth_refresh_in_progress:
+                logger.debug("🔄 Auth refresh already in progress, skipping duplicate call")
+                return True
+                
+            # Set flag to prevent duplicate refreshes
+            self._auth_refresh_in_progress = True
+            
             logger.info("🔄 Force refreshing authentication state after login...")
             
-            # First, ensure Supabase client is initialized
+            # First, check if we have a user in the user manager
+            from trackpro.auth.user_manager import get_current_user
+            current_user = get_current_user()
+            if current_user and current_user.is_authenticated:
+                logger.info(f"✅ Found authenticated user in user manager: {current_user.email}")
+                self.update_auth_state(True)
+                
+                # Also update all pages that need authentication state
+                if "home" in self.pages:
+                    self.pages["home"].refresh_header()
+                    # Also call the auth state changed method
+                    if hasattr(self.pages["home"], 'on_auth_state_changed'):
+                        self.pages["home"].on_auth_state_changed()
+                
+                # Clear the flag after successful completion
+                self._auth_refresh_in_progress = False
+                return True
+            
+            # If no user in user manager, try Supabase client
             from trackpro.database.supabase_client import get_supabase_client
             supabase_client = get_supabase_client()
             
@@ -1543,6 +1602,18 @@ class ModernMainWindow(QMainWindow):
                     session = supabase_client.auth.get_session()
                     if session and session.user:
                         logger.info("✅ Found valid session, updating UI...")
+                        
+                        # Ensure user is set in user manager
+                        from trackpro.auth.user_manager import User, set_current_user
+                        authenticated_user = User(
+                            id=session.user.id,
+                            email=session.user.email,
+                            name=session.user.user_metadata.get('name', session.user.email),
+                            is_authenticated=True
+                        )
+                        set_current_user(authenticated_user)
+                        logger.info(f"✅ Set user in user manager from session: {authenticated_user.email}")
+                        
                         self.update_auth_state(True)
                         
                         # Also update all pages that need authentication state
@@ -1552,23 +1623,33 @@ class ModernMainWindow(QMainWindow):
                             if hasattr(self.pages["home"], 'on_auth_state_changed'):
                                 self.pages["home"].on_auth_state_changed()
                         
+                        # Clear the flag after successful completion
+                        self._auth_refresh_in_progress = False
                         return True
                     else:
                         logger.warning("No valid session found after login")
                         self.update_auth_state(False)
+                        # Clear the flag after completion
+                        self._auth_refresh_in_progress = False
                         return False
                 except Exception as session_error:
                     logger.error(f"Error getting session: {session_error}")
                     self.update_auth_state(False)
+                    # Clear the flag after completion
+                    self._auth_refresh_in_progress = False
                     return False
             else:
                 logger.warning("⚠️ Supabase client not available after login")
                 self.update_auth_state(False)
+                # Clear the flag after completion
+                self._auth_refresh_in_progress = False
                 return False
             
         except Exception as e:
             logger.error(f"Error in force_auth_refresh_after_login: {e}")
             self.update_auth_state(False)
+            # Clear the flag after completion
+            self._auth_refresh_in_progress = False
             return False
     
     def get_current_user_info(self):
@@ -1758,12 +1839,46 @@ class ModernMainWindow(QMainWindow):
         if community_page and hasattr(community_page, 'start_private_conversation_with_user'):
             community_page.start_private_conversation_with_user(user_data)
     
+    def start_direct_private_message(self, user_data):
+        """Start a direct private message with a user (called from other widgets)."""
+        try:
+            logger.info(f"🔄 Starting direct private message with user: {user_data.get('display_name', 'Unknown')}")
+            
+            # Switch to community page first
+            self.switch_to_page("community")
+            
+            # Get the community page and start private conversation
+            community_page = self.get_page("community")
+            if community_page and hasattr(community_page, 'start_private_conversation_with_user'):
+                community_page.start_private_conversation_with_user(user_data)
+            else:
+                logger.error("Community page not available for private messaging")
+                
+        except Exception as e:
+            logger.error(f"Error starting direct private message: {e}")
+    
+    def get_page(self, page_name: str):
+        """Get a page by name."""
+        return self.pages.get(page_name)
+    
     def on_sidebar_toggled(self, is_expanded):
         """Handle online users sidebar toggle."""
         logger.info(f"📱 Online users sidebar {'expanded' if is_expanded else 'collapsed'}")
     
     def force_refresh_sidebar(self):
         """Force refresh the online users sidebar."""
+        # PERFORMANCE: Add debouncing to prevent redundant sidebar refreshes
+        import time
+        current_time = time.time()
+        
+        # Skip if called too frequently (within 1 second)
+        if hasattr(self, '_last_sidebar_refresh_time'):
+            if current_time - self._last_sidebar_refresh_time < 1.0:
+                logger.debug("🔄 Skipping sidebar refresh - called too frequently")
+                return
+                
+        self._last_sidebar_refresh_time = current_time
+        
         if hasattr(self, 'online_users_sidebar'):
             self.online_users_sidebar.force_refresh()
             logger.info("🔄 Forced refresh of online users sidebar")
@@ -1974,9 +2089,14 @@ class ModernMainWindow(QMainWindow):
         """Force exit the application completely from system tray."""
         logger.info("FORCE EXIT requested from system tray")
         
-        # Hide tray icon first
+        # Clean up tray icon properly first
         if hasattr(self, 'tray_icon') and self.tray_icon:
-            self.tray_icon.hide()
+            try:
+                self.tray_icon.hide()
+                self.tray_icon.deleteLater()
+                logger.info("✅ System tray icon cleaned up during force exit")
+            except Exception as e:
+                logger.error(f"Error cleaning up tray icon during force exit: {e}")
         
         # Temporarily disable minimize to tray to force actual exit
         from trackpro.config import Config
@@ -1993,7 +2113,7 @@ class ModernMainWindow(QMainWindow):
             
             kill_commands = [
                 ['taskkill', '/F', '/IM', 'TrackPro*.exe'],
-                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.5.exe'],
+                ['taskkill', '/F', '/T', '/IM', 'TrackPro_v1.5.6.exe'],
                 # More specific PowerShell command that excludes IDEs
                 ['powershell', '-Command', '''Get-Process | Where-Object {
                     ($_.ProcessName -eq "TrackPro" -or 
@@ -2044,6 +2164,15 @@ class ModernMainWindow(QMainWindow):
         self._is_shutting_down = True
         
         try:
+            # Clean up system tray icon first
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                try:
+                    self.tray_icon.hide()
+                    self.tray_icon.deleteLater()
+                    logger.info("✅ System tray icon cleaned up")
+                except Exception as e:
+                    logger.error(f"Error cleaning up tray icon: {e}")
+            
             # Stop UI update timer first
             if self.ui_update_timer:
                 try:
@@ -2093,6 +2222,15 @@ class ModernMainWindow(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error during main window cleanup: {e}")
+    
+    def __del__(self):
+        """Destructor to ensure tray icon is cleaned up."""
+        try:
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                self.tray_icon.hide()
+                self.tray_icon.deleteLater()
+        except:
+            pass
     
     def _emergency_exit(self):
         """Emergency exit method when normal shutdown fails."""

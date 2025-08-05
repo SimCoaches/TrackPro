@@ -112,10 +112,13 @@ class UserProfilePopup(QDialog):
                 # Check if the clicked widget is this dialog or a child of it
                 if widget is not None:
                     current_widget = widget
-                    while current_widget:
+                    while current_widget is not None:
                         if current_widget is self:
                             return False  # Click is inside this dialog
-                        current_widget = current_widget.parent()
+                        next_widget = current_widget.parent()
+                        if next_widget is None:
+                            break
+                        current_widget = next_widget
                     
                     # Click is outside - close the dialog
                     self.close()
@@ -1074,7 +1077,12 @@ class UserProfilePopup(QDialog):
                 self.friend_request_sent.emit(user_id)
             else:
                 error_message = result.get('message', 'Failed to send friend request.')
-                QMessageBox.warning(self, "Error", error_message)
+                
+                # Show specific popup for already sent friend request
+                if error_message == "Friend request already sent":
+                    QMessageBox.information(self, "Friend Request", "You've already sent this user a request!")
+                else:
+                    QMessageBox.warning(self, "Error", error_message)
                 
         except Exception as e:
             logger.error(f"Error sending friend request: {e}")
@@ -1092,7 +1100,39 @@ class UserProfilePopup(QDialog):
                                   "Please sign in to send private messages.")
             return
         
-        # Emit the signal with user data
+        # Try to find a widget with start_direct_private_message method
+        # Start from current widget and traverse up the parent hierarchy
+        current_widget = self
+        while current_widget is not None:
+            if hasattr(current_widget, 'start_direct_private_message'):
+                current_widget.start_direct_private_message(self.user_data)
+                self.close()
+                return
+            
+            # Get the parent widget safely
+            try:
+                current_widget = current_widget.parent()
+            except Exception as e:
+                logger.error(f"Error traversing parent hierarchy: {e}")
+                break
+        
+        # If we can't find the method in parent hierarchy, try to find the main window
+        # and look for the community page
+        try:
+            # Find the main window
+            main_window = self.window()
+            if main_window and hasattr(main_window, 'content_stack'):
+                # Look for CommunityPage in the content stack
+                for i in range(main_window.content_stack.count()):
+                    widget = main_window.content_stack.widget(i)
+                    if hasattr(widget, 'start_direct_private_message'):
+                        widget.start_direct_private_message(self.user_data)
+                        self.close()
+                        return
+        except Exception as e:
+            logger.error(f"Error finding main window or community page: {e}")
+        
+        # Fallback to emitting signal if direct method not found
         self.private_message_requested.emit(self.user_data)
         self.close()
     

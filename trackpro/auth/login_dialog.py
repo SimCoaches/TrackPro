@@ -6,21 +6,21 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap, QFont
-from .base_dialog import BaseAuthDialog
-from ..database.supabase_client import get_supabase_client
-from ..config import config
+from trackpro.auth.base_dialog import BaseAuthDialog
+from trackpro.database.supabase_client import get_supabase_client
+from trackpro.config import config
 from trackpro.social import enhanced_user_manager
 import logging
 import socket
 import webbrowser
 import os
 
-from .terms_handler import check_and_prompt_for_terms
+from trackpro.auth.terms_handler import check_and_prompt_for_terms
 
 # Add Twilio import for 2FA
 try:
     from twilio.rest import Client as TwilioClient
-    from .twilio_service import twilio_service
+    from trackpro.auth.twilio_service import twilio_service
     TWILIO_AVAILABLE = True
 except ImportError:
     TWILIO_AVAILABLE = False
@@ -695,17 +695,26 @@ class LoginDialog(BaseAuthDialog):
     def check_google_auth_status(self):
         """Periodically check if the user has completed Google authentication."""
         try:
+            # PERFORMANCE: Prevent multiple simultaneous auth completions
+            if hasattr(self, '_auth_completion_in_progress') and self._auth_completion_in_progress:
+                logger.debug("🔄 Auth completion already in progress, skipping duplicate check")
+                return
+                
             # Check if user is authenticated now
-            supabase = get_supabase_client()
-            if not supabase:
-                logger.error("Supabase client not initialized in check_google_auth_status")
+            # Get the manager directly instead of the client
+            from trackpro.database.supabase_client import _supabase_manager
+            if not _supabase_manager:
+                logger.error("Supabase manager not initialized in check_google_auth_status")
                 return
 
-            if supabase.is_authenticated():
+            if _supabase_manager.is_authenticated():
                 logger.info("Google authentication detected - user is now authenticated")
                 
+                # Set flag to prevent duplicate completions
+                self._auth_completion_in_progress = True
+                
                 # Get user info
-                user_response = supabase.get_user()
+                user_response = _supabase_manager.get_user()
                 
                 # Check 2FA before proceeding
                 # 2FA temporarily disabled - commented out for now
@@ -713,7 +722,7 @@ class LoginDialog(BaseAuthDialog):
                 # if not self.check_and_handle_2fa(user_response.user.id, user_email):
                 #     # 2FA failed, logout and return
                 #     try:
-                #         supabase.client.auth.sign_out()
+                #         _supabase_manager.client.auth.sign_out()
                 #     except:
                 #         pass
                 #     # Stop the timer
@@ -728,23 +737,27 @@ class LoginDialog(BaseAuthDialog):
                 remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
                 
                 # Ensure session is saved
-                if hasattr(supabase, '_save_session') and user_response:
+                if hasattr(_supabase_manager, '_save_session') and user_response:
                     logger.info(f"Explicitly saving Google session with remember_me={remember_me}")
-                    supabase._save_session(user_response, remember_me=remember_me)
+                    _supabase_manager._save_session(user_response, remember_me=remember_me)
                 
-                # Force the parent window to update if we can
+                # PERFORMANCE: Single consolidated auth state update
                 try:
                     parent = self.parent()
                     if parent:
                         from PyQt6.QtWidgets import QApplication
-                        logger.info("Forcing parent window to update authentication state after Google login")
+                        logger.info("🔄 Single consolidated auth state update after Google login")
                         QApplication.processEvents()
                         
-                        # If the parent has update_auth_state method, call it directly
-                        if hasattr(parent, 'update_auth_state'):
-                            logger.info("Parent has update_auth_state method, calling it")
+                        # Use the optimized force refresh method if available
+                        if hasattr(parent, 'force_auth_refresh_after_login'):
+                            logger.info("🔄 Using optimized force_auth_refresh_after_login")
+                            parent.force_auth_refresh_after_login()
+                        elif hasattr(parent, 'update_auth_state'):
+                            logger.info("🔄 Using direct update_auth_state")
                             parent.update_auth_state(True)
-                            QApplication.processEvents()
+                        
+                        QApplication.processEvents()
                 except Exception as e:
                     logger.error(f"Error updating parent window: {e}")
                 
@@ -839,6 +852,14 @@ class LoginDialog(BaseAuthDialog):
             
             logger.info(f"OAuth completion successful for provider: {self.pending_provider}")
             
+            # PERFORMANCE: Prevent multiple simultaneous auth completions
+            if hasattr(self, '_auth_completion_in_progress') and self._auth_completion_in_progress:
+                logger.debug("🔄 Auth completion already in progress, skipping duplicate OAuth completion")
+                return
+                
+            # Set flag to prevent duplicate completions
+            self._auth_completion_in_progress = True
+            
             # Get the Supabase manager (not the client)
             from trackpro.database.supabase_client import _supabase_manager
             if not _supabase_manager:
@@ -875,9 +896,24 @@ class LoginDialog(BaseAuthDialog):
                 logger.info(f"Explicitly saving session after OAuth completion with remember_me={remember_me}")
                 _supabase_manager._save_session(user_response, remember_me=remember_me)
             
-            # Force the parent window to update if we can
+            # PERFORMANCE: Single consolidated auth state update
             if hasattr(self.parent(), 'force_auth_refresh_after_login'):
-                self.parent().force_auth_refresh_after_login()
+                logger.info("🔄 Single consolidated auth state update after OAuth completion")
+                refresh_success = self.parent().force_auth_refresh_after_login()
+                logger.info(f"🔄 Force auth refresh result: {refresh_success}")
+            else:
+                logger.warning("⚠️ Parent window doesn't have force_auth_refresh_after_login method")
+            
+            # Verify user is still set after refresh
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                current_user = get_current_user()
+                if current_user:
+                    logger.info(f"✅ User still authenticated after refresh: {current_user.email}")
+                else:
+                    logger.error("❌ User lost after auth refresh - this indicates a timing issue")
+            except Exception as verify_error:
+                logger.error(f"❌ Error verifying user after refresh: {verify_error}")
             
             # Close the dialog
             self.accept()
@@ -999,8 +1035,10 @@ class LoginDialog(BaseAuthDialog):
                     return True
             else:
                 # This user has not verified their phone number. Force them to do so now.
-                logger.info(f"User {user_email} has not verified their phone. Forcing verification process.")
-                return self.force_phone_verification(user_id, user_email)
+                # TEMPORARILY DISABLED: Phone verification requirement
+                logger.info(f"User {user_email} has not verified their phone. Phone verification temporarily disabled.")
+                return True  # Allow login without phone verification
+                # return self.force_phone_verification(user_id, user_email)
                 
         except Exception as e:
             logger.error(f"Error checking 2FA status: {e}", exc_info=True)
@@ -1028,7 +1066,7 @@ class LoginDialog(BaseAuthDialog):
             # Allow login to proceed without phone verification
             return True
         
-        from .phone_verification_dialog import PhoneVerificationDialog
+        from trackpro.auth.phone_verification_dialog import PhoneVerificationDialog
 
         QMessageBox.information(self, 
             "Account Security Update",
@@ -1082,7 +1120,7 @@ class LoginDialog(BaseAuthDialog):
             return False
         
         try:
-            from .sms_verification_dialog import SMSVerificationDialog
+            from trackpro.auth.sms_verification_dialog import SMSVerificationDialog
             
             # Create and show the SMS verification dialog
             dialog = SMSVerificationDialog(self, phone_number)
@@ -1122,10 +1160,11 @@ class LoginDialog(BaseAuthDialog):
             username = (profile_res.get('username') or '').strip()
             display_name = (profile_res.get('display_name') or '').strip()
             
-            if not username:
+            # Check for display_name instead of username since that's what's available in the UI
+            if not display_name:
                 # Profile incomplete, inform user
                 QMessageBox.information(self, "Complete Your Profile",
-                    "Please complete your profile information (username) before proceeding.")
+                    "Please complete your profile information (display name) before proceeding.")
                 
                 # For now, just inform them - the main app will handle the redirect
                 return True
@@ -1196,13 +1235,29 @@ class LoginDialog(BaseAuthDialog):
                 remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
                 
                 # Save session
-                if hasattr(supabase, '_save_session') and response:
+                from trackpro.database.supabase_client import _supabase_manager
+                if hasattr(_supabase_manager, '_save_session') and response:
                     logger.info(f"Explicitly saving session with remember_me={remember_me}")
-                    supabase._save_session(response, remember_me=remember_me)
+                    _supabase_manager._save_session(response, remember_me=remember_me)
                 
-                # Force the parent window to update if we can
+                # PERFORMANCE: Single consolidated auth state update
                 if hasattr(self.parent(), 'force_auth_refresh_after_login'):
-                    self.parent().force_auth_refresh_after_login()
+                    logger.info("🔄 Single consolidated auth state update after password login")
+                    refresh_success = self.parent().force_auth_refresh_after_login()
+                    logger.info(f"🔄 Force auth refresh result: {refresh_success}")
+                else:
+                    logger.warning("⚠️ Parent window doesn't have force_auth_refresh_after_login method")
+                
+                # Verify user is still set after refresh
+                try:
+                    from trackpro.auth.user_manager import get_current_user
+                    current_user = get_current_user()
+                    if current_user:
+                        logger.info(f"✅ User still authenticated after refresh: {current_user.email}")
+                    else:
+                        logger.error("❌ User lost after auth refresh - this indicates a timing issue")
+                except Exception as verify_error:
+                    logger.error(f"❌ Error verifying user after refresh: {verify_error}")
                 
                 # Close the dialog
                 self.accept()

@@ -171,7 +171,8 @@ class ThreadPriorityManager:
             if ctypes.windll.kernel32.SetThreadPriority(thread_handle, 1):
                 logger.info("🎨 UI THREAD: Set to ABOVE_NORMAL priority")
             else:
-                logger.warning("Failed to set UI thread priority")
+                error_code = ctypes.windll.kernel32.GetLastError()
+                logger.warning(f"Failed to set UI thread priority. Error code: {error_code}")
         except Exception as e:
             logger.error(f"Could not set UI thread priority: {e}")
     
@@ -182,7 +183,8 @@ class ThreadPriorityManager:
             if ctypes.windll.kernel32.SetThreadPriority(thread_handle, 0):
                 logger.info("📊 CHART THREAD: Set to NORMAL priority")
             else:
-                logger.warning("Failed to set chart thread priority")
+                error_code = ctypes.windll.kernel32.GetLastError()
+                logger.warning(f"Failed to set chart thread priority. Error code: {error_code}")
         except Exception as e:
             logger.error(f"Could not set chart thread priority: {e}")
     
@@ -193,7 +195,8 @@ class ThreadPriorityManager:
             if ctypes.windll.kernel32.SetThreadPriority(thread_handle, -1):
                 logger.info("🔧 BACKGROUND THREAD: Set to BELOW_NORMAL priority")
             else:
-                logger.warning("Failed to set background thread priority")
+                error_code = ctypes.windll.kernel32.GetLastError()
+                logger.warning(f"Failed to set background thread priority. Error code: {error_code}")
         except Exception as e:
             logger.error(f"Could not set background thread priority: {e}")
 

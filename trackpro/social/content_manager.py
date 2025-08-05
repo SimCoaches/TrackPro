@@ -177,32 +177,59 @@ class ContentManager(DatabaseManager):
             """).eq("privacy_level", PrivacyLevel.PUBLIC.value).eq("status", ContentStatus.APPROVED.value)
             
             if query:
-                query_builder = query_builder.or_(f"title.ilike.%{query}%,description.ilike.%{query}%")
+                # Use separate queries for title and description search
+                title_response = self.client.from_("shared_setups").select("""
+                    *,
+                    user_profiles(username, display_name, avatar_url, level)
+                """).eq("privacy_level", PrivacyLevel.PUBLIC.value).eq("status", ContentStatus.APPROVED.value).ilike("title", f"%{query}%").execute()
+                
+                desc_response = self.client.from_("shared_setups").select("""
+                    *,
+                    user_profiles(username, display_name, avatar_url, level)
+                """).eq("privacy_level", PrivacyLevel.PUBLIC.value).eq("status", ContentStatus.APPROVED.value).ilike("description", f"%{query}%").execute()
+                
+                # Combine results
+                setups = []
+                if title_response.data:
+                    setups.extend(title_response.data)
+                if desc_response.data:
+                    setups.extend(desc_response.data)
+                
+                # Remove duplicates based on setup ID
+                seen_ids = set()
+                unique_setups = []
+                for setup in setups:
+                    if setup['id'] not in seen_ids:
+                        seen_ids.add(setup['id'])
+                        unique_setups.append(setup)
+                
+                return unique_setups[:limit]
             
-            if track_id:
-                query_builder = query_builder.eq("track_id", track_id)
-            
-            if car_id:
-                query_builder = query_builder.eq("car_id", car_id)
-            
-            if category:
-                query_builder = query_builder.eq("category", category)
-            
-            if tags:
-                for tag in tags:
-                    query_builder = query_builder.contains("tags", [tag])
-            
-            # Sort options
-            if sort_by == "rating_average":
-                query_builder = query_builder.order("rating_average", desc=True)
-            elif sort_by == "download_count":
-                query_builder = query_builder.order("download_count", desc=True)
-            else:
-                query_builder = query_builder.order("created_at", desc=True)
-            
-            response = query_builder.limit(limit).execute()
-            
-            return response.data or []
+            # If no query, use the original query builder approach
+            if not query:
+                if track_id:
+                    query_builder = query_builder.eq("track_id", track_id)
+                
+                if car_id:
+                    query_builder = query_builder.eq("car_id", car_id)
+                
+                if category:
+                    query_builder = query_builder.eq("category", category)
+                
+                if tags:
+                    for tag in tags:
+                        query_builder = query_builder.contains("tags", [tag])
+                
+                # Sort options
+                if sort_by == "rating_average":
+                    query_builder = query_builder.order("rating_average", desc=True)
+                elif sort_by == "download_count":
+                    query_builder = query_builder.order("download_count", desc=True)
+                else:
+                    query_builder = query_builder.order("created_at", desc=True)
+                
+                response = query_builder.limit(limit).execute()
+                return response.data or []
             
         except Exception as e:
             logger.error(f"Error searching setups: {e}")
@@ -404,26 +431,53 @@ class ContentManager(DatabaseManager):
             """).eq("privacy_level", PrivacyLevel.PUBLIC.value).eq("status", ContentStatus.APPROVED.value)
             
             if query:
-                query_builder = query_builder.or_(f"title.ilike.%{query}%,description.ilike.%{query}%")
+                # Use separate queries for title and description search
+                title_response = self.client.from_("shared_media").select("""
+                    *,
+                    user_profiles(username, display_name, avatar_url, level)
+                """).eq("privacy_level", PrivacyLevel.PUBLIC.value).eq("status", ContentStatus.APPROVED.value).ilike("title", f"%{query}%").execute()
+                
+                desc_response = self.client.from_("shared_media").select("""
+                    *,
+                    user_profiles(username, display_name, avatar_url, level)
+                """).eq("privacy_level", PrivacyLevel.PUBLIC.value).eq("status", ContentStatus.APPROVED.value).ilike("description", f"%{query}%").execute()
+                
+                # Combine results
+                media = []
+                if title_response.data:
+                    media.extend(title_response.data)
+                if desc_response.data:
+                    media.extend(desc_response.data)
+                
+                # Remove duplicates based on media ID
+                seen_ids = set()
+                unique_media = []
+                for item in media:
+                    if item['id'] not in seen_ids:
+                        seen_ids.add(item['id'])
+                        unique_media.append(item)
+                
+                return unique_media[:limit]
             
-            if content_type:
-                query_builder = query_builder.eq("content_type", content_type.value)
-            
-            if tags:
-                for tag in tags:
-                    query_builder = query_builder.contains("tags", [tag])
-            
-            # Sort options
-            if sort_by == "view_count":
-                query_builder = query_builder.order("view_count", desc=True)
-            elif sort_by == "like_count":
-                query_builder = query_builder.order("like_count", desc=True)
-            else:
-                query_builder = query_builder.order("created_at", desc=True)
-            
-            response = query_builder.limit(limit).execute()
-            
-            return response.data or []
+            # If no query, use the original query builder approach
+            if not query:
+                if content_type:
+                    query_builder = query_builder.eq("content_type", content_type.value)
+                
+                if tags:
+                    for tag in tags:
+                        query_builder = query_builder.contains("tags", [tag])
+                
+                # Sort options
+                if sort_by == "view_count":
+                    query_builder = query_builder.order("view_count", desc=True)
+                elif sort_by == "like_count":
+                    query_builder = query_builder.order("like_count", desc=True)
+                else:
+                    query_builder = query_builder.order("created_at", desc=True)
+                
+                response = query_builder.limit(limit).execute()
+                return response.data or []
             
         except Exception as e:
             logger.error(f"Error searching media: {e}")

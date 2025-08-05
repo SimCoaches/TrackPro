@@ -237,7 +237,10 @@ def start_global_pedal_thread():
     logger.info("🚀 ULTRA-FAST PEDAL THREAD: Started with maximum priority for modern UI")
 
 def global_pedal_polling_loop():
-    """The main loop for polling pedals and sending output to vJoy - ULTRA HIGH PERFORMANCE."""
+    """
+    Ultra-high priority pedal polling loop for modern UI.
+    Runs at 1000Hz with TIME_CRITICAL priority for maximum responsiveness.
+    """
     import time
     import ctypes
     from queue import Empty
@@ -247,14 +250,19 @@ def global_pedal_polling_loop():
         thread_handle = ctypes.windll.kernel32.GetCurrentThread()
         # Set to TIME_CRITICAL priority (highest possible)
         if not ctypes.windll.kernel32.SetThreadPriority(thread_handle, 15):  # THREAD_PRIORITY_TIME_CRITICAL
-            logger.warning("Failed to set pedal thread priority to TIME_CRITICAL.")
+            # Get error code for better debugging
+            error_code = ctypes.windll.kernel32.GetLastError()
+            logger.warning(f"Failed to set pedal thread priority to TIME_CRITICAL. Error code: {error_code}")
         else:
             logger.info("🏎️ MODERN PEDAL THREAD: Set to TIME_CRITICAL priority for ultra-low latency")
             
         # Set process priority to HIGH for the entire TrackPro process
         process_handle = ctypes.windll.kernel32.GetCurrentProcess()
-        ctypes.windll.kernel32.SetPriorityClass(process_handle, 0x00000080)  # HIGH_PRIORITY_CLASS
-        logger.info("🚀 MODERN PROCESS: Set TrackPro to HIGH priority class")
+        if not ctypes.windll.kernel32.SetPriorityClass(process_handle, 0x00000080):  # HIGH_PRIORITY_CLASS
+            error_code = ctypes.windll.kernel32.GetLastError()
+            logger.warning(f"Failed to set process priority to HIGH. Error code: {error_code}")
+        else:
+            logger.info("🚀 MODERN PROCESS: Set TrackPro to HIGH priority class")
         
     except Exception as e:
         logger.warning(f"Could not set thread/process priority on Windows: {e}")
@@ -713,7 +721,7 @@ def main():
     # Create QApplication
     app = QApplication(sys.argv)
     app.setApplicationName("TrackPro by Sim Coaches")
-    app.setApplicationVersion("1.5.5-modern")
+    app.setApplicationVersion("1.5.6-modern")
     app.setOrganizationName("Sim Coaches")
     app.setOrganizationDomain("simcoaches.com")
     
@@ -721,7 +729,7 @@ def main():
     try:
         import os
         # Try ICO first (user preference)
-        icon_path = os.path.join(os.path.dirname(__file__), "trackpro", "resources", "icons", "trackpro-tray-1.ico")
+        icon_path = os.path.join(os.path.dirname(__file__), "trackpro", "resources", "icons", "trackpro_tray-1.ico")
         logger.info(f"🔍 Looking for application icon at: {icon_path}")
         logger.info(f"🔍 File exists: {os.path.exists(icon_path)}")
         if os.path.exists(icon_path):
@@ -781,11 +789,16 @@ def main():
     app.aboutToQuit.connect(cleanup_all_global_systems)
     
     try:
-        # Set up OAuth handler first (like run_app.py does)
-        splash.showMessage("Setting up authentication...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+        # Set up OAuth handler first (like run_app.py does) - NON-BLOCKING
+        splash.showMessage("Setting up authentication system...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
         app.processEvents()
+        
+        # Create OAuth handler without blocking initialization
         from trackpro.auth import oauth_handler
         oauth_handler_instance = oauth_handler.OAuthHandler()
+        
+        # Don't perform any blocking operations during OAuth handler creation
+        # The actual authentication will happen when needed
         
         # PERFORMANCE OPTIMIZATION: Initialize hardware systems in parallel with better error handling
         splash.showMessage("Initializing hardware systems...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
@@ -828,7 +841,8 @@ def main():
         from trackpro.modern_main import ModernTrackProApp
         
         # Create the modern TrackPro app with authentication and global iRacing access
-        logger.info("🏗️ Creating modern TrackPro application with authentication...")
+        # PERFORMANCE: Authentication check is now non-blocking - UI will appear immediately
+        logger.info("🏗️ Creating modern TrackPro application with non-blocking authentication...")
         trackpro_app = ModernTrackProApp(oauth_handler=oauth_handler_instance, start_time=start_time, app=app)
         
         # Make the global iRacing API available to the app

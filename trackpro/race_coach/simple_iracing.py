@@ -123,7 +123,8 @@ class SimpleIRacingAPI(QObject):
                     thread_handle = ctypes.windll.kernel32.GetCurrentThread()
                     # Set to BELOW_NORMAL priority to ensure pedal thread gets priority
                     if not ctypes.windll.kernel32.SetThreadPriority(thread_handle, -1):
-                        logger.warning("Failed to set telemetry thread priority to BELOW_NORMAL")
+                        error_code = ctypes.windll.kernel32.GetLastError()
+                        logger.warning(f"Failed to set telemetry thread priority to BELOW_NORMAL. Error code: {error_code}")
                     else:
                         logger.info("📊 TELEMETRY THREAD: Set to BELOW_NORMAL priority (pedal thread has TIME_CRITICAL)")
                 except Exception as e:

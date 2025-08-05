@@ -463,14 +463,17 @@ class RacePassOverviewWidget(QWidget):
         
         # Notify parent widget if it has the premium activation method
         parent_widget = self.parent()
-        while parent_widget:
+        while parent_widget is not None:
             if hasattr(parent_widget, 'race_pass_track_widget'):
                 parent_widget.race_pass_track_widget.premium_active = True
                 # Refresh the track widget
                 current_tier = 5  # You might want to get this from actual data
                 parent_widget.race_pass_track_widget._load_placeholder_tiers(50, current_tier, premium_active=True)
                 break
-            parent_widget = parent_widget.parent()
+            next_parent = parent_widget.parent()
+            if next_parent is None:
+                break
+            parent_widget = next_parent
         
     def update_overview_data(self, season_data, user_progress, stats):
         """Update the overview with current data."""

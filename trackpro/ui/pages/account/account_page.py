@@ -510,10 +510,7 @@ class AccountPage(QWidget):
         bio_card.content_layout.addWidget(self.bio_input)
         layout.addWidget(bio_card)
         
-        # Test storage button (for debugging)
-        test_storage_btn = ModernButton("Test Storage Connection", "secondary")
-        test_storage_btn.clicked.connect(self.test_storage_connection)
-        layout.addWidget(test_storage_btn)
+
         
         # Save button
         save_btn = ModernButton("Save Profile", "primary")
@@ -1342,7 +1339,7 @@ Total: ~128.0 MB | Last updated: Just now"""
         try:
             # Load profile from Supabase
             from ....database.supabase_client import get_supabase_client
-            from ....social import enhanced_user_manager
+            from ....social.user_manager import EnhancedUserManager
             
             # Check if user is authenticated
             supabase_client = get_supabase_client()
@@ -1362,7 +1359,8 @@ Total: ~128.0 MB | Last updated: Just now"""
             logger.info(f"Loading user data for user {user_id}")
             
             # Load profile from Supabase
-            profile_data = enhanced_user_manager.get_complete_user_profile()
+            user_manager = EnhancedUserManager()
+            profile_data = user_manager.get_complete_user_profile()
             
             if profile_data:
                 self.user_data = profile_data
@@ -1408,7 +1406,6 @@ Total: ~128.0 MB | Last updated: Just now"""
                     if dob_str:
                         try:
                             # Parse the date string and set it in the date input
-                            from PyQt6.QtCore import QDate
                             dob_date = QDate.fromString(dob_str, "yyyy-MM-dd")
                             if dob_date.isValid():
                                 self.dob_input.setDate(dob_date)
@@ -1474,7 +1471,8 @@ Total: ~128.0 MB | Last updated: Just now"""
                 "last_name": self.last_name_input.text().strip(),
                 "display_name": self.display_name_input.text().strip(),
                 "bio": self.bio_input.toPlainText().strip(),
-                "date_of_birth": self.dob_input.date().toString("yyyy-MM-dd")
+                "date_of_birth": self.dob_input.date().toString("yyyy-MM-dd"),
+                "share_data": True  # Make profile public by default
             }
             
             # Validate required fields
@@ -1484,7 +1482,7 @@ Total: ~128.0 MB | Last updated: Just now"""
             
             # Save to Supabase using enhanced user manager
             from ....database.supabase_client import get_supabase_client
-            from ....social import enhanced_user_manager
+            from ....social.user_manager import EnhancedUserManager
             
             # Check if user is authenticated
             supabase_client = get_supabase_client()
@@ -1509,8 +1507,9 @@ Total: ~128.0 MB | Last updated: Just now"""
             user_id = user_response.user.id
             logger.info(f"Saving profile for user {user_id}: {profile_data}")
             
-            # Save to Supabase
-            success = enhanced_user_manager.update_user_profile(user_id, profile_data)
+            # Create user manager instance and save to Supabase
+            user_manager = EnhancedUserManager()
+            success = user_manager.update_user_profile(user_id, profile_data)
             
             if not success:
                 QMessageBox.warning(
@@ -1554,17 +1553,23 @@ Total: ~128.0 MB | Last updated: Just now"""
                 
                 # Get main window and trigger logout
                 main_window = self.parent()
-                while main_window and not hasattr(main_window, 'logout_user'):
-                    main_window = main_window.parent()
+                while main_window is not None and not hasattr(main_window, 'logout_user'):
+                    next_main_window = main_window.parent()
+                    if next_main_window is None:
+                        break
+                    main_window = next_main_window
                 
-                if main_window and hasattr(main_window, 'logout_user'):
+                if main_window is not None and hasattr(main_window, 'logout_user'):
                     main_window.logout_user()
                 else:
                     # Fallback: try to find the main window by looking for ModernMainWindow
-                    while main_window and not hasattr(main_window, '__class__'):
-                        main_window = main_window.parent()
+                    while main_window is not None and not hasattr(main_window, '__class__'):
+                        next_main_window = main_window.parent()
+                        if next_main_window is None:
+                            break
+                        main_window = next_main_window
                     
-                    if main_window and 'ModernMainWindow' in main_window.__class__.__name__:
+                    if main_window is not None and 'ModernMainWindow' in main_window.__class__.__name__:
                         if hasattr(main_window, 'logout_user'):
                             main_window.logout_user()
                         else:
@@ -1635,7 +1640,7 @@ Total: ~128.0 MB | Last updated: Just now"""
             
             # Import required modules
             from ....database.supabase_client import get_supabase_client
-            from ....social import enhanced_user_manager
+            from ....social.user_manager import EnhancedUserManager
             import uuid
             import mimetypes
             
@@ -1698,7 +1703,8 @@ Total: ~128.0 MB | Last updated: Just now"""
                 avatar_url = public_url
                 
                 # Update user profile with new avatar URL
-                success = enhanced_user_manager.update_user_profile(user_id, {
+                user_manager = EnhancedUserManager()
+                success = user_manager.update_user_profile(user_id, {
                     'avatar_url': avatar_url
                 })
                 
@@ -1802,42 +1808,7 @@ Total: ~128.0 MB | Last updated: Just now"""
         except Exception as e:
             logger.error(f"Error loading avatar from URL: {e}")
     
-    def test_storage_connection(self):
-        """Test if Supabase storage is working."""
-        try:
-            from ....database.supabase_client import get_supabase_client
-            from PyQt6.QtWidgets import QMessageBox
-            
-            supabase_client = get_supabase_client()
-            if not supabase_client:
-                logger.error("No Supabase client available")
-                QMessageBox.warning(self, "Storage Test", "No Supabase client available")
-                return False
-            
-            # Test listing buckets
-            buckets = supabase_client.storage.list_buckets()
-            bucket_names = [bucket.name for bucket in buckets]
-            logger.info(f"Available storage buckets: {bucket_names}")
-            
-            if 'avatars' in bucket_names:
-                logger.info("'avatars' bucket exists")
-                QMessageBox.information(self, "Storage Test", f"✅ Storage connection successful!\n\nAvailable buckets: {', '.join(bucket_names)}\n\n'avatars' bucket exists and is ready for uploads.")
-                return True
-            else:
-                logger.warning("'avatars' bucket does not exist")
-                QMessageBox.warning(
-                    self, 
-                    "Storage Test", 
-                    f"⚠️ Storage connection successful, but 'avatars' bucket is missing!\n\n"
-                    f"Available buckets: {', '.join(bucket_names)}\n\n"
-                    f"Please create a storage bucket named 'avatars' in your Supabase dashboard."
-                )
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error testing storage connection: {e}")
-            QMessageBox.critical(self, "Storage Test", f"❌ Storage connection failed!\n\nError: {str(e)}")
-            return False
+
     
     def remove_avatar(self):
         """Remove the current avatar."""
@@ -2182,7 +2153,7 @@ Total: ~128.0 MB | Last updated: Just now"""
             
             # Save to user preferences
             from ....database.supabase_client import get_supabase_client
-            from ....social import enhanced_user_manager
+            from ....social.user_manager import EnhancedUserManager
             
             supabase_client = get_supabase_client()
             if not supabase_client:
@@ -2199,7 +2170,8 @@ Total: ~128.0 MB | Last updated: Just now"""
             user_id = user_response.user.id
             
             # Update user profile with racing preferences
-            success = enhanced_user_manager.update_user_profile(user_id, {
+            user_manager = EnhancedUserManager()
+            success = user_manager.update_user_profile(user_id, {
                 "preferences": racing_settings
             })
             
@@ -2302,7 +2274,7 @@ Total: ~128.0 MB | Last updated: Just now"""
             
             # Save to user profile
             from ....database.supabase_client import get_supabase_client
-            from ....social import enhanced_user_manager
+            from ....social.user_manager import EnhancedUserManager
             
             supabase_client = get_supabase_client()
             if not supabase_client:
@@ -2319,7 +2291,8 @@ Total: ~128.0 MB | Last updated: Just now"""
             user_id = user_response.user.id
             
             # Update privacy settings
-            success = enhanced_user_manager.update_user_profile(user_id, {
+            user_manager = EnhancedUserManager()
+            success = user_manager.update_user_profile(user_id, {
                 "privacy_settings": privacy_settings
             })
             
@@ -2356,7 +2329,7 @@ Total: ~128.0 MB | Last updated: Just now"""
             
             # Collect profile data
             from ....database.supabase_client import get_supabase_client
-            from ....social import enhanced_user_manager
+            from ....social.user_manager import EnhancedUserManager
             
             supabase_client = get_supabase_client()
             if not supabase_client:
@@ -2369,7 +2342,8 @@ Total: ~128.0 MB | Last updated: Just now"""
                 return
             
             # Get complete profile
-            profile_data = enhanced_user_manager.get_complete_user_profile()
+            user_manager = EnhancedUserManager()
+            profile_data = user_manager.get_complete_user_profile()
             
             # Add export metadata
             export_data = {

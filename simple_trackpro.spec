@@ -30,6 +30,7 @@ if pyqt6_path:
             binaries_list.append((webengine_path, '.'))
             # print(f"Found Qt WebEngine file: {webengine_file}")
         else:
+            pass
             # print(f"WARNING: Missing Qt WebEngine file: {webengine_file}")
 
 # Check for vJoy DLL (optional - don't fail build if not found)
@@ -47,6 +48,7 @@ for vjoy_path in vjoy_paths:
         break
 
 if not vjoy_found:
+    pass
     # print("vJoy DLL not found on build machine - this is OK, users will install it via installer")
 
 # Check for HidHide executables (optional)
@@ -110,6 +112,12 @@ a = Analysis(
         'trackpro.auth.signup_dialog',
         'trackpro.auth.base_dialog',
         'trackpro.auth.secure_session',
+        'trackpro.auth.hierarchy_manager',
+        'trackpro.auth.phone_verification_dialog',
+        'trackpro.auth.profile_completion_dialog',
+        'trackpro.auth.sms_verification_dialog',
+        'trackpro.auth.terms_handler',
+        'trackpro.auth.twilio_service',
         
         # Pedal system
         'trackpro.pedals',
@@ -144,6 +152,10 @@ a = Analysis(
         'trackpro.race_coach.ai_coach.elevenlabs_client',
         'trackpro.race_coach.pyirsdk',
         'trackpro.race_coach.pyirsdk.irsdk',
+        'trackpro.race_coach.integrated_track_builder',
+        'trackpro.race_coach.ui.integrated_track_builder_dialog',
+        'trackpro.race_coach.ui.track_map_overlay_settings',
+        'trackpro.race_coach.telemetry_cache',
         
         # Future modules
         'future',
@@ -167,6 +179,11 @@ a = Analysis(
         'trackpro.database.base',
         'trackpro.database.user_manager',
         'trackpro.database.calibration_manager',
+        'trackpro.database.force_update_user_level',
+        'trackpro.database.refresh_user_cache',
+        'trackpro.database.run_migrations',
+        'trackpro.database.update_lawrence_to_team',
+        'trackpro.database.update_lawrence_to_team_direct',
         
         # UI components
         'trackpro.ui',
@@ -178,21 +195,36 @@ a = Analysis(
         'trackpro.ui.shared_imports',
         'trackpro.ui.theme',
         'trackpro.ui.theme_engine',
+        'trackpro.ui.achievements_ui',
+        'trackpro.ui.auth_dialogs',
+        'trackpro.ui.online_users_sidebar',
+        'trackpro.ui.update_notification_dialog',
         
         # Community system
         'trackpro.community',
         'trackpro.community.community_manager',
         'trackpro.community.community_main_widget',
+        'trackpro.community.community_account',
+        'trackpro.community.community_content',
+        'trackpro.community.community_social',
+        'trackpro.community.community_theme',
+        'trackpro.community.database_managers',
+        'trackpro.community.main_widget',
+        'trackpro.community.private_messaging_widget',
         
         # Social system
         'trackpro.social',
         'trackpro.social.achievements_manager',
         'trackpro.social.activity_manager',
+        'trackpro.social.enhanced_user_manager',
+        'trackpro.social.friends_manager',
+        'trackpro.social.reputation_manager',
         
         # Utils
         'trackpro.utils',
         'trackpro.utils.app_tracker',
         'trackpro.utils.performance_optimizer',
+        'trackpro.utils.resource_utils',
         
         # Essential PyQt6 modules for TrackPro only
         'PyQt6.QtCore',
@@ -405,19 +437,19 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='TrackPro_v1.5.5',
+    name='TrackPro_v1.5.6',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # Disabled for Windows compatibility
     upx=False,   # Disabled to avoid UPX dependency issues
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=False,
-            icon='trackpro/resources/icons/trackpro-tray-1.ico',
+            icon='trackpro/resources/icons/trackpro_tray-1.ico',
 )

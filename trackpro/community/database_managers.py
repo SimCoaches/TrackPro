@@ -177,18 +177,36 @@ class SocialManager(CommunityDatabaseManager):
     def get_friends_list(self, user_id: str) -> List[Dict]:
         """Get list of user's friends with their status"""
         try:
-            response = self.supabase.from_("friendships") \
+            # Use two separate queries to get friendships where user is either requester or addressee
+            requester_response = self.supabase.from_("friendships") \
                 .select("""
                     *,
                     requester:user_profiles!friendships_requester_id_fkey(user_id, username, display_name, avatar_url),
                     addressee:user_profiles!friendships_addressee_id_fkey(user_id, username, display_name, avatar_url)
                 """) \
-                .or_(f"requester_id.eq.{user_id},addressee_id.eq.{user_id}") \
+                .eq("requester_id", user_id) \
                 .eq("status", "accepted") \
                 .execute()
             
+            addressee_response = self.supabase.from_("friendships") \
+                .select("""
+                    *,
+                    requester:user_profiles!friendships_requester_id_fkey(user_id, username, display_name, avatar_url),
+                    addressee:user_profiles!friendships_addressee_id_fkey(user_id, username, display_name, avatar_url)
+                """) \
+                .eq("addressee_id", user_id) \
+                .eq("status", "accepted") \
+                .execute()
+            
+            # Combine results
+            response_data = []
+            if requester_response.data:
+                response_data.extend(requester_response.data)
+            if addressee_response.data:
+                response_data.extend(addressee_response.data)
+            
             friends = []
-            for friendship in response.data:
+            for friendship in response_data:
                 # Determine if current user is requester or addressee
                 if friendship['requester_id'] == user_id:
                     friend = friendship['addressee']
@@ -226,13 +244,27 @@ class SocialManager(CommunityDatabaseManager):
             
             target_user_id = target_response.data[0]['user_id']
             
-            # Check if friendship already exists
-            existing = self.supabase.from_("friendships") \
+            # Check if friendship already exists using two separate queries
+            existing1 = self.supabase.from_("friendships") \
                 .select("*") \
-                .or_(f"and(requester_id.eq.{user_id},addressee_id.eq.{target_user_id}),and(requester_id.eq.{target_user_id},addressee_id.eq.{user_id})") \
+                .eq("requester_id", user_id) \
+                .eq("addressee_id", target_user_id) \
                 .execute()
             
-            if existing.data:
+            existing2 = self.supabase.from_("friendships") \
+                .select("*") \
+                .eq("requester_id", target_user_id) \
+                .eq("addressee_id", user_id) \
+                .execute()
+            
+            # Combine results
+            existing_data = []
+            if existing1.data:
+                existing_data.extend(existing1.data)
+            if existing2.data:
+                existing_data.extend(existing2.data)
+            
+            if existing_data:
                 return False  # Friendship already exists
             
             # Create friend request
@@ -251,18 +283,40 @@ class SocialManager(CommunityDatabaseManager):
         """Get activity feed for user - includes own activities, friends' activities, and public activities"""
         try:
             # Get user's own activities (all privacy levels) + public activities from all users
-            response = self.supabase.from_("user_activities") \
+            # Use two separate queries
+            user_activities = self.supabase.from_("user_activities") \
                 .select("""
                     *,
                     user:user_profiles(username, display_name, avatar_url)
                 """) \
-                .or_(f"user_id.eq.{user_id},privacy_level.eq.public") \
+                .eq("user_id", user_id) \
                 .order("created_at", desc=True) \
                 .limit(50) \
                 .execute()
             
+            public_activities = self.supabase.from_("user_activities") \
+                .select("""
+                    *,
+                    user:user_profiles(username, display_name, avatar_url)
+                """) \
+                .eq("privacy_level", "public") \
+                .order("created_at", desc=True) \
+                .limit(50) \
+                .execute()
+            
+            # Combine results
+            response_data = []
+            if user_activities.data:
+                response_data.extend(user_activities.data)
+            if public_activities.data:
+                response_data.extend(public_activities.data)
+            
+            # Sort by created_at and limit to 50
+            response_data.sort(key=lambda x: x['created_at'], reverse=True)
+            response_data = response_data[:50]
+            
             activities = []
-            for activity in response.data:
+            for activity in response_data:
                 # Get interaction count
                 interactions = self.supabase.from_("activity_interactions") \
                     .select("interaction_type") \

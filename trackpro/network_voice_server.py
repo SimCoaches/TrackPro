@@ -489,9 +489,9 @@ async def main():
         # Create server instance
         server = NetworkVoiceServer()
         
-        # Get local IP and port
+        # Get local IP and port from environment variable
         local_ip = server.get_local_ip()
-        server_port = 8080
+        server_port = int(os.environ.get('VOICE_SERVER_PORT', 8080))
         
         # Start WebSocket server on all interfaces
         start_server = websockets.serve(

@@ -175,7 +175,7 @@ class UpdateNotificationDialog(QFrame):
     def setup_animations(self):
         """Set up slide-in animation from bottom-left corner."""
         # Position the notification in the bottom-left corner
-        if self.parent():
+        if self.parent() is not None:
             parent_rect = self.parent().geometry()
             self.move(
                 60,  # 60px from left edge (moved further to the right to avoid account button)

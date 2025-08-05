@@ -922,7 +922,11 @@ class AddFriendDialog(QDialog):
                 QMessageBox.information(self, "Success", "Friend request sent!")
                 self.accept()
             else:
-                QMessageBox.warning(self, "Error", result['message'])
+                # Show specific popup for already sent friend request
+                if result['message'] == "Friend request already sent":
+                    QMessageBox.information(self, "Friend Request", "You've already sent this user a request!")
+                else:
+                    QMessageBox.warning(self, "Error", result['message'])
         except Exception as e:
             logger.error(f"Error sending friend request: {e}")
 

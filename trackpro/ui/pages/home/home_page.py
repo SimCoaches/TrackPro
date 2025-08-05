@@ -112,6 +112,11 @@ class HomePage(BasePage):
         
         # Authentication buttons container (initially hidden)
         self.auth_buttons_container = QWidget()
+        self.auth_buttons_container.setStyleSheet("""
+            QWidget {
+                background-color: transparent;
+            }
+        """)
         auth_buttons_layout = QVBoxLayout(self.auth_buttons_container)
         auth_buttons_layout.setSpacing(10)
         auth_buttons_layout.setContentsMargins(0, 10, 0, 0)

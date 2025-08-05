@@ -13,9 +13,9 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer, Qt
 
 # Import authentication and database components
-from .database import supabase
-from .auth.oauth_handler import OAuthHandler
-from .ui.modern import ModernMainWindow
+from trackpro.database import supabase
+from trackpro.auth.oauth_handler import OAuthHandler
+from trackpro.ui.modern import ModernMainWindow
 
 logger = logging.getLogger(__name__)
 
@@ -165,14 +165,15 @@ class ModernTrackProApp:
             # Ensure OAuth callback server is ready immediately
             self.ensure_oauth_server_ready()
             
-            # PERFORMANCE: Single auth check during startup
-            is_authenticated = supabase.is_authenticated()
-            self.handle_auth_state_change(is_authenticated)
+            # PERFORMANCE: Non-blocking auth check during startup
+            # Don't block the UI for authentication check - do it in background
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, self.perform_background_auth_check)
             
             # Connect window closing to cleanup
             self.window.destroyed.connect(self.cleanup)
             
-            logger.info("✅ Modern main window created with authentication")
+            logger.info("✅ Modern main window created with non-blocking authentication")
             
         except Exception as e:
             logger.error(f"❌ Error creating main window: {e}")
@@ -182,6 +183,40 @@ class ModernTrackProApp:
         """Handle authentication state changes."""
         try:
             logger.info(f"🔐 Authentication state changed: {is_authenticated}")
+            
+            # Update online status
+            if is_authenticated:
+                # Set user as online (status = 1)
+                try:
+                    from trackpro.database.supabase_client import get_supabase_client
+                    from trackpro.social.user_manager import EnhancedUserManager
+                    
+                    client = get_supabase_client()
+                    if client:
+                        session = client.auth.get_session()
+                        if session and hasattr(session, 'user'):
+                            user_id = session.user.id
+                            user_manager = EnhancedUserManager()
+                            user_manager.update_online_status(user_id, True)
+                            logger.info(f"✅ Set user {user_id} as online")
+                except Exception as e:
+                    logger.warning(f"Could not set user as online: {e}")
+            else:
+                # Set user as offline (status = 0)
+                try:
+                    from trackpro.database.supabase_client import get_supabase_client
+                    from trackpro.social.user_manager import EnhancedUserManager
+                    
+                    client = get_supabase_client()
+                    if client:
+                        session = client.auth.get_session()
+                        if session and hasattr(session, 'user'):
+                            user_id = session.user.id
+                            user_manager = EnhancedUserManager()
+                            user_manager.update_online_status(user_id, False)
+                            logger.info(f"✅ Set user {user_id} as offline")
+                except Exception as e:
+                    logger.warning(f"Could not set user as offline: {e}")
             
             # Update window authentication state
             if hasattr(self.window, 'update_auth_state'):
@@ -194,10 +229,45 @@ class ModernTrackProApp:
         except Exception as e:
             logger.error(f"❌ Error handling auth state change: {e}")
     
+    def perform_background_auth_check(self):
+        """Perform authentication check in background without blocking UI."""
+        try:
+            logger.info("🔐 Performing background authentication check...")
+            
+            # Check if Supabase is enabled first (fast local check)
+            from trackpro.config import config
+            if not config.supabase_enabled:
+                logger.info("Supabase disabled in config - skipping auth check")
+                self.handle_auth_state_change(False)
+                return
+            
+            # Try a quick local session check first
+            try:
+                # Check if we have a local session file (fast check)
+                import os
+                auth_file = os.path.join(os.path.expanduser("~"), ".trackpro", "auth.json")
+                if os.path.exists(auth_file):
+                    logger.info("Found local auth file - attempting quick session restore")
+                    # This will be fast if session is valid
+                    is_authenticated = supabase.is_authenticated()
+                    self.handle_auth_state_change(is_authenticated)
+                else:
+                    logger.info("No local auth file found - user not authenticated")
+                    self.handle_auth_state_change(False)
+            except Exception as e:
+                logger.warning(f"Background auth check failed: {e}")
+                # Don't block UI - assume not authenticated
+                self.handle_auth_state_change(False)
+                
+        except Exception as e:
+            logger.error(f"❌ Error in background auth check: {e}")
+            # Don't block UI - assume not authenticated
+            self.handle_auth_state_change(False)
+    
     def show_login_dialog(self):
         """Show the login dialog."""
         try:
-            from .auth.login_dialog import LoginDialog
+            from trackpro.auth.login_dialog import LoginDialog
             
             # Create and show login dialog
             login_dialog = LoginDialog(self.window, oauth_handler=self.oauth_handler)
@@ -350,6 +420,17 @@ class ModernTrackProApp:
         self.cleanup_completed = True
         
         try:
+
+            
+            # Clean up system tray icon first
+            if self.window and hasattr(self.window, 'tray_icon') and self.window.tray_icon:
+                try:
+                    self.window.tray_icon.hide()
+                    self.window.tray_icon.deleteLater()
+                    logger.info("✅ System tray icon cleaned up from main app")
+                except Exception as e:
+                    logger.error(f"Error cleaning up tray icon from main app: {e}")
+            
             # Shutdown OAuth callback server
             if hasattr(self, 'oauth_callback_server') and self.oauth_callback_server:
                 try:

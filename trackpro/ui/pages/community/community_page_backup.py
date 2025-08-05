@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QBrush
+from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QBrush, QPen
 from PyQt6.QtMultimedia import QMediaDevices, QAudioInput, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 import wave
@@ -439,83 +439,49 @@ class ChatMessageWidget(QWidget):
     
     def create_avatar(self):
         """Create a circular avatar with user profile picture or initials."""
-        pixmap = QPixmap(32, 32)
+        size = 32
+        pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Try to get avatar URL from message data
+        # Get user data from message - check multiple sources for avatar URL
         avatar_url = None
-        if self.message_data.get('user_display_info'):
-            avatar_url = self.message_data['user_display_info'].get('avatar_url')
-        elif self.message_data.get('user_profiles'):
-            avatar_url = self.message_data['user_profiles'].get('avatar_url')
-        elif self.message_data.get('sender_avatar_url'):
-            avatar_url = self.message_data['sender_avatar_url']
         
-        # Try to load profile picture if URL is available
+        # Check user_profiles first (most common)
+        user_profiles = self.message_data.get('user_profiles', {})
+        if user_profiles and user_profiles.get('avatar_url'):
+            avatar_url = user_profiles['avatar_url']
+        
+        # Check user_display_info if not found in user_profiles
+        if not avatar_url:
+            user_display_info = self.message_data.get('user_display_info', {})
+            if user_display_info and user_display_info.get('avatar_url'):
+                avatar_url = user_display_info['avatar_url']
+        
+        # Check direct avatar_url field
+        if not avatar_url:
+            avatar_url = self.message_data.get('avatar_url')
+        
+        # Load avatar from URL if available
         if avatar_url:
-            try:
-                from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-                from PyQt6.QtCore import QUrl
-                
-                # Create network manager for downloading image
-                manager = QNetworkAccessManager()
-                request = QNetworkRequest(QUrl(avatar_url))
-                
-                # For now, we'll create a placeholder and load the image asynchronously
-                # This is a simplified approach - in production you'd want proper async loading
-                import requests
-                import io
-                from PIL import Image
-                
-                try:
-                    response = requests.get(avatar_url, timeout=5)
-                    if response.status_code == 200:
-                        # Convert to QPixmap
-                        image_data = response.content
-                        image = QPixmap()
-                        if image.loadFromData(image_data):
-                            # Scale and make circular
-                            scaled_image = image.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                            
-                            # Create circular mask
-                            mask = QPixmap(32, 32)
-                            mask.fill(Qt.GlobalColor.transparent)
-                            mask_painter = QPainter(mask)
-                            mask_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            mask_painter.setBrush(QBrush(Qt.GlobalColor.white))
-                            mask_painter.setPen(Qt.PenStyle.NoPen)
-                            mask_painter.drawEllipse(0, 0, 32, 32)
-                            mask_painter.end()
-                            
-                            # Apply mask to create circular image
-                            circular_image = scaled_image.copy()
-                            circular_image.setMask(mask.createMaskFromColor(Qt.GlobalColor.transparent))
-                            
-                            painter.drawPixmap(0, 0, circular_image)
-                            painter.end()
-                            return pixmap
-                except Exception as e:
-                    logger.debug(f"Failed to load avatar from URL {avatar_url}: {e}")
-                    # Fall through to initials
-            except Exception as e:
-                logger.debug(f"Error loading avatar: {e}")
-                # Fall through to initials
+            return self.load_avatar_from_url(avatar_url, size)
         
-        # Fallback to initials-based avatar
-        name = self.message_data.get('sender_name')
-        logger.info(f"🔍 Avatar creation - sender_name: {name}")
+        # Fallback to initials if no avatar URL
+        # Get user name from multiple sources
+        name = self.message_data.get('sender_name', 'U')
         
-        # Try to get name from user_profiles first
-        if not name and self.message_data.get('user_profiles'):
-            user_profile = self.message_data['user_profiles']
-            name = user_profile.get('display_name') or user_profile.get('username') or 'U'
-            logger.info(f"🔍 Avatar creation - from user_profiles: {name}")
+        # Try to get from user_profiles
+        user_profiles = self.message_data.get('user_profiles', {})
+        if name == 'U' and user_profiles:
+            name = user_profiles.get('display_name') or user_profiles.get('username') or 'U'
         
-        # If still no name, try to get from current user context
-        if not name:
+        # Try to get from user_display_info
+        if name == 'U':
+            user_display_info = self.message_data.get('user_display_info', {})
+            if user_display_info:
+                name = user_display_info.get('display_name') or user_display_info.get('username') or 'U'
+        
+        # For current user, try to get from user manager
+        if not name or name == 'U':
             try:
                 from trackpro.auth.user_manager import get_current_user
                 user = get_current_user()
@@ -523,26 +489,31 @@ class ChatMessageWidget(QWidget):
                     # Check if this is the current user's message
                     if self.message_data.get('sender_id') == user.id:
                         name = user.name or user.email or 'You'
-                        logger.info(f"🔍 Avatar creation - current user: {name}")
                     else:
                         name = 'U'
-                        logger.info(f"🔍 Avatar creation - unknown user: {name}")
                 else:
                     name = 'U'
-                    logger.info(f"🔍 Avatar creation - no current user: {name}")
             except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
                 logger.debug(f"Could not get current user for avatar: {e}")
                 name = 'U'
-                logger.info(f"🔍 Avatar creation - using fallback: {name}")
-            
+        
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in name.split()][:2])
+        
+        # Create pixmap for avatar
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw circle background using TrackPro colors
         colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
         color_index = hash(name) % len(colors)
         painter.setBrush(QBrush(QColor(colors[color_index])))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, 32, 32)
+        painter.drawEllipse(0, 0, size, size)
         
         # Draw initials
-        initials = ''.join([word[0].upper() for word in name.split()][:2])
         painter.setPen(QColor('#ffffff'))
         font = painter.font()
         font.setPixelSize(12)
@@ -553,6 +524,135 @@ class ChatMessageWidget(QWidget):
         painter.end()
         return pixmap
     
+    def load_avatar_from_url(self, url: str, size: int = 32) -> QPixmap:
+        """Load and display avatar from URL."""
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+            from PyQt6.QtCore import QUrl
+            
+            # Create network manager if it doesn't exist
+            if not hasattr(self, 'network_manager'):
+                self.network_manager = QNetworkAccessManager(self)
+            
+            # Download image
+            request = QNetworkRequest(QUrl(url))
+            reply = self.network_manager.get(request)
+            
+            def on_avatar_downloaded():
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        image_data = reply.readAll()
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(image_data)
+                        
+                        # Scale and crop to circle
+                        if not pixmap.isNull():
+                            # Scale to fit avatar size
+                            scaled_pixmap = pixmap.scaled(
+                                size, size, 
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                            
+                            # Create circular mask
+                            circular_pixmap = QPixmap(size, size)
+                            circular_pixmap.fill(Qt.GlobalColor.transparent)
+                            
+                            try:
+                                painter = QPainter(circular_pixmap)
+                                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                                painter.setBrush(QBrush(scaled_pixmap))
+                                painter.setPen(QPen(Qt.GlobalColor.transparent))
+                                painter.drawEllipse(0, 0, size, size)
+                                painter.end()
+                            except RuntimeError:
+                                # Painting device might be destroyed, create a simple fallback
+                                circular_pixmap = self.create_fallback_avatar(size)
+                            
+                            # Update avatar display if this widget is still valid
+                            if hasattr(self, 'avatar_label') and self.avatar_label and not self.isHidden():
+                                try:
+                                    self.avatar_label.setPixmap(circular_pixmap)
+                                except RuntimeError:
+                                    # Widget might be destroyed, ignore the error
+                                    pass
+                    
+                    reply.deleteLater()
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error processing downloaded avatar: {e}")
+                    # Fallback to initials
+                    fallback_pixmap = self.create_fallback_avatar(size)
+                    if hasattr(self, 'avatar_label') and self.avatar_label and not self.isHidden():
+                        try:
+                            self.avatar_label.setPixmap(fallback_pixmap)
+                        except RuntimeError:
+                            # Widget might be destroyed, ignore the error
+                            pass
+            
+            reply.finished.connect(on_avatar_downloaded)
+            
+            # Return a placeholder pixmap while loading
+            placeholder = QPixmap(size, size)
+            placeholder.fill(Qt.GlobalColor.transparent)
+            return placeholder
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            return self.create_fallback_avatar(size)
+    
+    def create_fallback_avatar(self, size: int = 32) -> QPixmap:
+        """Create a fallback avatar with initials when image loading fails."""
+        # Get user name from message data
+        name = self.message_data.get('sender_name', 'U')
+        
+        # Try to get from user_profiles
+        user_profiles = self.message_data.get('user_profiles', {})
+        if name == 'U' and user_profiles:
+            name = user_profiles.get('display_name') or user_profiles.get('username') or 'U'
+        
+        # Try to get from user_display_info
+        if name == 'U':
+            user_display_info = self.message_data.get('user_display_info', {})
+            if user_display_info:
+                name = user_display_info.get('display_name') or user_display_info.get('username') or 'U'
+        
+        # Generate initials from the name
+        initials = ''.join([word[0].upper() for word in name.split()][:2])
+        
+        # Create pixmap for avatar
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        try:
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            # Draw circle background using TrackPro colors
+            colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
+            color_index = hash(name) % len(colors)
+            painter.setBrush(QBrush(QColor(colors[color_index])))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(0, 0, size, size)
+            
+            # Draw initials
+            painter.setPen(QColor('#ffffff'))
+            font = painter.font()
+            font.setPixelSize(size // 3)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
+            
+            painter.end()
+        except RuntimeError:
+            # If painting fails, create a simple colored square
+            pixmap.fill(QColor('#3498db'))
+        return pixmap
+    
     def setup_ui(self):
         """Setup the message UI."""
         layout = QHBoxLayout(self)
@@ -560,10 +660,10 @@ class ChatMessageWidget(QWidget):
         layout.setSpacing(8)
         
         # User avatar
-        avatar_label = QLabel()
-        avatar_label.setFixedSize(32, 32)
-        avatar_label.setPixmap(self.create_avatar())
-        layout.addWidget(avatar_label)
+        self.avatar_label = QLabel()
+        self.avatar_label.setFixedSize(32, 32)
+        self.avatar_label.setPixmap(self.create_avatar())
+        layout.addWidget(self.avatar_label)
         
         # Message content
         content_layout = QVBoxLayout()
@@ -603,6 +703,11 @@ class ChatMessageWidget(QWidget):
                 logger.debug(f"Could not get current user for username: {e}")
                 sender_name = 'Unknown'
                 logger.info(f"🔍 Username display - using fallback: {sender_name}")
+        
+        # If we still don't have a name, use a default
+        if not sender_name:
+            sender_name = 'Unknown'
+            logger.info(f"🔍 Username display - using default: {sender_name}")
             
         username_label = QLabel(sender_name)
         role_color = ROLE_COLORS.get(self.user_role, ROLE_COLORS['newbie'])
@@ -1496,24 +1601,37 @@ class ChatChannelWidget(QWidget):
             self.messages_list.scrollToBottom()
         except Exception as e:
             logger.error(f"Error adding message to chat: {e}")
+    
+    def clear_messages(self):
+        """Clear all messages from the chat display."""
+        try:
+            # Clear all items from the QListWidget
+            self.messages_list.clear()
+            
+            logger.info("✅ Cleared all messages from chat display")
+            
+        except Exception as e:
+            logger.error(f"❌ Error clearing messages: {e}")
 
 
 class CommunityPage(BasePage):
     """Community page with Discord-inspired design and voice chat."""
     
-    # Class-level flag to prevent multiple initializations during startup
+    # Class-level flags to prevent multiple initializations during startup
     _global_initialization_in_progress = False
     _instance_count = 0
     _heavy_components_initialized = False  # Add flag to prevent duplicate heavy initialization
     _channels_loaded = False  # Class-level flag to prevent duplicate channel loading
     _private_messages_loaded = False  # Class-level flag to prevent duplicate private message loading
+    _initialization_lock = threading.Lock()  # Thread safety for initialization
     
     def __init__(self, global_managers=None):
         super().__init__("community", global_managers)
         
         # Initialize instance counter
-        CommunityPage._instance_count += 1
-        self.instance_id = CommunityPage._instance_count
+        with self._initialization_lock:
+            CommunityPage._instance_count += 1
+            self.instance_id = CommunityPage._instance_count
         
         logger.info(f"🔄 Initializing CommunityPage (instance #{self.instance_id})")
         
@@ -1533,18 +1651,12 @@ class CommunityPage(BasePage):
         self.private_messages = []
         self.current_private_conversation = None
         self.voice_channels = {}  # Track voice channels for cleanup
+        self.chat_history = {}  # Track chat history for each channel
         
         # Initialize state flags
         self._initialization_complete = False
         self._user_state_refreshed = False
         self._activation_complete = False
-        
-        # Initialize message caching and lazy loading
-        self._message_cache = {}  # Cache for loaded messages by channel_id
-        self._message_cache_timestamps = {}  # Track when cache was last updated
-        self._lazy_loading_enabled = True  # Enable lazy loading by default
-        self._messages_per_page = 20  # Number of messages to load per page
-        self._loaded_message_counts = {}  # Track how many messages loaded per channel
         
         # Initialize UI
         self.setup_ui()
@@ -1569,10 +1681,11 @@ class CommunityPage(BasePage):
     @classmethod
     def reset_instance_counter(cls):
         """Reset the instance counter (for testing purposes)."""
-        cls._instance_count = 0
-        cls._heavy_components_initialized = False
-        cls._channels_loaded = False
-        cls._private_messages_loaded = False
+        with cls._initialization_lock:
+            cls._instance_count = 0
+            cls._heavy_components_initialized = False
+            cls._channels_loaded = False
+            cls._private_messages_loaded = False
     
     def setup_ui(self):
         """Setup the community page layout."""
@@ -1771,7 +1884,7 @@ class CommunityPage(BasePage):
         self.add_friend_btn = QPushButton("+ Add Friend")
         self.add_friend_btn.setStyleSheet("""
             QPushButton {
-                background-color: #5865f2;
+                background-color: #3498db;
                 border: none;
                 border-radius: 4px;
                 color: #ffffff;
@@ -1781,10 +1894,10 @@ class CommunityPage(BasePage):
                 margin: 4px 16px;
             }
             QPushButton:hover {
-                background-color: #4752c4;
+                background-color: #2980b9;
             }
             QPushButton:pressed {
-                background-color: #3c45a5;
+                background-color: #1f5f35;
             }
         """)
         self.add_friend_btn.clicked.connect(self.on_add_friend_clicked)
@@ -1812,15 +1925,15 @@ class CommunityPage(BasePage):
         scroll_layout.addWidget(self.friends_list)
         
         # Friend requests section
-        friend_requests_header = QLabel("FRIEND REQUESTS")
-        friend_requests_header.setStyleSheet("""
+        requests_header = QLabel("FRIEND REQUESTS")
+        requests_header.setStyleSheet("""
             color: #888888; 
             font-size: 12px; 
             font-weight: bold; 
             padding: 8px 16px 4px 16px;
             background-color: #1e1e1e;
         """)
-        scroll_layout.addWidget(friend_requests_header)
+        scroll_layout.addWidget(requests_header)
         
         # Friend requests list
         self.friend_requests_list = QListWidget()
@@ -2078,8 +2191,29 @@ class CommunityPage(BasePage):
                 # Update input field state based on authentication
                 self.update_input_field_state()
                 
-                # Load messages for this channel using lazy loading
-                self.load_messages_for_channel(channel_id, chat_widget)
+                # Load messages for this channel
+                if self.community_manager:
+                    try:
+                        messages = self.community_manager.get_messages(channel_id)
+                        for message in messages:
+                            chat_widget.add_message(message)
+                        logger.info(f"✅ Loaded {len(messages)} messages for channel {channel_id}")
+                        # Scroll to bottom to show newest messages
+                        chat_widget.messages_list.scrollToBottom()
+                    except Exception as e:
+                        logger.error(f"Error loading messages for channel {channel_id}: {e}")
+                else:
+                    # Fallback: load from local chat history
+                    if channel_id in self.chat_history:
+                        for message in self.chat_history[channel_id]:
+                            chat_widget.add_message(message)
+                        logger.info(f"✅ Loaded {len(self.chat_history[channel_id])} local messages for channel {channel_id}")
+                        # Scroll to bottom to show newest messages
+                        chat_widget.messages_list.scrollToBottom()
+                    else:
+                        # Initialize empty chat history for this channel
+                        self.chat_history[channel_id] = []
+                        logger.info(f"✅ Initialized empty chat history for channel {channel_id}")
         except Exception as e:
             logger.error(f"❌ Error creating channel widget: {e}")
             import traceback
@@ -2089,149 +2223,6 @@ class CommunityPage(BasePage):
         """Get default messages for each channel."""
         # Start with empty messages for all channels
         return []
-    
-    def load_messages_for_channel(self, channel_id: str, chat_widget=None):
-        """Load messages for a channel using lazy loading and caching."""
-        try:
-            logger.info(f"🔄 Loading messages for channel {channel_id} using lazy loading")
-            
-            # Check if we have cached messages that are recent (within 30 seconds)
-            cache_timestamp = self._message_cache_timestamps.get(channel_id, 0)
-            current_time = time.time()
-            cache_age = current_time - cache_timestamp
-            
-            if channel_id in self._message_cache and cache_age < 30:
-                # Use cached messages
-                cached_messages = self._message_cache[channel_id]
-                logger.info(f"📋 Using cached messages for channel {channel_id} ({len(cached_messages)} messages)")
-                
-                if chat_widget:
-                    for message in cached_messages:
-                        chat_widget.add_message(message)
-                
-                return cached_messages
-            
-            # Load messages from database with pagination
-            if self.community_manager:
-                try:
-                    # Load only the most recent messages initially
-                    messages = self.community_manager.get_messages(channel_id, limit=self._messages_per_page)
-                    
-                    # Cache the messages
-                    self._message_cache[channel_id] = messages
-                    self._message_cache_timestamps[channel_id] = current_time
-                    self._loaded_message_counts[channel_id] = len(messages)
-                    
-                    logger.info(f"✅ Loaded {len(messages)} messages for channel {channel_id} (lazy loading)")
-                    
-                    # Add messages to UI if widget provided
-                    if chat_widget:
-                        for message in messages:
-                            chat_widget.add_message(message)
-                    
-                    return messages
-                    
-                except Exception as e:
-                    logger.error(f"Error loading messages for channel {channel_id}: {e}")
-                    return []
-            else:
-                # Fallback: load from local chat history
-                if channel_id in self.chat_history:
-                    messages = self.chat_history[channel_id]
-                    logger.info(f"✅ Loaded {len(messages)} local messages for channel {channel_id}")
-                    
-                    if chat_widget:
-                        for message in messages:
-                            chat_widget.add_message(message)
-                    
-                    return messages
-                else:
-                    # Initialize empty chat history for this channel
-                    self.chat_history[channel_id] = []
-                    logger.info(f"✅ Initialized empty chat history for channel {channel_id}")
-                    return []
-                    
-        except Exception as e:
-            logger.error(f"Error in load_messages_for_channel: {e}")
-            return []
-    
-    def load_more_messages_for_channel(self, channel_id: str, chat_widget=None):
-        """Load more messages for a channel (pagination)."""
-        try:
-            logger.info(f"🔄 Loading more messages for channel {channel_id}")
-            
-            if not self.community_manager:
-                logger.warning("Community manager not available for loading more messages")
-                return
-            
-            # Get current loaded count
-            current_count = self._loaded_message_counts.get(channel_id, 0)
-            
-            # Load additional messages
-            additional_messages = self.community_manager.get_messages(
-                channel_id, 
-                limit=self._messages_per_page,
-                offset=current_count
-            )
-            
-            if additional_messages:
-                # Update cache with new messages
-                if channel_id in self._message_cache:
-                    self._message_cache[channel_id].extend(additional_messages)
-                else:
-                    self._message_cache[channel_id] = additional_messages
-                
-                self._loaded_message_counts[channel_id] = current_count + len(additional_messages)
-                
-                logger.info(f"✅ Loaded {len(additional_messages)} additional messages for channel {channel_id}")
-                
-                # Add messages to UI if widget provided
-                if chat_widget:
-                    for message in additional_messages:
-                        chat_widget.add_message(message)
-                
-                return additional_messages
-            else:
-                logger.info(f"📭 No more messages available for channel {channel_id}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"Error loading more messages for channel {channel_id}: {e}")
-            return []
-    
-    def clear_message_cache(self, channel_id: str = None):
-        """Clear message cache for a specific channel or all channels."""
-        try:
-            if channel_id:
-                if channel_id in self._message_cache:
-                    del self._message_cache[channel_id]
-                if channel_id in self._message_cache_timestamps:
-                    del self._message_cache_timestamps[channel_id]
-                if channel_id in self._loaded_message_counts:
-                    del self._loaded_message_counts[channel_id]
-                logger.info(f"🗑️ Cleared message cache for channel {channel_id}")
-            else:
-                self._message_cache.clear()
-                self._message_cache_timestamps.clear()
-                self._loaded_message_counts.clear()
-                logger.info("🗑️ Cleared all message caches")
-        except Exception as e:
-            logger.error(f"Error clearing message cache: {e}")
-    
-    def refresh_messages_for_channel(self, channel_id: str, chat_widget=None):
-        """Refresh messages for a channel (clear cache and reload)."""
-        try:
-            logger.info(f"🔄 Refreshing messages for channel {channel_id}")
-            
-            # Clear cache for this channel
-            self.clear_message_cache(channel_id)
-            
-            # Reload messages
-            return self.load_messages_for_channel(channel_id, chat_widget)
-            
-        except Exception as e:
-            logger.error(f"Error refreshing messages for channel {channel_id}: {e}")
-            return []
     
     def on_message_sent(self, message_text):
         """Handle message sent."""
@@ -2378,10 +2369,8 @@ class CommunityPage(BasePage):
     
     def update_input_field_state(self):
         """Update the message input field state based on authentication."""
-        # Prevent multiple updates
-        if hasattr(self, '_input_field_updated') and self._input_field_updated:
-            logger.info("🔄 Input field state already updated, skipping")
-            return
+        # Reset the flag to allow updates
+        self._input_field_updated = False
         
         try:
             # Check if user is authenticated
@@ -2391,6 +2380,7 @@ class CommunityPage(BasePage):
             is_authenticated = False
             if user and user.is_authenticated:
                 is_authenticated = True
+                logger.info(f"✅ User authenticated via user manager: {user.email}")
             else:
                 # Try to get user from Supabase session directly
                 try:
@@ -2400,6 +2390,11 @@ class CommunityPage(BasePage):
                         session = client.auth.get_session()
                         if session and hasattr(session, 'user'):
                             is_authenticated = True
+                            logger.info(f"✅ User authenticated via Supabase session: {session.user.email}")
+                        else:
+                            logger.warning("❌ Supabase session found but no user")
+                    else:
+                        logger.warning("❌ No Supabase session found")
                 except Exception as e:
                     logger.debug(f"Could not check Supabase session: {e}")
             
@@ -2423,6 +2418,7 @@ class CommunityPage(BasePage):
                                 border: 1px solid #3498db;
                             }
                         """)
+                        logger.info("✅ Input field enabled for authenticated user")
                     else:
                         input_field.setEnabled(False)
                         input_field.setPlaceholderText("Please log in to send messages")
@@ -2436,7 +2432,7 @@ class CommunityPage(BasePage):
                                 font-size: 13px;
                             }
                         """)
-                    logger.info(f"Updated input field state - authenticated: {is_authenticated}")
+                        logger.warning("❌ Input field disabled - user not authenticated")
             
             self._input_field_updated = True
         except Exception as e:
@@ -2445,57 +2441,103 @@ class CommunityPage(BasePage):
     
     def on_page_activated(self):
         """Called when the page is activated."""
-        logger.info("🔄 Community page activated")
-        
-        # Add a small delay to prevent rapid-fire initialization attempts
-        import time
-        if hasattr(self, '_last_activation_time'):
-            time_since_last = time.time() - self._last_activation_time
-            if time_since_last < 1.0:  # Less than 1 second since last activation
-                logger.info(f"🔄 Activation too soon ({time_since_last:.2f}s), skipping")
-                return
-        self._last_activation_time = time.time()
-        
-        # Initialize heavy components if not already done (from pre-loading)
-        if not hasattr(self, '_initialization_complete') or not self._initialization_complete:
-            logger.info("🔄 Heavy components not yet initialized, waiting for pre-loading to complete...")
-            # Wait a bit for pre-loading to finish
-            import time
-            time.sleep(0.5)
-        
-        # Only proceed with activation-specific tasks if not already done
-        if not hasattr(self, '_activation_complete') or not self._activation_complete:
-            # Refresh user state and set current user for community manager
+        try:
+            logger.info("🚀 Community page activated")
+            
+            # Force authentication refresh first
+            self.force_auth_refresh()
+            
+            # Test database connection and user authentication
+            self.test_database_connection()
+            
+            # Set current user again to ensure it's properly set
+            self.set_current_user()
+            
+            # Refresh user state
             self.refresh_user_state()
             
-            # Update input field state based on authentication
-            self.update_input_field_state()
+            # Load channels and messages if not already loaded
+            if not hasattr(self, '_channels_loaded') or not self._channels_loaded:
+                self.load_channels_from_database()
             
-            # Refresh friends list to ensure it's loaded properly
-            logger.info("🔄 Refreshing friends list on page activation...")
+            if not hasattr(self, '_private_messages_loaded') or not self._private_messages_loaded:
+                self.load_private_messages()
+            
+            # Load friends list and friend requests
             self.load_friends_list()
             self.load_friend_requests()
             
-            # Check voice server status (already started during pre-loading)
-            if VOICE_COMPONENTS_AVAILABLE:
+            # Start message polling when page is active
+            self._start_message_polling()
+            
+            logger.info("✅ Community page activation complete")
+            
+        except Exception as e:
+            logger.error(f"❌ Error during community page activation: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+    
+    def force_auth_refresh(self):
+        """Force refresh the authentication state."""
+        try:
+            logger.info("🔄 Forcing authentication refresh...")
+            
+            # Clear user manager cache
+            import trackpro.auth.user_manager
+            trackpro.auth.user_manager._current_user = None
+            logger.info("✅ Cleared user manager cache")
+            
+            # Force Supabase client refresh
+            from trackpro.database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            
+            if client:
                 try:
-                    if is_voice_server_running():
-                        logger.info("✅ Voice server is running (started during pre-loading)")
+                    session = client.auth.get_session()
+                    if session and hasattr(session, 'user'):
+                        logger.info(f"✅ Fresh Supabase session: {session.user.email}")
+                        
+                        # Force user manager to create new user object
+                        from trackpro.auth.user_manager import get_current_user
+                        user = get_current_user()
+                        
+                        if user and user.is_authenticated:
+                            logger.info(f"✅ User manager refreshed: {user.email}")
+                        else:
+                            logger.warning("❌ User manager still not authenticated after refresh")
                     else:
-                        logger.warning("⚠️ Voice server not running, may need manual start")
+                        logger.warning("❌ No fresh Supabase session available")
                 except Exception as e:
-                    logger.error(f"❌ Failed to check voice server status: {e}")
+                    logger.error(f"❌ Error refreshing Supabase session: {e}")
             
-            # Data already loaded during pre-loading
-            logger.info("📋 Channels and messages already loaded during pre-loading")
+            # Reset input field update flag to force refresh
+            self._input_field_updated = False
             
-            self._activation_complete = True
-            logger.info("✅ Community page activation completed")
-        else:
-            logger.info("🔄 Community page already activated, skipping re-initialization")
+        except Exception as e:
+            logger.error(f"❌ Error forcing auth refresh: {e}")
+    
+    def on_page_deactivated(self):
+        """Called when the page is deactivated."""
+        try:
+            logger.info("🛑 Community page deactivated")
+            
+            # Stop message polling when page is not active
+            self._stop_message_polling()
+            
+            logger.info("✅ Community page deactivation complete")
+            
+        except Exception as e:
+            logger.error(f"❌ Error during community page deactivation: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
     
     def _initialize_heavy_components(self):
         """Initialize heavy components that were deferred during construction."""
+        # Prevent duplicate initialization
+        if CommunityPage._heavy_components_initialized:
+            logger.info("🔄 Heavy components already initialized, skipping")
+            return
+            
         try:
             logger.info("🏗️ Initializing heavy community components...")
             
@@ -2504,20 +2546,9 @@ class CommunityPage(BasePage):
                 logger.info("🔧 Attempting to initialize CommunityManager...")
                 from trackpro.community.community_manager import CommunityManager
                 
-                # Check if CommunityManager has get_instance method (singleton pattern)
-                if hasattr(CommunityManager, 'get_instance'):
-                    self.community_manager = CommunityManager.get_instance()
-                    logger.info("✅ CommunityManager instance created using singleton pattern")
-                else:
-                    # Create normal instance if singleton pattern not implemented
-                    self.community_manager = CommunityManager()
-                    logger.info("✅ CommunityManager instance created normally")
-                
-                if self._community_manager:
-                    logger.info("✅ CommunityManager instance created successfully")
-                else:
-                    logger.error("❌ CommunityManager creation returned None")
-                    self._community_manager = None
+                # Use singleton pattern
+                self.community_manager = CommunityManager()
+                logger.info("✅ CommunityManager instance created successfully")
                 
             except ImportError as import_error:
                 logger.error(f"❌ Failed to import CommunityManager: {import_error}")
@@ -2530,25 +2561,6 @@ class CommunityPage(BasePage):
             
             # Set current user
             self.set_current_user()
-            
-            # Add a small delay to ensure user is set before loading data
-            import time
-            time.sleep(0.5)
-            
-            # Verify current user is set
-            if hasattr(self, '_community_manager') and self._community_manager:
-                current_user_id = self._community_manager.get_current_user_id()
-                if not current_user_id:
-                    logger.warning("⚠️ Current user not set, retrying...")
-                    self.set_current_user()
-                    time.sleep(0.5)
-                    current_user_id = self._community_manager.get_current_user_id()
-                    if current_user_id:
-                        logger.info(f"✅ Current user set after retry: {current_user_id}")
-                    else:
-                        logger.error("❌ Failed to set current user after retry")
-                else:
-                    logger.info(f"✅ Current user already set: {current_user_id}")
             
             # START VOICE SERVER DURING PRE-LOADING FOR FASTER ACCESS
             if VOICE_COMPONENTS_AVAILABLE:
@@ -2567,12 +2579,6 @@ class CommunityPage(BasePage):
                 logger.info("📋 Loading channels and messages during pre-loading...")
                 self.load_channels_from_database()
                 self.load_private_messages()
-                self.load_friends_list()
-                self.load_friend_requests()
-                
-                # Add debug button for testing
-                self.add_debug_button()
-                
                 logger.info("✅ Data loading completed during pre-loading")
             except Exception as e:
                 logger.error(f"❌ Failed to load data during pre-loading: {e}")
@@ -2678,6 +2684,12 @@ class CommunityPage(BasePage):
                         logger.warning("Client does not have remove_all_subscriptions method")
         except Exception as e:
             logger.error(f"Error cleaning up real-time subscriptions: {e}")
+        
+        # Cleanup message polling timer
+        try:
+            self._stop_message_polling()
+        except Exception as e:
+            logger.error(f"Error cleaning up message polling: {e}")
     
     def set_current_user(self):
         """Set the current authenticated user in the community manager."""
@@ -2688,8 +2700,6 @@ class CommunityPage(BasePage):
                 logger.warning("Community manager not available")
                 return
                 
-            logger.info("🔄 Setting current user in community manager...")
-            
             from trackpro.auth.user_manager import get_current_user
             user = get_current_user()
             
@@ -2723,13 +2733,19 @@ class CommunityPage(BasePage):
             if user and user.is_authenticated:
                 community_manager.set_current_user(user.id)
                 logger.info(f"✅ Set current user: {user.email} (ID: {user.id})")
+                
+                # Verify the user is properly set in the community manager
+                if hasattr(community_manager, 'current_user_id') and community_manager.current_user_id:
+                    logger.info(f"✅ Community manager current_user_id verified: {community_manager.current_user_id}")
+                else:
+                    logger.warning("⚠️ Community manager current_user_id not set properly")
             else:
-                logger.warning("User not authenticated")
+                logger.warning("❌ User not authenticated")
                 
         except Exception as e:
-            logger.warning(f"Failed to set current user: {e}")
+            logger.warning(f"❌ Failed to set current user: {e}")
             import traceback
-            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
     
     def on_message_received(self, message_data):
         """Handle new message received from database."""
@@ -3003,21 +3019,24 @@ class CommunityPage(BasePage):
             # Get conversation details and messages
             messages = self.community_manager.get_private_messages(conversation_id)
             
-            # Always get conversation data from database for reliability
-            logger.info(f"🔍 Fetching conversation data for ID: {conversation_id}")
-            conversation_data = self.community_manager.get_conversation_data(conversation_id)
+            # Create conversation widget
+            # Get conversation data from the list
+            conversation_data = None
+            for i in range(self.private_messages_list.count()):
+                item = self.private_messages_list.item(i)
+                widget = self.private_messages_list.itemWidget(item)
+                if hasattr(widget, 'conversation_id') and widget.conversation_id == conversation_id:
+                    conversation_data = widget.conversation_data
+                    break
             
             if not conversation_data:
-                logger.error(f"Conversation data not found for ID: {conversation_id}")
+                logger.warning(f"Conversation data not found for ID: {conversation_id}")
                 return
             
-            logger.info(f"✅ Got conversation data: {conversation_data.get('conversation_id', 'No ID')}")
-            
-            # Create conversation widget with proper user data
             conversation_widget = PrivateConversationWidget(conversation_data)
             conversation_widget.message_sent.connect(lambda text: self.on_private_message_sent(conversation_id, text))
             
-            # Add messages to the conversation with proper user data
+            # Add messages to the conversation
             current_user_id = None
             try:
                 from ...auth.user_manager import get_current_user
@@ -3028,34 +3047,14 @@ class CommunityPage(BasePage):
                 logger.debug(f"Could not get current user: {e}")
             
             for message in messages:
-                is_own_message = current_user_id and message.get('sender_id') == current_user_id
-                # Ensure message has proper user data
-                if not message.get('user_profiles'):
-                    # Try to get user data from the conversation data
-                    sender_id = message.get('sender_id')
-                    if sender_id == current_user_id:
-                        # This is the current user's message
-                        message['user_profiles'] = {
-                            'user_id': sender_id,
-                            'display_name': 'You',
-                            'username': 'You'
-                        }
-                    else:
-                        # This is the other user's message
-                        other_user = conversation_data.get('other_user', {})
-                        message['user_profiles'] = other_user
-                
+                is_own_message = current_user_id and message.get('user_profiles', {}).get('user_id') == current_user_id
                 conversation_widget.add_message(message, is_own_message)
             
-            # Show the conversation inline
-            logger.info("🔄 About to show private conversation inline")
+            # Show the conversation
             self.show_private_conversation(conversation_widget)
-            logger.info("✅ Private conversation should now be displayed inline")
             
         except Exception as e:
             logger.error(f"Error showing private conversation: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
     
     def on_private_message_sent(self, conversation_id, message_text):
         """Handle private message sent."""
@@ -3088,29 +3087,34 @@ class CommunityPage(BasePage):
                                         QListWidget, QListWidgetItem, QFrame, QSplitter)
             from PyQt6.QtCore import Qt
             from PyQt6.QtGui import QFont, QColor
+            from trackpro.social.friends_manager import FriendsManager
+            from trackpro.social.user_manager import EnhancedUserManager
             
             dialog = QDialog(self)
             dialog.setWindowTitle("New Private Message")
             dialog.setFixedSize(500, 400)
             dialog.setStyleSheet("""
                 QDialog {
-                    background-color: #2f3136;
-                    color: #dcddde;
+                    background-color: #1e1e1e;
+                    color: #ffffff;
                 }
                 QLabel {
-                    color: #dcddde;
+                    color: #ffffff;
                     font-size: 14px;
                 }
                 QLineEdit {
-                    background-color: #40444b;
-                    border: 1px solid #202225;
+                    background-color: #2d2d2d;
+                    border: 1px solid #404040;
                     border-radius: 4px;
-                    color: #dcddde;
+                    color: #ffffff;
                     padding: 8px;
                     font-size: 14px;
                 }
+                QLineEdit:focus {
+                    border: 1px solid #3498db;
+                }
                 QPushButton {
-                    background-color: #5865f2;
+                    background-color: #3498db;
                     border: none;
                     border-radius: 4px;
                     color: #ffffff;
@@ -3119,76 +3123,84 @@ class CommunityPage(BasePage):
                     font-weight: 600;
                 }
                 QPushButton:hover {
-                    background-color: #4752c4;
+                    background-color: #2980b9;
                 }
                 QPushButton:disabled {
                     background-color: #4f545c;
                     color: #72767d;
                 }
                 QTabWidget::pane {
-                    border: 1px solid #202225;
-                    background-color: #2f3136;
+                    border: 1px solid #404040;
+                    background-color: #2d2d2d;
                 }
                 QTabBar::tab {
-                    background-color: #40444b;
-                    color: #dcddde;
+                    background-color: #1e1e1e;
+                    color: #ffffff;
                     padding: 8px 16px;
-                    margin-right: 2px;
+                    border: 1px solid #404040;
+                    border-bottom: none;
                 }
                 QTabBar::tab:selected {
-                    background-color: #5865f2;
+                    background-color: #2d2d2d;
                 }
                 QListWidget {
-                    background-color: #40444b;
-                    border: 1px solid #202225;
-                    color: #dcddde;
+                    background-color: #2d2d2d;
+                    border: 1px solid #404040;
+                    color: #ffffff;
                 }
                 QListWidget::item {
                     padding: 8px;
-                    border: none;
+                    border-bottom: 1px solid #404040;
                 }
                 QListWidget::item:selected {
-                    background-color: #5865f2;
+                    background-color: #3498db;
                 }
                 QListWidget::item:hover {
-                    background-color: #4752c4;
+                    background-color: #2980b9;
                 }
             """)
             
             layout = QVBoxLayout(dialog)
             
-            # Create tab widget
-            tab_widget = QTabWidget()
+            # Title
+            title_label = QLabel("Start a private conversation:")
+            title_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+            layout.addWidget(title_label)
             
-            # Tab 1: Friends
-            friends_tab = QWidget()
-            friends_layout = QVBoxLayout(friends_tab)
+            # Search input
+            search_layout = QHBoxLayout()
+            search_label = QLabel("Search:")
+            self.search_input = QLineEdit()
+            self.search_input.setPlaceholderText("Search friends or users...")
+            self.search_input.textChanged.connect(self.on_search_text_changed)
+            search_layout.addWidget(search_label)
+            search_layout.addWidget(self.search_input)
+            layout.addLayout(search_layout)
             
-            friends_label = QLabel("Select a friend to start a conversation:")
+            # Tab widget for friends and search results
+            self.tab_widget = QTabWidget()
+            
+            # Friends tab
+            self.friends_tab = QWidget()
+            friends_layout = QVBoxLayout(self.friends_tab)
+            friends_label = QLabel("Your Friends:")
+            self.friends_list = QListWidget()
+            self.friends_list.itemClicked.connect(self.on_user_selected)
             friends_layout.addWidget(friends_label)
+            friends_layout.addWidget(self.friends_list)
+            self.tab_widget.addTab(self.friends_tab, "Friends")
             
-            self.friends_selection_list = QListWidget()
-            friends_layout.addWidget(self.friends_selection_list)
+            # Search results tab
+            self.search_tab = QWidget()
+            search_results_layout = QVBoxLayout(self.search_tab)
+            search_results_label = QLabel("Search Results:")
+            self.search_results_list = QListWidget()
+            self.search_results_list.itemClicked.connect(self.on_user_selected)
+            search_results_layout.addWidget(search_results_label)
+            search_results_layout.addWidget(self.search_results_list)
+            self.tab_widget.addTab(self.search_tab, "Search Results")
             
-            # Load friends into the list
-            self.load_friends_for_selection()
-            
-            tab_widget.addTab(friends_tab, "Friends")
-            
-            # Tab 2: Username
-            username_tab = QWidget()
-            username_layout = QVBoxLayout(username_tab)
-            
-            username_label = QLabel("Enter username to start a conversation:")
-            username_layout.addWidget(username_label)
-            
-            self.username_input = QLineEdit()
-            self.username_input.setPlaceholderText("Enter username...")
-            username_layout.addWidget(self.username_input)
-            
-            tab_widget.addTab(username_tab, "Username")
-            
-            layout.addWidget(tab_widget)
+            layout.addWidget(self.tab_widget)
             
             # Buttons
             button_layout = QHBoxLayout()
@@ -3203,153 +3215,132 @@ class CommunityPage(BasePage):
             
             layout.addLayout(button_layout)
             
+            # Initialize data
+            self.selected_user = None
+            self.load_friends_list()
+            
             # Show dialog
             result = dialog.exec()
             
         except Exception as e:
             logger.error(f"Error showing new private message dialog: {e}")
     
-    def load_friends_for_selection(self):
-        """Load friends into the selection list."""
+    def load_friends_list(self):
+        """Load the current user's friends list."""
         try:
-            self.friends_selection_list.clear()
+            from trackpro.social.friends_manager import FriendsManager
             
-            if not self.community_manager:
-                logger.warning("Community manager not available for loading friends")
+            friends_manager = FriendsManager()
+            current_user_id = self.get_current_user_id()
+            
+            if not current_user_id:
+                logger.error("No authenticated user found")
                 return
             
-            # Get real friends from database
-            friends = self.community_manager.get_friends()
+            friends = friends_manager.get_friends_list(current_user_id, include_online_status=True)
+            self.friends_list.clear()
             
             for friend in friends:
-                display_name = friend.get('display_name', 'Unknown User')
-                status = friend.get('status', 'Offline')
-                item = QListWidgetItem(f"{display_name} ({status})")
-                item.setData(Qt.ItemDataRole.UserRole, friend)
-                self.friends_selection_list.addItem(item)
+                item = QListWidgetItem()
+                widget = self.create_user_list_item(friend)
+                item.setSizeHint(widget.sizeHint())
+                self.friends_list.addItem(item)
+                self.friends_list.setItemWidget(item, widget)
                 
         except Exception as e:
-            logger.error(f"Error loading friends for selection: {e}")
-    
-    def start_private_conversation_from_dialog(self, dialog):
-        """Start a private conversation from the dialog."""
-        try:
-            # Check which tab is active
-            current_tab = dialog.findChild(QTabWidget).currentIndex()
-            
-            if current_tab == 0:  # Friends tab
-                # Get selected friend
-                selected_items = self.friends_selection_list.selectedItems()
-                if not selected_items:
-                    QMessageBox.warning(dialog, "Error", "Please select a friend.")
-                return
-            
-                friend_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
-                username = friend_data.get('username')
-                
-            else:  # Username tab
-                username = self.username_input.text().strip()
-                if not username:
-                    QMessageBox.warning(dialog, "Error", "Please enter a username.")
-                    return
-            
-            # Get user by username
-            if not self.community_manager:
-                QMessageBox.warning(dialog, "Error", "Community manager not available.")
-                return
-            
-            # Create conversation
-            conversation_id = self.community_manager.get_or_create_conversation(username)
-            
-            if conversation_id:
-                dialog.accept()
-                # Load and show the conversation
-                self.on_private_conversation_selected(conversation_id)
-            else:
-                QMessageBox.warning(dialog, "Error", f"Could not find user '{username}' or create conversation.")
-                
-        except Exception as e:
-            logger.error(f"Error starting private conversation from dialog: {e}")
-            QMessageBox.critical(dialog, "Error", f"An error occurred: {str(e)}")
-    
-    def start_private_conversation(self, dialog):
-        """Start a new private conversation with the entered username."""
-        try:
-            username = self.username_input.text().strip()
-            if not username:
-                QMessageBox.warning(dialog, "Error", "Please enter a username.")
-                return
-            
-            # Get user by username
-            if not self.community_manager:
-                QMessageBox.warning(dialog, "Error", "Community manager not available.")
-                return
-            
-            # For now, we'll create a mock conversation
-            # In a real implementation, you'd look up the user in the database
-            conversation_id = self.community_manager.get_or_create_conversation(username)
-            
-            if conversation_id:
-                dialog.accept()
-                # Load and show the conversation
-                self.on_private_conversation_selected(conversation_id)
-            else:
-                QMessageBox.warning(dialog, "Error", f"Could not find user '{username}' or create conversation.")
-                
-        except Exception as e:
-            logger.error(f"Error starting private conversation: {e}")
-            QMessageBox.critical(dialog, "Error", f"An error occurred: {str(e)}")
+            logger.error(f"Error loading friends list: {e}")
     
     def on_add_friend_clicked(self):
         """Handle add friend button click."""
         try:
-            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
-            from PyQt6.QtCore import Qt
+            logger.info("🔄 Add friend button clicked")
+            
+            # Create a dialog for adding friends
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QListWidget, QListWidgetItem
             
             dialog = QDialog(self)
             dialog.setWindowTitle("Add Friend")
-            dialog.setFixedSize(400, 200)
+            dialog.setFixedSize(400, 500)
             dialog.setStyleSheet("""
                 QDialog {
-                    background-color: #2f3136;
-                    color: #dcddde;
+                    background-color: #1e1e1e;
+                    color: #ffffff;
                 }
                 QLabel {
-                    color: #dcddde;
+                    color: #ffffff;
                     font-size: 14px;
+                    font-weight: bold;
                 }
                 QLineEdit {
-                    background-color: #40444b;
-                    border: 1px solid #202225;
+                    background-color: #2d2d2d;
+                    border: 1px solid #3d3d3d;
                     border-radius: 4px;
-                    color: #dcddde;
+                    color: #ffffff;
                     padding: 8px;
-                    font-size: 14px;
+                    font-size: 13px;
+                }
+                QLineEdit:focus {
+                    border: 1px solid #3498db;
                 }
                 QPushButton {
-                    background-color: #5865f2;
+                    background-color: #3498db;
                     border: none;
                     border-radius: 4px;
                     color: #ffffff;
                     padding: 8px 16px;
-                    font-size: 14px;
-                    font-weight: 600;
+                    font-size: 13px;
+                    font-weight: bold;
                 }
                 QPushButton:hover {
-                    background-color: #4752c4;
+                    background-color: #2980b9;
+                }
+                QPushButton:pressed {
+                    background-color: #1f5f35;
+                }
+                QListWidget {
+                    background-color: #2d2d2d;
+                    border: 1px solid #3d3d3d;
+                    border-radius: 4px;
+                    color: #ffffff;
+                }
+                QListWidget::item {
+                    padding: 8px;
+                    border-bottom: 1px solid #3d3d3d;
+                }
+                QListWidget::item:selected {
+                    background-color: #3498db;
+                }
+                QListWidget::item:hover {
+                    background-color: #3d3d3d;
                 }
             """)
             
             layout = QVBoxLayout(dialog)
             
             # Title
-            title_label = QLabel("Enter username to add as friend:")
+            title_label = QLabel("Add Friend")
+            title_label.setStyleSheet("font-size: 16px; margin-bottom: 16px;")
             layout.addWidget(title_label)
             
-            # Username input
-            self.add_friend_input = QLineEdit()
-            self.add_friend_input.setPlaceholderText("Enter username...")
-            layout.addWidget(self.add_friend_input)
+            # Search input
+            search_label = QLabel("Search users:")
+            layout.addWidget(search_label)
+            
+            search_input = QLineEdit()
+            search_input.setPlaceholderText("Enter username or email...")
+            search_input.textChanged.connect(lambda text: self.on_add_friend_search_changed(text, users_list))
+            layout.addWidget(search_input)
+            
+            # Users list
+            users_label = QLabel("Available users:")
+            layout.addWidget(users_label)
+            
+            users_list = QListWidget()
+            users_list.itemClicked.connect(lambda item: self.on_add_friend_user_selected(item, dialog))
+            layout.addWidget(users_list)
+            
+            # Load users into the list
+            self.load_users_for_add_friend(users_list)
             
             # Buttons
             button_layout = QHBoxLayout()
@@ -3358,235 +3349,594 @@ class CommunityPage(BasePage):
             cancel_btn.clicked.connect(dialog.reject)
             button_layout.addWidget(cancel_btn)
             
-            add_btn = QPushButton("Add Friend")
-            add_btn.clicked.connect(lambda: self.add_friend_from_dialog(dialog))
-            button_layout.addWidget(add_btn)
+            add_friend_btn = QPushButton("Add Friend")
+            add_friend_btn.clicked.connect(lambda: self.on_add_friend_button_clicked(users_list, dialog))
+            button_layout.addWidget(add_friend_btn)
             
             layout.addLayout(button_layout)
             
             # Show dialog
-            result = dialog.exec()
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                logger.info("✅ Add friend dialog accepted")
+            else:
+                logger.info("❌ Add friend dialog cancelled")
                 
         except Exception as e:
-            logger.error(f"Error showing add friend dialog: {e}")
-    
-    def add_friend_from_dialog(self, dialog):
-        """Add friend from dialog."""
-        try:
-            username = self.add_friend_input.text().strip()
-            if not username:
-                QMessageBox.warning(dialog, "Error", "Please enter a username.")
-                return
-            
-            if not self.community_manager:
-                logger.error("Community manager not available for sending friend request")
-                QMessageBox.warning(dialog, "Error", "Community manager not available.")
-                return
-            
-            # Send friend request using the community manager
-            success = self.community_manager.send_friend_request(username)
-            
-            if success:
-                logger.info(f"Friend request sent to {username}")
-                QMessageBox.information(dialog, "Success", f"Friend request sent to {username}")
-                dialog.accept()
-            else:
-                logger.error(f"Failed to send friend request to {username}")
-                QMessageBox.warning(dialog, "Error", f"Failed to send friend request to {username}. User may not exist or request already sent.")
-            
-        except Exception as e:
-            logger.error(f"Error adding friend: {e}")
-            QMessageBox.critical(dialog, "Error", f"An error occurred: {str(e)}")
+            logger.error(f"❌ Error showing add friend dialog: {e}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
     
     def on_friend_selected(self, item):
         """Handle friend selection."""
         try:
+            logger.info(f"🔄 Friend selected: {item.text()}")
+            
+            # Get friend data from item
             friend_data = item.data(Qt.ItemDataRole.UserRole)
             if friend_data:
-                # Start a private conversation with the friend
-                self.start_private_conversation_with_user(friend_data)
+                # Show friend profile or start conversation
+                self.show_friend_profile(friend_data)
             else:
-                logger.warning("No friend data found in selected item")
+                logger.warning("⚠️ No friend data found in selected item")
+                
         except Exception as e:
-            logger.error(f"Error handling friend selection: {e}")
+            logger.error(f"❌ Error handling friend selection: {e}")
     
     def on_friend_request_selected(self, item):
         """Handle friend request selection."""
         try:
+            logger.info(f"🔄 Friend request selected: {item.text()}")
+            
+            # Get request data from item
             request_data = item.data(Qt.ItemDataRole.UserRole)
             if request_data:
-                # Show friend request actions
+                # Show accept/decline options
                 self.show_friend_request_actions(request_data)
             else:
-                logger.warning("No request data found in selected item")
+                logger.warning("⚠️ No request data found in selected item")
+                
         except Exception as e:
-            logger.error(f"Error handling friend request selection: {e}")
+            logger.error(f"❌ Error handling friend request selection: {e}")
+    
+    def show_friend_profile(self, friend_data):
+        """Show friend profile dialog."""
+        try:
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Friend Profile")
+            dialog.setFixedSize(300, 200)
+            dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #1e1e1e;
+                    color: #ffffff;
+                }
+                QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                }
+                QPushButton {
+                    background-color: #3498db;
+                    border: none;
+                    border-radius: 4px;
+                    color: #ffffff;
+                    padding: 8px 16px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #2980b9;
+                }
+            """)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Friend info
+            name_label = QLabel(f"Name: {friend_data.get('friend_username', 'Unknown')}")
+            status_label = QLabel(f"Status: {'🟢 Online' if friend_data.get('is_online', False) else '⚫ Offline'}")
+            
+            layout.addWidget(name_label)
+            layout.addWidget(status_label)
+            
+            # Action buttons
+            button_layout = QHBoxLayout()
+            
+            message_btn = QPushButton("Send Message")
+            message_btn.clicked.connect(lambda: self.start_conversation_with_friend(friend_data))
+            button_layout.addWidget(message_btn)
+            
+            remove_btn = QPushButton("Remove Friend")
+            remove_btn.setStyleSheet("background-color: #e74c3c;")
+            remove_btn.clicked.connect(lambda: self.remove_friend(friend_data))
+            button_layout.addWidget(remove_btn)
+            
+            layout.addLayout(button_layout)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            logger.error(f"❌ Error showing friend profile: {e}")
     
     def show_friend_request_actions(self, request_data):
-        """Show actions for a friend request."""
+        """Show friend request action dialog."""
         try:
-            from PyQt6.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
             
-            username = request_data.get('username', 'Unknown')
-            message = f"Friend request from {username}\n\nAccept or decline?"
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Friend Request")
+            dialog.setFixedSize(300, 150)
+            dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #1e1e1e;
+                    color: #ffffff;
+                }
+                QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                }
+                QPushButton {
+                    border: none;
+                    border-radius: 4px;
+                    color: #ffffff;
+                    padding: 8px 16px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+            """)
             
-            reply = QMessageBox.question(
-                self, 
-                "Friend Request", 
-                message,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
-            )
+            layout = QVBoxLayout(dialog)
             
-            if reply == QMessageBox.StandardButton.Yes:
-                self.accept_friend_request(request_data)
-            else:
-                self.decline_friend_request(request_data)
+            # Request info
+            requester_name = request_data.get('user_profiles', {}).get('username', 'Unknown')
+            info_label = QLabel(f"{requester_name} wants to be your friend")
+            layout.addWidget(info_label)
+            
+            # Action buttons
+            button_layout = QHBoxLayout()
+            
+            accept_btn = QPushButton("Accept")
+            accept_btn.setStyleSheet("background-color: #27ae60;")
+            accept_btn.clicked.connect(lambda: self.accept_friend_request(request_data))
+            button_layout.addWidget(accept_btn)
+            
+            decline_btn = QPushButton("Decline")
+            decline_btn.setStyleSheet("background-color: #e74c3c;")
+            decline_btn.clicked.connect(lambda: self.decline_friend_request(request_data))
+            button_layout.addWidget(decline_btn)
+            
+            layout.addLayout(button_layout)
+            
+            dialog.exec()
             
         except Exception as e:
-            logger.error(f"Error showing friend request actions: {e}")
+            logger.error(f"❌ Error showing friend request actions: {e}")
+    
+    def load_users_for_add_friend(self, users_list):
+        """Load users for add friend dialog."""
+        try:
+            # Import friends manager and user manager
+            from trackpro.social.friends_manager import FriendsManager
+            from trackpro.social.user_manager import EnhancedUserManager
+            
+            friends_manager = FriendsManager()
+            user_manager = EnhancedUserManager()
+            
+            # Get current user ID
+            current_user_id = self.get_current_user_id()
+            if not current_user_id:
+                logger.warning("⚠️ No current user ID available")
+                return
+            
+            # Get all users from database
+            all_users = user_manager.get_all_users()
+            
+            # Get existing friends to filter out
+            friends = friends_manager.get_friends_list(current_user_id, include_online_status=False)
+            friend_ids = {friend['friend_id'] for friend in friends}
+            
+            # Filter out current user and existing friends
+            available_users = []
+            for user in all_users:
+                user_id = user.get('user_id')
+                if user_id and user_id != current_user_id and user_id not in friend_ids:
+                    available_users.append(user)
+            
+            # Add users to list
+            for user in available_users:
+                display_name = user.get('display_name', user.get('username', 'Unknown'))
+                username = user.get('username', 'unknown')
+                item = QListWidgetItem(f"{display_name} (@{username})")
+                item.setData(Qt.ItemDataRole.UserRole, user)
+                users_list.addItem(item)
+                
+            logger.info(f"✅ Loaded {len(available_users)} available users for friend requests")
+                
+        except Exception as e:
+            logger.error(f"❌ Error loading users for add friend: {e}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+    
+    def start_conversation_with_friend(self, friend_data):
+        """Start a conversation with a friend."""
+        try:
+            logger.info(f"🔄 Starting conversation with friend: {friend_data.get('friend_username', 'Unknown')}")
+            # This would open the messaging interface with the friend
+            # Implementation would depend on the messaging system
+            
+        except Exception as e:
+            logger.error(f"❌ Error starting conversation with friend: {e}")
+    
+    def remove_friend(self, friend_data):
+        """Remove a friend."""
+        try:
+            from trackpro.social.friends_manager import FriendsManager
+            friends_manager = FriendsManager()
+            
+            current_user_id = self.get_current_user_id()
+            friend_id = friend_data.get('friend_id')
+            
+            if current_user_id and friend_id:
+                result = friends_manager.remove_friend(current_user_id, friend_id)
+                if result['success']:
+                    logger.info("✅ Friend removed successfully")
+                    self.load_friends_list()  # Refresh friends list
+                else:
+                    logger.error(f"❌ Failed to remove friend: {result['message']}")
+            else:
+                logger.warning("⚠️ Missing user ID or friend ID")
+                
+        except Exception as e:
+            logger.error(f"❌ Error removing friend: {e}")
     
     def accept_friend_request(self, request_data):
         """Accept a friend request."""
         try:
-            friendship_id = request_data.get('friendship_id')
-            display_name = request_data.get('display_name', 'Unknown')
+            from trackpro.social.friends_manager import FriendsManager
+            friends_manager = FriendsManager()
             
-            if not friendship_id:
-                logger.error("No friendship ID provided for accepting friend request")
-                return
+            current_user_id = self.get_current_user_id()
+            request_id = request_data.get('id')
             
-            if not self.community_manager:
-                logger.error("Community manager not available for accepting friend request")
-                return
-            
-            # Accept the friend request using the community manager
-            success = self.community_manager.accept_friend_request(friendship_id)
-            
-            if success:
-                logger.info(f"Friend request from {display_name} accepted!")
-                QMessageBox.information(self, "Success", f"Friend request from {display_name} accepted!")
-                # Refresh the friend requests list
-                self.load_friend_requests()
-                # Refresh the friends list
-                self.load_friends_list()
+            if current_user_id and request_id:
+                result = friends_manager.respond_to_friend_request(request_id, current_user_id, True)
+                if result['success']:
+                    logger.info("✅ Friend request accepted")
+                    self.load_friends_list()  # Refresh friends list
+                    self.load_friend_requests()  # Refresh requests list
+                else:
+                    logger.error(f"❌ Failed to accept friend request: {result['message']}")
             else:
-                logger.error(f"Failed to accept friend request from {display_name}")
-                QMessageBox.warning(self, "Error", f"Failed to accept friend request from {display_name}")
+                logger.warning("⚠️ Missing user ID or request ID")
                 
         except Exception as e:
-            logger.error(f"Error accepting friend request: {e}")
-            QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
+            logger.error(f"❌ Error accepting friend request: {e}")
     
     def decline_friend_request(self, request_data):
         """Decline a friend request."""
         try:
-            friendship_id = request_data.get('friendship_id')
-            display_name = request_data.get('display_name', 'Unknown')
+            from trackpro.social.friends_manager import FriendsManager
+            friends_manager = FriendsManager()
             
-            if not friendship_id:
-                logger.error("No friendship ID provided for declining friend request")
-                return
+            current_user_id = self.get_current_user_id()
+            request_id = request_data.get('id')
             
-            if not self.community_manager:
-                logger.error("Community manager not available for declining friend request")
-                return
-            
-            # Decline the friend request using the community manager
-            success = self.community_manager.decline_friend_request(friendship_id)
-            
-            if success:
-                logger.info(f"Friend request from {display_name} declined!")
-                QMessageBox.information(self, "Success", f"Friend request from {display_name} declined.")
-                # Refresh the friend requests list
-                self.load_friend_requests()
-            else:
-                logger.error(f"Failed to decline friend request from {display_name}")
-                QMessageBox.warning(self, "Error", f"Failed to decline friend request from {display_name}")
-                
-        except Exception as e:
-            logger.error(f"Error declining friend request: {e}")
-            QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
-    
-    def load_friends_list(self):
-        """Load friends list."""
-        try:
-            self.friends_list.clear()
-            
-            if not self.community_manager:
-                logger.warning("Community manager not available for loading friends")
-                return
-            
-            logger.info("🔄 Loading friends list from database...")
-            
-            # Get real friends from database
-            friends = self.community_manager.get_friends()
-            logger.info(f"📋 Retrieved {len(friends)} friends from database")
-            
-            if not friends:
-                logger.warning("⚠️ No friends found in database")
-                # Add a placeholder item to show "No friends" message
-                empty_item = QListWidgetItem("No friends found")
-                empty_item.setFlags(Qt.ItemFlag.NoItemFlags)  # Make it non-selectable
-                self.friends_list.addItem(empty_item)
-                return
-            
-            for friend in friends:
-                display_name = friend.get('display_name', 'Unknown User')
-                status = friend.get('status', 'Offline')
-                user_id = friend.get('user_id', 'Unknown')
-                avatar_url = friend.get('avatar_url')
-                
-                logger.info(f"👤 Adding friend: {display_name} ({status}) - ID: {user_id}")
-                
-                # Create friend item with status indicator
-                status_icon = "🟢" if status == "Online" else "⚫"
-                item_text = f"{status_icon} {display_name}"
-                
-                item = QListWidgetItem(item_text)
-                item.setData(Qt.ItemDataRole.UserRole, friend)
-                
-                # Set color based on status
-                if status == "Online":
-                    item.setForeground(QColor('#44ff44'))  # Green for online
+            if current_user_id and request_id:
+                result = friends_manager.respond_to_friend_request(request_id, current_user_id, False)
+                if result['success']:
+                    logger.info("✅ Friend request declined")
+                    self.load_friend_requests()  # Refresh requests list
                 else:
-                    item.setForeground(QColor('#888888'))  # Gray for offline
-                
-                self.friends_list.addItem(item)
-            
-            logger.info(f"✅ Successfully loaded {len(friends)} friends")
+                    logger.error(f"❌ Failed to decline friend request: {result['message']}")
+            else:
+                logger.warning("⚠️ Missing user ID or request ID")
                 
         except Exception as e:
-            logger.error(f"❌ Error loading friends list: {e}")
-            import traceback
-            logger.error(f"📋 Traceback: {traceback.format_exc()}")
-            
-            # Add error item to show something went wrong
-            error_item = QListWidgetItem("Error loading friends")
-            error_item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.friends_list.addItem(error_item)
+            logger.error(f"❌ Error declining friend request: {e}")
     
     def load_friend_requests(self):
-        """Load friend requests list."""
+        """Load friend requests into the UI."""
         try:
+            from trackpro.social.friends_manager import FriendsManager
+            friends_manager = FriendsManager()
+            
+            current_user_id = self.get_current_user_id()
+            if not current_user_id:
+                logger.warning("⚠️ No current user ID available")
+                return
+            
+            # Get pending friend requests
+            requests = friends_manager.get_pending_friend_requests(current_user_id, sent=False)
+            
+            # Clear existing items
             self.friend_requests_list.clear()
             
-            if not self.community_manager:
-                logger.warning("Community manager not available for loading friend requests")
-                return
-                
-            # Get real friend requests from database
-            requests = self.community_manager.get_friend_requests()
-            
+            # Add requests to list
             for request in requests:
-                display_name = request.get('display_name', 'Unknown User')
-                status = request.get('status', 'Pending')
-                item = QListWidgetItem(f"{display_name} ({status})")
+                requester_name = request.get('user_profiles', {}).get('username', 'Unknown')
+                item = QListWidgetItem(f"Friend request from {requester_name}")
                 item.setData(Qt.ItemDataRole.UserRole, request)
                 self.friend_requests_list.addItem(item)
                 
         except Exception as e:
-            logger.error(f"Error loading friend requests: {e}")
+            logger.error(f"❌ Error loading friend requests: {e}")
+    
+    def create_user_list_item(self, user_data: dict) -> QWidget:
+        """Create a user list item widget."""
+        widget = QFrame()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        
+        # Store user data in the widget
+        widget.user_data = user_data
+        
+        # Avatar placeholder
+        avatar = QLabel("👤")
+        avatar.setFixedSize(32, 32)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        avatar.setStyleSheet("""
+            QLabel {
+                border: 2px solid #5865f2;
+                border-radius: 16px;
+                background-color: #40444b;
+            }
+        """)
+        
+        # User info
+        info_layout = QVBoxLayout()
+        username = user_data.get('friend_username', user_data.get('username', 'Unknown'))
+        username_label = QLabel(username)
+        username_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        
+        status_text = "🟢 Online" if user_data.get('is_online', False) else "⚫ Offline"
+        status_label = QLabel(status_text)
+        status_label.setStyleSheet("color: #72767d; font-size: 11px;")
+        
+        info_layout.addWidget(username_label)
+        info_layout.addWidget(status_label)
+        
+        layout.addWidget(avatar)
+        layout.addLayout(info_layout)
+        layout.addStretch()
+        
+        return widget
+    
+    def on_search_text_changed(self, text: str):
+        """Handle search text changes."""
+        if len(text) < 2:
+            self.search_results_list.clear()
+            self.tab_widget.setCurrentIndex(0)  # Switch to friends tab
+            return
+        
+        try:
+            from trackpro.social.user_manager import EnhancedUserManager
+            
+            user_manager = EnhancedUserManager()
+            users = user_manager.search_users(text, limit=20)
+            
+            self.search_results_list.clear()
+            
+            for user in users:
+                if user.get('user_id') != self.get_current_user_id():
+                    item = QListWidgetItem()
+                    widget = self.create_user_list_item(user)
+                    item.setSizeHint(widget.sizeHint())
+                    self.search_results_list.addItem(item)
+                    self.search_results_list.setItemWidget(item, widget)
+            
+            # Switch to search results tab if we have results
+            if users:
+                self.tab_widget.setCurrentIndex(1)
+                
+        except Exception as e:
+            logger.error(f"Error searching users: {e}")
+    
+    def on_add_friend_search_changed(self, text: str, users_list):
+        """Handle search text changes in add friend dialog."""
+        try:
+            if len(text) < 2:
+                # Reload all users when search is cleared
+                users_list.clear()
+                self.load_users_for_add_friend(users_list)
+                return
+            
+            from trackpro.social.user_manager import EnhancedUserManager
+            from trackpro.social.friends_manager import FriendsManager
+            
+            user_manager = EnhancedUserManager()
+            friends_manager = FriendsManager()
+            
+            current_user_id = self.get_current_user_id()
+            if not current_user_id:
+                return
+            
+            # Search for users
+            search_results = user_manager.search_users(text, limit=20)
+            
+            # Get existing friends to filter out
+            friends = friends_manager.get_friends_list(current_user_id, include_online_status=False)
+            friend_ids = {friend['friend_id'] for friend in friends}
+            
+            # Filter results
+            available_users = []
+            for user in search_results:
+                user_id = user.get('user_id')
+                if user_id and user_id != current_user_id and user_id not in friend_ids:
+                    available_users.append(user)
+            
+            # Update the list
+            users_list.clear()
+            for user in available_users:
+                display_name = user.get('display_name', user.get('username', 'Unknown'))
+                username = user.get('username', 'unknown')
+                item = QListWidgetItem(f"{display_name} (@{username})")
+                item.setData(Qt.ItemDataRole.UserRole, user)
+                users_list.addItem(item)
+                
+        except Exception as e:
+            logger.error(f"Error searching users in add friend dialog: {e}")
+    
+    def on_add_friend_user_selected(self, item, dialog):
+        """Handle user selection in add friend dialog."""
+        try:
+            user_data = item.data(Qt.ItemDataRole.UserRole)
+            if user_data:
+                # Store selected user for the add friend button
+                dialog.selected_user = user_data
+                logger.info(f"Selected user for friend request: {user_data.get('username', 'Unknown')}")
+        except Exception as e:
+            logger.error(f"Error selecting user in add friend dialog: {e}")
+    
+    def on_add_friend_button_clicked(self, users_list, dialog):
+        """Handle add friend button click in dialog."""
+        try:
+            selected_user = getattr(dialog, 'selected_user', None)
+            if not selected_user:
+                # Try to get the first selected item
+                current_item = users_list.currentItem()
+                if current_item:
+                    selected_user = current_item.data(Qt.ItemDataRole.UserRole)
+            
+            if selected_user:
+                user_id = selected_user.get('user_id')
+                username = selected_user.get('username', 'Unknown')
+                
+                if user_id:
+                    from trackpro.social.friends_manager import FriendsManager
+                    friends_manager = FriendsManager()
+                    
+                    current_user_id = self.get_current_user_id()
+                    if current_user_id:
+                        result = friends_manager.send_friend_request(current_user_id, user_id)
+                        if result['success']:
+                            logger.info(f"✅ Friend request sent to {username}")
+                            dialog.accept()
+                        else:
+                            logger.error(f"❌ Failed to send friend request: {result['message']}")
+                            
+                            # Show specific popup for already sent friend request
+                            if result['message'] == "Friend request already sent":
+                                from PyQt6.QtWidgets import QMessageBox
+                                QMessageBox.information(
+                                    dialog, 
+                                    "Friend Request", 
+                                    "You've already sent this user a request!"
+                                )
+                            else:
+                                # Show generic error for other cases
+                                from PyQt6.QtWidgets import QMessageBox
+                                QMessageBox.warning(
+                                    dialog, 
+                                    "Friend Request Error", 
+                                    result['message']
+                                )
+                    else:
+                        logger.warning("⚠️ No current user ID available")
+                else:
+                    logger.warning("⚠️ No user ID found in selected user data")
+            else:
+                logger.warning("⚠️ No user selected for friend request")
+                
+        except Exception as e:
+            logger.error(f"Error sending friend request: {e}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+    
+    def on_user_selected(self, item):
+        """Handle user selection from either friends or search results."""
+        try:
+            # Get the widget associated with the selected item
+            widget = self.tab_widget.currentWidget()
+            list_widget = widget.findChild(QListWidget)
+            
+            # Clear previous selection visual indicators
+            self.clear_selection_indicators()
+            
+            if list_widget == self.friends_list:
+                # Get friend data from friends list
+                item_widget = self.friends_list.itemWidget(item)
+                if item_widget and hasattr(item_widget, 'user_data'):
+                    self.selected_user = item_widget.user_data
+                    # Update search input with selected username
+                    username = item_widget.user_data.get('friend_username', item_widget.user_data.get('username', ''))
+                    self.search_input.setText(username)
+                    # Highlight the selected item
+                    item.setBackground(QColor('#5865f2'))
+            elif list_widget == self.search_results_list:
+                # Get user data from search results
+                item_widget = self.search_results_list.itemWidget(item)
+                if item_widget and hasattr(item_widget, 'user_data'):
+                    self.selected_user = item_widget.user_data
+                    # Update search input with selected username
+                    username = item_widget.user_data.get('username', '')
+                    self.search_input.setText(username)
+                    # Highlight the selected item
+                    item.setBackground(QColor('#5865f2'))
+                
+        except Exception as e:
+            logger.error(f"Error selecting user: {e}")
+    
+    def clear_selection_indicators(self):
+        """Clear visual selection indicators from all lists."""
+        try:
+            # Clear friends list selection indicators
+            for i in range(self.friends_list.count()):
+                item = self.friends_list.item(i)
+                item.setBackground(QColor('transparent'))
+            
+            # Clear search results list selection indicators
+            for i in range(self.search_results_list.count()):
+                item = self.search_results_list.item(i)
+                item.setBackground(QColor('transparent'))
+        except Exception as e:
+            logger.error(f"Error clearing selection indicators: {e}")
+    
+    def start_private_conversation_from_dialog(self, dialog):
+        """Start a new private conversation from the enhanced dialog."""
+        try:
+            # Try to get selected user first
+            if self.selected_user:
+                # Use user_id if available, otherwise fall back to username
+                user_id = self.selected_user.get('user_id') or self.selected_user.get('friend_id')
+                username = self.selected_user.get('username') or self.selected_user.get('friend_username')
+                
+                if user_id:
+                    # Use user ID for conversation creation
+                    conversation_id = self.community_manager.get_or_create_conversation(user_id)
+                elif username:
+                    # Use username for conversation creation
+                    conversation_id = self.community_manager.get_or_create_conversation(username)
+                else:
+                    QMessageBox.warning(dialog, "Error", "Invalid user data selected.")
+                    return
+            else:
+                # Fall back to search input
+                username = self.search_input.text().strip()
+                if not username:
+                    QMessageBox.warning(dialog, "Error", "Please select a user or enter a username.")
+                    return
+                
+                conversation_id = self.community_manager.get_or_create_conversation(username)
+            
+            if conversation_id:
+                dialog.accept()
+                # Load and show the conversation
+                self.on_private_conversation_selected(conversation_id)
+            else:
+                QMessageBox.warning(dialog, "Error", f"Could not find user or create conversation.")
+                
+        except Exception as e:
+            logger.error(f"Error starting private conversation: {e}")
+            QMessageBox.critical(dialog, "Error", f"An error occurred: {str(e)}")
+    
+    def get_current_user_id(self):
+        """Get the current user ID."""
+        try:
+            if hasattr(self, 'community_manager') and self.community_manager:
+                return self.community_manager.get_current_user_id()
+            return None
+        except Exception as e:
+            logger.error(f"Error getting current user ID: {e}")
+            return None
     
     def start_private_conversation_with_user(self, user_data):
         """Start a private conversation with a specific user."""
@@ -3612,89 +3962,15 @@ class CommunityPage(BasePage):
         except Exception as e:
             logger.error(f"Error starting private conversation with user: {e}")
     
-    def start_direct_private_message(self, user_data):
-        """Start a direct private message with a user (called from other widgets)."""
-        try:
-            logger.info(f"🔄 Starting direct private message with user: {user_data.get('display_name', 'Unknown')}")
-            
-            # Switch to community page first
-            main_window = self.window()
-            if main_window and hasattr(main_window, 'switch_to_page'):
-                main_window.switch_to_page("community")
-            
-            # Start the private conversation
-            self.start_private_conversation_with_user(user_data)
-            
-        except Exception as e:
-            logger.error(f"Error starting direct private message: {e}")
-    
     def show_private_conversation(self, conversation_widget):
-        """Show private conversation in the main content area like a regular channel."""
-        try:
-            logger.info("🔄 Switching to private conversation view")
-            
-            # Store the conversation widget for potential reuse
-            self.current_conversation_widget = conversation_widget
-            
-            # Clear current content - since content_stack is a QWidget, we need to clear its layout
-            if hasattr(self.content_stack, 'layout') and self.content_stack.layout():
-                # Remove all widgets from the layout
-                while self.content_stack.layout().count() > 0:
-                    item = self.content_stack.layout().takeAt(0)
-                    if item.widget():
-                        item.widget().setParent(None)
-            
-            # Add conversation widget to the layout
-            if hasattr(self.content_stack, 'layout') and self.content_stack.layout():
-                self.content_stack.layout().addWidget(conversation_widget)
-            else:
-                # If no layout, create one
-                layout = QVBoxLayout(self.content_stack)
-                layout.addWidget(conversation_widget)
-            
-            conversation_widget.show()
-            
-            # Update the channel display to show it's a private conversation
-            self.update_channel_display_for_private_conversation(conversation_widget)
-            
-            logger.info("✅ Private conversation view displayed inline")
-            
-        except Exception as e:
-            logger.error(f"❌ Error showing private conversation: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-    
-    def update_channel_display_for_private_conversation(self, conversation_widget):
-        """Update the channel display area to show private conversation info."""
-        try:
-            # Get conversation data from the widget
-            conversation_data = getattr(conversation_widget, 'conversation_data', {})
-            other_user = conversation_data.get('other_user', {})
-            
-            # Update the channel name display
-            if hasattr(self, 'channel_name_label'):
-                user_name = other_user.get('display_name') or other_user.get('username') or 'Unknown User'
-                self.channel_name_label.setText(f"💬 {user_name}")
-                self.channel_name_label.setStyleSheet("""
-                    color: #ffffff;
-                    font-size: 18px;
-                    font-weight: bold;
-                    padding: 10px;
-                    background-color: #2c2f33;
-                    border-bottom: 1px solid #404040;
-                """)
-            
-            # Update the channel description
-            if hasattr(self, 'channel_description_label'):
-                self.channel_description_label.setText("Private conversation")
-                self.channel_description_label.setStyleSheet("""
-                    color: #888888;
-                    font-size: 12px;
-                    padding: 5px 10px;
-                """)
-                
-        except Exception as e:
-            logger.error(f"Error updating channel display for private conversation: {e}")
+        """Show private conversation in the main content area."""
+        # Clear current content
+        for i in reversed(range(self.content_stack.count())):
+            self.content_stack.removeWidget(self.content_stack.widget(i))
+        
+        # Add conversation widget
+        self.content_stack.addWidget(conversation_widget)
+        conversation_widget.show()
     
     def show_voice_debug_info(self):
         """Show debug information about voice chat status."""
@@ -3742,11 +4018,7 @@ class CommunityPage(BasePage):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Debug Error", f"Error getting debug info: {str(e)}")
     
-    def add_debug_button(self):
-        """Add debug button to the UI for troubleshooting."""
-        # Removed debug button to avoid layout issues
-        # The community page already has proper error handling and logging
-        pass
+
     
     @property
     def community_manager(self):
@@ -3769,6 +4041,95 @@ class CommunityPage(BasePage):
     def community_manager(self, value):
         """Set the community manager."""
         self._community_manager = value
+        
+        # Connect signals when community manager is set
+        if value:
+            try:
+                # Check if signals are already connected to prevent duplicates
+                if not hasattr(self, '_signals_connected'):
+                    # Connect message received signal
+                    value.message_received.connect(self.on_message_received)
+                    value.user_joined_channel.connect(self.on_user_joined_channel)
+                    value.user_left_channel.connect(self.on_user_left_channel)
+                    value.user_status_changed.connect(self.on_user_status_changed)
+                    self._signals_connected = True
+                    logger.info("✅ Connected community manager signals")
+                else:
+                    logger.info("🔄 Signals already connected, skipping")
+                
+                # Message polling will be started when page is activated
+                
+            except Exception as e:
+                logger.error(f"❌ Error connecting community manager signals: {e}")
+    
+    def _start_message_polling(self):
+        """Start polling for new messages since real-time subscriptions are disabled."""
+        try:
+            if not hasattr(self, '_message_polling_timer'):
+                from PyQt6.QtCore import QTimer
+                self._message_polling_timer = QTimer()
+                self._message_polling_timer.timeout.connect(self._poll_for_new_messages)
+                self._message_polling_timer.start(5000)  # Poll every 5 seconds
+                logger.info("✅ Started message polling timer (5 second interval)")
+            elif not self._message_polling_timer.isActive():
+                # Timer exists but is not active, restart it
+                self._message_polling_timer.start(5000)
+                logger.info("✅ Restarted message polling timer (5 second interval)")
+            else:
+                logger.info("🔄 Message polling timer already running")
+        except Exception as e:
+            logger.error(f"❌ Error starting message polling: {e}")
+    
+    def _poll_for_new_messages(self):
+        """Poll for new messages in the current channel."""
+        try:
+            if not self.community_manager or not self.current_channel:
+                logger.debug("🔄 Skipping message poll - no community manager or current channel")
+                return
+            
+            # Get the latest message ID for this channel to avoid duplicates
+            latest_message_id = None
+            if hasattr(self, 'chat_history') and self.current_channel in self.chat_history:
+                if self.chat_history[self.current_channel]:
+                    latest_message = self.chat_history[self.current_channel][-1]
+                    latest_message_id = latest_message.get('message_id')
+            
+            # Fetch only recent messages from database (last 5 to reduce load)
+            messages = self.community_manager.get_messages(self.current_channel, limit=5)
+            
+            # Find truly new messages by comparing message IDs
+            new_messages = []
+            seen_message_ids = set()
+            
+            # Build set of existing message IDs to avoid duplicates
+            if hasattr(self, 'chat_history') and self.current_channel in self.chat_history:
+                seen_message_ids = {msg.get('message_id') for msg in self.chat_history[self.current_channel]}
+            
+            for message in messages:
+                message_id = message.get('message_id')
+                if message_id and message_id not in seen_message_ids:
+                    new_messages.append(message)
+            
+            # Only add new messages to UI if we found any
+            if new_messages:
+                logger.info(f"📨 Found {len(new_messages)} new messages in channel {self.current_channel}")
+                for message in new_messages:
+                    if self.current_channel == message.get('channel_id'):
+                        self.on_message_received(message)
+            else:
+                logger.debug(f"📭 No new messages found in channel {self.current_channel}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error polling for new messages: {e}")
+    
+    def _stop_message_polling(self):
+        """Stop the message polling timer."""
+        try:
+            if hasattr(self, '_message_polling_timer'):
+                self._message_polling_timer.stop()
+                logger.info("✅ Stopped message polling timer")
+        except Exception as e:
+            logger.error(f"❌ Error stopping message polling: {e}")
     
     def test_voice_server_connection(self):
         """Test voice server connection and provide detailed feedback."""
@@ -3958,70 +4319,789 @@ class CommunityPage(BasePage):
             logger.warning(f"HighQualityVoiceManager not available: {e}")
             return None
     
-    def debug_friends_loading(self):
-        """Debug method to test friends loading."""
+    def test_database_connection(self):
+        """Test the database connection and user authentication."""
         try:
-            logger.info("🔍 DEBUG: Testing friends loading...")
+            logger.info("🔍 Testing database connection and user authentication...")
             
-            if not self.community_manager:
+            # Test Supabase client
+            from trackpro.database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            if client:
+                logger.info("✅ Supabase client available")
+                
+                # Test session
+                session = client.auth.get_session()
+                if session and hasattr(session, 'user'):
+                    user_data = session.user
+                    logger.info(f"✅ User session found: {user_data.email} (ID: {user_data.id})")
+                    
+                    # Test user_profiles table
+                    response = client.table("user_profiles").select("user_id, email, display_name").eq("user_id", user_data.id).execute()
+                    if response.data:
+                        user_profile = response.data[0]
+                        logger.info(f"✅ User profile found: {user_profile}")
+                    else:
+                        logger.warning("❌ No user profile found in database")
+                else:
+                    logger.warning("❌ No user session found")
+            else:
+                logger.error("❌ Supabase client not available")
+            
+            # Test community manager
+            community_manager = getattr(self, '_community_manager', None)
+            if community_manager:
+                logger.info(f"✅ Community manager available")
+                if hasattr(community_manager, 'current_user_id') and community_manager.current_user_id:
+                    logger.info(f"✅ Community manager current_user_id: {community_manager.current_user_id}")
+                else:
+                    logger.warning("❌ Community manager current_user_id not set")
+                
+                if hasattr(community_manager, 'client') and community_manager.client:
+                    logger.info("✅ Community manager has Supabase client")
+                else:
+                    logger.warning("❌ Community manager has no Supabase client")
+            else:
                 logger.error("❌ Community manager not available")
+                
+        except Exception as e:
+            logger.error(f"❌ Error testing database connection: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+    
+    def set_current_user(self):
+        """Set the current authenticated user in the community manager."""
+        try:
+            # During initialization, access _community_manager directly to avoid recursion
+            community_manager = getattr(self, '_community_manager', None)
+            if not community_manager:
+                logger.warning("Community manager not available")
+                return
+                
+            from trackpro.auth.user_manager import get_current_user
+            user = get_current_user()
+            
+            if user is None:
+                # Try to get user from Supabase session directly
+                try:
+                    from trackpro.database.supabase_client import get_supabase_client
+                    client = get_supabase_client()
+                    if client and hasattr(client, 'auth') and client.auth.get_session():
+                        session = client.auth.get_session()
+                        if session and hasattr(session, 'user'):
+                            user_data = session.user
+                            # Create a temporary user object
+                            from trackpro.auth.user_manager import User
+                            temp_user = User(
+                                id=user_data.id,
+                                email=user_data.email,
+                                name=user_data.user_metadata.get('name', user_data.email),
+                                is_authenticated=True
+                            )
+                            community_manager.set_current_user(temp_user.id)
+                            logger.info(f"✅ Set current user from Supabase session: {temp_user.email} (ID: {temp_user.id})")
+                            return
+                except Exception as e:
+                    logger.debug(f"Could not get user from Supabase session: {e}")
+                
+                # User manager not ready yet - skip setting current user
+                logger.info("🔍 User manager not ready yet - skipping current user setting")
+                return
+                
+            if user and user.is_authenticated:
+                community_manager.set_current_user(user.id)
+                logger.info(f"✅ Set current user: {user.email} (ID: {user.id})")
+                
+                # Verify the user is properly set in the community manager
+                if hasattr(community_manager, 'current_user_id') and community_manager.current_user_id:
+                    logger.info(f"✅ Community manager current_user_id verified: {community_manager.current_user_id}")
+                else:
+                    logger.warning("⚠️ Community manager current_user_id not set properly")
+            else:
+                logger.warning("❌ User not authenticated")
+                
+        except Exception as e:
+            logger.warning(f"❌ Failed to set current user: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+    def force_refresh_messages(self):
+        """Load channels from database instead of hardcoded list."""
+        # Prevent multiple loads using class-level flag
+        if CommunityPage._channels_loaded:
+            logger.info("🔄 Channels already loaded, skipping")
+            return
+            
+        try:
+            # During initialization, access _community_manager directly to avoid recursion
+            community_manager = getattr(self, '_community_manager', None)
+            if not community_manager:
+                logger.warning("Community manager not available, using fallback channels")
+                self.load_fallback_channels()
+                CommunityPage._channels_loaded = True
+                return
+                
+            logger.info("Loading channels from database...")
+            channels = community_manager.get_channels()
+            logger.info(f"Received {len(channels)} channels from community manager")
+            
+            logger.info(f"🧹 Clearing channel lists - Text channels: {self.channel_list.count()}, Voice channels: {self.voice_channels_list.count()}")
+            self.channel_list.clear()
+            self.voice_channels_list.clear()
+            logger.info("✅ Channel lists cleared")
+            
+            # Check if we got any channels from the database
+            if not channels:
+                logger.warning("No channels returned from database, using fallback channels")
+                self.load_fallback_channels()
                 return
             
-            # Check current user ID
-            current_user_id = self.community_manager.get_current_user_id()
-            logger.info(f"🔍 Current user ID: {current_user_id}")
+            text_channels_count = 0
+            voice_channels_count = 0
             
-            if not current_user_id:
-                logger.error("❌ No current user ID set")
+            for channel in channels:
+                channel_name = channel['name']
+                channel_type = channel['channel_type']
+                
+                logger.info(f"📋 Processing channel: {channel_name} (type: {channel_type})")
+                
+                # Format display name
+                if channel_type == 'text':
+                    display_name = f"# {channel_name}"
+                    target_list = self.channel_list
+                    text_channels_count += 1
+                    logger.info(f"📝 Added text channel: {display_name}")
+                else:
+                    display_name = f"🔊 {channel_name}"
+                    target_list = self.voice_channels_list
+                    voice_channels_count += 1
+                    logger.info(f"🔊 Added voice channel: {display_name}")
+                
+                item = QListWidgetItem(display_name)
+                item.setData(Qt.ItemDataRole.UserRole, {
+                    'id': channel['channel_id'],
+                    'name': channel_name,
+                    'type': channel_type
+                })
+                target_list.addItem(item)
+            
+            logger.info(f"Loaded {text_channels_count} text channels and {voice_channels_count} voice channels")
+            logger.info(f"📊 Final state - Text channels: {self.channel_list.count()}, Voice channels: {self.voice_channels_list.count()}")
+            
+            # Auto-select the first text channel if no channel is currently selected
+            if self.channel_list.count() > 0 and not self.current_channel:
+                first_item = self.channel_list.item(0)
+                if first_item:
+                    channel_data = first_item.data(Qt.ItemDataRole.UserRole)
+                    if channel_data and channel_data['type'] == 'text':
+                        self.current_channel = channel_data['id']
+                        self.channel_list.setCurrentItem(first_item)
+                        self.show_channel(channel_data['id'])
+                        logger.info(f"Auto-selected first channel: {channel_data['id']}")
+            
+            # Mark as loaded using class-level flag
+            CommunityPage._channels_loaded = True
+                
+        except Exception as e:
+            logger.error(f"Error loading channels from database: {e}")
+            # Fallback to hardcoded channels
+            self.load_fallback_channels()
+            CommunityPage._channels_loaded = True
+    
+    def load_fallback_channels(self):
+        """Load fallback channels when database is unavailable."""
+        logger.info("Loading fallback channels...")
+        
+        # Text channels
+        text_channels = [
+            ("# general", "fallback-general", "text"),
+            ("# racing", "fallback-racing", "text"),
+            ("# tech-support", "fallback-tech-support", "text"),
+            ("# events", "fallback-events", "text")
+        ]
+        
+        for channel_name, channel_id, channel_type in text_channels:
+            item = QListWidgetItem(channel_name)
+            item.setData(Qt.ItemDataRole.UserRole, {
+                'id': channel_id,
+                'name': channel_name.replace('# ', '').replace('🔊 ', ''),
+                'type': channel_type
+            })
+            self.channel_list.addItem(item)
+        
+        # Voice channels
+        voice_channels = [
+            ("🔊 Voice General", "fallback-voice-general", "voice"),
+            ("🔊 Voice Racing", "fallback-voice-racing", "voice")
+        ]
+        
+        for channel_name, channel_id, channel_type in voice_channels:
+            logger.info(f"🔊 Adding fallback voice channel: {channel_name}")
+            item = QListWidgetItem(channel_name)
+            item.setData(Qt.ItemDataRole.UserRole, {
+                'id': channel_id,
+                'name': channel_name.replace('# ', '').replace('🔊 ', ''),
+                'type': channel_type
+            })
+            self.voice_channels_list.addItem(item)
+        
+        logger.info(f"Loaded {len(text_channels)} text channels and {len(voice_channels)} voice channels as fallback")
+        
+        # Auto-select the first text channel if no channel is currently selected
+        if self.channel_list.count() > 0 and not self.current_channel:
+            first_item = self.channel_list.item(0)
+            if first_item:
+                channel_data = first_item.data(Qt.ItemDataRole.UserRole)
+                if channel_data and channel_data['type'] == 'text':
+                    self.current_channel = channel_data['id']
+                    self.channel_list.setCurrentItem(first_item)
+                    self.show_channel(channel_data['id'])
+                    logger.info(f"Auto-selected first fallback channel: {channel_data['id']}")
+    
+    def load_private_messages(self):
+        """Load private messages/conversations."""
+        # Prevent multiple loads using class-level flag
+        if CommunityPage._private_messages_loaded:
+            logger.info("🔄 Private messages already loaded, skipping")
+            return
+            
+        try:
+            # During initialization, access _community_manager directly to avoid recursion
+            community_manager = getattr(self, '_community_manager', None)
+            if not community_manager:
+                logger.warning("Community manager not available, using fallback private messages")
+                self.load_fallback_private_messages()
+                CommunityPage._private_messages_loaded = True
+                return
+                
+            conversations = community_manager.get_private_conversations()
+            self.private_messages_list.clear()
+            
+            for conversation in conversations:
+                # Create conversation list item widget
+                conversation_widget = PrivateConversationListItem(conversation)
+                conversation_widget.conversation_selected.connect(self.on_private_conversation_selected)
+                
+                item = QListWidgetItem()
+                item.setSizeHint(conversation_widget.sizeHint())
+                
+                self.private_messages_list.addItem(item)
+                self.private_messages_list.setItemWidget(item, conversation_widget)
+            
+            # Mark as loaded using class-level flag
+            CommunityPage._private_messages_loaded = True
+                
+        except Exception as e:
+            logger.error(f"Error loading private messages: {e}")
+            self.load_fallback_private_messages()
+            CommunityPage._private_messages_loaded = True
+    
+    def load_fallback_private_messages(self):
+        """Load fallback private messages when database is unavailable."""
+        # For now, we'll show a placeholder message
+        placeholder_item = QListWidgetItem("No private messages yet")
+        # Note: QListWidgetItem doesn't have setStyleSheet, styling is done via the widget
+        self.private_messages_list.addItem(placeholder_item)
+    
+    def refresh_private_messages(self):
+        """Refresh private messages list (bypasses the class-level flag for updates)."""
+        try:
+            if not self.community_manager:
+                logger.warning("Community manager not available, cannot refresh private messages")
+                return
+                
+            conversations = self.community_manager.get_private_conversations()
+            self.private_messages_list.clear()
+            
+            for conversation in conversations:
+                # Create conversation list item widget
+                conversation_widget = PrivateConversationListItem(conversation)
+                conversation_widget.conversation_selected.connect(self.on_private_conversation_selected)
+                
+                item = QListWidgetItem()
+                item.setSizeHint(conversation_widget.sizeHint())
+                
+                self.private_messages_list.addItem(item)
+                self.private_messages_list.setItemWidget(item, conversation_widget)
+                
+        except Exception as e:
+            logger.error(f"Error refreshing private messages: {e}")
+    
+    def on_private_message_selected(self, item):
+        """Handle private message selection."""
+        logger.info(f"Private message selected: {item.text()}")
+    
+    def on_private_conversation_selected(self, conversation_id):
+        """Handle private conversation selection."""
+        logger.info(f"Private conversation selected: {conversation_id}")
+        
+        try:
+            # Get conversation data
+            if not self.community_manager:
+                logger.warning("Community manager not available")
                 return
             
-            # Test friends loading
-            friends = self.community_manager.get_friends()
-            logger.info(f"📋 DEBUG: Retrieved {len(friends)} friends")
+            # Get conversation details and messages
+            messages = self.community_manager.get_private_messages(conversation_id)
             
-            for friend in friends:
-                logger.info(f"👤 DEBUG Friend: {friend}")
+            # Create conversation widget
+            # Get conversation data from the list
+            conversation_data = None
+            for i in range(self.private_messages_list.count()):
+                item = self.private_messages_list.item(i)
+                widget = self.private_messages_list.itemWidget(item)
+                if hasattr(widget, 'conversation_id') and widget.conversation_id == conversation_id:
+                    conversation_data = widget.conversation_data
+                    break
             
-            # Refresh the UI
-            self.load_friends_list()
+            if not conversation_data:
+                logger.warning(f"Conversation data not found for ID: {conversation_id}")
+                return
+            
+            conversation_widget = PrivateConversationWidget(conversation_data)
+            conversation_widget.message_sent.connect(lambda text: self.on_private_message_sent(conversation_id, text))
+            
+            # Add messages to the conversation
+            current_user_id = None
+            try:
+                from ...auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated:
+                    current_user_id = user.id
+            except Exception as e:
+                logger.debug(f"Could not get current user: {e}")
+            
+            for message in messages:
+                is_own_message = current_user_id and message.get('user_profiles', {}).get('user_id') == current_user_id
+                conversation_widget.add_message(message, is_own_message)
+            
+            # Show the conversation
+            self.show_private_conversation(conversation_widget)
             
         except Exception as e:
-            logger.error(f"❌ Error in debug friends loading: {e}")
-            import traceback
-            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            logger.error(f"Error showing private conversation: {e}")
     
-    def add_debug_button(self):
-        """Add a debug button to test friends loading."""
+    def on_private_message_sent(self, conversation_id, message_text):
+        """Handle private message sent."""
+        logger.info(f"Private message sent to conversation {conversation_id}: {message_text}")
+        
         try:
-            debug_button = QPushButton("🔍 Debug Friends")
-            debug_button.setStyleSheet("""
+            if not self.community_manager:
+                logger.warning("Community manager not available")
+                return
+            
+            # Send message to database
+            success = self.community_manager.send_private_message(conversation_id, message_text)
+            
+            if success:
+                logger.info("Private message sent successfully")
+                # Refresh the private messages list
+                self.refresh_private_messages()
+            else:
+                logger.error("Failed to send private message")
+                
+        except Exception as e:
+            logger.error(f"Error sending private message: {e}")
+    
+    def on_new_private_message_clicked(self):
+        """Handle new private message button click."""
+        try:
+            # Show an enhanced dialog to select a user to message
+            from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+                                        QLineEdit, QPushButton, QMessageBox, QTabWidget,
+                                        QListWidget, QListWidgetItem, QFrame, QSplitter)
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtGui import QFont
+            from trackpro.social.friends_manager import FriendsManager
+            from trackpro.social.user_manager import EnhancedUserManager
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("New Private Message")
+            dialog.setFixedSize(500, 400)
+            dialog.setStyleSheet("""
+                QDialog {
+                    background-color: #2f3136;
+                    color: #dcddde;
+                }
+                QLabel {
+                    color: #dcddde;
+                    font-size: 14px;
+                }
+                QLineEdit {
+                    background-color: #40444b;
+                    border: 1px solid #202225;
+                    border-radius: 4px;
+                    color: #dcddde;
+                    padding: 8px;
+                    font-size: 14px;
+                }
                 QPushButton {
-                    background-color: #e74c3c;
+                    background-color: #5865f2;
                     border: none;
                     border-radius: 4px;
                     color: #ffffff;
-                    font-size: 12px;
+                    padding: 8px 16px;
+                    font-size: 14px;
                     font-weight: 600;
-                    padding: 6px 12px;
-                    margin: 4px 16px;
                 }
                 QPushButton:hover {
-                    background-color: #c0392b;
+                    background-color: #4752c4;
+                }
+                QPushButton:disabled {
+                    background-color: #4f545c;
+                    color: #72767d;
+                }
+                QTabWidget::pane {
+                    border: 1px solid #202225;
+                    background-color: #40444b;
+                }
+                QTabBar::tab {
+                    background-color: #2f3136;
+                    color: #dcddde;
+                    padding: 8px 16px;
+                    border: 1px solid #202225;
+                    border-bottom: none;
+                }
+                QTabBar::tab:selected {
+                    background-color: #40444b;
+                }
+                QListWidget {
+                    background-color: #40444b;
+                    border: 1px solid #202225;
+                    color: #dcddde;
+                }
+                QListWidget::item {
+                    padding: 8px;
+                    border-bottom: 1px solid #202225;
+                }
+                QListWidget::item:selected {
+                    background-color: #5865f2;
+                }
+                QListWidget::item:hover {
+                    background-color: #4752c4;
                 }
             """)
-            debug_button.clicked.connect(self.debug_friends_loading)
             
-            # Add to the friends section
-            # Find the friends section in the scroll area
-            scroll_area = self.findChild(QScrollArea)
-            if scroll_area:
-                scroll_widget = scroll_area.widget()
-                if scroll_widget:
-                    layout = scroll_widget.layout()
-                    if layout:
-                        # Insert after the Add Friend button
-                        layout.insertWidget(layout.indexOf(self.add_friend_btn) + 1, debug_button)
-                        logger.info("✅ Added debug button to friends section")
+            layout = QVBoxLayout(dialog)
+            
+            # Title
+            title_label = QLabel("Start a private conversation:")
+            title_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+            layout.addWidget(title_label)
+            
+            # Search input
+            search_layout = QHBoxLayout()
+            search_label = QLabel("Search:")
+            self.search_input = QLineEdit()
+            self.search_input.setPlaceholderText("Search friends or users...")
+            self.search_input.textChanged.connect(self.on_search_text_changed)
+            search_layout.addWidget(search_label)
+            search_layout.addWidget(self.search_input)
+            layout.addLayout(search_layout)
+            
+            # Tab widget for friends and search results
+            self.tab_widget = QTabWidget()
+            
+            # Friends tab
+            self.friends_tab = QWidget()
+            friends_layout = QVBoxLayout(self.friends_tab)
+            friends_label = QLabel("Your Friends:")
+            self.friends_list = QListWidget()
+            self.friends_list.itemClicked.connect(self.on_user_selected)
+            friends_layout.addWidget(friends_label)
+            friends_layout.addWidget(self.friends_list)
+            self.tab_widget.addTab(self.friends_tab, "Friends")
+            
+            # Search results tab
+            self.search_tab = QWidget()
+            search_results_layout = QVBoxLayout(self.search_tab)
+            search_results_label = QLabel("Search Results:")
+            self.search_results_list = QListWidget()
+            self.search_results_list.itemClicked.connect(self.on_user_selected)
+            search_results_layout.addWidget(search_results_label)
+            search_results_layout.addWidget(self.search_results_list)
+            self.tab_widget.addTab(self.search_tab, "Search Results")
+            
+            layout.addWidget(self.tab_widget)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_btn)
+            
+            start_btn = QPushButton("Start Conversation")
+            start_btn.clicked.connect(lambda: self.start_private_conversation_from_dialog(dialog))
+            button_layout.addWidget(start_btn)
+            
+            layout.addLayout(button_layout)
+            
+            # Initialize data
+            self.selected_user = None
+            self.load_friends_list()
+            
+            # Show dialog
+            result = dialog.exec()
             
         except Exception as e:
-            logger.error(f"❌ Error adding debug button: {e}")
+            logger.error(f"Error showing new private message dialog: {e}")
+    
+    def load_friends_list(self):
+        """Load the current user's friends list."""
+        try:
+            from trackpro.social.friends_manager import FriendsManager
+            
+            friends_manager = FriendsManager()
+            current_user_id = self.get_current_user_id()
+            
+            if not current_user_id:
+                logger.error("No authenticated user found")
+                return
+            
+            friends = friends_manager.get_friends_list(current_user_id, include_online_status=True)
+            self.friends_list.clear()
+            
+            for friend in friends:
+                item = QListWidgetItem()
+                widget = self.create_user_list_item(friend)
+                item.setSizeHint(widget.sizeHint())
+                self.friends_list.addItem(item)
+                self.friends_list.setItemWidget(item, widget)
+                
+        except Exception as e:
+            logger.error(f"Error loading friends list: {e}")
+    
+    def create_user_list_item(self, user_data: dict) -> QWidget:
+        """Create a user list item widget."""
+        widget = QFrame()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        
+        # Store user data in the widget
+        widget.user_data = user_data
+        
+        # Avatar placeholder
+        avatar = QLabel("👤")
+        avatar.setFixedSize(32, 32)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        avatar.setStyleSheet("""
+            QLabel {
+                border: 2px solid #5865f2;
+                border-radius: 16px;
+                background-color: #40444b;
+            }
+        """)
+        
+        # User info
+        info_layout = QVBoxLayout()
+        username = user_data.get('friend_username', user_data.get('username', 'Unknown'))
+        username_label = QLabel(username)
+        username_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        
+        status_text = "🟢 Online" if user_data.get('is_online', False) else "⚫ Offline"
+        status_label = QLabel(status_text)
+        status_label.setStyleSheet("color: #72767d; font-size: 11px;")
+        
+        info_layout.addWidget(username_label)
+        info_layout.addWidget(status_label)
+        
+        layout.addWidget(avatar)
+        layout.addLayout(info_layout)
+        layout.addStretch()
+        
+        return widget
+    
+    def on_search_text_changed(self, text: str):
+        """Handle search text changes."""
+        if len(text) < 2:
+            self.search_results_list.clear()
+            self.tab_widget.setCurrentIndex(0)  # Switch to friends tab
+            return
+        
+        try:
+            from trackpro.social.user_manager import EnhancedUserManager
+            
+            user_manager = EnhancedUserManager()
+            users = user_manager.search_users(text, limit=20)
+            
+            self.search_results_list.clear()
+            
+            for user in users:
+                if user.get('user_id') != self.get_current_user_id():
+                    item = QListWidgetItem()
+                    widget = self.create_user_list_item(user)
+                    item.setSizeHint(widget.sizeHint())
+                    self.search_results_list.addItem(item)
+                    self.search_results_list.setItemWidget(item, widget)
+            
+            # Switch to search results tab if we have results
+            if users:
+                self.tab_widget.setCurrentIndex(1)
+                
+        except Exception as e:
+            logger.error(f"Error searching users: {e}")
+    
+    def on_user_selected(self, item):
+        """Handle user selection from either friends or search results."""
+        try:
+            # Get the widget associated with the selected item
+            widget = self.tab_widget.currentWidget()
+            list_widget = widget.findChild(QListWidget)
+            
+            if list_widget == self.friends_list:
+                # Get friend data from friends list
+                item_widget = self.friends_list.itemWidget(item)
+                if item_widget and hasattr(item_widget, 'user_data'):
+                    self.selected_user = item_widget.user_data
+                    # Update search input with selected username
+                    username = item_widget.user_data.get('friend_username', item_widget.user_data.get('username', ''))
+                    self.search_input.setText(username)
+            elif list_widget == self.search_results_list:
+                # Get user data from search results
+                item_widget = self.search_results_list.itemWidget(item)
+                if item_widget and hasattr(item_widget, 'user_data'):
+                    self.selected_user = item_widget.user_data
+                    # Update search input with selected username
+                    username = item_widget.user_data.get('username', '')
+                    self.search_input.setText(username)
+                
+        except Exception as e:
+            logger.error(f"Error selecting user: {e}")
+    
+    def start_private_conversation_from_dialog(self, dialog):
+        """Start a new private conversation from the enhanced dialog."""
+        try:
+            # Try to get selected user first
+            if self.selected_user:
+                username = self.selected_user.get('username')
+            else:
+                # Fall back to search input
+                username = self.search_input.text().strip()
+            
+            if not username:
+                QMessageBox.warning(dialog, "Error", "Please select a user or enter a username.")
+                return
+            
+            # Get user by username
+            if not self.community_manager:
+                QMessageBox.warning(dialog, "Error", "Community manager not available.")
+                return
+            
+            # For now, we'll create a mock conversation
+            # In a real implementation, you'd look up the user in the database
+            conversation_id = self.community_manager.get_or_create_conversation(username)
+            
+            if conversation_id:
+                dialog.accept()
+                # Load and show the conversation
+                self.on_private_conversation_selected(conversation_id)
+            else:
+                QMessageBox.warning(dialog, "Error", f"Could not find user '{username}' or create conversation.")
+                
+        except Exception as e:
+            logger.error(f"Error starting private conversation: {e}")
+            QMessageBox.critical(dialog, "Error", f"An error occurred: {str(e)}")
+    
+    def get_current_user_id(self):
+        """Get the current user ID."""
+        try:
+            if hasattr(self, 'community_manager') and self.community_manager:
+                return self.community_manager.get_current_user_id()
+            return None
+        except Exception as e:
+            logger.error(f"Error getting current user ID: {e}")
+            return None
+    
+    def start_private_conversation_with_user(self, user_data):
+        """Start a private conversation with a specific user."""
+        try:
+            if not self.community_manager:
+                logger.error("Community manager not available")
+                return
+            
+            user_id = user_data.get('user_id')
+            if not user_id:
+                logger.error("No user ID provided")
+                return
+            
+            # Get or create conversation
+            conversation_id = self.community_manager.get_or_create_conversation(user_id)
+            
+            if conversation_id:
+                # Load and show the conversation
+                self.on_private_conversation_selected(conversation_id)
+            else:
+                logger.error(f"Could not create conversation with user {user_id}")
+                
+        except Exception as e:
+            logger.error(f"Error starting private conversation with user: {e}")
+    
+    def show_private_conversation(self, conversation_widget):
+        """Show private conversation in the main content area."""
+        # Clear current content
+        for i in reversed(range(self.content_stack.count())):
+            self.content_stack.removeWidget(self.content_stack.widget(i))
+        
+        # Add conversation widget
+        self.content_stack.addWidget(conversation_widget)
+        conversation_widget.show()
+    
+    def show_voice_debug_info(self):
+        """Show debug information about voice chat status."""
+        try:
+            debug_info = []
+            
+            # Check voice server status
+            if VOICE_SERVER_AVAILABLE:
+                server_running = is_voice_server_running()
+                debug_info.append(f"Voice Server: {'✅ Running' if server_running else '❌ Not Running'}")
+            else:
+                debug_info.append("Voice Server: ❌ Not Available")
+            
+            # Check voice components
+            debug_info.append(f"Voice Components: {'✅ Available' if VOICE_COMPONENTS_AVAILABLE else '❌ Not Available'}")
+            debug_info.append(f"Simple Voice Client: {'✅ Available' if SIMPLE_VOICE_AVAILABLE else '❌ Not Available'}")
+            debug_info.append(f"PyAudio: {'✅ Available' if PYAUDIO_AVAILABLE else '❌ Not Available'}")
+            
+            # Check current voice connection
+            if hasattr(self, 'voice_client'):
+                connected = self.voice_client.is_connected()
+                debug_info.append(f"Voice Client: {'✅ Connected' if connected else '❌ Disconnected'}")
+            else:
+                debug_info.append("Voice Client: ❌ Not Initialized")
+            
+            # Check voice server connection
+            try:
+                import socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                result = sock.connect_ex(('localhost', 8080))
+                sock.close()
+                debug_info.append(f"Server Port 8080: {'✅ Accessible' if result == 0 else '❌ Not Accessible'}")
+            except Exception as e:
+                debug_info.append(f"Server Port 8080: ❌ Error checking - {e}")
+            
+            # Show debug info
+            debug_text = "\n".join(debug_info)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Voice Chat Debug Info", 
+                                  f"Voice Chat Status:\n\n{debug_text}")
+            
+        except Exception as e:
+            logger.error(f"Error showing voice debug info: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Debug Error", f"Error getting debug info: {str(e)}")
+    
+
+    

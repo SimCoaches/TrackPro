@@ -703,8 +703,9 @@ class OAuthHandler(QObject):
                                 logger.error(f"Error setting session after forced init: {e}")
                     
                     # Save session and emit success
-                    if hasattr(self.parent, '_save_session'):
-                        self.parent._save_session(mock_response, remember_me=True)
+                    from trackpro.database.supabase_client import _supabase_manager
+                    if hasattr(_supabase_manager, '_save_session'):
+                        _supabase_manager._save_session(mock_response, remember_me=True)
                     
                     # Emit auth completed signal
                     self.parent.auth_completed.emit(True, mock_response)
@@ -756,9 +757,19 @@ class OAuthHandler(QObject):
                                     is_authenticated=True
                                 )
                                 set_current_user(authenticated_user)
-                                logger.info("Set current user in user_manager successfully")
+                                logger.info(f"Set current user in user_manager successfully: {authenticated_user.email}")
+                                
+                                # Verify the user was set correctly
+                                from ..auth.user_manager import get_current_user
+                                current_user = get_current_user()
+                                if current_user and current_user.id == result.user.id:
+                                    logger.info("✅ User verification successful - user is properly set")
+                                else:
+                                    logger.error(f"❌ User verification failed - expected {result.user.id}, got {current_user.id if current_user else 'None'}")
                             except Exception as user_set_error:
                                 logger.error(f"Failed to set user in user_manager: {user_set_error}")
+                                import traceback
+                                logger.error(f"Traceback: {traceback.format_exc()}")
                             # *** END ADDED CODE ***
                             
                             # OPTIMIZATION: Get user details from metadata if available rather than making another query

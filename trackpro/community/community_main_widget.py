@@ -610,10 +610,10 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
         try:
             # Try to get the main window and open login dialog
             parent_window = self.parent()
-            while parent_window and not hasattr(parent_window, 'show_login_dialog'):
+            while parent_window is not None and not hasattr(parent_window, 'show_login_dialog'):
                 parent_window = parent_window.parent()
                 
-            if parent_window and hasattr(parent_window, 'show_login_dialog'):
+            if parent_window is not None and hasattr(parent_window, 'show_login_dialog'):
                 parent_window.show_login_dialog()
             else:
                 print("Could not find main window to open login dialog")
@@ -906,7 +906,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
             try:
                 # Look for the main window's iRacing API
                 parent_widget = self.parent()
-                while parent_widget:
+                while parent_widget is not None:
                     # Look for the main window that should have the iRacing API
                     if hasattr(parent_widget, 'iracing_api') or hasattr(parent_widget, 'simple_iracing_api'):
                         iracing_api = getattr(parent_widget, 'iracing_api', None) or getattr(parent_widget, 'simple_iracing_api', None)
@@ -915,7 +915,10 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                             self.hook_into_telemetry_backend(iracing_api)
                             success = True
                             break
-                    parent_widget = parent_widget.parent()
+                    next_parent = parent_widget.parent()
+                    if next_parent is None:
+                        break
+                    parent_widget = next_parent
                     
             except Exception as e:
                 print(f"⚠️ Method 1 failed: {e}")
@@ -928,7 +931,7 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                     
                     # Check if we can find an active lap saver instance
                     parent_widget = self.parent()
-                    while parent_widget:
+                    while parent_widget is not None:
                         # Look for any object that might have a lap_saver
                         for attr_name in dir(parent_widget):
                             if 'lap' in attr_name.lower() and 'saver' in attr_name.lower():
@@ -940,7 +943,10 @@ class CommunityMainWidget(QWidget, CommunitySocialMixin, CommunityContentMixin, 
                                     break
                         if success:
                             break
-                        parent_widget = parent_widget.parent()
+                        next_parent = parent_widget.parent()
+                        if next_parent is None:
+                            break
+                        parent_widget = next_parent
                         
                 except Exception as e:
                     print(f"⚠️ Method 2 failed: {e}")

@@ -1,17 +1,16 @@
 import logging
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 from ...modern.shared.base_page import BasePage
 
 logger = logging.getLogger(__name__)
 
 class RacePassPage(BasePage):
     """
-    Complete Race Pass page that integrates all Race Pass functionality
-    including battle pass progression, premium purchases, quests, and TrackCoins store.
+    Race Pass page - Coming Soon
     """
     
     # Signals for communication with parent window
@@ -19,197 +18,173 @@ class RacePassPage(BasePage):
     trackcoins_updated = pyqtSignal(int)
     
     def __init__(self, global_managers=None):
-        self.race_pass_widget = None
-        self._is_authenticated = False
         super().__init__("Race Pass", global_managers)
         
     def init_page(self):
-        """Initialize the Race Pass page layout and components."""
+        """Initialize the Race Pass Coming Soon page layout."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(30)
         
-        # Initialize the main Race Pass widget
-        self.init_race_pass_widget(layout)
+        # Create the coming soon content
+        self.create_coming_soon_content(layout)
         
-
-    def init_race_pass_widget(self, layout):
-        """Initialize the main Race Pass widget with all functionality."""
-        try:
-            # Import the existing Race Pass widget
-            try:
-                from future.gamification.trackpro_gamification.ui.race_pass_view import RacePassViewWidget
-            except ImportError:
-                from trackpro.ui.shared_imports import RacePassViewWidget
-            
-            # Create the race pass widget
-            self.race_pass_widget = RacePassViewWidget(self)
-            
-            # Connect signals if the widget has them
-            if hasattr(self.race_pass_widget, 'premium_pass_purchased'):
-                self.race_pass_widget.premium_pass_purchased.connect(self.on_premium_pass_purchased)
-            
-            if hasattr(self.race_pass_widget, 'trackcoins_updated'):
-                self.race_pass_widget.trackcoins_updated.connect(self.on_trackcoins_updated)
-            
-            # Add the widget to layout
-            layout.addWidget(self.race_pass_widget)
-            
-            logger.info("✅ Race Pass widget initialized successfully")
-            
-        except ImportError as e:
-            logger.error(f"Failed to import Race Pass widget: {e}")
-            self.create_fallback_ui(layout)
-        except Exception as e:
-            logger.error(f"Error initializing Race Pass widget: {e}")
-            self.create_fallback_ui(layout)
-    
-    def create_fallback_ui(self, layout):
-        """Create a fallback UI when the main Race Pass widget fails to load."""
-        fallback_frame = QFrame()
-        fallback_frame.setStyleSheet("""
+    def create_coming_soon_content(self, layout):
+        """Create the coming soon UI content."""
+        # Main container frame
+        main_frame = QFrame()
+        main_frame.setStyleSheet("""
             QFrame {
-                background-color: #252525;
-                border: 2px solid #e74c3c;
-                border-radius: 8px;
-                padding: 30px;
+                background-color: #1a1a1a;
+                border: 2px solid #333;
+                border-radius: 12px;
+                padding: 40px;
             }
         """)
-        fallback_layout = QVBoxLayout(fallback_frame)
+        main_layout = QVBoxLayout(main_frame)
+        main_layout.setSpacing(25)
         
-        error_label = QLabel("⚠️ Race Pass Temporarily Unavailable")
-        error_label.setStyleSheet("""
-            color: #e74c3c;
-            font-size: 24px;
+        # Title
+        title_label = QLabel("Race Pass")
+        title_label.setStyleSheet("""
+            color: #ffffff;
+            font-size: 36px;
             font-weight: bold;
             text-align: center;
-            margin-bottom: 15px;
         """)
-        error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        fallback_layout.addWidget(error_label)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(title_label)
         
-        info_label = QLabel(
-            "The Race Pass system is currently unavailable.\n\n"
-            "This could be due to:\n"
-            "• Network connectivity issues\n"
-            "• Authentication requirements\n"
-            "• System maintenance\n\n"
-            "Please try again later or check the logs for more details."
-        )
-        info_label.setStyleSheet("""
-            color: #ccc;
-            font-size: 14px;
+        # Coming Soon badge
+        coming_soon_label = QLabel("COMING SOON")
+        coming_soon_label.setStyleSheet("""
+            color: #00d4ff;
+            font-size: 18px;
+            font-weight: bold;
             text-align: center;
-            line-height: 1.5;
+            background-color: rgba(0, 212, 255, 0.1);
+            border: 2px solid #00d4ff;
+            border-radius: 20px;
+            padding: 8px 20px;
         """)
-        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        fallback_layout.addWidget(info_label)
+        coming_soon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(coming_soon_label)
         
-        layout.addWidget(fallback_frame)
+        # Description
+        desc_label = QLabel(
+            "We're working hard to bring you an amazing Race Pass experience!\n\n"
+            "Get ready for:\n"
+            "• Battle Pass progression with exclusive rewards\n"
+            "• Premium pass with enhanced benefits\n"
+            "• TrackCoins store with unique cosmetics\n"
+            "• Daily and weekly challenges\n"
+            "• Milestone rewards and achievements"
+        )
+        desc_label.setStyleSheet("""
+            color: #cccccc;
+            font-size: 16px;
+            text-align: center;
+            line-height: 1.6;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 20px;
+        """)
+        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc_label.setWordWrap(True)
+        main_layout.addWidget(desc_label)
+        
+        # Progress indicator
+        progress_frame = QFrame()
+        progress_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.05);
+                border-radius: 8px;
+                padding: 20px;
+            }
+        """)
+        progress_layout = QVBoxLayout(progress_frame)
+        
+        progress_title = QLabel("Development Progress")
+        progress_title.setStyleSheet("""
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 10px;
+        """)
+        progress_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_layout.addWidget(progress_title)
+        
+        # Progress bar simulation
+        progress_bar_frame = QFrame()
+        progress_bar_frame.setStyleSheet("""
+            QFrame {
+                background-color: #333;
+                border-radius: 10px;
+                padding: 3px;
+            }
+        """)
+        progress_bar_layout = QHBoxLayout(progress_bar_frame)
+        progress_bar_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Progress fill (simulated)
+        progress_fill = QFrame()
+        progress_fill.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #00d4ff, stop:1 #0099cc);
+                border-radius: 7px;
+            }
+        """)
+        progress_fill.setFixedWidth(200)  # Simulate 60% progress
+        progress_bar_layout.addWidget(progress_fill)
+        progress_bar_layout.addStretch()
+        
+        progress_layout.addWidget(progress_bar_frame)
+        
+        # Progress text
+        progress_text = QLabel("60% Complete")
+        progress_text.setStyleSheet("""
+            color: #00d4ff;
+            font-size: 14px;
+            font-weight: bold;
+            text-align: center;
+            margin-top: 5px;
+        """)
+        progress_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_layout.addWidget(progress_text)
+        
+        main_layout.addWidget(progress_frame)
+        
+        # Add some spacing
+        main_layout.addStretch()
+        
+        # Add the main frame to the layout
+        layout.addWidget(main_frame)
         
     def on_page_activated(self):
         """Called when the page becomes active."""
         super().on_page_activated()
-        
-        # Refresh Race Pass data when page is activated
-        if self.race_pass_widget and hasattr(self.race_pass_widget, 'load_race_pass_data'):
-            try:
-                self.race_pass_widget.load_race_pass_data()
-            except Exception as e:
-                logger.warning(f"Failed to refresh Race Pass data: {e}")
+        logger.info("🎟️ Race Pass Coming Soon page activated")
     
     def lazy_init(self):
         """Perform lazy initialization when page is first activated."""
-        logger.info("🎟️ Race Pass page lazy initialization")
-        
-        # Check authentication status
-        self.check_authentication()
-        
-        # Load initial data if not already loaded
-        if self.race_pass_widget:
-            try:
-                if hasattr(self.race_pass_widget, 'load_race_pass_data'):
-                    self.race_pass_widget.load_race_pass_data()
-            except Exception as e:
-                logger.warning(f"Failed to load Race Pass data during lazy init: {e}")
-    
-    def check_authentication(self):
-        """Check if user is authenticated for Race Pass features."""
-        try:
-            # Check if auth handler is available
-            if self.auth_handler:
-                self._is_authenticated = self.auth_handler.is_authenticated()
-            else:
-                # Try to check authentication via supabase directly
-                from trackpro.database import supabase
-                self._is_authenticated = supabase.is_authenticated()
-            
-            logger.info(f"Race Pass authentication status: {self._is_authenticated}")
-            
-        except Exception as e:
-            logger.warning(f"Could not check authentication: {e}")
-            # Default to allowing access (offline mode)
-            self._is_authenticated = True
-    
-    def on_premium_pass_purchased(self):
-        """Handle premium pass purchase event."""
-        logger.info("🎉 Premium Race Pass purchased!")
-        self.premium_pass_purchased.emit()
-        
-        # Show success message
-        QMessageBox.information(
-            self,
-            "Premium Pass Activated",
-            "🎉 Your Premium Race Pass has been activated!\n\n"
-            "You now have access to:\n"
-            "• Exclusive premium rewards\n"
-            "• Double XP progression\n" 
-            "• Premium cosmetics\n"
-            "• Special milestone bonuses\n\n"
-            "Enjoy your enhanced Race Pass experience!"
-        )
-    
-    def on_trackcoins_updated(self, new_balance):
-        """Handle TrackCoins balance update."""
-        logger.info(f"💰 TrackCoins updated: {new_balance}")
-        self.trackcoins_updated.emit(new_balance)
+        logger.info("🎟️ Race Pass Coming Soon page lazy initialization")
     
     def get_race_pass_progress(self):
-        """Get current race pass progression data."""
-        if self.race_pass_widget:
-            try:
-                # Try to get progress from the widget
-                if hasattr(self.race_pass_widget, 'overview_widget'):
-                    # Return basic progress info
-                    return {
-                        'current_tier': 5,  # Default values
-                        'max_tier': 50,
-                        'premium_active': getattr(self.race_pass_widget, 'premium_active', False)
-                    }
-            except Exception as e:
-                logger.warning(f"Failed to get race pass progress: {e}")
-        
-        return None
+        """Get current race pass progression data (coming soon)."""
+        return {
+            'current_tier': 0,
+            'max_tier': 50,
+            'premium_active': False,
+            'status': 'coming_soon'
+        }
     
     def refresh_data(self):
-        """Refresh all Race Pass data."""
-        if self.race_pass_widget and hasattr(self.race_pass_widget, 'load_race_pass_data'):
-            try:
-                self.race_pass_widget.load_race_pass_data()
-                logger.info("🔄 Race Pass data refreshed")
-            except Exception as e:
-                logger.error(f"Failed to refresh Race Pass data: {e}")
+        """Refresh data (no-op for coming soon)."""
+        logger.info("🔄 Race Pass Coming Soon - no data to refresh")
     
     def cleanup(self):
         """Clean up resources when page is destroyed."""
-        logger.info("🧹 Race Pass page cleanup")
-        
-        # Clean up the race pass widget if it exists
-        if self.race_pass_widget:
-            try:
-                if hasattr(self.race_pass_widget, 'cleanup'):
-                    self.race_pass_widget.cleanup()
-            except Exception as e:
-                logger.warning(f"Error during Race Pass widget cleanup: {e}")
-        
+        logger.info("🧹 Race Pass Coming Soon page cleanup")
         super().cleanup()

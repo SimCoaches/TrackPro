@@ -41,7 +41,17 @@ class HierarchyManager:
         self.hardcoded_admin_email = "lawrence@simcoaches.com"
         # Dynamic admin emails - these can be modified without updates
         self.dynamic_admin_emails = set()
-        self._load_dynamic_admins()
+        # Defer loading dynamic admins to prevent startup hanging
+        self._admins_loaded = False
+        # Schedule admin loading for later
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(3000, self._load_dynamic_admins_async)
+    
+    def _load_dynamic_admins_async(self):
+        """Load dynamic admin emails asynchronously after startup."""
+        if not self._admins_loaded:
+            self._load_dynamic_admins()
+            self._admins_loaded = True
     
     def _load_dynamic_admins(self):
         """Load dynamic admin emails from database."""
@@ -215,10 +225,31 @@ class HierarchyManager:
             UserHierarchy object or None
         """
         try:
-            response = self.supabase.table("user_hierarchy").select("*").eq("user_id", user_id).single().execute()
+            # Add timeout to prevent hanging during startup
+            import concurrent.futures
+            import threading
             
-            if response.data:
-                data = response.data
+            def fetch_hierarchy():
+                try:
+                    response = self.supabase.table("user_hierarchy").select("*").eq("user_id", user_id).single().execute()
+                    return response.data if response.data else None
+                except Exception as e:
+                    logger.error(f"Error fetching user hierarchy: {e}")
+                    return None
+            
+            # Use a timeout to prevent hanging
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(fetch_hierarchy)
+                try:
+                    data = future.result(timeout=3.0)  # 3 second timeout
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"Timeout getting user hierarchy for {user_id}")
+                    return None
+                except Exception as e:
+                    logger.error(f"Error getting user hierarchy: {e}")
+                    return None
+            
+            if data:
                 return UserHierarchy(
                     user_id=data['user_id'],
                     hierarchy_level=HierarchyLevel(data['hierarchy_level']),

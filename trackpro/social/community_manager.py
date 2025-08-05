@@ -738,11 +738,28 @@ class CommunityManager(DatabaseManager):
             List of matching teams
         """
         try:
-            response = self.client.from_("teams").select("*").or_(
-                f"name.ilike.%{query}%,description.ilike.%{query}%"
-            ).eq("privacy_level", PrivacyLevel.PUBLIC.value).limit(limit).execute()
+            # Use separate queries for name and description search
+            name_response = self.client.from_("teams").select("*").ilike("name", f"%{query}%").eq("privacy_level", PrivacyLevel.PUBLIC.value).limit(limit).execute()
+            desc_response = self.client.from_("teams").select("*").ilike("description", f"%{query}%").eq("privacy_level", PrivacyLevel.PUBLIC.value).limit(limit).execute()
             
-            teams = response.data or []
+            # Combine results
+            teams = []
+            if name_response.data:
+                teams.extend(name_response.data)
+            if desc_response.data:
+                teams.extend(desc_response.data)
+            
+            # Remove duplicates based on team ID
+            seen_ids = set()
+            unique_teams = []
+            for team in teams:
+                if team['id'] not in seen_ids:
+                    seen_ids.add(team['id'])
+                    unique_teams.append(team)
+            
+            teams = unique_teams[:limit]
+            
+            # teams is already defined above
             
             # Add member counts
             for team in teams:
@@ -769,14 +786,36 @@ class CommunityManager(DatabaseManager):
             query_builder = self.client.from_("clubs").select("*").eq("privacy_level", PrivacyLevel.PUBLIC.value)
             
             if query:
-                query_builder = query_builder.or_(f"name.ilike.%{query}%,description.ilike.%{query}%")
+                # Use separate queries for name and description search
+                name_response = self.client.from_("clubs").select("*").ilike("name", f"%{query}%").eq("privacy_level", PrivacyLevel.PUBLIC.value).execute()
+                desc_response = self.client.from_("clubs").select("*").ilike("description", f"%{query}%").eq("privacy_level", PrivacyLevel.PUBLIC.value).execute()
+                
+                # Combine results
+                clubs = []
+                if name_response.data:
+                    clubs.extend(name_response.data)
+                if desc_response.data:
+                    clubs.extend(desc_response.data)
+                
+                # Remove duplicates based on club ID
+                seen_ids = set()
+                unique_clubs = []
+                for club in clubs:
+                    if club['id'] not in seen_ids:
+                        seen_ids.add(club['id'])
+                        unique_clubs.append(club)
+                
+                return unique_clubs[:limit]
             
-            if category:
-                query_builder = query_builder.eq("category", category)
-            
-            response = query_builder.limit(limit).execute()
-            
-            return response.data or []
+            # If no query, get all public clubs
+            if not query:
+                response = self.client.from_("clubs").select("*").eq("privacy_level", PrivacyLevel.PUBLIC.value).limit(limit).execute()
+                clubs = response.data or []
+                
+                if category:
+                    clubs = [club for club in clubs if club.get('category') == category]
+                
+                return clubs
             
         except Exception as e:
             logger.error(f"Error searching clubs: {e}")

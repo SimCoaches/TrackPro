@@ -39,12 +39,17 @@ class FriendsManager(DatabaseManager):
             Dictionary with success status and message
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - cannot send friend request")
+                return {"success": False, "message": "Database connection not available"}
+            
             # Validate users are different
             if requester_id == addressee_id:
                 return {"success": False, "message": "Cannot send friend request to yourself"}
             
             # Check if addressee exists
-            addressee_response = self.client.from_("user_profiles").select("user_id, username, privacy_settings").eq("user_id", addressee_id).single().execute()
+            addressee_response = self.supabase.from_("user_profiles").select("user_id, username, privacy_settings").eq("user_id", addressee_id).single().execute()
             if not addressee_response.data:
                 return {"success": False, "message": "User not found"}
             
@@ -76,7 +81,7 @@ class FriendsManager(DatabaseManager):
                 'updated_at': datetime.utcnow().isoformat()
             }
             
-            response = self.client.from_("friendships").insert(friendship_data).execute()
+            response = self.supabase.from_("friendships").insert(friendship_data).execute()
             if not response.data:
                 return {"success": False, "message": "Failed to send friend request"}
             
@@ -111,8 +116,13 @@ class FriendsManager(DatabaseManager):
             Dictionary with success status and message
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - cannot respond to friend request")
+                return {"success": False, "message": "Database connection not available"}
+            
             # Get the friendship record
-            friendship_response = self.client.from_("friendships").select("*").eq("id", friendship_id).single().execute()
+            friendship_response = self.supabase.from_("friendships").select("*").eq("id", friendship_id).single().execute()
             if not friendship_response.data:
                 return {"success": False, "message": "Friend request not found"}
             
@@ -133,7 +143,7 @@ class FriendsManager(DatabaseManager):
                 'updated_at': datetime.utcnow().isoformat()
             }
             
-            response = self.client.from_("friendships").update(update_data).eq("id", friendship_id).execute()
+            response = self.supabase.from_("friendships").update(update_data).eq("id", friendship_id).execute()
             if not response.data:
                 return {"success": False, "message": "Failed to update friend request"}
             
@@ -174,14 +184,19 @@ class FriendsManager(DatabaseManager):
             Dictionary with success status and message
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - cannot cancel friend request")
+                return {"success": False, "message": "Database connection not available"}
+            
             # Find the pending friendship
-            friendship_response = self.client.from_("friendships").select("*").eq("requester_id", requester_id).eq("addressee_id", addressee_id).eq("status", FriendshipStatus.PENDING.value).single().execute()
+            friendship_response = self.supabase.from_("friendships").select("*").eq("requester_id", requester_id).eq("addressee_id", addressee_id).eq("status", FriendshipStatus.PENDING.value).single().execute()
             
             if not friendship_response.data:
                 return {"success": False, "message": "No pending friend request found"}
             
             # Delete the friendship record
-            delete_response = self.client.from_("friendships").delete().eq("id", friendship_response.data['id']).execute()
+            delete_response = self.supabase.from_("friendships").delete().eq("id", friendship_response.data['id']).execute()
             
             if delete_response.data:
                 logger.info(f"Friend request cancelled from {requester_id} to {addressee_id}")
@@ -208,16 +223,27 @@ class FriendsManager(DatabaseManager):
             Dictionary with success status and message
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - cannot remove friend")
+                return {"success": False, "message": "Database connection not available"}
+            
             # Find the friendship (could be in either direction)
-            friendship_response = self.client.from_("friendships").select("*").or_(
-                f"and(requester_id.eq.{user_id},addressee_id.eq.{friend_id}),and(requester_id.eq.{friend_id},addressee_id.eq.{user_id})"
-            ).eq("status", FriendshipStatus.ACCEPTED.value).single().execute()
+            # First check user as requester, friend as addressee
+            friendship_response1 = self.supabase.from_("friendships").select("*").eq("requester_id", user_id).eq("addressee_id", friend_id).eq("status", FriendshipStatus.ACCEPTED.value).single().execute()
+            
+            if friendship_response1.data:
+                friendship_response = friendship_response1
+            else:
+                # Check friend as requester, user as addressee
+                friendship_response2 = self.supabase.from_("friendships").select("*").eq("requester_id", friend_id).eq("addressee_id", user_id).eq("status", FriendshipStatus.ACCEPTED.value).single().execute()
+                friendship_response = friendship_response2
             
             if not friendship_response.data:
                 return {"success": False, "message": "Friendship not found"}
             
             # Delete the friendship
-            delete_response = self.client.from_("friendships").delete().eq("id", friendship_response.data['id']).execute()
+            delete_response = self.supabase.from_("friendships").delete().eq("id", friendship_response.data['id']).execute()
             
             if delete_response.data:
                 # Create activity
@@ -245,10 +271,15 @@ class FriendsManager(DatabaseManager):
             Dictionary with success status and message
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - cannot block user")
+                return {"success": False, "message": "Database connection not available"}
+            
             # Remove existing friendship if any
             existing_friendship = self.get_friendship_status(blocker_id, blocked_id)
             if existing_friendship:
-                self.client.from_("friendships").delete().eq("id", existing_friendship['id']).execute()
+                self.supabase.from_("friendships").delete().eq("id", existing_friendship['id']).execute()
             
             # Create block record
             block_data = {
@@ -259,7 +290,7 @@ class FriendsManager(DatabaseManager):
                 'updated_at': datetime.utcnow().isoformat()
             }
             
-            response = self.client.from_("friendships").insert(block_data).execute()
+            response = self.supabase.from_("friendships").insert(block_data).execute()
             if response.data:
                 logger.info(f"User {blocked_id} blocked by {blocker_id}")
                 return {"success": True, "message": "User blocked successfully"}
@@ -281,14 +312,19 @@ class FriendsManager(DatabaseManager):
             Dictionary with success status and message
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - cannot unblock user")
+                return {"success": False, "message": "Database connection not available"}
+            
             # Find the block record
-            block_response = self.client.from_("friendships").select("*").eq("requester_id", blocker_id).eq("addressee_id", blocked_id).eq("status", FriendshipStatus.BLOCKED.value).single().execute()
+            block_response = self.supabase.from_("friendships").select("*").eq("requester_id", blocker_id).eq("addressee_id", blocked_id).eq("status", FriendshipStatus.BLOCKED.value).single().execute()
             
             if not block_response.data:
                 return {"success": False, "message": "Block record not found"}
             
             # Delete the block record
-            delete_response = self.client.from_("friendships").delete().eq("id", block_response.data['id']).execute()
+            delete_response = self.supabase.from_("friendships").delete().eq("id", block_response.data['id']).execute()
             
             if delete_response.data:
                 logger.info(f"User {blocked_id} unblocked by {blocker_id}")
@@ -315,8 +351,13 @@ class FriendsManager(DatabaseManager):
             List of friends with their information
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning empty friends list")
+                return []
+            
             # Use the user_friends view for efficient querying
-            response = self.client.from_("user_friends").select("*").eq("user_id", user_id).execute()
+            response = self.supabase.from_("user_friends").select("*").eq("user_id", user_id).execute()
             friends = response.data or []
             
             if include_online_status:
@@ -342,15 +383,20 @@ class FriendsManager(DatabaseManager):
             List of pending friend requests
         """
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning empty friend requests list")
+                return []
+            
             if sent:
                 # Requests sent by this user
-                response = self.client.from_("friendships").select("""
+                response = self.supabase.from_("friendships").select("""
                     id, addressee_id, created_at,
                     user_profiles!friendships_addressee_id_fkey(username, display_name, avatar_url, level)
                 """).eq("requester_id", user_id).eq("status", FriendshipStatus.PENDING.value).execute()
             else:
                 # Requests received by this user
-                response = self.client.from_("friendships").select("""
+                response = self.supabase.from_("friendships").select("""
                     id, requester_id, created_at,
                     user_profiles!friendships_requester_id_fkey(username, display_name, avatar_url, level)
                 """).eq("addressee_id", user_id).eq("status", FriendshipStatus.PENDING.value).execute()
@@ -371,7 +417,12 @@ class FriendsManager(DatabaseManager):
             List of blocked users
         """
         try:
-            response = self.client.from_("friendships").select("""
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning empty blocked users list")
+                return []
+            
+            response = self.supabase.from_("friendships").select("""
                 id, addressee_id, created_at,
                 user_profiles!friendships_addressee_id_fkey(username, display_name, avatar_url)
             """).eq("requester_id", user_id).eq("status", FriendshipStatus.BLOCKED.value).execute()
@@ -404,7 +455,7 @@ class FriendsManager(DatabaseManager):
                 return []
             
             # Get user details for mutual friends
-            response = self.client.from_("user_profiles").select(
+            response = self.supabase.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, level"
             ).in_("user_id", list(mutual_friend_ids)).execute()
             
@@ -503,7 +554,7 @@ class FriendsManager(DatabaseManager):
             level_range = 3
             
             # Get users with similar levels
-            response = self.client.from_("user_profiles").select(
+            response = self.supabase.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, level, reputation_score"
             ).gte("level", user_level - level_range).lte("level", user_level + level_range).neq("user_id", user_id).limit(limit * 2).execute()
             
@@ -525,7 +576,7 @@ class FriendsManager(DatabaseManager):
             # Get recently active users
             cutoff_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
             
-            response = self.client.from_("user_stats").select("""
+            response = self.supabase.from_("user_stats").select("""
                 user_id, last_active,
                 user_profiles!user_stats_user_id_fkey(username, display_name, avatar_url, level)
             """).gte("last_active", cutoff_date).neq("user_id", user_id).order("last_active", desc=True).limit(limit).execute()
@@ -559,12 +610,21 @@ class FriendsManager(DatabaseManager):
             Friendship record or None
         """
         try:
-            # Check both directions
-            response = self.client.from_("friendships").select("*").or_(
-                f"and(requester_id.eq.{user1_id},addressee_id.eq.{user2_id}),and(requester_id.eq.{user2_id},addressee_id.eq.{user1_id})"
-            ).execute()
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning None for friendship status")
+                return None
             
-            return response.data[0] if response.data else None
+            # Check both directions - first check user1 as requester, user2 as addressee
+            response1 = self.supabase.from_("friendships").select("*").eq("requester_id", user1_id).eq("addressee_id", user2_id).execute()
+            
+            if response1.data:
+                return response1.data[0]
+            
+            # Check user2 as requester, user1 as addressee
+            response2 = self.supabase.from_("friendships").select("*").eq("requester_id", user2_id).eq("addressee_id", user1_id).execute()
+            
+            return response2.data[0] if response2.data else None
             
         except Exception as e:
             logger.error(f"Error getting friendship status: {e}")
@@ -594,7 +654,12 @@ class FriendsManager(DatabaseManager):
             True if blocked, False otherwise
         """
         try:
-            response = self.client.from_("friendships").select("id").eq("requester_id", blocker_id).eq("addressee_id", blocked_id).eq("status", FriendshipStatus.BLOCKED.value).execute()
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning False for block status")
+                return False
+            
+            response = self.supabase.from_("friendships").select("id").eq("requester_id", blocker_id).eq("addressee_id", blocked_id).eq("status", FriendshipStatus.BLOCKED.value).execute()
             return len(response.data or []) > 0
         except Exception as e:
             logger.error(f"Error checking block status: {e}")
@@ -610,27 +675,60 @@ class FriendsManager(DatabaseManager):
             Number of friends
         """
         try:
-            response = self.client.from_("friendships").select("id", count="exact").or_(
-                f"requester_id.eq.{user_id},addressee_id.eq.{user_id}"
-            ).eq("status", FriendshipStatus.ACCEPTED.value).execute()
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning 0 for friend count")
+                return 0
             
-            return response.count or 0
+            # Count friendships where user is requester and status is accepted
+            response1 = self.supabase.from_("friendships").select("id", count="exact").eq("requester_id", user_id).eq("status", FriendshipStatus.ACCEPTED.value).execute()
+            
+            # Count friendships where user is addressee and status is accepted
+            response2 = self.supabase.from_("friendships").select("id", count="exact").eq("addressee_id", user_id).eq("status", FriendshipStatus.ACCEPTED.value).execute()
+            
+            count1 = response1.count or 0
+            count2 = response2.count or 0
+            
+            return count1 + count2
             
         except Exception as e:
             logger.error(f"Error getting friend count: {e}")
             return 0
     
     def _get_user_online_status(self, user_id: str) -> bool:
-        """Get user's online status (placeholder for real-time system)."""
-        # This would be implemented with a real-time presence system
-        # For now, return False as placeholder
-        return False
+        """Get user's online status from the database."""
+        try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning False for online status")
+                return False
+            
+            # Simple approach: check if user has online_status = 1
+            response = self.supabase.from_("user_profiles").select(
+                "online_status"
+            ).eq("user_id", user_id).execute()
+            
+            if response.data and len(response.data) > 0:
+                online_status = response.data[0].get('online_status', 0)
+                return online_status == 1
+            return False
+                
+        except Exception as e:
+            logger.error(f"Error getting user online status: {e}")
+            return False
     
     def _get_user_last_seen(self, user_id: str) -> Optional[str]:
         """Get user's last seen timestamp."""
         try:
-            response = self.client.from_("user_stats").select("last_active").eq("user_id", user_id).single().execute()
-            return response.data.get('last_active') if response.data else None
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning None for last seen")
+                return None
+            
+            response = self.supabase.from_("user_stats").select("last_active").eq("user_id", user_id).execute()
+            if response.data and len(response.data) > 0:
+                return response.data[0].get('last_active')
+            return None
         except Exception as e:
             logger.error(f"Error getting last seen: {e}")
             return None
@@ -638,6 +736,11 @@ class FriendsManager(DatabaseManager):
     def _create_friend_activity(self, user_id: str, activity_type: str, metadata: Dict[str, Any]):
         """Create a friend-related activity."""
         try:
+            # Check if client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - skipping friend activity creation")
+                return
+            
             activity_data = {
                 'user_id': user_id,
                 'activity_type': activity_type,
@@ -648,7 +751,7 @@ class FriendsManager(DatabaseManager):
                 'created_at': datetime.utcnow().isoformat()
             }
             
-            self.client.from_("user_activities").insert(activity_data).execute()
+            self.supabase.from_("user_activities").insert(activity_data).execute()
             
         except Exception as e:
             logger.error(f"Error creating friend activity: {e}")

@@ -41,14 +41,14 @@ def get_supabase_client():
     """
     global _supabase_manager, _initialization_complete
     
+    # Fast path: if already initialized, return immediately
     if _supabase_manager is not None and _initialization_complete:
-        # Get the client from the manager (this will trigger initialization if needed)
         return _supabase_manager.client if _supabase_manager else None
     
     # Slow path: thread-safe initialization with reduced timeout for faster startup
     try:
         # Use much shorter timeout to prevent hanging during startup
-        acquired = _supabase_manager_lock.acquire(timeout=2.0)  # Reduced from 10s to 2s
+        acquired = _supabase_manager_lock.acquire(timeout=1.0)  # Reduced from 2s to 1s
         if not acquired:
             logger.error("⚠️ STARTUP FIX: Supabase initialization timed out - continuing without client")
             return None
@@ -154,7 +154,7 @@ def resolve_hostname(hostname):
 class RetryStrategy:
     """Implements exponential backoff retry strategy."""
     
-    def __init__(self, max_retries=3, base_delay=1.0, max_delay=8.0):
+    def __init__(self, max_retries=2, base_delay=0.5, max_delay=2.0):  # Faster for startup
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.max_delay = max_delay
@@ -204,9 +204,9 @@ class SupabaseManager:
                 logger.error(f"Failed to initialize secure session manager: {e}")
                 self._secure_session = None
         
-        # Always try to restore session from file for better user experience
-        # This prevents the "login every time" issue
-        self._restore_session()
+        # REMOVED: Don't restore session during initialization to prevent hanging
+        # Session restoration will happen when client is first accessed
+        # self._restore_session()
         
         # Defer initialization to speed up startup - client will be created on first use
         self._initialization_deferred = True
@@ -267,23 +267,31 @@ class SupabaseManager:
             if self._secure_session:
                 auth_data = self._secure_session.load_session()
                 if auth_data and auth_data.get('access_token'):
-                    logger.info("Found saved authentication session (encrypted)")
+                    logger.info("✅ Found saved authentication session (encrypted)")
                     return auth_data
             
             # Fallback to plaintext session
             if os.path.exists(self._auth_file):
+                logger.info(f"📁 Found auth file at: {self._auth_file}")
                 with open(self._auth_file, 'r') as f:
                     auth_data = json.load(f)
                 
+                # Debug logging
+                logger.info(f"📄 Loaded auth data: access_token={'present' if auth_data.get('access_token') else 'missing'}, refresh_token={'present' if auth_data.get('refresh_token') else 'missing'}, remember_me={auth_data.get('remember_me', 'not set')}")
+                
                 # Check if we have the minimum required data
                 if auth_data.get('access_token'):
-                    logger.info("Found saved authentication session (plaintext)")
+                    logger.info("✅ Found saved authentication session (plaintext)")
                     return auth_data
+                else:
+                    logger.warning("❌ Auth file exists but has no access token")
+            else:
+                logger.info(f"📁 No auth file found at: {self._auth_file}")
             
             logger.info(f"No saved authentication session found at: {self._auth_file}")
             return None
         except Exception as e:
-            logger.error(f"Error loading authentication session: {e}")
+            logger.error(f"❌ Error loading authentication session: {e}")
             return None
     
     def _restore_session(self):
@@ -309,6 +317,11 @@ class SupabaseManager:
             if isinstance(access_token, str) and ('+00:00' in access_token or len(access_token) < 50):
                 logger.warning("Access token appears to be corrupted - clearing session")
                 self._clear_session()
+                return False
+            
+            # Ensure client is available before attempting session restoration
+            if not self._client:
+                logger.warning("Client not available for session restoration")
                 return False
             
             # Check if session is expired
@@ -614,7 +627,8 @@ class SupabaseManager:
         """
         try:
             if not response:
-                return
+                logger.warning("No response provided to _save_session")
+                return False
             
             # Extract tokens from response
             session = response.session if hasattr(response, 'session') else response
@@ -625,11 +639,19 @@ class SupabaseManager:
                 'remember_me': remember_me  # Store the remember_me preference
             }
             
+            # Debug logging
+            logger.info(f"🔐 SAVING SESSION: access_token={'present' if auth_data['access_token'] else 'missing'}, refresh_token={'present' if auth_data['refresh_token'] else 'missing'}, remember_me={remember_me}")
+            
+            # Validate that we have the required data
+            if not auth_data['access_token']:
+                logger.error("❌ Cannot save session - no access token found in response")
+                return False
+            
             # Try secure session first
             if self._secure_session:
                 success = self._secure_session.save_session(auth_data)
                 if success:
-                    logger.info(f"Authentication session saved securely with remember_me={remember_me}")
+                    logger.info(f"✅ Authentication session saved securely with remember_me={remember_me}")
                     self._saved_auth = auth_data
                     return True
                 else:
@@ -640,11 +662,11 @@ class SupabaseManager:
             with open(self._auth_file, 'w') as f:
                 json.dump(auth_data, f)
             
-            logger.info(f"Authentication session saved (plaintext) with remember_me={remember_me}")
+            logger.info(f"✅ Authentication session saved (plaintext) with remember_me={remember_me} to {self._auth_file}")
             self._saved_auth = auth_data
             return True
         except Exception as e:
-            logger.error(f"Error saving authentication session: {e}")
+            logger.error(f"❌ Error saving authentication session: {e}")
             return False
     
     def _clear_session(self):
@@ -739,19 +761,22 @@ class SupabaseManager:
                 self._offline_mode = False
                 logger.info("✅ Supabase client created successfully, disabled offline mode")
             
-            # Attempt to restore session
-            try:
-                self._restore_session()
-            except Exception as e:
-                logger.warning(f"Failed to restore session during initialization: {e}")
+            # REMOVED: Don't attempt session restoration during initialization
+            # This can cause hanging if there are network issues
+            # Session restoration will happen when client is first accessed
+            # try:
+            #     self._restore_session()
+            # except Exception as e:
+            #     logger.warning(f"Failed to restore session during initialization: {e}")
             
-            # Test connection
-            try:
-                self.check_connection()
-            except Exception as e:
-                logger.warning(f"Connection test failed during initialization: {e}")
+            # REMOVED: Don't test connection during initialization
+            # This can cause hanging if there are network issues
+            # try:
+            #     self.check_connection()
+            # except Exception as e:
+            #     logger.warning(f"Connection test failed during initialization: {e}")
             
-            logger.info("Supabase client initialized and connected successfully")
+            logger.info("Supabase client initialized successfully")
             
         except Exception as e:
             logger.error(f"Error initializing Supabase client: {e}")
@@ -817,6 +842,15 @@ class SupabaseManager:
             logger.warning("Supabase client is None after initialization attempts")
             return None
         
+        # Attempt session restoration when client is first accessed (non-blocking)
+        if self._client and not hasattr(self, '_session_restored'):
+            self._session_restored = True
+            try:
+                logger.info("🔄 Attempting session restoration on first client access")
+                self._restore_session()
+            except Exception as e:
+                logger.warning(f"Session restoration failed on first access: {e}")
+        
         return self._client
     
     def is_authenticated(self) -> bool:
@@ -826,6 +860,11 @@ class SupabaseManager:
             bool: True if authenticated, False otherwise
         """
         try:
+            # Fast path: check if we have any local session data first
+            if not os.path.exists(self._auth_file):
+                logger.info("🔐 Fast path: No local auth file found - not authenticated")
+                return False
+            
             # Force initialization if needed for auth checks
             if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
                 logger.info("🔐 AUTH CHECK: Triggering deferred Supabase initialization")
@@ -1405,16 +1444,16 @@ class SupabaseManager:
                     # Create a session with retry for the connection test
                     session = requests.Session()
                     retry_strategy = Retry(
-                        total=3,
-                        backoff_factor=0.5,
+                        total=1,  # Reduced from 3 to 1 for faster startup
+                        backoff_factor=0.1,  # Reduced from 0.5 to 0.1 for faster startup
                         status_forcelist=[429, 500, 502, 503, 504],
                     )
                     adapter = HTTPAdapter(max_retries=retry_strategy)
                     session.mount("https://", adapter)
                     
-                    # Basic health check - only wait 10 seconds maximum
+                    # Basic health check - only wait 3 seconds maximum for faster startup
                     base_url = self._client.rest_url
-                    response = session.get(f"{base_url}/health", timeout=10)
+                    response = session.get(f"{base_url}/health", timeout=3)
                     if response.status_code == 200:
                         logger.info("Verified Supabase connection via health check")
                         return True

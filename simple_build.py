@@ -374,10 +374,14 @@ begin
     OldShortcuts.Add(ExpandConstant('{{commondesktop}}') + '\\TrackPro.lnk');
     OldShortcuts.Add(ExpandConstant('{{userdesktop}}') + '\\TrackPro.lnk');
     
-    // Check for shortcuts with version numbers (e.g., TrackPro v1.5.5.lnk)
-    OldShortcuts.Add(ExpandConstant('{{group}}') + '\\TrackPro v1.5.5.lnk');
-    OldShortcuts.Add(ExpandConstant('{{commondesktop}}') + '\\TrackPro v1.5.5.lnk');
-    OldShortcuts.Add(ExpandConstant('{{userdesktop}}') + '\\TrackPro v1.5.5.lnk');
+            // Check for shortcuts with version numbers (e.g., TrackPro v1.5.5.lnk)
+        OldShortcuts.Add(ExpandConstant('{{group}}') + '\\TrackPro v1.5.5.lnk');
+        OldShortcuts.Add(ExpandConstant('{{commondesktop}}') + '\\TrackPro v1.5.5.lnk');
+        OldShortcuts.Add(ExpandConstant('{{userdesktop}}') + '\\TrackPro v1.5.5.lnk');
+        // Also check for v1.5.6 shortcuts
+        OldShortcuts.Add(ExpandConstant('{{group}}') + '\\TrackPro v1.5.6.lnk');
+        OldShortcuts.Add(ExpandConstant('{{commondesktop}}') + '\\TrackPro v1.5.6.lnk');
+        OldShortcuts.Add(ExpandConstant('{{userdesktop}}') + '\\TrackPro v1.5.6.lnk');
     OldShortcuts.Add(ExpandConstant('{{group}}') + '\\TrackPro v1.5.4.lnk');
     OldShortcuts.Add(ExpandConstant('{{commondesktop}}') + '\\TrackPro v1.5.4.lnk');
     OldShortcuts.Add(ExpandConstant('{{userdesktop}}') + '\\TrackPro v1.5.4.lnk');

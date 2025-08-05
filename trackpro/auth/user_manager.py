@@ -35,7 +35,8 @@ def get_current_user():
     global _current_user
     
     if _current_user is None:
-        # Check if we can get the user from Supabase
+        # During startup, don't perform authentication checks that could hang
+        # This prevents the splash screen from freezing on "Setting up authentication system..."
         try:
             from ..database.supabase_client import get_supabase_client
             client = get_supabase_client()
@@ -44,19 +45,22 @@ def get_current_user():
                 if session and hasattr(session, 'user'):
                     user_data = session.user
                     
-                    # Get hierarchy information
-                    hierarchy_info = _get_user_hierarchy_info(user_data.id)
-                    
+                    # Create user without hierarchy check during startup to prevent hanging
                     _current_user = User(
                         id=user_data.id,
                         email=user_data.email,
                         name=user_data.user_metadata.get('name', user_data.email),
                         is_authenticated=True,
-                        hierarchy_level=hierarchy_info.get('hierarchy_level', 'PADDOCK'),
-                        is_dev=hierarchy_info.get('is_dev', False),
-                        is_moderator=hierarchy_info.get('is_moderator', False)
+                        hierarchy_level='PADDOCK',  # Default during startup
+                        is_dev=False,  # Default during startup
+                        is_moderator=False  # Default during startup
                     )
-                    logger.info(f"Found authenticated user from Supabase: {_current_user.email} (Level: {_current_user.hierarchy_level})")
+                    logger.info(f"Found authenticated user from Supabase: {_current_user.email} (using default hierarchy during startup)")
+                    
+                    # Schedule hierarchy check for later to prevent startup hanging
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(5000, _update_user_hierarchy_async)  # Update hierarchy after 5 seconds
+                    
                     return _current_user
         except Exception as e:
             logger.warning(f"Error getting user from Supabase: {e}")
@@ -66,6 +70,24 @@ def get_current_user():
         return None
     
     return _current_user
+
+def _update_user_hierarchy_async():
+    """Update user hierarchy information asynchronously after startup."""
+    global _current_user
+    
+    if _current_user and _current_user.is_authenticated:
+        try:
+            # Get hierarchy information
+            hierarchy_info = _get_user_hierarchy_info(_current_user.id)
+            
+            # Update user with correct hierarchy
+            _current_user.hierarchy_level = hierarchy_info.get('hierarchy_level', 'PADDOCK')
+            _current_user.is_dev = hierarchy_info.get('is_dev', False)
+            _current_user.is_moderator = hierarchy_info.get('is_moderator', False)
+            
+            logger.info(f"Updated user hierarchy: {_current_user.email} (Level: {_current_user.hierarchy_level})")
+        except Exception as e:
+            logger.warning(f"Error updating user hierarchy: {e}")
 
 def _get_user_hierarchy_info(user_id: str) -> dict:
     """Get user hierarchy information from database.

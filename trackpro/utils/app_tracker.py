@@ -32,14 +32,18 @@ class AppTracker:
             "platform_version": platform.version(),
             "machine": platform.machine(),
             "processor": platform.processor(),
-            "app_version": "1.2.5",  # Update this with your actual version
+            "app_version": "1.5.6",  # Update this with your actual version
         }
     
     def start_session(self, user_id: Optional[str] = None) -> bool:
         """Start tracking a new app session."""
         try:
+            # Set user_id if provided
             if user_id:
                 self.user_id = user_id
+                logger.info(f"Starting app session with user_id: {user_id}")
+            else:
+                logger.warning("No user_id provided for app session - will run in anonymous mode")
             
             # Check if Supabase client is available
             if not self.supabase:
@@ -48,7 +52,7 @@ class AppTracker:
             
             # Insert session start
             session_data = {
-                "user_id": self.user_id,
+                "user_id": self.user_id,  # This can be None for anonymous sessions
                 "session_start": datetime.utcnow().isoformat(),
                 "app_version": self.app_info["app_version"],
                 "platform": self.app_info["platform"],
@@ -65,6 +69,8 @@ class AppTracker:
                 # Start heartbeat if user is logged in
                 if self.user_id:
                     self._start_heartbeat()
+                    # Also update online status immediately
+                    self.update_online_status(True)
                 
                 return True
             else:
@@ -103,6 +109,53 @@ class AppTracker:
             logger.error(f"Error ending app session: {e}")
             return False
     
+    def update_user_id(self, user_id: str) -> bool:
+        """Update the user_id for an existing session (when user logs in)."""
+        try:
+            if not user_id:
+                logger.warning("No user_id provided for update")
+                return False
+            
+            old_user_id = self.user_id
+            self.user_id = user_id
+            
+            logger.info(f"Updated user_id from {old_user_id} to {user_id}")
+            
+            # Update the current session with the new user_id
+            if self.is_running:
+                try:
+                    # Update the active session
+                    update_data = {"user_id": user_id}
+                    result = self.supabase.table("app_sessions").update(update_data).eq(
+                        "session_id", self.session_id
+                    ).eq("is_active", True).execute()
+                    
+                    if result.data:
+                        logger.info(f"Updated session with user_id: {user_id}")
+                        
+                        # Start heartbeat for the authenticated user
+                        self._start_heartbeat()
+                        
+                        # Update online status
+                        self.update_online_status(True)
+                        
+                        return True
+                    else:
+                        logger.warning("Failed to update session with user_id")
+                        return False
+                        
+                except Exception as e:
+                    logger.error(f"Error updating session with user_id: {e}")
+                    return False
+            else:
+                # If session is not running, start a new session for the authenticated user
+                logger.info(f"Starting new session for authenticated user: {user_id}")
+                return self.start_session(user_id)
+            
+        except Exception as e:
+            logger.error(f"Error updating user_id: {e}")
+            return False
+
     def update_online_status(self, is_online: bool = True) -> bool:
         """Update user's online status."""
         try:
@@ -188,13 +241,19 @@ class AppTracker:
     
     def _heartbeat_loop(self):
         """Heartbeat loop that runs in a separate thread."""
+        logger.info(f"💓 Heartbeat loop started for user {self.user_id}")
         while self.is_running:
             try:
                 # Send heartbeat
-                self.send_heartbeat()
+                heartbeat_success = self.send_heartbeat()
                 
                 # Update online status
-                self.update_online_status(True)
+                status_success = self.update_online_status(True)
+                
+                if heartbeat_success and status_success:
+                    logger.debug(f"💓 Heartbeat sent successfully for user {self.user_id}")
+                else:
+                    logger.warning(f"💓 Heartbeat failed for user {self.user_id} - heartbeat: {heartbeat_success}, status: {status_success}")
                 
                 # Wait for next heartbeat
                 time.sleep(self.heartbeat_interval)
@@ -202,6 +261,8 @@ class AppTracker:
             except Exception as e:
                 logger.error(f"Error in heartbeat loop: {e}")
                 time.sleep(5)  # Wait before retrying
+        
+        logger.info(f"💓 Heartbeat loop stopped for user {self.user_id}")
     
     def get_online_users(self) -> list:
         """Get list of currently online users."""
@@ -303,6 +364,38 @@ def update_user_online_status(user_id: str, is_online: bool = True) -> bool:
     """Update a user's online status."""
     tracker = get_app_tracker(user_id)
     return tracker.update_online_status(is_online)
+
+def force_heartbeat(user_id: str) -> bool:
+    """Force a heartbeat for testing purposes."""
+    tracker = get_app_tracker(user_id)
+    if tracker.user_id:
+        logger.info(f"💓 Forcing heartbeat for user {user_id}")
+        heartbeat_success = tracker.send_heartbeat()
+        status_success = tracker.update_online_status(True)
+        return heartbeat_success and status_success
+    return False
+
+def get_heartbeat_status(user_id: str) -> Dict[str, Any]:
+    """Get heartbeat status for a user."""
+    tracker = get_app_tracker(user_id)
+    return {
+        "user_id": tracker.user_id,
+        "is_running": tracker.is_running,
+        "heartbeat_thread_alive": tracker.heartbeat_thread.is_alive() if tracker.heartbeat_thread else False,
+        "session_id": tracker.session_id,
+        "heartbeat_interval": tracker.heartbeat_interval
+    }
+
+
+def update_app_tracker_user_id(user_id: str) -> bool:
+    """Update the user_id for the global app tracker (when user logs in)."""
+    global _app_tracker
+    if _app_tracker:
+        return _app_tracker.update_user_id(user_id)
+    else:
+        # If no tracker exists, create one with the user_id
+        _app_tracker = AppTracker(user_id)
+        return _app_tracker.start_session(user_id)
 
 
 def get_online_users() -> list:
