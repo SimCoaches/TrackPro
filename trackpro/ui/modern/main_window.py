@@ -365,6 +365,7 @@ class ModernMainWindow(QMainWindow):
         self.global_pedal_data_queue = data_queue
         self.global_managers.hardware = hardware
         logger.info("✅ Global pedal system set for modern window")
+        logger.info(f"🎮 Hardware: {hardware is not None}, Output: {output is not None}, Queue: {data_queue is not None}")
         
         # Start UI update timer for real-time pedal visualization
         self.start_ui_update_timer()
@@ -400,6 +401,8 @@ class ModernMainWindow(QMainWindow):
             self.ui_update_timer.setInterval(17)  # ~60Hz UI updates for smooth visualization
             self.ui_update_timer.start()
             logger.info("🖥️ UI update timer started at 60Hz for smooth pedal visualization")
+        else:
+            logger.info("🖥️ UI update timer already running")
     
     def update_pedal_ui(self):
         """Update the UI with the latest pedal data from the global queue."""
@@ -413,7 +416,10 @@ class ModernMainWindow(QMainWindow):
             
             # Update current page if it has pedal update methods
             current_widget = self.content_stack.currentWidget()
-            if current_widget and hasattr(current_widget, 'update_pedal_values'):
+            if current_widget and hasattr(current_widget, 'handle_hardware_update'):
+                current_widget.handle_hardware_update(raw_values)
+            elif current_widget and hasattr(current_widget, 'update_pedal_values'):
+                # Fallback for other pages that might have this method
                 current_widget.update_pedal_values(raw_values)
                 
         except Empty:
@@ -630,6 +636,7 @@ class ModernMainWindow(QMainWindow):
         # Pre-load Pedals page (commonly used)
         try:
             from ..pages.pedals import PedalsPage
+            logger.info("🏗️ Creating Pedals page...")
             self.pages["pedals"] = PedalsPage(self.global_managers)
             self.content_stack.addWidget(self.pages["pedals"])
             
@@ -641,8 +648,9 @@ class ModernMainWindow(QMainWindow):
             logger.info("✅ Pedals page pre-loaded")
         except Exception as e:
             logger.error(f"Failed to pre-load pedals page: {e}")
-            self.pages["pedals"] = self.create_placeholder_page("pedals")
-            self.content_stack.addWidget(self.pages["pedals"])
+            import traceback
+            logger.error(f"❌ Pedals page error traceback: {traceback.format_exc()}")
+            self.pages["pedals"] = self.create_placeholder_page("pedals", "🎮", "Coming Soon", "Pedal controls will be available soon.")
         
         # LAZY LOADING: Only lazy-load less frequently used pages
         # This keeps startup fast while eliminating lag for common pages

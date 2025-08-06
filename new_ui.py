@@ -298,6 +298,11 @@ def global_pedal_polling_loop():
                         break
                 # Add latest data non-blocking
                 global_pedal_data_queue.put_nowait(raw_values)
+                
+                # Log every 1000 iterations (about once per second at 1000Hz)
+                if loop_count % 1000 == 0:
+                    logger.info(f"🎮 Pedal thread: Put data in queue: {raw_values}")
+                    
             except:
                 pass  # Don't let UI queue issues slow down pedal processing
 

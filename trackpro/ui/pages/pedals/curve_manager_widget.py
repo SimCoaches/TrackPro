@@ -99,15 +99,15 @@ class CurveManagerWidget(QWidget):
         save_curve_btn.clicked.connect(self.save_custom_curve)
         
         save_layout.addWidget(curve_name_label)
-        save_layout.addWidget(self.curve_name_input, 1)
+        save_layout.addWidget(self.curve_name_input)
         save_layout.addWidget(save_curve_btn)
         
         # Load curve section - compact horizontal layout
-        manage_layout = QHBoxLayout()
-        manage_layout.setSpacing(6)
-        custom_curves_label = QLabel("Custom Curves:")
-        custom_curves_label.setMaximumWidth(80)
-        custom_curves_label.setStyleSheet("""
+        load_layout = QHBoxLayout()
+        load_layout.setSpacing(6)
+        curve_selector_label = QLabel("Load Curve:")
+        curve_selector_label.setMaximumWidth(80)
+        curve_selector_label.setStyleSheet("""
             QLabel {
                 background-color: transparent;
                 color: #fefefe;
@@ -117,8 +117,6 @@ class CurveManagerWidget(QWidget):
             }
         """)
         self.custom_curves_selector = QComboBox()
-        self.custom_curves_selector.addItem("No custom curves")
-        self.custom_curves_selector.setEnabled(False)
         self.custom_curves_selector.setMaximumHeight(22)
         self.custom_curves_selector.setStyleSheet("""
             QComboBox {
@@ -129,23 +127,20 @@ class CurveManagerWidget(QWidget):
                 color: #fefefe;
                 font-size: 11px;
             }
-            QComboBox:hover {
+            QComboBox:focus {
                 border-color: #fba43b;
             }
-            QComboBox:disabled {
-                background-color: #252525;
-                color: #999999;
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
             }
-            QComboBox QAbstractItemView {
-                background-color: #252525;
-                border: 1px solid #666666;
-                border-radius: 3px;
-                color: #fefefe;
-                selection-background-color: #fba43b;
-                selection-color: #252525;
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #fefefe;
             }
         """)
-        
         delete_curve_btn = QPushButton("Delete Selected")
         delete_curve_btn.setMaximumHeight(22)
         delete_curve_btn.setStyleSheet("""
@@ -164,15 +159,25 @@ class CurveManagerWidget(QWidget):
         """)
         delete_curve_btn.clicked.connect(self.delete_selected_curve)
         
-        manage_layout.addWidget(custom_curves_label)
-        manage_layout.addWidget(self.custom_curves_selector, 1)
-        manage_layout.addWidget(delete_curve_btn)
+        load_layout.addWidget(curve_selector_label)
+        load_layout.addWidget(self.custom_curves_selector)
+        load_layout.addWidget(delete_curve_btn)
         
         group_layout.addLayout(save_layout)
-        group_layout.addLayout(manage_layout)
+        group_layout.addLayout(load_layout)
         layout.addWidget(group)
         
+        # Populate the curve selector
         self.refresh_custom_curves()
+        
+        # Connect curve selection change
+        self.custom_curves_selector.currentTextChanged.connect(self.on_curve_selected)
+    
+    def set_global_pedal_system(self, hardware, output, data_queue):
+        """Update the hardware input when it becomes available."""
+        # Store the hardware reference for potential future use
+        self.hardware_input = hardware
+        logger.info(f"✅ Hardware input updated for {self.pedal_name} curve manager widget")
     
     def save_custom_curve(self):
         curve_name = self.curve_name_input.text().strip()
@@ -246,3 +251,9 @@ class CurveManagerWidget(QWidget):
     
     def remove_custom_curve(self, curve_name: str):
         self.refresh_custom_curves()
+    
+    def on_curve_selected(self, curve_name: str):
+        """Handle curve selection change."""
+        if curve_name and curve_name != "No custom curves":
+            logger.info(f"Curve selected for {self.pedal_name}: {curve_name}")
+            self.curve_changed.emit(curve_name)

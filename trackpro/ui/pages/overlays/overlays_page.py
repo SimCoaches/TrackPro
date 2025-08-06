@@ -327,7 +327,7 @@ class OverlaysPage(BasePage):
     track_builder_progress = pyqtSignal(int, str)  # progress, status
 
     def __init__(self, global_managers=None):
-        super().__init__(global_managers)
+        super().__init__("overlays", global_managers)
         self.track_builder = None
         self.track_map_overlay_manager = None
         self.iracing_monitor = None

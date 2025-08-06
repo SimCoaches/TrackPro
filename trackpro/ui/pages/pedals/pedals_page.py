@@ -1,5 +1,5 @@
 import logging
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QScrollArea, QPushButton, QLabel
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QPushButton, QLabel
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QColor
 from ...modern.shared.base_page import BasePage
@@ -14,54 +14,72 @@ class PedalsPage(BasePage):
     curve_changed = pyqtSignal(str, str)
     
     def __init__(self, global_managers=None):
+        logger.info("🏗️ Initializing PedalsPage...")
         self.pedal_widgets = {}
         self.pedal_tabs = None
         self.connection_status_label = None
         self.connection_timer = None
         super().__init__("pedals", global_managers)
+        logger.info("✅ PedalsPage initialized successfully")
     
     def init_page(self):
-        layout = QVBoxLayout()
-        self.setLayout(layout)
+        """Initialize the pedals page."""
+        logger.info("🏗️ Initializing pedals page UI...")
+        # Don't call super().init_page() as it raises NotImplementedError
         
-        # Add calibration wizard button and connection status
-        wizard_layout = QHBoxLayout()
-        wizard_btn = QPushButton("🧙 Calibration Wizard")
-        wizard_btn.setMaximumWidth(180)  # Make button much smaller
-        wizard_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #5865f2;
-                color: white;
-                font-weight: bold;
-                padding: 6px 12px;
-                border: none;
-                border-radius: 4px;
-                font-size: 11px;
-                max-width: 180px;
-            }
-            QPushButton:hover {
-                background-color: #4752c4;
-            }
-        """)
-        wizard_btn.clicked.connect(self.open_calibration_wizard)
-        wizard_layout.addWidget(wizard_btn)  # Left-aligned (no stretch before)
+        # Create main layout
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
-        # Add connection status indicator
-        self.connection_status_label = QLabel()
+        # Create connection status indicator
+        self.connection_status_label = QLabel("⚪ Hardware Unavailable")
         self.connection_status_label.setStyleSheet("""
             QLabel {
+                background-color: #6b7280;
+                color: white;
                 padding: 6px 12px;
                 border-radius: 4px;
                 font-size: 11px;
                 font-weight: bold;
-                color: white;
             }
         """)
-        wizard_layout.addWidget(self.connection_status_label)
-        wizard_layout.addStretch()  # Stretch after to push button left
-        layout.addLayout(wizard_layout)
+        self.connection_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.connection_status_label)
         
-        # Setup connection status timer
+        # Create calibration wizard button
+        calibration_button = QPushButton("Open Calibration Wizard")
+        calibration_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3b82f6;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2563eb;
+            }
+            QPushButton:pressed {
+                background-color: #1d4ed8;
+            }
+        """)
+        calibration_button.clicked.connect(self.open_calibration_wizard)
+        main_layout.addWidget(calibration_button)
+        
+        # Create pedals layout
+        pedals_layout = QHBoxLayout()
+        self.create_side_by_side_pedals(pedals_layout)
+        main_layout.addLayout(pedals_layout)
+        
+        # Add stretch to push everything to the top
+        main_layout.addStretch()
+        
+        self.setLayout(main_layout)
+        
+        # Set up connection status timer
         self.connection_timer = QTimer()
         self.connection_timer.timeout.connect(self.update_connection_status)
         self.connection_timer.start(1000)  # Update every second
@@ -69,14 +87,42 @@ class PedalsPage(BasePage):
         # Initial connection status update
         self.update_connection_status()
         
-        # Side-by-side pedal layout
-        pedals_layout = QHBoxLayout()
-        layout.addLayout(pedals_layout)
-        
-        self.create_side_by_side_pedals(pedals_layout)
-        
         if self.performance_manager:
             self.performance_manager.ui_update_ready.connect(self.handle_hardware_update)
+        
+        logger.info("✅ Pedals page UI initialized successfully")
+    
+    def set_global_pedal_system(self, hardware, output, data_queue):
+        """Update the hardware input when it becomes available."""
+        self.hardware_input = hardware
+        logger.info("✅ Hardware input updated for pedals page")
+        
+        # Update connection status immediately
+        self.update_connection_status()
+        
+        # Pass hardware input to all child widgets
+        for pedal_name, pedal_widget in self.pedal_widgets.items():
+            if hasattr(pedal_widget, 'layout'):
+                layout = pedal_widget.layout()
+                # Pass to calibration widget
+                if layout.itemAt(0) and layout.itemAt(0).widget():
+                    calibration_widget = layout.itemAt(0).widget()
+                    if hasattr(calibration_widget, 'set_global_pedal_system'):
+                        calibration_widget.set_global_pedal_system(hardware, output, data_queue)
+                
+                # Pass to deadzone widget
+                if layout.itemAt(1) and layout.itemAt(1).widget():
+                    deadzone_widget = layout.itemAt(1).widget()
+                    if hasattr(deadzone_widget, 'set_global_pedal_system'):
+                        deadzone_widget.set_global_pedal_system(hardware, output, data_queue)
+                
+                # Pass to curve manager widget
+                if layout.itemAt(2) and layout.itemAt(2).widget():
+                    curve_widget = layout.itemAt(2).widget()
+                    if hasattr(curve_widget, 'set_global_pedal_system'):
+                        curve_widget.set_global_pedal_system(hardware, output, data_queue)
+        
+        logger.info("✅ Hardware input passed to all child widgets")
     
     def update_connection_status(self):
         """Update the connection status indicator."""
@@ -136,26 +182,24 @@ class PedalsPage(BasePage):
             self.pedal_widgets[pedal] = pedal_widget
     
     def create_pedal_widget(self, pedal_name: str):
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
+        # Create main widget without scroll area - no scroll bars!
         main_widget = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(6)  # Reduced spacing between sections
-        layout.setContentsMargins(6, 6, 6, 6)  # Reduced margins
+        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
         main_widget.setLayout(layout)
         
+        # Create child widgets
         calibration_widget = PedalCalibrationWidget(pedal_name, self.global_managers)
         deadzone_widget = DeadzoneWidget(pedal_name, self.global_managers)
         curve_manager_widget = CurveManagerWidget(pedal_name, self.global_managers)
         
+        # Add widgets to layout
         layout.addWidget(calibration_widget)
         layout.addWidget(deadzone_widget)
         layout.addWidget(curve_manager_widget)
-        layout.addStretch()
         
+        # Connect signals
         calibration_widget.calibration_updated.connect(
             lambda data, p=pedal_name: self.pedal_calibrated.emit(p, data)
         )
@@ -166,18 +210,24 @@ class PedalsPage(BasePage):
             lambda pedal, min_dz, max_dz: self.update_deadzone(pedal, min_dz, max_dz, calibration_widget)
         )
         
-        scroll_area.setWidget(main_widget)
-        return scroll_area
+        return main_widget
     
     def open_calibration_wizard(self):
         try:
             from ....pedals.calibration import CalibrationWizard
             
-            if not self.hardware_input:
+            # Try to get hardware input from multiple sources
+            hardware_input = None
+            if self.hardware_input:
+                hardware_input = self.hardware_input
+            elif hasattr(self, 'global_managers') and self.global_managers and hasattr(self.global_managers, 'hardware'):
+                hardware_input = self.global_managers.hardware
+            
+            if not hardware_input:
                 logger.warning("Hardware input not available - cannot open calibration wizard")
                 return
             
-            wizard = CalibrationWizard(self.hardware_input, self)
+            wizard = CalibrationWizard(hardware_input, self)
             wizard.calibration_complete.connect(self.on_calibration_complete)
             
             result = wizard.exec()
@@ -193,18 +243,9 @@ class PedalsPage(BasePage):
     
     def update_deadzone(self, pedal_name: str, min_deadzone: int, max_deadzone: int, calibration_widget):
         """Update the deadzone values in the calibration chart."""
-        logger.info(f"Updating deadzone for {pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
-        
-        if hasattr(calibration_widget, 'calibration_chart') and calibration_widget.calibration_chart:
-            chart = calibration_widget.calibration_chart
-            if hasattr(chart, 'set_deadzones'):
-                chart.set_deadzones(min_deadzone, max_deadzone)
-                logger.debug(f"Applied deadzone to chart for {pedal_name}")
-        
-        # Update the deadzone visualization on the pyqtgraph chart
-        if hasattr(calibration_widget, 'update_deadzone_visualization'):
-            calibration_widget.update_deadzone_visualization()
-            logger.debug(f"Updated deadzone visualization for {pedal_name}")
+        # Update the deadzone visualization directly with the values
+        if hasattr(calibration_widget, 'draggable_plot') and calibration_widget.draggable_plot:
+            calibration_widget.draggable_plot.update_deadzone_visualization(min_deadzone, max_deadzone)
     
     def on_calibration_complete(self, calibration_data):
         logger.info(f"Calibration completed with data: {calibration_data}")
@@ -221,11 +262,12 @@ class PedalsPage(BasePage):
                         calibration_widget.set_calibration_range(min_val, max_val)
     
     def handle_hardware_update(self, pedal_data):
+        """Handle hardware updates from the main window."""
         for pedal, value in pedal_data.items():
             if pedal in self.pedal_widgets:
                 widget = self.pedal_widgets[pedal]
-                if hasattr(widget.widget(), 'layout'):
-                    calibration_widget = widget.widget().layout().itemAt(0).widget()
+                if hasattr(widget, 'layout'):
+                    calibration_widget = widget.layout().itemAt(0).widget()
                     if hasattr(calibration_widget, 'update_input_value'):
                         calibration_widget.update_input_value(value)
     

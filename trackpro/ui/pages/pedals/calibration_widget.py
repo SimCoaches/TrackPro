@@ -28,6 +28,11 @@ class DraggablePlotWidget:
         self.curve_y = []
         self.scatter = None
         self.curve_line = None
+        self.input_dot = None  # Current input position indicator
+        self.min_deadzone_rect = None  # Deadzone visualization
+        self.max_deadzone_rect = None
+        self.current_input_x = 0
+        self.current_input_y = 0
         self.on_point_moved = None
         self.pg = pg  # Store pg reference
         
@@ -59,6 +64,12 @@ class DraggablePlotWidget:
                                           symbol='o', symbolBrush='#00ff00', symbolSize=12,
                                           pen=self.pg.mkPen('#00ff00', width=2))
         self.plot_widget.addItem(self.scatter)
+        
+        # Create input position indicator (moving dot)
+        self.input_dot = self.pg.ScatterPlotItem(x=[self.current_input_x], y=[self.current_input_y],
+                                                symbol='o', symbolBrush='#ff0000', symbolSize=16,
+                                                pen=self.pg.mkPen('#ff0000', width=3))
+        self.plot_widget.addItem(self.input_dot)
     
     def _reset_to_linear(self):
         """Reset the curve to a safe linear response."""
@@ -217,6 +228,46 @@ class DraggablePlotWidget:
         
         return constrained_x, constrained_y
     
+    def update_input_position(self, input_percentage, output_percentage):
+        """Update the position of the input indicator dot."""
+        self.current_input_x = input_percentage
+        self.current_input_y = output_percentage
+        
+        if self.input_dot:
+            self.input_dot.setData(x=[self.current_input_x], y=[self.current_input_y])
+    
+    def update_deadzone_visualization(self, min_deadzone, max_deadzone):
+        """Update the deadzone visualization rectangles."""
+        # Remove existing deadzone rectangles
+        if self.min_deadzone_rect:
+            self.plot_widget.removeItem(self.min_deadzone_rect)
+            self.min_deadzone_rect = None
+        if self.max_deadzone_rect:
+            self.plot_widget.removeItem(self.max_deadzone_rect)
+            self.max_deadzone_rect = None
+        
+        # Add min deadzone rectangle (red shaded area at the beginning)
+        if min_deadzone > 0:
+            self.min_deadzone_rect = self.pg.LinearRegionItem(
+                values=[0, min_deadzone],
+                orientation='vertical',
+                brush=self.pg.mkBrush(200, 50, 50, 100),  # Semi-transparent red
+                pen=self.pg.mkPen(200, 50, 50, width=2),
+                movable=False
+            )
+            self.plot_widget.addItem(self.min_deadzone_rect)
+        
+        # Add max deadzone rectangle (red shaded area at the end)
+        if max_deadzone > 0:
+            self.max_deadzone_rect = self.pg.LinearRegionItem(
+                values=[100 - max_deadzone, 100],
+                orientation='vertical',
+                brush=self.pg.mkBrush(200, 50, 50, 100),  # Semi-transparent red
+                pen=self.pg.mkPen(200, 50, 50, width=2),
+                movable=False
+            )
+            self.plot_widget.addItem(self.max_deadzone_rect)
+    
     def _is_monotonic_curve(self, x_coords, y_coords):
         """Check if the curve is monotonically increasing."""
         if len(x_coords) < 2:
@@ -263,7 +314,13 @@ class PedalCalibrationWidget(QWidget):
         self._is_fixing_curve = False
         
         self.init_ui()
-        
+    
+    def set_global_pedal_system(self, hardware, output, data_queue):
+        """Update the hardware input when it becomes available."""
+        # Store the hardware reference for potential future use
+        self.hardware_input = hardware
+        logger.info(f"✅ Hardware input updated for {self.pedal_name} calibration widget")
+    
     def init_ui(self):
         layout = QVBoxLayout()
         self.setLayout(layout)
@@ -542,85 +599,9 @@ class PedalCalibrationWidget(QWidget):
     
     def update_deadzone_visualization(self):
         """Update the deadzone visualization on the chart."""
-        if not hasattr(self, 'calibration_chart') or not self.calibration_chart:
-            return
-            
-        try:
-            if not PYTQTGRAPH_AVAILABLE:
-                return
-            
-            # Remove existing deadzone rectangles
-            if hasattr(self, 'min_deadzone_rect') and self.min_deadzone_rect:
-                self.calibration_chart.removeItem(self.min_deadzone_rect)
-                self.min_deadzone_rect = None
-            if hasattr(self, 'max_deadzone_rect') and self.max_deadzone_rect:
-                self.calibration_chart.removeItem(self.max_deadzone_rect)
-                self.max_deadzone_rect = None
-            
-            # Get deadzone values from the deadzone widget
-            deadzone_widget = None
-            try:
-                if hasattr(self.parent(), 'layout') and self.parent() is not None:
-                    layout = self.parent().layout()
-                    if layout:
-                        for i in range(layout.count()):
-                            item = layout.itemAt(i)
-                            if item and item.widget():
-                                widget = item.widget()
-                                if hasattr(widget, 'pedal_name') and widget.pedal_name == self.pedal_name:
-                                    if hasattr(widget, 'layout'):
-                                        widget_layout = widget.layout()
-                                        if widget_layout:
-                                            for j in range(widget_layout.count()):
-                                                child_item = widget_layout.itemAt(j)
-                                                if child_item and child_item.widget():
-                                                    child_widget = child_item.widget()
-                                                    if hasattr(child_widget, 'get_deadzone_values'):
-                                                        deadzone_widget = child_widget
-                                                        break
-                                    break
-            except Exception as e:
-                logger.debug(f"Error finding deadzone widget: {e}")
-                deadzone_widget = None
-            
-            if deadzone_widget:
-                try:
-                    deadzone_values = deadzone_widget.get_deadzone_values()
-                    min_deadzone = deadzone_values.get('min_deadzone', 0)
-                    max_deadzone = deadzone_values.get('max_deadzone', 0)
-                except Exception as e:
-                    logger.debug(f"Error getting deadzone values: {e}")
-                    min_deadzone = 0
-                    max_deadzone = 0
-                
-                # Add min deadzone rectangle
-                if min_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
-                    self.min_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
-                        values=[0, min_deadzone],
-                        orientation='vertical',
-                        brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
-                        pen=self.draggable_plot.pg.mkPen(200, 50, 50)
-                    )
-                    self.calibration_chart.addItem(self.min_deadzone_rect)
-                
-                # Add max deadzone rectangle
-                if max_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
-                    self.max_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
-                        values=[100 - max_deadzone, 100],
-                        orientation='vertical',
-                        brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
-                        pen=self.draggable_plot.pg.mkPen(200, 50, 50)
-                    )
-                    self.calibration_chart.addItem(self.max_deadzone_rect)
-                
-                # Only log in debug mode if needed
-                # logger.debug(f"Updated deadzone visualization for {self.pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
-                
-        except ImportError:
-            pass
-        except Exception as e:
-            # logger.error(f"Error updating deadzone visualization: {e}")
-            pass
+        # This method is called during curve changes to refresh deadzone visualization
+        # The actual deadzone visualization is now handled directly by the pedals page
+        pass
     
     def create_calibration_controls(self, parent_layout):
         controls_group = QGroupBox("Calibration Controls")
@@ -811,6 +792,58 @@ class PedalCalibrationWidget(QWidget):
             return curves[curve_name]
         return curves["Linear (Default)"]
     
+    def apply_deadzone_constraints(self, raw_value: int) -> int:
+        """Apply deadzone constraints to create a deadzone in input range."""
+        # Get current deadzone values
+        min_deadzone, max_deadzone = self.get_deadzone_values()
+        
+        # Convert raw value to percentage (0-100)
+        if self.max_value == self.min_value:
+            input_percentage = 0
+        else:
+            input_percentage = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
+            input_percentage = max(0, min(100, input_percentage))
+        
+        # Apply deadzone logic
+        if input_percentage <= min_deadzone:
+            # In min deadzone - no output (stay at minimum)
+            output_percentage = 0
+        elif input_percentage >= (100 - max_deadzone):
+            # In max deadzone - full output (stay at maximum)
+            output_percentage = 100
+        else:
+            # In active range - scale proportionally from min_deadzone to (100-max_deadzone)
+            active_range = 100 - min_deadzone - max_deadzone
+            if active_range > 0:
+                active_input = input_percentage - min_deadzone
+                output_percentage = (active_input / active_range) * 100
+            else:
+                output_percentage = 0
+        
+        # Convert output percentage back to raw value for the curve calculation
+        if self.max_value == self.min_value:
+            return raw_value
+        else:
+            output_raw = self.min_value + (output_percentage / 100) * (self.max_value - self.min_value)
+            return int(output_raw)
+    
+    def get_deadzone_values(self):
+        """Get the current deadzone values from the deadzone widget."""
+        # Find the deadzone widget in the parent layout
+        if hasattr(self, 'parent') and self.parent():
+            parent_widget = self.parent()
+            if hasattr(parent_widget, 'layout') and parent_widget.layout():
+                layout = parent_widget.layout()
+                # Look for deadzone widget (should be at index 1)
+                if layout.count() > 1:
+                    deadzone_widget = layout.itemAt(1).widget()
+                    if hasattr(deadzone_widget, 'get_deadzone_values'):
+                        deadzone_values = deadzone_widget.get_deadzone_values()
+                        return deadzone_values.get('min_deadzone', 0), deadzone_values.get('max_deadzone', 0)
+        
+        # Fallback to 0 if can't find deadzone widget
+        return 0, 0
+    
     def update_input_value(self, value: int):
         """Update the input value display and calculate output."""
         self.current_input = value
@@ -821,14 +854,27 @@ class PedalCalibrationWidget(QWidget):
         if self.input_progress:
             self.input_progress.setValue(value)
         
-        # Calculate output based on current curve
-        output_percentage = self.calculate_output_with_curve(value)
+        # Apply deadzone logic to the input value
+        constrained_value = self.apply_deadzone_constraints(value)
+        
+        # Calculate output based on current curve using the constrained value
+        output_percentage = self.calculate_output_with_curve(constrained_value)
         
         if self.output_label:
             self.output_label.setText(f"Output: {output_percentage:.1f}%")
         
         if self.output_progress:
             self.output_progress.setValue(int(output_percentage))
+        
+        # Update the moving dot on the chart
+        if hasattr(self, 'draggable_plot') and self.draggable_plot:
+            # Show the actual pedal position (before deadzone), but with constrained output
+            if self.max_value != self.min_value:
+                # Use the original raw value for X position (shows where pedal actually is)
+                raw_input_percentage = ((value - self.min_value) / (self.max_value - self.min_value)) * 100
+                raw_input_percentage = max(0, min(100, raw_input_percentage))
+                # Use the constrained output for Y position (shows actual output after deadzone)
+                self.draggable_plot.update_input_position(raw_input_percentage, output_percentage)
     
     def calculate_output_with_curve(self, raw_value: int) -> float:
         """Calculate output percentage based on input and current curve."""
@@ -896,8 +942,6 @@ class PedalCalibrationWidget(QWidget):
         # logger.info(f"Reset calibration for {self.pedal_name}")
     
     def on_curve_changed(self, curve_name: str):
-        # logger.info(f"Curve changed for {self.pedal_name}: {curve_name}")
-        
         # Get the points for this curve
         curve_points = self.get_curve_points(curve_name)
         
@@ -910,7 +954,6 @@ class PedalCalibrationWidget(QWidget):
                 
                 # Validate curve monotonicity before applying
                 if not self._is_monotonic_curve(x, y):
-                    # logger.warning(f"Non-monotonic curve '{curve_name}' detected for {self.pedal_name}, using linear fallback")
                     # Use linear curve as fallback
                     x = [0, 25, 50, 75, 100]
                     y = [0, 25, 50, 75, 100]
@@ -922,11 +965,12 @@ class PedalCalibrationWidget(QWidget):
                 # Update the draggable plot
                 self.draggable_plot.set_curve_data(x, y, self.on_curve_points_changed)
                 
-                # Update deadzone visualization
+                # Update deadzone visualization (make sure it shows after curve changes)
                 self.update_deadzone_visualization()
                 
-                # Only log in debug mode if needed
-                # logger.debug(f"Applied {len(x)} points to {self.pedal_name} chart")
+                # Force chart refresh
+                if hasattr(self.draggable_plot, 'plot_widget'):
+                    self.draggable_plot.plot_widget.update()
             except ImportError:
                 pass
         
