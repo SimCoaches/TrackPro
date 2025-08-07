@@ -1751,7 +1751,46 @@ Total: ~128.0 MB | Last updated: Just now"""
             QMessageBox.critical(self, "Error", f"Failed to upload avatar: {str(e)}")
     
     def load_avatar_from_url(self, url):
-        """Load and display avatar from URL."""
+        """Load and display avatar from URL using centralized avatar manager."""
+        try:
+            from ...avatar_manager import get_avatar_manager, AvatarSize
+            
+            # Use centralized avatar manager
+            avatar_manager = get_avatar_manager()
+            avatar_manager.get_avatar(
+                url=url,
+                size=AvatarSize.XLARGE,  # 80px for account page
+                callback=self._on_avatar_loaded,
+                user_name="User"  # Will be updated when we have user data
+            )
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            if hasattr(self, 'profile_avatar'):
+                first_initial = self.user_data.get("first_name", "U")[0].upper()
+                last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
+                self.profile_avatar.setText(f"{first_initial}{last_initial}")
+    
+    def _on_avatar_loaded(self, pixmap):
+        """Handle avatar loaded callback."""
+        try:
+            # Update avatar display
+            if hasattr(self, 'profile_avatar'):
+                self.profile_avatar.setPixmap(pixmap)
+                self.profile_avatar.setText("")  # Clear text
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error updating avatar display: {e}")
+            # Fallback to initials
+            if hasattr(self, 'profile_avatar'):
+                first_initial = self.user_data.get("first_name", "U")[0].upper()
+                last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
+                self.profile_avatar.setText(f"{first_initial}{last_initial}")
+        
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
             from PyQt6.QtCore import QUrl

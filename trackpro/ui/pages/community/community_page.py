@@ -2496,6 +2496,7 @@ class CommunityPage(BasePage):
     
     def _initialize_heavy_components(self):
         """Initialize heavy components that were deferred during construction."""
+        
         try:
             logger.info("🏗️ Initializing heavy community components...")
             

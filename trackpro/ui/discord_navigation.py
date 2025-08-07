@@ -550,7 +550,40 @@ class DiscordNavigation(QWidget):
         self.user_avatar_btn.setToolTip(f"{username} - Account Settings")
     
     def load_avatar_from_url(self, url: str):
-        """Load and display avatar from URL."""
+        """Load and display avatar from URL using centralized avatar manager."""
+        try:
+            from .avatar_manager import get_avatar_manager, AvatarSize
+            
+            # Use centralized avatar manager
+            avatar_manager = get_avatar_manager()
+            avatar_manager.get_avatar(
+                url=url,
+                size=AvatarSize.SMALL,  # 32px for navigation
+                callback=self._on_avatar_loaded,
+                user_name=self.user_info_label.text() if hasattr(self, 'user_info_label') else "User"
+            )
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            self.user_avatar_btn.setText("U")
+    
+    def _on_avatar_loaded(self, pixmap):
+        """Handle avatar loaded callback."""
+        try:
+            # Update avatar display
+            self.user_avatar_btn.setIcon(QIcon(pixmap))
+            self.user_avatar_btn.setText("")  # Clear text
+            self.current_avatar_url = self.current_avatar_url  # Keep track of current URL
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error updating avatar display: {e}")
+            # Fallback to initials
+            self.user_avatar_btn.setText("U")
+        
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
             from PyQt6.QtCore import QUrl

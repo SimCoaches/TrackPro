@@ -11,6 +11,8 @@ from ..pages.home import HomePage
 from ..pages.community import CommunityPage
 # App tracking
 from trackpro.utils.app_tracker import start_app_tracking, stop_app_tracking, update_user_online_status, update_app_tracker_user_id
+# Avatar management
+from ..avatar_manager import get_avatar_manager, shutdown_avatar_manager
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,9 @@ class ModernMainWindow(QMainWindow):
         self.init_performance_optimization()
         self.init_global_managers()
         self.init_modern_ui()
+        
+        # Initialize centralized avatar manager
+        self.init_avatar_manager()
         
         # Start app tracking
         self.start_app_tracking()
@@ -346,6 +351,20 @@ class ModernMainWindow(QMainWindow):
         
         self.global_managers.auth = self.oauth_handler
         logger.info("✅ Global managers initialized (hardware deferred)")
+    
+    def init_avatar_manager(self):
+        """Initialize the centralized avatar manager."""
+        try:
+            # Initialize the global avatar manager
+            avatar_manager = get_avatar_manager()
+            logger.info("✅ Centralized avatar manager initialized")
+            
+            # Connect signals for monitoring
+            avatar_manager.avatar_loaded.connect(lambda url, pixmap: logger.debug(f"Avatar loaded: {url}"))
+            avatar_manager.avatar_load_failed.connect(lambda url, error: logger.warning(f"Avatar load failed: {url} - {error}"))
+            
+        except Exception as e:
+            logger.error(f"❌ Error initializing avatar manager: {e}")
     
     def set_global_iracing_api(self, iracing_api):
         """Set the global iRacing API instance."""
@@ -2225,6 +2244,13 @@ class ModernMainWindow(QMainWindow):
                     logger.info("✅ Cleaned up performance manager")
                 except Exception as e:
                     logger.error(f"Error cleaning up performance manager: {e}")
+            
+            # Cleanup avatar manager
+            try:
+                shutdown_avatar_manager()
+                logger.info("✅ Cleaned up avatar manager")
+            except Exception as e:
+                logger.error(f"Error cleaning up avatar manager: {e}")
                     
             logger.info("🧹 Main window cleanup completed")
             

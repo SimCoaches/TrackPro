@@ -363,7 +363,38 @@ class HomePage(BasePage):
         self.create_avatar_with_initials(initials, name)
     
     def load_avatar_from_url(self, url: str):
-        """Load and display avatar from URL."""
+        """Load and display avatar from URL using centralized avatar manager."""
+        try:
+            from ...avatar_manager import get_avatar_manager, AvatarSize
+            
+            # Use centralized avatar manager
+            avatar_manager = get_avatar_manager()
+            avatar_manager.get_avatar(
+                url=url,
+                size=AvatarSize.XXLARGE,  # 100px for home page
+                callback=self._on_avatar_loaded,
+                user_name="User"  # Will be updated when we have user data
+            )
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            # Fallback to initials
+            self.create_avatar_with_initials("U", "User")
+    
+    def _on_avatar_loaded(self, pixmap):
+        """Handle avatar loaded callback."""
+        try:
+            # Update avatar display
+            self.avatar_label.setPixmap(pixmap)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error updating avatar display: {e}")
+            # Fallback to initials
+            self.create_avatar_with_initials("U", "User")
+        
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
             from PyQt6.QtCore import QUrl

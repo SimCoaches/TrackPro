@@ -314,10 +314,15 @@ class SupabaseManager:
                 return False
             
             # Check if the access token appears to be corrupted
-            if isinstance(access_token, str) and ('+00:00' in access_token or len(access_token) < 50):
-                logger.warning("Access token appears to be corrupted - clearing session")
-                self._clear_session()
-                return False
+            if isinstance(access_token, str):
+                # Check for common corruption patterns
+                if ('+00:00' in access_token or 
+                    len(access_token) < 100 or  # Supabase access tokens are typically 200+ chars
+                    access_token.count('.') != 2 or  # JWT tokens have 3 parts separated by dots
+                    not access_token.startswith('eyJ')):  # JWT tokens start with 'eyJ'
+                    logger.warning(f"Access token appears to be corrupted (length: {len(access_token)}, starts with: {access_token[:10]}) - clearing session")
+                    self._clear_session()
+                    return False
             
             # Ensure client is available before attempting session restoration
             if not self._client:
@@ -367,10 +372,15 @@ class SupabaseManager:
             logger.warning("No refresh token available")
             return False
         
-        # Check if refresh token appears to be corrupted
-        if isinstance(refresh_token, str) and ('+00:00' in refresh_token or len(refresh_token) < 50):
-            logger.warning("Refresh token appears to be corrupted")
-            return False
+        # IMPROVED: Check if refresh token appears to be corrupted
+        if isinstance(refresh_token, str):
+            # Check for common corruption patterns
+            if ('+00:00' in refresh_token or 
+                len(refresh_token) < 100 or  # Supabase refresh tokens are typically 200+ chars
+                refresh_token.count('.') != 2 or  # JWT tokens have 3 parts separated by dots
+                not refresh_token.startswith('eyJ')):  # JWT tokens start with 'eyJ'
+                logger.warning(f"Refresh token appears to be corrupted (length: {len(refresh_token)}, starts with: {refresh_token[:10]})")
+                return False
         
         # Only try one refresh method to avoid multiple failed attempts
         try:
@@ -842,14 +852,8 @@ class SupabaseManager:
             logger.warning("Supabase client is None after initialization attempts")
             return None
         
-        # Attempt session restoration when client is first accessed (non-blocking)
-        if self._client and not hasattr(self, '_session_restored'):
-            self._session_restored = True
-            try:
-                logger.info("🔄 Attempting session restoration on first client access")
-                self._restore_session()
-            except Exception as e:
-                logger.warning(f"Session restoration failed on first access: {e}")
+        # REMOVED: Session restoration moved to is_authenticated() to fix timing issues
+        # This prevents authentication checks from happening before session restoration
         
         return self._client
     
@@ -865,11 +869,21 @@ class SupabaseManager:
                 logger.info("🔐 Fast path: No local auth file found - not authenticated")
                 return False
             
-            # Force initialization if needed for auth checks
+            # CRITICAL FIX: Attempt session restoration BEFORE checking authentication
+            # This ensures the session is restored before we try to check if user is authenticated
             if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
                 logger.info("🔐 AUTH CHECK: Triggering deferred Supabase initialization")
                 self._initialization_deferred = False
                 self.initialize()
+            
+            # Attempt session restoration if we haven't done it yet
+            if not hasattr(self, '_session_restored'):
+                logger.info("🔐 AUTH CHECK: Attempting session restoration before auth check")
+                self._session_restored = True
+                try:
+                    self._restore_session()
+                except Exception as e:
+                    logger.warning(f"Session restoration failed during auth check: {e}")
             
             if self._offline_mode or not self._client:
                 return False

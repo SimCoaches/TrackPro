@@ -162,7 +162,50 @@ class OnlineUserItem(QWidget):
         return self.create_fallback_avatar(name)
     
     def load_avatar_from_url(self, url: str, size: int = 32, avatar_label: QLabel = None) -> QPixmap:
-        """Load and display avatar from URL."""
+        """Load and display avatar from URL using centralized avatar manager."""
+        try:
+            from .avatar_manager import get_avatar_manager, AvatarSize
+            
+            # Map size to AvatarSize enum
+            size_map = {
+                24: AvatarSize.TINY,
+                32: AvatarSize.SMALL,
+                48: AvatarSize.MEDIUM,
+                64: AvatarSize.LARGE,
+                80: AvatarSize.XLARGE,
+                100: AvatarSize.XXLARGE
+            }
+            avatar_size = size_map.get(size, AvatarSize.SMALL)
+            
+            # Use centralized avatar manager
+            avatar_manager = get_avatar_manager()
+            avatar_manager.get_avatar(
+                url=url,
+                size=avatar_size,
+                callback=lambda pixmap: self._on_avatar_loaded(pixmap, avatar_label) if avatar_label else None,
+                user_name="User"  # Will be updated when we have user data
+            )
+            
+            # Return None initially, the image will be loaded asynchronously
+            return None
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error loading avatar from URL: {e}")
+            return None
+    
+    def _on_avatar_loaded(self, pixmap, avatar_label):
+        """Handle avatar loaded callback."""
+        try:
+            if avatar_label:
+                avatar_label.setPixmap(pixmap)
+                logger.debug(f"Successfully updated avatar with image")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error updating avatar label: {e}")
+        
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
             from PyQt6.QtCore import QUrl
