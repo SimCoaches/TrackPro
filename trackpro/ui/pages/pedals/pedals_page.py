@@ -32,20 +32,25 @@ class PedalsPage(BasePage):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(20, 20, 20, 20)
         
+        # Create top controls layout (center-aligned, limited width)
+        top_controls_layout = QVBoxLayout()
+        top_controls_layout.setSpacing(5)
+        
         # Create connection status indicator
         self.connection_status_label = QLabel("⚪ Hardware Unavailable")
         self.connection_status_label.setStyleSheet("""
             QLabel {
                 background-color: #6b7280;
                 color: white;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-size: 11px;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-size: 10px;
                 font-weight: bold;
+                max-height: 24px;
+                max-width: 400px;
             }
         """)
         self.connection_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(self.connection_status_label)
         
         # Create calibration wizard button
         calibration_button = QPushButton("Open Calibration Wizard")
@@ -54,10 +59,12 @@ class PedalsPage(BasePage):
                 background-color: #3b82f6;
                 color: white;
                 border: none;
-                padding: 10px 20px;
-                border-radius: 6px;
-                font-size: 14px;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-size: 12px;
                 font-weight: bold;
+                max-height: 32px;
+                max-width: 400px;
             }
             QPushButton:hover {
                 background-color: #2563eb;
@@ -67,7 +74,13 @@ class PedalsPage(BasePage):
             }
         """)
         calibration_button.clicked.connect(self.open_calibration_wizard)
-        main_layout.addWidget(calibration_button)
+        
+        # Add widgets to top controls layout
+        top_controls_layout.addWidget(self.connection_status_label, alignment=Qt.AlignmentFlag.AlignLeft)
+        top_controls_layout.addWidget(calibration_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        
+        # Add the top controls layout to main layout
+        main_layout.addLayout(top_controls_layout)
         
         # Create pedals layout
         pedals_layout = QHBoxLayout()
@@ -132,6 +145,12 @@ class PedalsPage(BasePage):
         if hasattr(self, 'global_managers') and self.global_managers and hasattr(self.global_managers, 'hardware'):
             hardware = self.global_managers.hardware
             
+            # Debug logging to diagnose the issue
+            logger.info(f"🔍 Connection check - Hardware object: {hardware}")
+            logger.info(f"🔍 Connection check - Has pedals_connected: {hasattr(hardware, 'pedals_connected')}")
+            if hasattr(hardware, 'pedals_connected'):
+                logger.info(f"🔍 Connection check - pedals_connected value: {hardware.pedals_connected}")
+            
             # Simple check: if pedals_connected is True, then connected
             if hasattr(hardware, 'pedals_connected') and hardware.pedals_connected:
                 # Pedals connected
@@ -140,12 +159,15 @@ class PedalsPage(BasePage):
                     QLabel {
                         background-color: #22c55e;
                         color: white;
-                        padding: 6px 12px;
-                        border-radius: 4px;
-                        font-size: 11px;
+                        padding: 4px 8px;
+                        border-radius: 3px;
+                        font-size: 10px;
                         font-weight: bold;
+                        max-height: 24px;
+                        max-width: 400px;
                     }
                 """)
+                logger.info("🟢 UI Status: Pedals Connected")
             else:
                 # Pedals disconnected
                 self.connection_status_label.setText("🔴 Pedals Disconnected")
@@ -153,12 +175,15 @@ class PedalsPage(BasePage):
                     QLabel {
                         background-color: #ef4444;
                         color: white;
-                        padding: 6px 12px;
-                        border-radius: 4px;
-                        font-size: 11px;
+                        padding: 4px 8px;
+                        border-radius: 3px;
+                        font-size: 10px;
                         font-weight: bold;
+                        max-height: 24px;
+                        max-width: 400px;
                     }
                 """)
+                logger.warning("🔴 UI Status: Pedals Disconnected")
         else:
             # Hardware manager not available
             self.connection_status_label.setText("⚪ Hardware Unavailable")
@@ -166,12 +191,19 @@ class PedalsPage(BasePage):
                 QLabel {
                     background-color: #6b7280;
                     color: white;
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    font-size: 11px;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    font-size: 10px;
                     font-weight: bold;
+                    max-height: 24px;
+                    max-width: 400px;
                 }
             """)
+            logger.warning("⚪ UI Status: Hardware Unavailable")
+            logger.info(f"🔍 Debug - Has global_managers: {hasattr(self, 'global_managers')}")
+            logger.info(f"🔍 Debug - global_managers: {getattr(self, 'global_managers', 'NOT_FOUND')}")
+            if hasattr(self, 'global_managers') and self.global_managers:
+                logger.info(f"🔍 Debug - Has hardware attr: {hasattr(self.global_managers, 'hardware')}")
     
     def create_side_by_side_pedals(self, parent_layout):
         pedals = ['throttle', 'brake', 'clutch']

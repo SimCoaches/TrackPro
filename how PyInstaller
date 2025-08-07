@@ -1,0 +1,5 @@
+simple_installer.iss
+trackpro/pedals/calibration.py
+trackpro/ui/pages/pedals/calibration_widget.py
+trackpro/ui/pages/pedals/pedals_page.py
+trackpro/ui/pages/support/support_page_fixed.py

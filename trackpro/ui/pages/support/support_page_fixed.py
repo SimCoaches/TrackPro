@@ -208,9 +208,6 @@ class SupportPage(BasePage):
             # FAQ tab
             self.create_faq_tab_safe()
             
-            # Contact Info tab
-            self.create_contact_tab_safe()
-            
         except Exception as e:
             logger.error(f"❌ Error creating support tabs: {e}")
             # Create minimal fallback tab
@@ -469,38 +466,7 @@ class SupportPage(BasePage):
         except Exception as e:
             logger.error(f"❌ Error creating FAQ item: {e}")
     
-    def create_contact_tab_safe(self):
-        """Create the contact information tab with error handling."""
-        try:
-            contact_widget = QWidget()
-            contact_layout = QVBoxLayout(contact_widget)
-            contact_layout.setContentsMargins(20, 20, 20, 20)
-            contact_layout.setSpacing(20)
-            
-            # Contact header
-            contact_header = QLabel("Contact Information")
-            contact_header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-            contact_header.setStyleSheet("color: white; margin-bottom: 15px;")
-            contact_layout.addWidget(contact_header)
-            
-            # Contact info
-            contact_info = [
-                "📧 Email: support@simcoaches.com",
-                "💬 Discord: Join our community server for quick help",
-                "📝 Support Tickets: Use the 'Submit Ticket' tab for detailed issues",
-                "🕒 Response Time: We typically respond within 24 hours"
-            ]
-            
-            for info in contact_info:
-                info_label = QLabel(info)
-                info_label.setStyleSheet("color: #ecf0f1; font-size: 14px; margin-bottom: 8px;")
-                contact_layout.addWidget(info_label)
-            
-            contact_layout.addStretch()
-            self.tab_widget.addTab(contact_widget, "📞 Contact")
-            
-        except Exception as e:
-            logger.error(f"❌ Error creating contact tab: {e}")
+
     
     def create_minimal_support_tab(self):
         """Create a minimal support tab as fallback."""

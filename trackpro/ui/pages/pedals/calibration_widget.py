@@ -589,6 +589,14 @@ class PedalCalibrationWidget(QWidget):
                 )
                 self.draggable_plot.plot_widget.addItem(self.draggable_plot.scatter)
                 
+                # Restore the input dot
+                if self.draggable_plot.input_dot:
+                    self.draggable_plot.plot_widget.addItem(self.draggable_plot.input_dot)
+                
+                # Restore deadzone visualization
+                min_deadzone, max_deadzone = self.get_deadzone_values()
+                self.draggable_plot.update_deadzone_visualization(min_deadzone, max_deadzone)
+                
                 # Restore the callback
                 self.draggable_plot.on_point_moved = original_callback
             
@@ -599,9 +607,10 @@ class PedalCalibrationWidget(QWidget):
     
     def update_deadzone_visualization(self):
         """Update the deadzone visualization on the chart."""
-        # This method is called during curve changes to refresh deadzone visualization
-        # The actual deadzone visualization is now handled directly by the pedals page
-        pass
+        # Get current deadzone values and update the plot visualization
+        if hasattr(self, 'draggable_plot') and self.draggable_plot:
+            min_deadzone, max_deadzone = self.get_deadzone_values()
+            self.draggable_plot.update_deadzone_visualization(min_deadzone, max_deadzone)
     
     def create_calibration_controls(self, parent_layout):
         controls_group = QGroupBox("Calibration Controls")
@@ -868,13 +877,65 @@ class PedalCalibrationWidget(QWidget):
         
         # Update the moving dot on the chart
         if hasattr(self, 'draggable_plot') and self.draggable_plot:
-            # Show the actual pedal position (before deadzone), but with constrained output
             if self.max_value != self.min_value:
-                # Use the original raw value for X position (shows where pedal actually is)
+                # Convert input value to percentage
                 raw_input_percentage = ((value - self.min_value) / (self.max_value - self.min_value)) * 100
                 raw_input_percentage = max(0, min(100, raw_input_percentage))
-                # Use the constrained output for Y position (shows actual output after deadzone)
-                self.draggable_plot.update_input_position(raw_input_percentage, output_percentage)
+                
+                # Get deadzone values to determine dot positioning
+                min_deadzone, max_deadzone = self.get_deadzone_values()
+                
+                # Calculate the X position for the dot based on dead zone mapping
+                if raw_input_percentage <= min_deadzone and min_deadzone > 0:
+                    # In min deadzone - show dot at start of active curve (min_deadzone position)
+                    dot_x_position = min_deadzone
+                elif raw_input_percentage >= (100 - max_deadzone) and max_deadzone > 0:
+                    # In max deadzone - show dot at end of active curve (100 - max_deadzone position)
+                    dot_x_position = 100 - max_deadzone
+                else:
+                    # In active range or no deadzone - show actual position
+                    dot_x_position = raw_input_percentage
+                
+                # Calculate Y position from the response curve at the dot_x_position
+                dot_y_position = self.calculate_curve_y_at_x(dot_x_position)
+                
+                self.draggable_plot.update_input_position(dot_x_position, dot_y_position)
+    
+    def calculate_curve_y_at_x(self, x_position: float) -> float:
+        """Calculate the Y value on the response curve at the given X position."""
+        if not hasattr(self, 'draggable_plot') or not self.draggable_plot:
+            return x_position  # Fallback to linear if no plot
+        
+        # Get the current curve points from the draggable plot
+        if hasattr(self.draggable_plot, 'curve_x') and hasattr(self.draggable_plot, 'curve_y'):
+            curve_x = self.draggable_plot.curve_x
+            curve_y = self.draggable_plot.curve_y
+            
+            if len(curve_x) < 2 or len(curve_y) < 2:
+                return x_position  # Fallback to linear if insufficient points
+            
+            # Ensure x_position is within bounds
+            x_position = max(min(x_position, max(curve_x)), min(curve_x))
+            
+            # Find the two points that bracket our x_position
+            for i in range(len(curve_x) - 1):
+                if curve_x[i] <= x_position <= curve_x[i + 1]:
+                    # Linear interpolation between the two points
+                    x1, y1 = curve_x[i], curve_y[i]
+                    x2, y2 = curve_x[i + 1], curve_y[i + 1]
+                    
+                    if x2 == x1:
+                        return y1  # Avoid division by zero
+                    
+                    # Calculate interpolated Y value
+                    t = (x_position - x1) / (x2 - x1)
+                    return y1 + t * (y2 - y1)
+            
+            # If we get here, x_position is at or beyond the last point
+            return curve_y[-1]
+        
+        # Fallback to linear response if curve data is not available
+        return x_position
     
     def calculate_output_with_curve(self, raw_value: int) -> float:
         """Calculate output percentage based on input and current curve."""
@@ -937,6 +998,8 @@ class PedalCalibrationWidget(QWidget):
         # Update the chart if available
         if hasattr(self, 'draggable_plot') and self.draggable_plot:
             self.draggable_plot.set_curve_data(self.curve_x, self.curve_y, self.on_curve_points_changed)
+            # Restore deadzone visualization after resetting curve
+            self.update_deadzone_visualization()
         
         self.emit_calibration_update()
         # logger.info(f"Reset calibration for {self.pedal_name}")
