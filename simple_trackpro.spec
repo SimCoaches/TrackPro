@@ -1,6 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import re
 import site
+
+def _read_version():
+    try:
+        with open(os.path.join('trackpro', '__init__.py'), 'r', encoding='utf-8') as f:
+            content = f.read()
+        m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", content)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return '1.0.0'
+
+TP_VERSION = _read_version()
 
 # Get PyQt6 installation path
 pyqt6_path = None
@@ -60,7 +74,7 @@ for hidhide_path in hidhide_paths:
 
 # Build datas list - minimal and essential only
 datas_list = [
-    # Core TrackPro files
+    # Core code and data
     ('trackpro', 'trackpro'),
     ('race_coach.db', '.'),
     ('config.ini', '.'),
@@ -68,14 +82,13 @@ datas_list = [
     *([('.env', '.')] if os.path.exists('.env') else []),
     ('trackpro/resources/terms_of_service.txt', 'trackpro/resources'),
     ('trackpro/database/migrations', 'trackpro/database/migrations'),
-    # Core resources only
+    # Resources
     ('trackpro/resources', 'trackpro/resources'),
+    ('ui_resources', 'ui_resources'),
+    # JSON configuration used at runtime
     ('ai_coach_volume.json', '.'),
     ('centerline_track_map.json', '.'),
     ('data.txt', '.'),
-    ('future', 'future'),
-    ('ui_resources', 'ui_resources'),
-    ('Supabase', 'Supabase'),
 ]
 
 # Add Qt WebEngine resources if available
@@ -91,12 +104,7 @@ if pyqt6_path:
             datas_list.append((v8_context_file, '.'))
             # print("Added V8 context snapshot")
 
-a = Analysis(
-    ['new_ui.py'],
-    pathex=[],
-    binaries=binaries_list,
-    datas=datas_list,
-    hiddenimports=[
+optimize_hiddenimports = [
         # Core TrackPro modules only
         'trackpro',
         'trackpro.modern_main',
@@ -126,7 +134,6 @@ a = Analysis(
         'trackpro.pedals.hardware_input',
         'trackpro.pedals.hidhide',
         'trackpro.pedals.calibration',
-        'trackpro.pedals.calibration_chart',
         'trackpro.pedals.curve_cache',
         
         # Race coach and telemetry
@@ -141,6 +148,7 @@ a = Analysis(
         'trackpro.race_coach.utils.telemetry_validation',
         'trackpro.race_coach.utils.telemetry_worker',
         'trackpro.race_coach.widgets',
+        # Widgets imported dynamically in UI
         'trackpro.race_coach.widgets.brake_graph',
         'trackpro.race_coach.widgets.gaze_graph',
         'trackpro.race_coach.widgets.gear_graph',
@@ -184,6 +192,12 @@ a = Analysis(
         'trackpro.database.run_migrations',
         'trackpro.database.update_lawrence_to_team',
         'trackpro.database.update_lawrence_to_team_direct',
+
+        # Local Supabase helper package (capital S)
+        'Supabase',
+        'Supabase.auth',
+        'Supabase.client',
+        'Supabase.database',
         
         # UI components
         'trackpro.ui',
@@ -197,7 +211,6 @@ a = Analysis(
         'trackpro.ui.theme_engine',
         'trackpro.ui.achievements_ui',
         'trackpro.ui.auth_dialogs',
-        'trackpro.ui.online_users_sidebar',
         'trackpro.ui.update_notification_dialog',
         
         # Community system
@@ -256,27 +269,18 @@ a = Analysis(
         'idna',
         
         # Matplotlib for charts and graphs
+        # Reduce matplotlib backends to required ones only
         'matplotlib',
-        'matplotlib.pyplot',
-        'matplotlib.backends',
         'matplotlib.backends.backend_qt6agg',
-        'matplotlib.backends.backend_agg',
-        'matplotlib.figure',
         
         # Audio/game essentials
         'pygame',
-        'pygame.mixer',
-        'pygame.joystick',
-        'pygame.event',
         
         # Windows API
         'win32api',
-        'win32con',
-        'win32gui',
         
         # Database essentials
         'supabase',
-        'supabase.lib',
         'supabase.lib.client_options',
         'supabase.lib.realtime',
         'supabase.lib.auth',
@@ -353,14 +357,28 @@ a = Analysis(
         'ntpath',
         'stat',
         'time',
-        'calendar',
-        'datetime',
         'email',
         'email.mime',
         'email.mime.text',
         'email.mime.multipart',
         'email.mime.base',
-    ],
+]
+
+# Optional: include UPX if available to reduce binary size
+enable_upx = False
+try:
+    import shutil as _shutil
+    if _shutil.which('upx'):
+        enable_upx = True
+except Exception:
+    enable_upx = False
+
+a = Analysis(
+    ['new_ui.py'],
+    pathex=[],
+    binaries=binaries_list,
+    datas=datas_list,
+    hiddenimports=optimize_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -426,7 +444,7 @@ a = Analysis(
         'sphinx',
     ],
     noarchive=False,
-    optimize=1,  # Enable Python optimization
+    optimize=2,  # Stronger Python optimization for smaller size
 )
 
 pyz = PYZ(a.pure, a.zipped_data)
@@ -437,19 +455,19 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='TrackPro_v1.5.6',
+    name=f'TrackPro_v{TP_VERSION}',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,  # Disabled for Windows compatibility
-    upx=False,   # Disabled to avoid UPX dependency issues
+    strip=False,  # Keep symbols for stability on Windows
+    upx=enable_upx,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=False,
-            icon='trackpro/resources/icons/trackpro_tray-1.ico',
+    icon='trackpro/resources/icons/trackpro_tray-1.ico',
 )

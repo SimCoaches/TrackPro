@@ -438,14 +438,9 @@ class ChatMessageWidget(QWidget):
         self.setup_ui()
     
     def create_avatar(self):
-        """Create a circular avatar with user profile picture or initials."""
-        pixmap = QPixmap(32, 32)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Try to get avatar URL from message data
+        """Create or load avatar using centralized manager (cached + async)."""
+        from ...avatar_manager import AvatarManager
+        size = 32
         avatar_url = None
         if self.message_data.get('user_display_info'):
             avatar_url = self.message_data['user_display_info'].get('avatar_url')
@@ -453,105 +448,15 @@ class ChatMessageWidget(QWidget):
             avatar_url = self.message_data['user_profiles'].get('avatar_url')
         elif self.message_data.get('sender_avatar_url'):
             avatar_url = self.message_data['sender_avatar_url']
-        
-        # Try to load profile picture if URL is available
-        if avatar_url:
-            try:
-                from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-                from PyQt6.QtCore import QUrl
-                
-                # Create network manager for downloading image
-                manager = QNetworkAccessManager()
-                request = QNetworkRequest(QUrl(avatar_url))
-                
-                # For now, we'll create a placeholder and load the image asynchronously
-                # This is a simplified approach - in production you'd want proper async loading
-                import requests
-                import io
-                from PIL import Image
-                
-                try:
-                    response = requests.get(avatar_url, timeout=5)
-                    if response.status_code == 200:
-                        # Convert to QPixmap
-                        image_data = response.content
-                        image = QPixmap()
-                        if image.loadFromData(image_data):
-                            # Scale and make circular
-                            scaled_image = image.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                            
-                            # Create circular mask
-                            mask = QPixmap(32, 32)
-                            mask.fill(Qt.GlobalColor.transparent)
-                            mask_painter = QPainter(mask)
-                            mask_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            mask_painter.setBrush(QBrush(Qt.GlobalColor.white))
-                            mask_painter.setPen(Qt.PenStyle.NoPen)
-                            mask_painter.drawEllipse(0, 0, 32, 32)
-                            mask_painter.end()
-                            
-                            # Apply mask to create circular image
-                            circular_image = scaled_image.copy()
-                            circular_image.setMask(mask.createMaskFromColor(Qt.GlobalColor.transparent))
-                            
-                            painter.drawPixmap(0, 0, circular_image)
-                            painter.end()
-                            return pixmap
-                except Exception as e:
-                    logger.debug(f"Failed to load avatar from URL {avatar_url}: {e}")
-                    # Fall through to initials
-            except Exception as e:
-                logger.debug(f"Error loading avatar: {e}")
-                # Fall through to initials
-        
-        # Fallback to initials-based avatar
+
         name = self.message_data.get('sender_name')
-        logger.info(f"🔍 Avatar creation - sender_name: {name}")
-        
-        # Try to get name from user_profiles first
         if not name and self.message_data.get('user_profiles'):
             user_profile = self.message_data['user_profiles']
             name = user_profile.get('display_name') or user_profile.get('username') or 'U'
-            logger.info(f"🔍 Avatar creation - from user_profiles: {name}")
-        
-        # If still no name, try to get from current user context
         if not name:
-            try:
-                from trackpro.auth.user_manager import get_current_user
-                user = get_current_user()
-                if user and user.is_authenticated:
-                    # Check if this is the current user's message
-                    if self.message_data.get('sender_id') == user.id:
-                        name = user.name or user.email or 'You'
-                        logger.info(f"🔍 Avatar creation - current user: {name}")
-                    else:
-                        name = 'U'
-                        logger.info(f"🔍 Avatar creation - unknown user: {name}")
-                else:
-                    name = 'U'
-                    logger.info(f"🔍 Avatar creation - no current user: {name}")
-            except Exception as e:
-                logger.debug(f"Could not get current user for avatar: {e}")
-                name = 'U'
-                logger.info(f"🔍 Avatar creation - using fallback: {name}")
-            
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
-        color_index = hash(name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, 32, 32)
-        
-        # Draw initials
-        initials = ''.join([word[0].upper() for word in name.split()][:2])
-        painter.setPen(QColor('#ffffff'))
-        font = painter.font()
-        font.setPixelSize(12)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
-        
-        painter.end()
-        return pixmap
+            name = 'U'
+
+        return AvatarManager.instance().get_cached_pixmap(avatar_url or "", name, size=size)
     
     def setup_ui(self):
         """Setup the message UI."""
@@ -1390,7 +1295,14 @@ class ChatChannelWidget(QWidget):
     def __init__(self, channel_data):
         super().__init__()
         self.channel_data = channel_data
+        self._auth_overlay = None
+        self.on_request_older = None
+        self._is_loading_more = False
+        self._has_unseen = False
+        self._new_separator_item = None
         self.setup_ui()
+        # Build overlay last so it sits above content
+        self._create_auth_overlay()
     
     def setup_ui(self):
         """Setup the chat channel UI."""
@@ -1437,7 +1349,28 @@ class ChatChannelWidget(QWidget):
                 padding: 0px;
             }
         """)
+        try:
+            # Detect scroll to top to load older messages
+            vbar = self.messages_list.verticalScrollBar()
+            vbar.valueChanged.connect(self._on_scroll_changed)
+        except Exception:
+            pass
         layout.addWidget(self.messages_list)
+
+        # Jump-to-present button (lightweight, only shows when scrolled up or with unseen)
+        from PyQt6.QtWidgets import QPushButton
+        self.jump_to_present_btn = QPushButton("Jump to Present")
+        self.jump_to_present_btn.setVisible(False)
+        self.jump_to_present_btn.setFixedHeight(28)
+        self.jump_to_present_btn.setStyleSheet(
+            """
+            QPushButton { background-color: #3ba55c; color: #ffffff; border: none; border-radius: 4px; margin: 6px 12px; }
+            QPushButton:hover { background-color: #2d7d46; }
+            QPushButton:pressed { background-color: #1f5f35; }
+            """
+        )
+        self.jump_to_present_btn.clicked.connect(self._on_jump_to_present_clicked)
+        layout.addWidget(self.jump_to_present_btn)
         
         # Message input area
         input_widget = QWidget()
@@ -1475,6 +1408,62 @@ class ChatChannelWidget(QWidget):
         
         layout.addWidget(input_widget)
     
+    def _create_auth_overlay(self):
+        """Create a semi-transparent overlay prompting login, covering the chat area."""
+        try:
+            if self._auth_overlay is not None:
+                return
+            overlay = QWidget(self)
+            overlay.setVisible(False)
+            overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+            overlay.setStyleSheet(
+                """
+                QWidget {
+                    background-color: rgba(20, 20, 20, 200);
+                    border: none;
+                }
+                """
+            )
+            # Centered message
+            msg = QLabel("Must Be Logged In To Chat", overlay)
+            msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            msg.setStyleSheet("color: #bbbbbb; font-size: 16px; font-weight: bold;")
+            # Fill overlay and center label using a layout
+            v = QVBoxLayout(overlay)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.addStretch(1)
+            v.addWidget(msg, 0, Qt.AlignmentFlag.AlignCenter)
+            v.addStretch(1)
+            self._auth_overlay = overlay
+            # Ensure correct initial geometry
+            self._resize_auth_overlay()
+        except Exception as e:
+            logger.error(f"Error creating auth overlay: {e}")
+
+    def _resize_auth_overlay(self):
+        try:
+            if self._auth_overlay is not None:
+                self._auth_overlay.setGeometry(0, 0, self.width(), self.height())
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        self._resize_auth_overlay()
+        return super().resizeEvent(event)
+
+    def show_auth_overlay(self, show: bool):
+        """Show or hide the authentication overlay and block interactions when shown."""
+        try:
+            if self._auth_overlay is None:
+                self._create_auth_overlay()
+            if self._auth_overlay:
+                self._auth_overlay.setVisible(bool(show))
+                # When overlay is shown, also ensure input is disabled
+                if hasattr(self, 'message_input') and self.message_input:
+                    self.message_input.setEnabled(not show)
+        except Exception as e:
+            logger.error(f"Error toggling auth overlay: {e}")
+
     def send_message(self):
         """Send a message."""
         text = self.message_input.text().strip()
@@ -1485,6 +1474,15 @@ class ChatChannelWidget(QWidget):
     def add_message(self, message_data):
         """Add a message to the chat."""
         try:
+            is_near_bottom = self._is_near_bottom()
+
+            # If user is not at bottom, mark unseen and ensure separator exists before first unseen
+            if not is_near_bottom:
+                if not self._has_unseen:
+                    self._ensure_new_separator()
+                self._has_unseen = True
+                self.jump_to_present_btn.setVisible(True)
+
             message_widget = ChatMessageWidget(message_data)
             item = QListWidgetItem()
             item.setSizeHint(message_widget.sizeHint())
@@ -1492,10 +1490,113 @@ class ChatChannelWidget(QWidget):
             self.messages_list.addItem(item)
             self.messages_list.setItemWidget(item, message_widget)
             
-            # Scroll to bottom
-            self.messages_list.scrollToBottom()
+            # Auto-scroll only if user is already near the bottom
+            if is_near_bottom:
+                self.messages_list.scrollToBottom()
         except Exception as e:
             logger.error(f"Error adding message to chat: {e}")
+
+    def add_messages_bulk(self, messages, scroll_to_bottom: bool = True):
+        """Add a list of messages efficiently; optionally scroll to bottom once."""
+        try:
+            for message in messages:
+                message_widget = ChatMessageWidget(message)
+                item = QListWidgetItem()
+                item.setSizeHint(message_widget.sizeHint())
+                self.messages_list.addItem(item)
+                self.messages_list.setItemWidget(item, message_widget)
+            if scroll_to_bottom:
+                self.messages_list.scrollToBottom()
+        except Exception as e:
+            logger.error(f"Error adding messages in bulk: {e}")
+
+    def prepend_messages(self, messages):
+        """Prepend older messages at the top while preserving the user's position."""
+        try:
+            # Remember the item currently at the top (likely visible when at top)
+            prev_top_item = self.messages_list.item(0)
+            # Insert in order so that the earliest ends up at the very top
+            for message in messages:
+                message_widget = ChatMessageWidget(message)
+                item = QListWidgetItem()
+                item.setSizeHint(message_widget.sizeHint())
+                self.messages_list.insertItem(0, item)
+                self.messages_list.setItemWidget(item, message_widget)
+            # Restore previous top item position below newly inserted block
+            try:
+                from PyQt6.QtWidgets import QAbstractItemView
+                if prev_top_item is not None:
+                    self.messages_list.scrollToItem(prev_top_item, QAbstractItemView.ScrollHint.PositionAtTop)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Error prepending messages: {e}")
+
+    def _on_scroll_changed(self, value: int):
+        try:
+            # Top reached → load older
+            if value == 0 and not self._is_loading_more and callable(self.on_request_older):
+                self._is_loading_more = True
+                self.on_request_older()
+            # Bottom proximity → hide jump, clear unseen and separator
+            if self._is_near_bottom():
+                self.jump_to_present_btn.setVisible(False)
+                self._has_unseen = False
+                self._remove_new_separator()
+            else:
+                if self._has_unseen:
+                    self.jump_to_present_btn.setVisible(True)
+        except Exception:
+            pass
+
+    def notify_load_more_complete(self):
+        """Allow more load-more triggers after current load finishes."""
+        self._is_loading_more = False
+
+    def _is_near_bottom(self, threshold: int = 20) -> bool:
+        try:
+            vbar = self.messages_list.verticalScrollBar()
+            return (vbar.maximum() - vbar.value()) <= threshold
+        except Exception:
+            return True
+
+    def _ensure_new_separator(self):
+        try:
+            if self._new_separator_item is not None:
+                return
+            from PyQt6.QtWidgets import QLabel
+            sep_label = QLabel("— New Messages —")
+            sep_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sep_label.setStyleSheet("color: #9aa0a6; padding: 6px 0;")
+            item = QListWidgetItem()
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.setSizeHint(sep_label.sizeHint())
+            self.messages_list.addItem(item)
+            self.messages_list.setItemWidget(item, sep_label)
+            self._new_separator_item = item
+        except Exception:
+            pass
+
+    def _remove_new_separator(self):
+        try:
+            if self._new_separator_item is None:
+                return
+            row = self.messages_list.row(self._new_separator_item)
+            if row >= 0:
+                itm = self.messages_list.takeItem(row)
+                del itm
+            self._new_separator_item = None
+        except Exception:
+            self._new_separator_item = None
+
+    def _on_jump_to_present_clicked(self):
+        try:
+            self.messages_list.scrollToBottom()
+            self.jump_to_present_btn.setVisible(False)
+            self._has_unseen = False
+            self._remove_new_separator()
+        except Exception:
+            pass
 
 
 class CommunityPage(BasePage):
@@ -1543,14 +1644,24 @@ class CommunityPage(BasePage):
         self._message_cache = {}  # Cache for loaded messages by channel_id
         self._message_cache_timestamps = {}  # Track when cache was last updated
         self._lazy_loading_enabled = True  # Enable lazy loading by default
-        self._messages_per_page = 20  # Number of messages to load per page
+        self._messages_per_page = 50  # Number of messages to load per page (newest window)
         self._loaded_message_counts = {}  # Track how many messages loaded per channel
+        self._max_messages_in_ui = 500  # Cap to keep UI responsive
+        # Local chat history fallback (used if DB manager unavailable or for realtime append)
+        self.chat_history = {}
+        self._auth_signal_connected = False
         
         # Initialize UI
         self.setup_ui()
         
         # Set up authentication state
         self.set_current_user()
+        # Attempt to connect to global auth state changes right after construction
+        try:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self._ensure_auth_signal_connected)
+        except Exception:
+            pass
         
         # START HEAVY INITIALIZATION IMMEDIATELY FOR FASTER LOADING
         # This moves the heavy work from activation to pre-loading
@@ -1860,17 +1971,49 @@ class CommunityPage(BasePage):
     
     def create_main_content(self, parent_layout):
         """Create the main content area."""
+        # Create a tab widget to host Chat (existing), Events, and Setup
+        from PyQt6.QtWidgets import QTabWidget, QVBoxLayout, QWidget, QLabel
+
+        self.content_tabs = QTabWidget()
+        self.content_tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #202225; background-color: #1e1e1e; }
+            QTabBar::tab { background-color: #2a2a2a; color: #dcddde; padding: 8px 14px; margin-right: 2px; }
+            QTabBar::tab:selected { background-color: #3a3a3a; color: #ffffff; }
+            QTabBar::tab:hover:!selected { background-color: #333333; }
+        """)
+
+        # Chat tab content contains the legacy content stack which channels render into
+        chat_tab = QWidget()
+        chat_tab_layout = QVBoxLayout(chat_tab)
+        chat_tab_layout.setContentsMargins(0, 0, 0, 0)
+        chat_tab_layout.setSpacing(0)
+
         self.content_stack = QWidget()
         self.content_stack.setStyleSheet("""
-            QWidget {
-                background-color: #1e1e1e;
-            }
+            QWidget { background-color: #1e1e1e; }
         """)
-        
-        # Don't show any channel by default - let auto-selection handle it
-        # self.show_channel("general")  # This was causing the UUID error
-        
-        parent_layout.addWidget(self.content_stack, 1)
+        chat_tab_layout.addWidget(self.content_stack)
+
+        self.content_tabs.addTab(chat_tab, "💬 Chat")
+
+        # Events tab
+        try:
+            events_tab = self.create_events_tab()
+        except Exception as _e:
+            # Fall back to simple placeholder if creation fails
+            events_tab = QWidget()
+            _lt = QVBoxLayout(events_tab)
+            _lt.setContentsMargins(16, 16, 16, 16)
+            _label = QLabel("Events are unavailable")
+            _label.setStyleSheet("color: #dcddde;")
+            _lt.addWidget(_label)
+        self.content_tabs.addTab(events_tab, "📅 Events")
+
+        # Setup tab
+        setup_tab = self.create_setup_tab()
+        self.content_tabs.addTab(setup_tab, "🛠️ Setup")
+
+        parent_layout.addWidget(self.content_tabs, 1)
     
 
     
@@ -1957,28 +2100,31 @@ class CommunityPage(BasePage):
             layout.setSpacing(0)
             logger.info("✅ New layout created successfully")
             
-            # Replace the old content_stack with the new one
+            # Replace the old content_stack with the new one inside its actual parent layout (Chat tab)
             if hasattr(self, 'content_stack') and self.content_stack:
                 logger.info("🔄 Replacing old content_stack")
-                # Find the content_stack in the parent layout and replace it
-                parent_layout = self.layout()
+                parent_widget = self.content_stack.parentWidget()
+                parent_layout = parent_widget.layout() if parent_widget else self.layout()
                 if parent_layout:
-                    for i in range(parent_layout.count()):
-                        item = parent_layout.itemAt(i)
-                        if item.widget() == self.content_stack:
-                            logger.info("🗑️ Removing old content_stack from parent layout")
-                            # Store the stretch factor
-                            stretch = parent_layout.stretch(i)
-                            parent_layout.removeItem(item)
-                            self.content_stack.setParent(None)
-                            self.content_stack.deleteLater()  # Properly delete the old widget
-                            
-                            # Add the new content widget to the parent layout with same stretch
-                            parent_layout.addWidget(new_content, stretch)
-                            logger.info("✅ Added new content widget to parent layout")
-                            break
+                    try:
+                        parent_layout.replaceWidget(self.content_stack, new_content)
+                        self.content_stack.setParent(None)
+                        self.content_stack.deleteLater()
+                        logger.info("✅ Replaced content_stack in parent layout")
+                    except Exception as _repl_err:
+                        # Fallback manual replace
+                        for i in range(parent_layout.count()):
+                            item = parent_layout.itemAt(i)
+                            if item and item.widget() == self.content_stack:
+                                logger.info("🗑️ Removing old content_stack from parent layout (fallback)")
+                                parent_layout.removeWidget(self.content_stack)
+                                self.content_stack.setParent(None)
+                                self.content_stack.deleteLater()
+                                parent_layout.insertWidget(i, new_content)
+                                logger.info("✅ Inserted new content widget into parent layout (fallback)")
+                                break
                 else:
-                    logger.warning("⚠️ No parent layout found")
+                    logger.warning("⚠️ No parent layout found for content_stack")
             
             # Update the content_stack reference
             self.content_stack = new_content
@@ -2069,6 +2215,11 @@ class CommunityPage(BasePage):
                     'name': channel_name
                 })
                 chat_widget.message_sent.connect(self.on_message_sent)
+                # Enable infinite scroll upwards (load older on top reach)
+                try:
+                    chat_widget.on_request_older = lambda cid=channel_id, cw=chat_widget: self.load_more_messages_for_channel(cid, cw)
+                except Exception:
+                    pass
                 logger.info(f"✅ Chat channel widget created, adding to layout")
                 layout.addWidget(chat_widget)
                 
@@ -2078,12 +2229,75 @@ class CommunityPage(BasePage):
                 # Update input field state based on authentication
                 self.update_input_field_state()
                 
-                # Load messages for this channel using lazy loading
+                # Load messages for this channel using lazy loading (latest window)
                 self.load_messages_for_channel(channel_id, chat_widget)
         except Exception as e:
             logger.error(f"❌ Error creating channel widget: {e}")
             import traceback
             logger.error(f"📋 Traceback: {traceback.format_exc()}")
+
+    def create_events_tab(self):
+        """Create the Events tab content."""
+        from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+        try:
+            # Prefer using the existing EventsWidget if available
+            from ...community_ui import EventsWidget  # type: ignore
+            events_container = QWidget()
+            layout = QVBoxLayout(events_container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+
+            user_id = None
+            try:
+                if self.community_manager:
+                    user_id = self.community_manager.get_current_user_id()
+            except Exception:
+                user_id = None
+
+            self.events_widget = EventsWidget(self.community_manager, user_id)
+            layout.addWidget(self.events_widget)
+            return events_container
+        except Exception as e:
+            logger.warning(f"EventsWidget unavailable, using placeholder: {e}")
+            placeholder = QWidget()
+            pl = QVBoxLayout(placeholder)
+            pl.setContentsMargins(16, 16, 16, 16)
+            lbl = QLabel("Community events coming soon")
+            lbl.setStyleSheet("color: #dcddde;")
+            pl.addWidget(lbl)
+            return placeholder
+
+    def create_setup_tab(self):
+        """Create the Setup tab content (placeholder for iRacing car setups)."""
+        from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+        setup = QWidget()
+        layout = QVBoxLayout(setup)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+        title = QLabel("Car Setups (iRacing)")
+        title.setStyleSheet("color: #ffffff; font-size: 16px; font-weight: bold;")
+        desc = QLabel("Manage and share your iRacing setups here. This feature is coming soon.")
+        desc.setStyleSheet("color: #cccccc;")
+        layout.addWidget(title)
+        layout.addWidget(desc)
+        layout.addStretch()
+        return setup
+
+    def switch_to_sub_tab(self, tab_name: str):
+        """Switch community sub-tab: 'chat' | 'events' | 'setup'."""
+        try:
+            if not hasattr(self, 'content_tabs') or not self.content_tabs:
+                return
+            name = (tab_name or '').strip().lower()
+            for i in range(self.content_tabs.count()):
+                text = self.content_tabs.tabText(i).lower()
+                if (name == 'chat' and 'chat' in text) or \
+                   (name == 'events' and 'events' in text) or \
+                   (name == 'setup' and 'setup' in text):
+                    self.content_tabs.setCurrentIndex(i)
+                    break
+        except Exception as e:
+            logger.debug(f"switch_to_sub_tab error: {e}")
     
     def get_channel_default_messages(self, channel_id):
         """Get default messages for each channel."""
@@ -2111,7 +2325,7 @@ class CommunityPage(BasePage):
                 
                 return cached_messages
             
-            # Load messages from database with pagination
+            # Load messages from database with pagination (newest window)
             if self.community_manager:
                 try:
                     # Load only the most recent messages initially
@@ -2126,8 +2340,12 @@ class CommunityPage(BasePage):
                     
                     # Add messages to UI if widget provided
                     if chat_widget:
-                        for message in messages:
-                            chat_widget.add_message(message)
+                        # Add in bulk for efficiency and scroll once
+                        if hasattr(chat_widget, 'add_messages_bulk'):
+                            chat_widget.add_messages_bulk(messages, scroll_to_bottom=True)
+                        else:
+                            for message in messages:
+                                chat_widget.add_message(message)
                     
                     return messages
                     
@@ -2156,7 +2374,7 @@ class CommunityPage(BasePage):
             return []
     
     def load_more_messages_for_channel(self, channel_id: str, chat_widget=None):
-        """Load more messages for a channel (pagination)."""
+        """Load older messages for a channel (pagination upwards)."""
         try:
             logger.info(f"🔄 Loading more messages for channel {channel_id}")
             
@@ -2164,39 +2382,60 @@ class CommunityPage(BasePage):
                 logger.warning("Community manager not available for loading more messages")
                 return
             
-            # Get current loaded count
-            current_count = self._loaded_message_counts.get(channel_id, 0)
+            # Determine the 'before' cursor as the oldest currently cached message
+            oldest_ts = None
+            cached = self._message_cache.get(channel_id, [])
+            if not cached:
+                logger.info("No cached messages yet; skipping load-more to avoid duplicates")
+                if chat_widget and hasattr(chat_widget, 'notify_load_more_complete'):
+                    chat_widget.notify_load_more_complete()
+                return []
+            if cached:
+                first = cached[0]
+                oldest_ts = first.get('created_at')
             
-            # Load additional messages
             additional_messages = self.community_manager.get_messages(
-                channel_id, 
+                channel_id,
                 limit=self._messages_per_page,
-                offset=current_count
+                before=oldest_ts
             )
             
             if additional_messages:
-                # Update cache with new messages
+                # Prepend to cache
                 if channel_id in self._message_cache:
-                    self._message_cache[channel_id].extend(additional_messages)
+                    self._message_cache[channel_id] = additional_messages + self._message_cache[channel_id]
                 else:
                     self._message_cache[channel_id] = additional_messages
                 
-                self._loaded_message_counts[channel_id] = current_count + len(additional_messages)
+                self._loaded_message_counts[channel_id] = len(self._message_cache[channel_id])
                 
                 logger.info(f"✅ Loaded {len(additional_messages)} additional messages for channel {channel_id}")
                 
                 # Add messages to UI if widget provided
                 if chat_widget:
-                    for message in additional_messages:
-                        chat_widget.add_message(message)
+                    if hasattr(chat_widget, 'prepend_messages'):
+                        chat_widget.prepend_messages(additional_messages)
+                    else:
+                        # Fallback: re-render all (less ideal)
+                        for message in additional_messages:
+                            chat_widget.add_message(message)
+                    if hasattr(chat_widget, 'notify_load_more_complete'):
+                        chat_widget.notify_load_more_complete()
                 
                 return additional_messages
             else:
                 logger.info(f"📭 No more messages available for channel {channel_id}")
+                if chat_widget and hasattr(chat_widget, 'notify_load_more_complete'):
+                    chat_widget.notify_load_more_complete()
                 return []
                 
         except Exception as e:
             logger.error(f"Error loading more messages for channel {channel_id}: {e}")
+            try:
+                if chat_widget and hasattr(chat_widget, 'notify_load_more_complete'):
+                    chat_widget.notify_load_more_complete()
+            except Exception:
+                pass
             return []
     
     def clear_message_cache(self, channel_id: str = None):
@@ -2436,16 +2675,61 @@ class CommunityPage(BasePage):
                                 font-size: 13px;
                             }
                         """)
+                    # Also toggle the auth overlay for clearer UX
+                    if hasattr(self.current_chat_widget, 'show_auth_overlay'):
+                        self.current_chat_widget.show_auth_overlay(not is_authenticated)
                     logger.info(f"Updated input field state - authenticated: {is_authenticated}")
             
             self._input_field_updated = True
         except Exception as e:
             logger.error(f"Error updating input field state: {e}")
             self._input_field_updated = True  # Mark as done even on error
+
+    def _ensure_auth_signal_connected(self):
+        """Connect to the main window's auth_state_changed signal once."""
+        if getattr(self, '_auth_signal_connected', False):
+            return
+        try:
+            main_window = self.window()
+            if hasattr(main_window, 'auth_state_changed'):
+                main_window.auth_state_changed.connect(self.on_auth_state_changed)
+                self._auth_signal_connected = True
+                logger.info("✅ Connected community page to global auth_state_changed signal")
+        except Exception as e:
+            logger.error(f"Error connecting auth_state_changed signal: {e}")
+
+    def on_auth_state_changed(self, authenticated: bool | None = None):
+        """Handle login/logout while the community page is open."""
+        try:
+            if authenticated is None:
+                try:
+                    from trackpro.auth.user_manager import get_current_user
+                    user = get_current_user()
+                    authenticated = bool(user and user.is_authenticated)
+                except Exception:
+                    authenticated = False
+            logger.info(f"🔄 Community page received auth change: authenticated={authenticated}")
+            # Force re-evaluation of input/overlay state
+            self._input_field_updated = False
+            self.update_input_field_state()
+            # Ensure community manager has the current user after login
+            if authenticated:
+                try:
+                    self.set_current_user()
+                except Exception:
+                    pass
+            # If now authenticated and a chat is open, ensure it is ready without page change
+            if authenticated and hasattr(self, 'current_chat_widget') and self.current_chat_widget:
+                # Optionally refresh messages or UI elements if needed; keep light
+                pass
+        except Exception as e:
+            logger.error(f"Error handling auth state change on community page: {e}")
     
     def on_page_activated(self):
         """Called when the page is activated."""
         logger.info("🔄 Community page activated")
+        # Ensure we are listening for auth changes
+        self._ensure_auth_signal_connected()
         
         # Add a small delay to prevent rapid-fire initialization attempts
         import time
@@ -2456,12 +2740,19 @@ class CommunityPage(BasePage):
                 return
         self._last_activation_time = time.time()
         
-        # Initialize heavy components if not already done (from pre-loading)
-        if not hasattr(self, '_initialization_complete') or not self._initialization_complete:
-            logger.info("🔄 Heavy components not yet initialized, waiting for pre-loading to complete...")
-            # Wait a bit for pre-loading to finish
-            import time
-            time.sleep(0.5)
+        # Initialize heavy components if not already done
+        if not getattr(self, '_initialization_complete', False):
+            logger.info("🔧 Heavy components not initialized; starting initialization now...")
+            try:
+                self._initialize_heavy_components()
+            except Exception as e:
+                logger.error(f"❌ Error during heavy initialization on activation: {e}")
+            # Small grace period for async startup pieces
+            try:
+                import time as _time
+                _time.sleep(0.2)
+            except Exception:
+                pass
         
         # Only proceed with activation-specific tasks if not already done
         if not hasattr(self, '_activation_complete') or not self._activation_complete:
@@ -2498,97 +2789,67 @@ class CommunityPage(BasePage):
         """Initialize heavy components that were deferred during construction."""
         try:
             logger.info("🏗️ Initializing heavy community components...")
-            
-            # TEMPORARILY DISABLE HEAVY INITIALIZATION TO PREVENT CRASHES
-            logger.warning("⚠️ TEMPORARILY SKIPPING HEAVY COMMUNITY INITIALIZATION TO PREVENT CRASHES")
-            logger.warning("⚠️ Community features will be limited until crash is resolved")
-            
-            # Skip all heavy operations that might cause crashes
-            return
-            
-            # ORIGINAL CODE COMMENTED OUT FOR DEBUGGING:
-            # Initialize community manager
-            # try:
-            #     logger.info("🔧 Attempting to initialize CommunityManager...")
-            #     from trackpro.community.community_manager import CommunityManager
-            #     
-            #     # Check if CommunityManager has get_instance method (singleton pattern)
-            #     if hasattr(CommunityManager, 'get_instance'):
-            #         self.community_manager = CommunityManager.get_instance()
-            #         logger.info("✅ CommunityManager instance created using singleton pattern")
-            #     else:
-            #         # Create normal instance if singleton pattern not implemented
-            #         self.community_manager = CommunityManager()
-            #         logger.info("✅ CommunityManager instance created normally")
-            #     
-            #     if self._community_manager:
-            #         logger.info("✅ CommunityManager instance created successfully")
-            #     else:
-            #         logger.error("❌ CommunityManager creation returned None")
-            #         self._community_manager = None
-            #     
-            # except ImportError as import_error:
-            #     logger.error(f"❌ Failed to import CommunityManager: {import_error}")
-            #     self.community_manager = None
-            # except Exception as e:
-            #     logger.error(f"❌ Failed to initialize community manager: {e}")
-            #     import traceback
-            #     logger.error(f"📋 Traceback: {traceback.format_exc()}")
-            #     self.community_manager = None
-            # 
-            # # Set current user
-            # self.set_current_user()
-            # 
-            # # Add a small delay to ensure user is set before loading data
-            # import time
-            # time.sleep(0.5)
-            
-            # ORIGINAL CODE COMMENTED OUT FOR DEBUGGING:
-            # # Verify current user is set
-            # if hasattr(self, '_community_manager') and self._community_manager:
-            #     current_user_id = self._community_manager.get_current_user_id()
-            #     if not current_user_id:
-            #         logger.warning("⚠️ Current user not set, retrying...")
-            #         self.set_current_user()
-            #         time.sleep(0.5)
-            #         current_user_id = self._community_manager.get_current_user_id()
-            #         if current_user_id:
-            #             logger.info(f"✅ Current user set after retry: {current_user_id}")
-            #         else:
-            #             logger.error("❌ Failed to set current user after retry")
-            #     else:
-            #         logger.info(f"✅ Current user already set: {current_user_id}")
-            # 
-            # # START VOICE SERVER DURING PRE-LOADING FOR FASTER ACCESS
-            # if VOICE_COMPONENTS_AVAILABLE:
-            #     try:
-            #         if not is_voice_server_running():
-            #             logger.info("🎤 Starting voice server during pre-loading...")
-            #             start_voice_server()
-            #             logger.info("✅ Voice server startup initiated during pre-loading")
-            #         else:
-            #             logger.info("✅ Voice server is already running")
-            #     except Exception as e:
-            #         logger.error(f"❌ Failed to start voice server during pre-loading: {e}")
-            # 
-            # # LOAD DATA DURING PRE-LOADING FOR FASTER ACCESS
-            # try:
-            #     logger.info("📋 Loading channels and messages during pre-loading...")
-            #     self.load_channels_from_database()
-            #     self.load_private_messages()
-            #     self.load_friends_list()
-            #     self.load_friend_requests()
-            #     
-            #     # Add debug button for testing
-            #     self.add_debug_button()
-            #     
-            #     logger.info("✅ Data loading completed during pre-loading")
-            # except Exception as e:
-            #     logger.error(f"❌ Failed to load data during pre-loading: {e}")
-            
+            # Initialize Community Manager safely
+            try:
+                logger.info("🔧 Attempting to initialize CommunityManager...")
+                from trackpro.community.community_manager import CommunityManager
+                # Prefer singleton if provided; otherwise construct
+                if hasattr(CommunityManager, 'get_instance'):
+                    self.community_manager = CommunityManager.get_instance()
+                    logger.info("✅ CommunityManager instance created using singleton pattern")
+                else:
+                    self.community_manager = CommunityManager()
+                    logger.info("✅ CommunityManager instance created normally")
+                if not self._community_manager:
+                    logger.error("❌ CommunityManager creation returned None")
+            except Exception as import_error:
+                logger.error(f"❌ Failed to initialize community manager: {import_error}")
+                self.community_manager = None
+
+            # Set current user (best-effort)
+            try:
+                self.set_current_user()
+            except Exception as e:
+                logger.warning(f"Could not set current user during init: {e}")
+
+            # Verify user set; retry once briefly
+            try:
+                import time as _time
+                current_user_id = None
+                if hasattr(self, '_community_manager') and self._community_manager:
+                    current_user_id = self._community_manager.get_current_user_id()
+                if not current_user_id:
+                    logger.info("🔁 Current user not set, retrying once...")
+                    self.set_current_user()
+                    _time.sleep(0.2)
+            except Exception as e:
+                logger.debug(f"User verification step failed: {e}")
+
+            # Start voice server early if components available
+            if VOICE_COMPONENTS_AVAILABLE:
+                try:
+                    if not is_voice_server_running():
+                        logger.info("🎤 Starting voice server during initialization...")
+                        start_voice_server()
+                    else:
+                        logger.info("✅ Voice server already running")
+                except Exception as e:
+                    logger.error(f"❌ Failed to start voice server: {e}")
+
+            # Load core data
+            try:
+                logger.info("📋 Loading channels, private messages, friends, and requests...")
+                self.load_channels_from_database()
+                self.load_private_messages()
+                self.load_friends_list()
+                self.load_friend_requests()
+                logger.info("✅ Community data loaded")
+            except Exception as e:
+                logger.error(f"❌ Failed to load community data: {e}")
+
             self._initialization_complete = True
-            CommunityPage._heavy_components_initialized = True  # Set global flag (even when skipped)
-            logger.info("✅ Heavy components initialization completed (SKIPPED for debugging)")
+            CommunityPage._heavy_components_initialized = True
+            logger.info("✅ Heavy components initialization completed")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize heavy components: {e}")
@@ -2598,10 +2859,19 @@ class CommunityPage(BasePage):
     
     def refresh_user_state(self):
         """Refresh user authentication state and set current user."""
-        # Prevent multiple refreshes
+        # Prevent unnecessary repeats, but allow if current_user_id is still missing
         if hasattr(self, '_user_state_refreshed') and self._user_state_refreshed:
-            logger.info("🔄 User state already refreshed, skipping")
-            return
+            try:
+                current_user_id = None
+                if hasattr(self, '_community_manager') and self._community_manager:
+                    current_user_id = self._community_manager.get_current_user_id()
+                if current_user_id:
+                    logger.info("🔄 User state already refreshed, skipping")
+                    return
+                else:
+                    logger.info("🔁 User state was refreshed earlier but no current user set; retrying")
+            except Exception:
+                pass
             
         try:
             # Force refresh of user manager state
@@ -2746,6 +3016,8 @@ class CommunityPage(BasePage):
         logger.info(f"🔄 Real-time message received for channel: {channel_id}")
         
         # Initialize chat history for this channel if it doesn't exist
+        if not hasattr(self, 'chat_history'):
+            self.chat_history = {}
         if channel_id and channel_id not in self.chat_history:
             self.chat_history[channel_id] = []
         
@@ -2757,7 +3029,25 @@ class CommunityPage(BasePage):
             # Update UI if this channel is currently displayed
             if self.current_channel == channel_id:
                 logger.info(f"🔄 Updating UI for current channel: {channel_id}")
+                # Append to UI and prune old messages beyond cap
                 self.add_message_to_ui(message_data)
+                try:
+                    cached = self._message_cache.get(channel_id, [])
+                    if cached:
+                        cached.append(message_data)
+                        if len(cached) > self._max_messages_in_ui:
+                            overflow = len(cached) - self._max_messages_in_ui
+                            self._message_cache[channel_id] = cached[overflow:]
+                            # Optionally, prune UI items as well
+                            if hasattr(self, 'current_chat_widget') and getattr(self, 'current_chat_widget', None):
+                                to_remove = min(overflow, self.current_chat_widget.messages_list.count())
+                                for _ in range(to_remove):
+                                    itm = self.current_chat_widget.messages_list.takeItem(0)
+                                    del itm
+                    else:
+                        self._message_cache[channel_id] = [message_data]
+                except Exception:
+                    pass
             else:
                 logger.info(f"📝 Message received for different channel (current: {self.current_channel}, message: {channel_id})")
     
@@ -3771,6 +4061,18 @@ class CommunityPage(BasePage):
                 self._initialize_heavy_components()
             finally:
                 self._initializing = False
+        # If still not available due to heavy init being skipped, create lazily now
+        if self._community_manager is None:
+            try:
+                from ....community.community_manager import CommunityManager
+                self.community_manager = CommunityManager()
+                # Ensure current user is set for messaging
+                try:
+                    self.set_current_user()
+                except Exception as e:
+                    logger.debug(f"Could not set current user on lazy init: {e}")
+            except Exception as e:
+                logger.error(f"❌ Failed to lazily create CommunityManager: {e}")
         # Return the manager (may be None if initialization failed)
         return self._community_manager
     
@@ -3778,6 +4080,20 @@ class CommunityPage(BasePage):
     def community_manager(self, value):
         """Set the community manager."""
         self._community_manager = value
+        # Connect signals when community manager is set
+        if value:
+            try:
+                if not hasattr(self, '_signals_connected') or not self._signals_connected:
+                    value.message_received.connect(self.on_message_received)
+                    value.user_joined_channel.connect(self.on_user_joined_channel)
+                    value.user_left_channel.connect(self.on_user_left_channel)
+                    value.user_status_changed.connect(self.on_user_status_changed)
+                    self._signals_connected = True
+                    logger.info("✅ Connected community manager signals for realtime updates")
+                else:
+                    logger.info("🔄 Community manager signals already connected")
+            except Exception as e:
+                logger.error(f"❌ Error connecting community manager signals: {e}")
     
     def test_voice_server_connection(self):
         """Test voice server connection and provide detailed feedback."""

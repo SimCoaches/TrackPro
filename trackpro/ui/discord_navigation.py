@@ -10,7 +10,9 @@ from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QRect
 )
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QBrush, QPen
+from PyQt6.QtCore import QSize
 from PyQt6.QtSvgWidgets import QSvgWidget
+from .avatar_manager import AvatarManager
 
 class DiscordNavigationButton(QPushButton):
     """Individual navigation button with Discord-style styling."""
@@ -538,80 +540,18 @@ class DiscordNavigation(QWidget):
     def set_user_info(self, username: str = "User", avatar_text: str = "U", avatar_url: str = None):
         """Update user profile information."""
         self.user_info_label.setText(username)
-        
-        # If we have an avatar URL, load and display the image
-        if avatar_url and avatar_url != self.current_avatar_url:
-            self.load_avatar_from_url(avatar_url)
-        else:
-            # Fallback to initials
-            self.user_avatar_btn.setText(avatar_text)
-            self.user_avatar_btn.setIcon(QIcon())  # Clear any existing icon
-        
+        # Ensure icon renders at the expected size on QPushButton
+        try:
+            self.user_avatar_btn.setIconSize(QSize(36, 36))
+        except Exception:
+            pass
+        AvatarManager.instance().set_button_avatar(self.user_avatar_btn, avatar_url, username, size=36)
+        self.current_avatar_url = avatar_url
         self.user_avatar_btn.setToolTip(f"{username} - Account Settings")
     
     def load_avatar_from_url(self, url: str):
-        """Load and display avatar from URL."""
-        try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Scale to fit avatar button size
-                            avatar_size = 36
-                            scaled_pixmap = pixmap.scaled(
-                                avatar_size, avatar_size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(avatar_size, avatar_size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
-                            painter.end()
-                            
-                            # Update avatar display
-                            self.user_avatar_btn.setIcon(QIcon(circular_pixmap))
-                            self.user_avatar_btn.setText("")  # Clear text
-                            self.current_avatar_url = url
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Error processing downloaded avatar: {e}")
-                    # Fallback to initials
-                    self.user_avatar_btn.setText("U")
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error loading avatar from URL: {e}")
-            # Fallback to initials
-            self.user_avatar_btn.setText("U")
+        """Deprecated: use AvatarManager via set_user_info instead."""
+        AvatarManager.instance().set_button_avatar(self.user_avatar_btn, url, self.user_info_label.text(), size=36)
     
     def update_authentication_state(self, is_authenticated: bool, user_info: dict = None):
         """Update the navigation based on authentication state."""
@@ -637,12 +577,14 @@ class DiscordNavigation(QWidget):
             # Generate avatar initials from name
             avatar_text = self._generate_avatar_initials(username)
             
-            # TEMPORARILY DISABLE AVATAR LOADING TO PREVENT CRASHES
             # Update the display with avatar URL if available
-            # self.set_user_info(username, avatar_text, avatar_url)
-            # Use initials only to prevent network/image loading crashes
-            self.set_user_info(username, avatar_text, None)
-            logger.warning("⚠️ TEMPORARILY SKIPPING AVATAR LOADING TO PREVENT CRASHES")
+            self.set_user_info(username, avatar_text, avatar_url)
+            # Force an immediate refresh when we know the avatar URL
+            try:
+                from .avatar_manager import AvatarManager
+                AvatarManager.instance().set_button_avatar(self.user_avatar_btn, avatar_url, username, size=36)
+            except Exception:
+                pass
             
         else:
             # User is not logged in - show default

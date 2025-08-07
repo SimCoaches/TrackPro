@@ -70,7 +70,8 @@ class StripePaymentProcessor:
                 customer_email=customer_email,
                 metadata={
                     'product': 'race_pass_premium',
-                    'version': '1.0'
+                    'version': '1.0',
+                    'user_email': customer_email or ''
                 }
             )
             

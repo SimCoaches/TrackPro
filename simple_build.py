@@ -13,10 +13,12 @@ import json
 import time
 from pathlib import Path
 
-# Check Python version
-if sys.version_info[:2] != (3, 11):
-    print(f"❌ Need Python 3.11, got {sys.version_info.major}.{sys.version_info.minor}")
+# Check Python version (support 3.10–3.12; 3.11 recommended)
+if not (3, 10) <= sys.version_info[:2] <= (3, 12):
+    print(f"❌ Unsupported Python version: {sys.version_info.major}.{sys.version_info.minor}. Please use Python 3.10–3.12 (3.11 recommended).")
     sys.exit(1)
+elif sys.version_info[:2] != (3, 11):
+    print(f"⚠️  Detected Python {sys.version_info.major}.{sys.version_info.minor}. Python 3.11 is recommended for best compatibility.")
 
 def get_file_hash(file_path):
     """Get SHA256 hash of a file for caching"""
@@ -63,44 +65,44 @@ def download_file_with_cache(url, dest_path, expected_size=None):
         return False
 
 def check_critical_dependencies():
-    """Optimized dependency check - with version verification."""
-    # Note: pkg_resources is part of setuptools, which is a standard package.
+    """Optimized dependency check with proper version verification."""
     try:
         import pkg_resources
     except ImportError:
-        print("✗ Could not import pkg_resources. Please ensure setuptools is installed (`pip install setuptools`)")
+        print("✗ Could not import pkg_resources. Please ensure setuptools is installed (`pip install --user setuptools`)")
         return False
 
     critical_packages = {
         "PyQt6": "PyQt6>=6.0.0",
         "numpy": "numpy==1.26.4",
         "requests": "requests>=2.25.0",
-        "PyInstaller": "PyInstaller>=6.0.0"
+        "PyInstaller": "PyInstaller>=6.0.0",
     }
-    
-    requirements_to_install = []
-    for package, requirement_str in critical_packages.items():
-        try:
-            # Check if the installed version meets the requirement
-            dist = pkg_resources.get_distribution(package)
-            if dist not in pkg_resources.Requirement.parse(requirement_str):
-                 print(f"⚠️  {package} version {dist.version} does not meet requirement {requirement_str}. Upgrading...")
-                 requirements_to_install.append(requirement_str)
-            else:
-                 print(f"✓ Found {package} {dist.version}, which meets requirement {requirement_str}")
 
-        except pkg_resources.DistributionNotFound:
-            print(f"✗ Missing {package}")
-            requirements_to_install.append(requirement_str)
+    requirements_to_install = []
+    for pkg_name, requirement_str in critical_packages.items():
+        try:
+            requirement = pkg_resources.Requirement.parse(requirement_str)
+            try:
+                dist = pkg_resources.get_distribution(requirement.project_name)
+            except pkg_resources.DistributionNotFound:
+                print(f"✗ Missing {pkg_name}")
+                requirements_to_install.append(requirement_str)
+                continue
+
+            version_str = dist.version
+            if not requirement.specifier.contains(version_str, prereleases=True):
+                print(f"⚠️  {pkg_name} version {version_str} does not meet {requirement_str}. Upgrading...")
+                requirements_to_install.append(requirement_str)
+            else:
+                print(f"✓ Found {pkg_name} {version_str} (meets {requirement_str})")
         except Exception as e:
-            print(f"Error checking {package}: {e}")
-            requirements_to_install.append(requirement_str) # Install it to be safe
+            print(f"Error checking {pkg_name}: {e}")
+            requirements_to_install.append(requirement_str)
 
     if requirements_to_install:
         print(f"Installing/upgrading packages: {requirements_to_install}")
         try:
-            # Use --upgrade to ensure the version is changed if it's already installed.
-            # Using --no-cache-dir to avoid issues with pip's cache
             cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir"] + requirements_to_install
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             print("✓ Installed/upgraded packages successfully")
@@ -111,7 +113,7 @@ def check_critical_dependencies():
             print(f"STDOUT: {e.stdout}")
             print(f"STDERR: {e.stderr}")
             return False
-            
+
     return True
 
 def create_optimized_installer():
@@ -184,8 +186,8 @@ def create_optimized_installer():
             'simple_trackpro.spec',
             '--noconfirm',
             '--clean',
-            '--workpath=build',  # Explicit work path
-            '--distpath=dist',   # Explicit dist path
+            '--workpath=build',
+            '--distpath=dist',
         ]
         
         PyInstaller.__main__.run(build_args)
@@ -912,8 +914,7 @@ Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "
             return False
             
         # Run Inno Setup compiler
-        result = subprocess.run([inno_exe, iss_script], 
-                               capture_output=True, text=True, timeout=300)
+        result = subprocess.run([inno_exe, iss_script], capture_output=True, text=True, timeout=600)
         
         if result.returncode != 0:
             print(f"❌ Inno Setup compilation failed (exit code {result.returncode})")
@@ -935,6 +936,12 @@ Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "
             installer_files = [f for f in os.listdir('.') if f.startswith('TrackPro_Setup') and f.endswith('.exe')]
             if installer_files:
                 print(f"Found these installer files: {installer_files}")
+                # If versioned one missing but another exists, rename latest to expected naming for consistency
+                latest = sorted(installer_files, key=lambda p: os.path.getmtime(p))[-1]
+                try:
+                    shutil.copy2(latest, installer_name)
+                except Exception:
+                    pass
                 return True
             return False
              

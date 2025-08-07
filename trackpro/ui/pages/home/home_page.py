@@ -3,9 +3,11 @@
 import logging
 from datetime import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QScrollArea, QFrame, QGridLayout, QPushButton)
+                             QScrollArea, QFrame, QGridLayout, QPushButton, QSizePolicy)
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor, QPen
+from ...avatar_manager import AvatarManager
 from ...modern.shared.base_page import BasePage
 
 logger = logging.getLogger(__name__)
@@ -38,8 +40,8 @@ class HomePage(BasePage):
         left_column = self.create_welcome_section()
         main_content.addWidget(left_column)
         
-        # Right column - Upcoming events section
-        right_column = self.create_events_section()
+        # Right column - Dashboard + Events
+        right_column = self.create_right_column()
         main_content.addWidget(right_column)
         
         layout.addLayout(main_content)
@@ -60,6 +62,11 @@ class HomePage(BasePage):
         self.date_timer = QTimer()
         self.date_timer.timeout.connect(self.update_date)
         self.date_timer.start(60000)  # Update every minute
+
+        # Readiness/metrics refresh (Phase 2 minimal wiring)
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.update_readiness)
+        self.status_timer.start(2500)
         
     def create_welcome_section(self):
         """Create the left column welcome section."""
@@ -82,16 +89,8 @@ class HomePage(BasePage):
         self.avatar_label = QLabel()
         self.avatar_label.setFixedSize(100, 100)  # Reduced from 120x120
         self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.avatar_label.setStyleSheet("""
-            QLabel {
-                border: 3px solid #3498db;
-                border-radius: 50px;
-                background-color: #3498db;
-                color: white;
-                font-size: 36px;
-                font-weight: bold;
-            }
-        """)
+        # Styling kept minimal so loaded pixmap is not tinted/overdrawn
+        self.avatar_label.setStyleSheet("QLabel { border: none; background-color: transparent; }")
         # Don't set default text - will be replaced by dynamic avatar
         welcome_layout.addWidget(self.avatar_label, alignment=Qt.AlignmentFlag.AlignCenter)
         
@@ -172,6 +171,389 @@ class HomePage(BasePage):
         self.auth_buttons_container.setVisible(True)
         
         return welcome_frame
+
+    def create_right_column(self):
+        container = QFrame()
+        container.setFrameStyle(QFrame.Shape.StyledPanel)
+        container.setStyleSheet("""
+            QFrame {
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(20)
+
+        # Dashboard grid (cards)
+        dashboard = self.create_dashboard_section()
+        layout.addWidget(dashboard)
+
+        # Events below
+        events = self.create_events_section()
+        layout.addWidget(events)
+
+        return container
+
+    def create_dashboard_section(self):
+        frame = QFrame()
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #1f1f1f;
+                border-radius: 12px;
+                border: 1px solid #2e2e2e;
+            }
+        """)
+        grid = QGridLayout(frame)
+        grid.setContentsMargins(20, 20, 20, 20)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+
+        # Create cards
+        quick_actions = self.create_quick_actions_card()
+        readiness = self.create_readiness_card()
+        performance = self.create_performance_card()
+        ai_coach = self.create_ai_coach_card()
+        race_pass = self.create_race_pass_card()
+        community = self.create_community_card()
+
+        # Store for reflow
+        self._dashboard_frame = frame
+        self._dashboard_grid = grid
+        self._dashboard_cards = [quick_actions, readiness, performance, ai_coach, race_pass, community]
+        self._dashboard_columns = self._compute_dashboard_columns()
+        self._layout_dashboard_cards()
+
+        return frame
+
+    def _compute_dashboard_columns(self) -> int:
+        screen = QGuiApplication.primaryScreen()
+        width = screen.size().width() if screen else 1280
+        if width >= 1700:
+            return 3
+        return 2
+
+    def _layout_dashboard_cards(self):
+        # Clear existing items from grid
+        while self._dashboard_grid.count():
+            item = self._dashboard_grid.takeAt(0)
+            if item and item.widget():
+                self._dashboard_grid.removeWidget(item.widget())
+        # Re-add based on columns
+        for index, card in enumerate(self._dashboard_cards):
+            row = index // self._dashboard_columns
+            col = index % self._dashboard_columns
+            self._dashboard_grid.addWidget(card, row, col)
+
+    def create_card(self, title: str) -> QFrame:
+        card = QFrame()
+        card.setFrameStyle(QFrame.Shape.StyledPanel)
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #2a2a2a;
+                border-radius: 10px;
+                border: 1px solid #3a3a3a;
+            }
+            QFrame:hover {
+                background-color: #313131;
+                border: 1px solid #4a4a4a;
+            }
+            QLabel[role="title"] {
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QLabel[role="chip"] {
+                border-radius: 10px;
+                padding: 4px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setProperty("role", "title")
+        layout.addWidget(title_label)
+
+        return card
+
+    def create_quick_actions_card(self) -> QFrame:
+        card = self.create_card("Quick Actions")
+
+        def make_btn(text: str, color: str):
+            btn = QPushButton(text)
+            btn.setMinimumWidth(120)
+            btn.setFixedHeight(34)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color};
+                    color: white;
+                    border: none;
+                    padding: 6px 10px;
+                    border-radius: 6px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{ filter: brightness(1.1); }}
+            """)
+            return btn
+
+        # Short labels for readability in compact width
+        calibrate_btn = make_btn("Calibrate", "#2a82da")
+        coach_btn = make_btn("Coach", "#27ae60")
+        voice_btn = make_btn("Voice", "#8e44ad")
+        race_pass_btn = make_btn("Race Pass", "#f39c12")
+
+        calibrate_btn.clicked.connect(lambda: self.navigate_to_page("pedals"))
+        coach_btn.clicked.connect(lambda: self.navigate_to_page("race_coach"))
+        voice_btn.clicked.connect(self.on_launch_voice_chat)
+        race_pass_btn.clicked.connect(lambda: self.navigate_to_page("race_pass"))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.addWidget(calibrate_btn, 0, 0)
+        grid.addWidget(coach_btn, 0, 1)
+        grid.addWidget(voice_btn, 1, 0)
+        grid.addWidget(race_pass_btn, 1, 1)
+        card.layout().addLayout(grid)
+        return card
+
+    def create_status_chip(self, text: str, status: str = "unknown") -> QLabel:
+        color_map = {
+            "ok": ("#1e824c", "#2ecc71"),
+            "warn": ("#7f6a00", "#f1c40f"),
+            "error": ("#7e1d1d", "#e74c3c"),
+            "unknown": ("#3a3a3a", "#7f8c8d"),
+        }
+        bg, fg = color_map.get(status, color_map["unknown"])
+        chip = QLabel(text)
+        chip.setProperty("role", "chip")
+        chip.setStyleSheet(f"""
+            QLabel[role="chip"] {{
+                background-color: {bg};
+                color: {fg};
+            }}
+        """)
+        return chip
+
+    def create_readiness_card(self) -> QFrame:
+        card = self.create_card("System Readiness")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+
+        self.pedals_chip = self.create_status_chip("Pedals", "unknown")
+        self.voice_chip = self.create_status_chip("Voice", "unknown")
+        self.auth_chip = self.create_status_chip("Auth", "unknown")
+        self.perf_chip = self.create_status_chip("UI Perf", "unknown")
+
+        grid.addWidget(self.pedals_chip, 0, 0)
+        grid.addWidget(self.voice_chip, 0, 1)
+        grid.addWidget(self.auth_chip, 1, 0)
+        grid.addWidget(self.perf_chip, 1, 1)
+
+        card.layout().addLayout(grid)
+        return card
+
+    def create_performance_card(self) -> QFrame:
+        card = self.create_card("Last Session Snapshot")
+        self.perf_label = QLabel("Avg UI: — ms | Dropped: —")
+        self.perf_label.setStyleSheet("color: #cccccc;")
+        card.layout().addWidget(self.perf_label)
+        return card
+
+    def create_ai_coach_card(self) -> QFrame:
+        card = self.create_card("AI Coach")
+        subtitle = QLabel("Quick toggle and last insights")
+        subtitle.setStyleSheet("color: #cccccc;")
+        card.layout().addWidget(subtitle)
+
+        btn_row = QHBoxLayout()
+        toggle_btn = QPushButton("Coming Soon")
+        toggle_btn.setEnabled(False)
+        toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555555;
+                color: #dddddd;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+        """)
+        btn_row.addWidget(toggle_btn)
+        btn_row.addStretch()
+        card.layout().addLayout(btn_row)
+        return card
+
+    def create_race_pass_card(self) -> QFrame:
+        card = self.create_card("Race Pass")
+        label = QLabel("Season progress and next challenge")
+        label.setStyleSheet("color: #cccccc;")
+        open_btn = QPushButton("Coming Soon")
+        open_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7f6a00;
+                color: #f1c40f;
+                border: 1px solid #9a8500;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover { filter: brightness(1.1); }
+        """)
+        open_btn.setEnabled(False)
+        card.layout().addWidget(label)
+        card.layout().addWidget(open_btn)
+        return card
+
+    def create_community_card(self) -> QFrame:
+        card = self.create_card("Community")
+        self.community_label = QLabel("Friends online: — | Unread DMs: —")
+        self.community_label.setStyleSheet("color: #cccccc;")
+        open_btn = QPushButton("Open Community")
+        open_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover { filter: brightness(1.1); }
+        """)
+        open_btn.clicked.connect(lambda: self.navigate_to_page("community"))
+        card.layout().addWidget(self.community_label)
+        card.layout().addWidget(open_btn)
+        return card
+
+    def update_readiness(self):
+        try:
+            # Auth
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                current_user = get_current_user()
+                if current_user and current_user.is_authenticated:
+                    self.set_chip(self.auth_chip, "Auth: OK", "ok")
+                else:
+                    self.set_chip(self.auth_chip, "Auth: Sign-in", "warn")
+            except Exception:
+                self.set_chip(self.auth_chip, "Auth: Unknown", "unknown")
+
+            # Voice server
+            try:
+                from trackpro.voice_server_manager import is_voice_server_running
+                is_running = is_voice_server_running()
+                self.set_chip(self.voice_chip, "Voice: On" if is_running else "Voice: Off", "ok" if is_running else "error")
+            except Exception:
+                self.set_chip(self.voice_chip, "Voice: Unknown", "unknown")
+
+            # Pedals (actual connection status when available)
+            try:
+                hw = getattr(self.global_managers, 'hardware', None)
+                if hw is None:
+                    self.set_chip(self.pedals_chip, "Pedals: —", "warn")
+                else:
+                    if getattr(hw, 'pedals_connected', False):
+                        self.set_chip(self.pedals_chip, "Pedals: OK", "ok")
+                    else:
+                        self.set_chip(self.pedals_chip, "Pedals: Off", "error")
+            except Exception:
+                self.set_chip(self.pedals_chip, "Pedals: Unknown", "unknown")
+
+            # Performance (avg UI time)
+            try:
+                pm = getattr(self, 'performance_manager', None) or getattr(self.global_managers, 'performance', None)
+                if pm and getattr(pm, 'performance_stats', None):
+                    avg_ms = pm.performance_stats.get('avg_ui_time', 0.0) * 1000.0
+                    dropped = pm.performance_stats.get('dropped_frames', 0)
+                    timers_started = getattr(pm, '_timers_started', False)
+                    if not timers_started:
+                        self.perf_label.setText("Avg UI: — ms | Dropped: —")
+                        self.set_chip(self.perf_chip, "UI: —", "unknown")
+                    else:
+                        self.perf_label.setText(f"Avg UI: {avg_ms:.1f} ms | Dropped: {dropped}")
+                        status = "ok" if avg_ms <= 8.0 else ("warn" if avg_ms <= 16.0 else "error")
+                        self.set_chip(self.perf_chip, f"UI: {avg_ms:.1f}ms", status)
+                else:
+                    self.perf_label.setText("Avg UI: — ms | Dropped: —")
+                    self.set_chip(self.perf_chip, "UI: —", "unknown")
+            except Exception:
+                self.set_chip(self.perf_chip, "UI: —", "unknown")
+
+            # Community metrics (friends online, unread DMs)
+            try:
+                from trackpro.community.community_manager import CommunityManager
+                # Ensure current user set for queries requiring it
+                try:
+                    from trackpro.auth.user_manager import get_current_user
+                    user = get_current_user()
+                    if user and user.is_authenticated:
+                        CommunityManager().set_current_user(user.id)
+                except Exception:
+                    pass
+                convs = CommunityManager().get_private_conversations()
+                unread = sum(int(c.get('unread_count') or 0) for c in (convs or []))
+                friends = CommunityManager().get_friends() or []
+                self.community_label.setText(f"Friends: {len(friends)} | Unread DMs: {unread}")
+            except Exception:
+                # Keep prior text if fetch fails
+                pass
+        except Exception:
+            pass
+
+    def set_chip(self, chip: QLabel, text: str, status: str):
+        chip.setText(text)
+        # Re-apply style based on status
+        _ = self.create_status_chip("", status)  # for colors
+        color_map = {
+            "ok": ("#1e824c", "#2ecc71"),
+            "warn": ("#7f6a00", "#f1c40f"),
+            "error": ("#7e1d1d", "#e74c3c"),
+            "unknown": ("#3a3a3a", "#7f8c8d"),
+        }
+        bg, fg = color_map.get(status, color_map["unknown"])
+        chip.setStyleSheet(f"""
+            QLabel[role="chip"] {{
+                background-color: {bg};
+                color: {fg};
+                border-radius: 10px;
+                padding: 4px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+        """)
+
+    def on_launch_voice_chat(self):
+        try:
+            from trackpro.voice_server_manager import start_voice_server
+            start_voice_server()
+        except Exception as e:
+            logger.error(f"Could not launch voice server: {e}")
+
+    def navigate_to_page(self, page_name: str):
+        try:
+            win = self.window()
+            if win and hasattr(win, 'switch_to_page'):
+                win.switch_to_page(page_name)
+        except Exception as e:
+            logger.error(f"Navigation error to {page_name}: {e}")
+
+    def resizeEvent(self, event):
+        try:
+            new_columns = self._compute_dashboard_columns()
+            if new_columns != getattr(self, '_dashboard_columns', new_columns):
+                self._dashboard_columns = new_columns
+                self._layout_dashboard_cards()
+        except Exception:
+            pass
+        super().resizeEvent(event)
         
     def create_events_section(self):
         """Create the right column events section."""
@@ -267,6 +649,7 @@ class HomePage(BasePage):
         title_label.setFont(QFont("Arial", 13, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #ffffff; background: transparent; border: none;")
         title_label.setWordWrap(True)
+        title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         details_layout.addWidget(title_label)
         
         # Subtitle
@@ -274,6 +657,7 @@ class HomePage(BasePage):
         subtitle_label.setFont(QFont("Arial", 11))
         subtitle_label.setStyleSheet("color: #3498db; background: transparent; border: none;")
         subtitle_label.setWordWrap(True)
+        subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         details_layout.addWidget(subtitle_label)
         
         # Description
@@ -281,12 +665,47 @@ class HomePage(BasePage):
         desc_label.setFont(QFont("Arial", 10))
         desc_label.setStyleSheet("color: #cccccc; background: transparent; border: none;")
         desc_label.setWordWrap(True)
+        desc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         details_layout.addWidget(desc_label)
         
+        # Let the details column expand to use available horizontal space
         event_layout.addLayout(details_layout)
-        event_layout.addStretch()
+        event_layout.setStretch(0, 0)  # icon keeps fixed width
+        event_layout.setStretch(1, 1)  # details expand
         
+        # Make the whole card clickable to navigate to Community → Events
+        def _on_click(_evt):
+            try:
+                self.open_community_events()
+            except Exception:
+                pass
+        event_frame.mousePressEvent = _on_click
+
         return event_frame
+
+    def open_community_events(self):
+        """Navigate to the Community page and focus the Events sub-tab."""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if not app:
+                return
+            # Locate the main window that hosts pages
+            main_window = None
+            for widget in app.topLevelWidgets():
+                if hasattr(widget, 'switch_to_page') and hasattr(widget, 'get_page'):
+                    main_window = widget
+                    break
+            if not main_window:
+                return
+            # Switch to Community page
+            main_window.switch_to_page("community")
+            # Focus Events tab if available
+            community_page = getattr(main_window, 'get_page')("community") if hasattr(main_window, 'get_page') else None
+            if community_page and hasattr(community_page, 'switch_to_sub_tab'):
+                community_page.switch_to_sub_tab('events')
+        except Exception:
+            return
         
     def update_date(self):
         """Update the date and time display."""
@@ -341,10 +760,9 @@ class HomePage(BasePage):
             
         # Check if user has an avatar URL
         avatar_url = user_data.get('avatar_url')
-        if avatar_url:
-            # Load avatar from URL
-            self.load_avatar_from_url(avatar_url)
-            return
+        name = user_data.get('display_name') or user_data.get('username') or user_data.get('name', 'User')
+        AvatarManager.instance().set_label_avatar(self.avatar_label, avatar_url, name, size=100)
+        return
             
         # Fallback to initials if no avatar URL
         # Get user name for initials
@@ -363,68 +781,9 @@ class HomePage(BasePage):
         self.create_avatar_with_initials(initials, name)
     
     def load_avatar_from_url(self, url: str):
-        """Load and display avatar from URL."""
-        # TEMPORARILY DISABLE AVATAR LOADING TO PREVENT CRASHES
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning("⚠️ TEMPORARILY SKIPPING AVATAR LOADING TO PREVENT CRASHES")
-        return
-        
-        try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Scale to fit avatar size (100x100)
-                            avatar_size = 100
-                            scaled_pixmap = pixmap.scaled(
-                                avatar_size, avatar_size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(avatar_size, avatar_size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
-                            painter.end()
-                            
-                            # Update avatar display
-                            self.avatar_label.setPixmap(circular_pixmap)
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    logger.error(f"Error processing downloaded avatar: {e}")
-                    # Fallback to initials
-                    self.create_avatar_with_initials("U", "User")
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-        except Exception as e:
-            logger.error(f"Error loading avatar from URL: {e}")
-            # Fallback to initials
-            self.create_avatar_with_initials("U", "User")
+        """Deprecated: use AvatarManager via update_user_avatar instead."""
+        name = "User"
+        AvatarManager.instance().set_label_avatar(self.avatar_label, url, name, size=100)
             
     def _generate_initials(self, name):
         """Generate initials from a name."""
@@ -624,6 +983,23 @@ class HomePage(BasePage):
                         logger.info("✅ Auth buttons container hidden")
                     except Exception as auth_error:
                         logger.error(f"❌ Error hiding auth buttons container: {auth_error}")
+
+                # NEW: ensure avatar is updated after authentication using the full profile
+                try:
+                    from ....social.user_manager import EnhancedUserManager
+                    profile = EnhancedUserManager().get_complete_user_profile(current_user.id)
+                    if profile:
+                        self.update_user_avatar(profile)
+                        logger.info("✅ Avatar updated from complete profile")
+                    else:
+                        # Fallback to minimal structure if profile unavailable
+                        self.update_user_avatar({
+                            'avatar_url': None,
+                            'display_name': current_user.name or current_user.email,
+                            'username': None,
+                        })
+                except Exception as avatar_err:
+                    logger.debug(f"Avatar refresh skipped: {avatar_err}")
                 
                 logger.info("✅ Authenticated with complete profile: {current_user.name or current_user.email}")
             else:

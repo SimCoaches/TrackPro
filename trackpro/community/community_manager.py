@@ -5,6 +5,7 @@ import threading
 import traceback
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import time
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,11 @@ class CommunityManager(QObject):
                 if not self._initialized:
                     super().__init__()
                     self.current_user_id = None
+                    self._realtime_channels = []
+                    # Caches
+                    self._friends_cache: Optional[List[Dict[str, Any]]] = None
+                    self._friends_cache_time: float = 0.0
+                    self._friends_cache_ttl_seconds: float = 60.0
                     self._setup_database_connection()
                     self._setup_realtime_subscriptions()
                     self._initialized = True
@@ -65,8 +71,14 @@ class CommunityManager(QObject):
     
     def set_current_user(self, user_id: str):
         """Set the current authenticated user."""
+        # No-op if unchanged to avoid redundant work/log noise
+        if self.current_user_id == user_id:
+            return
         logger.info(f"Setting current user ID: {user_id}")
         self.current_user_id = user_id
+        # Invalidate caches on user change
+        self._friends_cache = None
+        self._friends_cache_time = 0.0
     
     def get_current_user_id(self) -> Optional[str]:
         """Get the current authenticated user ID."""
@@ -98,19 +110,35 @@ class CommunityManager(QObject):
             logger.info("Falling back to hardcoded channels due to error")
             return self._get_fallback_channels()
     
-    def get_messages(self, channel_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get messages for a specific channel."""
+    def get_messages(self, channel_id: str, limit: int = 50, before: Optional[str] = None, after: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get a window of messages for a specific channel.
+
+        Fetches the most recent messages by default. Use `before` to page older
+        messages (created_at < before) and `after` to page newer messages if
+        needed. Results are returned in ascending order (oldest -> newest) for
+        natural display in the UI.
+        """
         try:
             if not self.client:
                 logger.warning("❌ No Supabase client available for getting messages")
                 return []
             
             logger.info(f"🔍 Getting messages for channel {channel_id}")
-            response = self.client.table("community_messages").select(
+            query = self.client.table("community_messages").select(
                 "message_id, content, message_type, created_at, sender_id"
-            ).eq("channel_id", channel_id).order("created_at", desc=False).limit(limit).execute()
+            ).eq("channel_id", channel_id)
+
+            if before:
+                query = query.lt("created_at", before)
+            if after:
+                query = query.gt("created_at", after)
+
+            # Fetch newest first to use index efficiently, then reverse for display
+            response = query.order("created_at", desc=True).limit(limit).execute()
             
             messages = response.data or []
+            # Oldest -> newest for display
+            messages.reverse()
             logger.info(f"📨 Retrieved {len(messages)} messages")
             
             # Try to get user display info from the public table first (no RLS restrictions)
@@ -348,9 +376,49 @@ class CommunityManager(QObject):
                 logger.warning("Cannot setup real-time subscriptions: no database connection")
                 return
             
-            # TODO: Implement real-time subscriptions when Supabase real-time is properly configured
-            # For now, we'll use polling or manual refresh instead
-            logger.info("⚠️ Real-time subscriptions disabled - using polling instead")
+            # Clean up any existing channels
+            try:
+                for ch in getattr(self, "_realtime_channels", []):
+                    try:
+                        ch.unsubscribe()
+                    except Exception:
+                        pass
+                self._realtime_channels = []
+            except Exception:
+                self._realtime_channels = []
+
+            # Subscribe to INSERT on community_messages
+            try:
+                channel_messages = self.client.channel("realtime:public:community_messages")
+                channel_messages.on(
+                    "postgres_changes",
+                    {"event": "INSERT", "schema": "public", "table": "community_messages"},
+                    self._on_message_inserted,
+                )
+                channel_messages.subscribe()
+                self._realtime_channels.append(channel_messages)
+                logger.info("✅ Subscribed to realtime INSERT on community_messages")
+            except Exception as e:
+                logger.warning(f"Failed to subscribe to community_messages realtime: {e}")
+
+            # Subscribe to INSERT/UPDATE on community_participants for voice presence
+            try:
+                channel_participants = self.client.channel("realtime:public:community_participants")
+                channel_participants.on(
+                    "postgres_changes",
+                    {"event": "INSERT", "schema": "public", "table": "community_participants"},
+                    self._on_participant_changed,
+                )
+                channel_participants.on(
+                    "postgres_changes",
+                    {"event": "UPDATE", "schema": "public", "table": "community_participants"},
+                    self._on_participant_changed,
+                )
+                channel_participants.subscribe()
+                self._realtime_channels.append(channel_participants)
+                logger.info("✅ Subscribed to realtime INSERT/UPDATE on community_participants")
+            except Exception as e:
+                logger.warning(f"Failed to subscribe to community_participants realtime: {e}")
             
         except Exception as e:
             logger.error(f"Failed to setup real-time subscriptions: {e}")
@@ -424,6 +492,37 @@ class CommunityManager(QObject):
             logger.error(f"❌ Error handling real-time message: {e}")
             import traceback
             logger.debug(f"Traceback: {traceback.format_exc()}")
+
+    def _on_participant_changed(self, payload):
+        """Handle realtime participant INSERT/UPDATE events."""
+        try:
+            event_type = payload.get("eventType")
+            new_row = payload.get("new", {}) or {}
+            old_row = payload.get("old", {}) or {}
+
+            channel_id = new_row.get("channel_id") or old_row.get("channel_id")
+            user_id = new_row.get("user_id") or old_row.get("user_id")
+            if not channel_id or not user_id:
+                return
+
+            if event_type == "INSERT":
+                user_data = self._get_user_data(user_id) or {"user_id": user_id}
+                self.user_joined_channel.emit(channel_id, user_data)
+                return
+
+            if event_type == "UPDATE":
+                left_now = bool(new_row.get("left_at")) and not bool(old_row.get("left_at"))
+                if left_now:
+                    self.user_left_channel.emit(channel_id, user_id)
+                    return
+                status_data = {
+                    "is_muted": new_row.get("is_muted"),
+                    "is_deafened": new_row.get("is_deafened"),
+                    "is_speaking": new_row.get("is_speaking"),
+                }
+                self.user_status_changed.emit(channel_id, user_id, status_data)
+        except Exception as e:
+            logger.error(f"❌ Error handling participant realtime event: {e}")
     
     def join_voice_channel(self, channel_id: str) -> bool:
         """Join a voice channel."""
@@ -632,6 +731,27 @@ class CommunityManager(QObject):
             # Combine both results
             conversations = (response1.data or []) + (response2.data or [])
             
+            # Build a lookup of public display info for all involved users so we can
+            # reliably show names/avatars in the UI list even if user_profiles is sparse
+            try:
+                user_ids: set[str] = set()
+                for conv in conversations:
+                    u1 = (conv.get("user1") or {}).get("user_id")
+                    u2 = (conv.get("user2") or {}).get("user_id")
+                    if u1:
+                        user_ids.add(u1)
+                    if u2:
+                        user_ids.add(u2)
+                display_lookup: dict[str, dict] = {}
+                if user_ids:
+                    disp_resp = self.client.table("public_user_display_info").select(
+                        "user_id, display_name, username, avatar_url"
+                    ).in_("user_id", list(user_ids)).execute()
+                    for row in getattr(disp_resp, "data", []) or []:
+                        display_lookup[row.get("user_id")] = row
+            except Exception:
+                display_lookup = {}
+
             # Sort by updated_at descending
             conversations.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
             
@@ -642,9 +762,35 @@ class CommunityManager(QObject):
                 
                 # Determine the other user in the conversation
                 if conv.get('user1', {}).get('user_id') == self.current_user_id:
-                    conv['other_user'] = conv.get('user2', {})
+                    other = dict(conv.get('user2', {}) or {})
                 else:
-                    conv['other_user'] = conv.get('user1', {})
+                    other = dict(conv.get('user1', {}) or {})
+
+                # Enrich with public display info if missing
+                try:
+                    other_id = other.get("user_id")
+                    if other_id and (not other.get("display_name") and not other.get("username")):
+                        disp = display_lookup.get(other_id)
+                        if disp:
+                            # Only fill missing fields to preserve any existing data
+                            if not other.get("display_name"):
+                                other["display_name"] = disp.get("display_name")
+                            if not other.get("username"):
+                                other["username"] = disp.get("username")
+                            if not other.get("avatar_url"):
+                                other["avatar_url"] = disp.get("avatar_url")
+                except Exception:
+                    pass
+
+                # Final fallback name so the UI never shows "Unknown User"
+                if not other.get("display_name") and not other.get("username"):
+                    try:
+                        gen = self._generate_fallback_name(other.get("user_id", "")) if other.get("user_id") else "User"
+                        other["display_name"] = gen
+                    except Exception:
+                        other["display_name"] = "User"
+
+                conv['other_user'] = other
             
             return conversations
             
@@ -701,9 +847,37 @@ class CommunityManager(QObject):
             
             # Determine the other user in the conversation
             if conversation_data.get('user1', {}).get('user_id') == self.current_user_id:
-                conversation_data['other_user'] = conversation_data.get('user2', {})
+                other = dict(conversation_data.get('user2', {}) or {})
             else:
-                conversation_data['other_user'] = conversation_data.get('user1', {})
+                other = dict(conversation_data.get('user1', {}) or {})
+
+            # Enrich other user from public display info if needed
+            try:
+                other_id = other.get("user_id")
+                if other_id and (not other.get("display_name") and not other.get("username")):
+                    disp_resp = self.client.table("public_user_display_info").select(
+                        "user_id, display_name, username, avatar_url"
+                    ).eq("user_id", other_id).single().execute()
+                    disp = getattr(disp_resp, "data", None)
+                    if disp:
+                        if not other.get("display_name"):
+                            other["display_name"] = disp.get("display_name")
+                        if not other.get("username"):
+                            other["username"] = disp.get("username")
+                        if not other.get("avatar_url"):
+                            other["avatar_url"] = disp.get("avatar_url")
+            except Exception:
+                pass
+
+            # Final fallback
+            if not other.get("display_name") and not other.get("username"):
+                try:
+                    gen = self._generate_fallback_name(other.get("user_id", "")) if other.get("user_id") else "User"
+                    other["display_name"] = gen
+                except Exception:
+                    other["display_name"] = "User"
+
+            conversation_data['other_user'] = other
             
             return conversation_data
             
@@ -889,6 +1063,16 @@ class CommunityManager(QObject):
                 logger.warning(f"Cannot get friends: no database connection or user not authenticated. Client: {bool(self.client)}, User ID: {self.current_user_id}")
                 return []
             
+            # Use cached value if still fresh
+            try:
+                if self._friends_cache is not None and (time.monotonic() - self._friends_cache_time) < self._friends_cache_ttl_seconds:
+                    # Debug-level to avoid log spam in normal runs
+                    logger.debug(f"Using cached friends list ({len(self._friends_cache)})")
+                    return list(self._friends_cache)
+            except Exception:
+                # If anything goes wrong with cache timing, fall through to fetch
+                pass
+
             logger.info(f"🔍 Getting friends for user: {self.current_user_id}")
             
             # Get accepted friendships where current user is either requester or addressee
@@ -942,6 +1126,14 @@ class CommunityManager(QObject):
             
             friends = friends_response.data
             logger.info(f"✅ Retrieved {len(friends)} friends with details")
+            
+            # Update cache
+            try:
+                self._friends_cache = list(friends) if friends is not None else []
+                self._friends_cache_time = time.monotonic()
+            except Exception:
+                # Non-fatal if caching fails
+                pass
             
             return friends
             
@@ -1112,3 +1304,418 @@ class CommunityManager(QObject):
         except Exception as e:
             logger.error(f"Error removing friend: {e}")
             return False 
+
+    # =====================================================
+    # Events API
+    # =====================================================
+    def get_events(self) -> dict:
+        """Return community events for the Events UI.
+
+        Returns a dict: { 'success': bool, 'events': list, 'error': str | None }
+        """
+        try:
+            if not self.client:
+                return {"success": True, "events": []}
+
+            # Fetch upcoming and recent events (simple ordering by start_time)
+            response = self.client.table("community_events").select(
+                "id, title, description, event_type, start_time, end_time, max_participants, created_by, entry_requirements, prizes"
+            ).order("start_time").execute()
+
+            events = []
+            now = datetime.now()
+            data = getattr(response, "data", []) or []
+
+            # Optionally fetch participant registrations per event
+            for ev in data:
+                start_time = ev.get("start_time")
+                end_time = ev.get("end_time")
+                try:
+                    start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00")) if isinstance(start_time, str) else start_time
+                except Exception:
+                    start_dt = None
+                try:
+                    end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00")) if isinstance(end_time, str) else end_time
+                except Exception:
+                    end_dt = None
+
+                status = "Upcoming"
+                if start_dt and end_dt and start_dt <= now <= end_dt:
+                    status = "Active"
+                elif (end_dt and now > end_dt) or (start_dt and not end_dt and now > start_dt):
+                    status = "Completed"
+
+                # Participants and registration flag
+                is_registered = False
+                participant_count = 0
+                try:
+                    part_resp = self.client.table("event_participants").select(
+                        "user_id"
+                    ).eq("event_id", ev["id"]).execute()
+                    participants = getattr(part_resp, "data", []) or []
+                    participant_count = len(participants)
+                    if self.current_user_id:
+                        is_registered = any(p.get("user_id") == self.current_user_id for p in participants)
+                except Exception as _e:
+                    # Non-fatal
+                    pass
+
+                events.append({
+                    "id": ev.get("id"),
+                    "title": ev.get("title"),
+                    "description": ev.get("description"),
+                    "event_type": (ev.get("event_type") or "open"),
+                    "start_time": ev.get("start_time"),
+                    "end_time": ev.get("end_time"),
+                    "max_participants": ev.get("max_participants"),
+                    "registration_info": f"{participant_count}/{ev.get('max_participants') or 0} registered",
+                    "is_registered": is_registered,
+                    "status": status,
+                    "created_by": ev.get("created_by"),
+                    "entry_requirements": ev.get("entry_requirements") or {},
+                    "prizes": ev.get("prizes") or {},
+                })
+
+            return {"success": True, "events": events}
+        except Exception as e:
+            # If the relation/table doesn't exist yet, fail gracefully with empty events
+            try:
+                msg = str(e)
+                if '42P01' in msg or 'does not exist' in msg:
+                    logger.warning("community_events table not found; returning empty events list")
+                    return {"success": True, "events": []}
+            except Exception:
+                pass
+            logger.error(f"Error getting events: {e}")
+            return {"success": False, "events": [], "error": str(e)}
+
+    def create_event(self, *, title: str, description: str, event_type: str,
+                     start_time, end_time=None, track_id=None, car_id=None,
+                     max_participants=None, entry_requirements=None, prizes=None) -> dict:
+        """Create a community event."""
+        try:
+            if not self.client or not self.current_user_id:
+                return {"success": False, "error": "Not authenticated"}
+
+            payload = {
+                "title": title,
+                "description": description,
+                "event_type": event_type,
+                "start_time": start_time.isoformat() if hasattr(start_time, "isoformat") else start_time,
+                "end_time": end_time.isoformat() if end_time and hasattr(end_time, "isoformat") else end_time,
+                "track_id": track_id,
+                "car_id": car_id,
+                "max_participants": max_participants,
+                "entry_requirements": entry_requirements or {},
+                "prizes": prizes or {},
+                "created_by": self.current_user_id,
+            }
+
+            resp = self.client.table("community_events").insert(payload).execute()
+            ok = bool(getattr(resp, "data", None))
+            return {"success": ok}
+        except Exception as e:
+            logger.error(f"Error creating event: {e}")
+            return {"success": False, "error": str(e)}
+
+    def register_for_event(self, event_id: str) -> dict:
+        """Register current user for an event."""
+        try:
+            if not self.client or not self.current_user_id:
+                return {"success": False, "error": "Not authenticated"}
+
+            # Check if already registered
+            existing = self.client.table("event_participants").select("user_id").eq(
+                "event_id", event_id
+            ).eq("user_id", self.current_user_id).execute()
+            if getattr(existing, "data", None):
+                return {"success": True}
+
+            data = {
+                "event_id": event_id,
+                "user_id": self.current_user_id,
+                "status": "registered",
+            }
+            resp = self.client.table("event_participants").insert(data).execute()
+            ok = bool(getattr(resp, "data", None))
+            return {"success": ok}
+        except Exception as e:
+            logger.error(f"Error registering for event: {e}")
+            return {"success": False, "error": str(e)}
+
+    def unregister_from_event(self, event_id: str) -> dict:
+        """Unregister current user from an event."""
+        try:
+            if not self.client or not self.current_user_id:
+                return {"success": False, "error": "Not authenticated"}
+
+            resp = self.client.table("event_participants").delete().eq(
+                "event_id", event_id
+            ).eq("user_id", self.current_user_id).execute()
+            ok = True  # delete returns empty data in some libs; treat as success
+            if hasattr(resp, "error") and getattr(resp, "error"):
+                ok = False
+            return {"success": ok}
+        except Exception as e:
+            logger.error(f"Error unregistering from event: {e}")
+            return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# Support Ticketing Manager
+# =====================================================
+
+class SupportManager(QObject):
+    """Manages support tickets and messages with realtime updates."""
+
+    # Signals
+    support_message_received = pyqtSignal(dict)
+    support_ticket_updated = pyqtSignal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.client = None
+        self.current_user_id = None
+        self._realtime_channels = []
+        self._is_team_cache = None
+        self._setup_database_connection()
+        self._setup_realtime_subscriptions()
+
+    def _setup_database_connection(self):
+        try:
+            from ..database.supabase_client import get_supabase_client
+            self.client = get_supabase_client()
+        except Exception as e:
+            logger.error(f"Failed to setup database connection (support): {e}")
+            self.client = None
+
+    def set_current_user(self, user_id: str):
+        self.current_user_id = user_id
+
+    # ----------------------------
+    # Role helpers
+    # ----------------------------
+    def is_team_user(self) -> bool:
+        try:
+            if self._is_team_cache is not None:
+                return self._is_team_cache
+            if not self.client or not self.current_user_id:
+                return False
+            response = self.client.rpc(
+                "get_user_hierarchy_level",
+                {"user_uuid": self.current_user_id}
+            ).execute()
+            level = None
+            if hasattr(response, "data"):
+                level = response.data
+            elif isinstance(response, dict):
+                level = response.get("data")
+            self._is_team_cache = (level == "TEAM")
+            return self._is_team_cache
+        except Exception as e:
+            logger.debug(f"is_team_user check failed: {e}")
+            return False
+
+    # ----------------------------
+    # Tickets API
+    # ----------------------------
+    def get_or_create_open_ticket(self, subject: str = None, category: str = None, priority: str = "medium") -> dict | None:
+        try:
+            if not self.client or not self.current_user_id:
+                return None
+            # Check for existing open ticket by this user
+            resp = self.client.table("support_tickets").select("*")\
+                .eq("created_by", self.current_user_id)\
+                .eq("status", "open").order("created_at", desc=True).limit(1).execute()
+            if resp and getattr(resp, "data", None):
+                return resp.data[0]
+            if not subject:
+                subject = "Support Chat"
+            ticket = {
+                "created_by": self.current_user_id,
+                "subject": subject,
+                "category": category or "General Question",
+                "priority": priority
+            }
+            create_resp = self.client.table("support_tickets").insert(ticket).execute()
+            if create_resp and getattr(create_resp, "data", None):
+                return create_resp.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error creating/opening ticket: {e}")
+            return None
+
+    def get_ticket_messages(self, ticket_id: str, limit: int = 100) -> list:
+        try:
+            if not self.client:
+                return []
+            resp = self.client.table("support_messages").select(
+                "id, ticket_id, sender_id, content, is_internal_note, created_at"
+            ).eq("ticket_id", ticket_id).order("created_at", desc=True).limit(limit).execute()
+            messages = getattr(resp, "data", []) or []
+            messages.reverse()
+            return messages
+        except Exception as e:
+            logger.error(f"Error getting ticket messages: {e}")
+            return []
+
+    def send_message(self, ticket_id: str, content: str, is_internal_note: bool = False) -> bool:
+        try:
+            if not self.client or not self.current_user_id:
+                return False
+            if not content or not content.strip():
+                return False
+            data = {
+                "ticket_id": ticket_id,
+                "sender_id": self.current_user_id,
+                "content": content.strip(),
+                "is_internal_note": bool(is_internal_note)
+            }
+            resp = self.client.table("support_messages").insert(data).execute()
+            return bool(getattr(resp, "data", None))
+        except Exception as e:
+            logger.error(f"Error sending support message: {e}")
+            return False
+
+    # ----------------------------
+    # TEAM Inbox helpers
+    # ----------------------------
+    def list_unassigned(self, limit: int = 50) -> list:
+        try:
+            if not self.client or not self.is_team_user():
+                return []
+            resp = self.client.table("support_tickets").select("*")\
+                .is_("assigned_to", None).eq("status", "open")\
+                .order("last_message_at", desc=True).limit(limit).execute()
+            return getattr(resp, "data", []) or []
+        except Exception as e:
+            logger.error(f"Error listing unassigned tickets: {e}")
+            return []
+
+    def list_my_tickets(self, limit: int = 50) -> list:
+        try:
+            if not self.client or not self.current_user_id or not self.is_team_user():
+                return []
+            resp = self.client.table("support_tickets").select("*")\
+                .eq("assigned_to", self.current_user_id)\
+                .order("last_message_at", desc=True).limit(limit).execute()
+            return getattr(resp, "data", []) or []
+        except Exception as e:
+            logger.error(f"Error listing my tickets: {e}")
+            return []
+
+    def list_all_open(self, limit: int = 100) -> list:
+        try:
+            if not self.client or not self.is_team_user():
+                return []
+            resp = self.client.table("support_tickets").select("*")\
+                .eq("status", "open").order("last_message_at", desc=True).limit(limit).execute()
+            return getattr(resp, "data", []) or []
+        except Exception as e:
+            logger.error(f"Error listing all open tickets: {e}")
+            return []
+
+    def assign_ticket_to_me(self, ticket_id: str) -> bool:
+        try:
+            if not self.client or not self.current_user_id or not self.is_team_user():
+                return False
+            resp = self.client.table("support_tickets").update({
+                "assigned_to": self.current_user_id
+            }).eq("id", ticket_id).execute()
+            return bool(getattr(resp, "data", None))
+        except Exception as e:
+            logger.error(f"Error assigning ticket: {e}")
+            return False
+
+    def update_ticket(self, ticket_id: str, status: str = None, priority: str = None) -> bool:
+        try:
+            if not self.client or not self.is_team_user():
+                return False
+            update = {}
+            if status:
+                update["status"] = status
+            if priority:
+                update["priority"] = priority
+            if not update:
+                return True
+            resp = self.client.table("support_tickets").update(update).eq("id", ticket_id).execute()
+            return bool(getattr(resp, "data", None))
+        except Exception as e:
+            logger.error(f"Error updating ticket: {e}")
+            return False
+
+    # ----------------------------
+    # Realtime
+    # ----------------------------
+    def _setup_realtime_subscriptions(self):
+        try:
+            if not self.client:
+                return
+            # Cleanup
+            try:
+                for ch in getattr(self, "_realtime_channels", []):
+                    try:
+                        ch.unsubscribe()
+                    except Exception:
+                        pass
+                self._realtime_channels = []
+            except Exception:
+                self._realtime_channels = []
+
+            # support_messages INSERT
+            try:
+                ch_msgs = self.client.channel("realtime:public:support_messages")
+                ch_msgs.on(
+                    "postgres_changes",
+                    {"event": "INSERT", "schema": "public", "table": "support_messages"},
+                    self._on_support_message_inserted,
+                )
+                ch_msgs.subscribe()
+                self._realtime_channels.append(ch_msgs)
+            except Exception as e:
+                logger.debug(f"Support realtime subscribe (messages) failed: {e}")
+
+            # support_tickets INSERT/UPDATE
+            try:
+                ch_tickets = self.client.channel("realtime:public:support_tickets")
+                ch_tickets.on(
+                    "postgres_changes",
+                    {"event": "INSERT", "schema": "public", "table": "support_tickets"},
+                    self._on_support_ticket_changed,
+                )
+                ch_tickets.on(
+                    "postgres_changes",
+                    {"event": "UPDATE", "schema": "public", "table": "support_tickets"},
+                    self._on_support_ticket_changed,
+                )
+                ch_tickets.subscribe()
+                self._realtime_channels.append(ch_tickets)
+            except Exception as e:
+                logger.debug(f"Support realtime subscribe (tickets) failed: {e}")
+        except Exception as e:
+            logger.error(f"Failed to setup support realtime: {e}")
+
+    def refresh_realtime(self):
+        """Rebind realtime subscriptions, e.g., after login or client/session change."""
+        try:
+            self._setup_database_connection()
+            self._setup_realtime_subscriptions()
+        except Exception:
+            pass
+
+    def _on_support_message_inserted(self, payload):
+        try:
+            if payload.get("eventType") == "INSERT":
+                new_row = payload.get("new", {}) or {}
+                if new_row:
+                    self.support_message_received.emit(new_row)
+        except Exception as e:
+            logger.debug(f"Support message event error: {e}")
+
+    def _on_support_ticket_changed(self, payload):
+        try:
+            new_row = payload.get("new", {}) or {}
+            if new_row:
+                self.support_ticket_updated.emit(new_row)
+        except Exception as e:
+            logger.debug(f"Support ticket event error: {e}")

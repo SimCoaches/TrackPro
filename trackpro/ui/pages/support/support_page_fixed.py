@@ -4,14 +4,19 @@ import logging
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton, QComboBox,
     QLineEdit, QFrame, QScrollArea, QWidget, QMessageBox, QTabWidget,
-    QCheckBox
+    QCheckBox, QListWidget, QListWidgetItem
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from ...modern.shared.base_page import BasePage
 from .emailjs_client import EmailJSConfig, EmailJSClient
+from trackpro.community.community_manager import SupportManager
 
 logger = logging.getLogger(__name__)
+
+# Feature flags for hiding unfinished features from users
+ENABLE_SUPPORT_LIVE_CHAT = False
+ENABLE_SUPPORT_TEAM_INBOX = False
 
 
 class EmailSendWorker(QThread):
@@ -79,6 +84,8 @@ class SupportPage(BasePage):
         self.user_email_input = None
         self.user_name_input = None
         self.include_user_info_checkbox = None
+        self.support_manager = None
+        self.current_ticket = None
         
         # Initialize EmailJS with debugging
         logger.info("🔧 [EMAIL DEBUG] Initializing EmailJS configuration...")
@@ -208,13 +215,319 @@ class SupportPage(BasePage):
             # FAQ tab
             self.create_faq_tab_safe()
             
-            # Contact Info tab
-            self.create_contact_tab_safe()
+            # Contact tab removed per requirement
+            
+            # Live Chat (beta)
+            if ENABLE_SUPPORT_LIVE_CHAT:
+                self.create_live_chat_tab_safe()
+            
+            # TEAM Inbox (if applicable)
+            if ENABLE_SUPPORT_TEAM_INBOX:
+                self.create_team_inbox_tab_safe()
             
         except Exception as e:
             logger.error(f"❌ Error creating support tabs: {e}")
             # Create minimal fallback tab
             self.create_minimal_support_tab()
+
+    def _ensure_support_manager(self):
+        if self.support_manager is None:
+            try:
+                self.support_manager = SupportManager()
+            except Exception as e:
+                logger.error(f"Failed to init SupportManager: {e}")
+        # Always attempt to bind current user from session (auth can change after init)
+        try:
+            from trackpro.database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            user_resp = client.auth.get_user() if client else None
+            if user_resp and user_resp.user and self.support_manager:
+                self.support_manager.set_current_user(user_resp.user.id)
+                # Ensure realtime subscriptions are active with current auth
+                if hasattr(self.support_manager, "refresh_realtime"):
+                    self.support_manager.refresh_realtime()
+        except Exception:
+            pass
+
+    def create_live_chat_tab_safe(self):
+        try:
+            self._ensure_support_manager()
+            chat_widget = QWidget()
+            layout = QVBoxLayout(chat_widget)
+            layout.setContentsMargins(15, 15, 15, 15)
+            layout.setSpacing(8)
+
+            header = QLabel("Live Chat (beta)")
+            header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+            header.setStyleSheet("color: white; margin-bottom: 8px;")
+            layout.addWidget(header)
+
+            desc = QLabel("Start a support chat with our team. You'll receive replies here in real time.")
+            desc.setStyleSheet("color: #b0b0b0; font-size: 12px;")
+            layout.addWidget(desc)
+
+            # Transcript area
+            self.chat_transcript = QTextEdit()
+            self.chat_transcript.setReadOnly(True)
+            self.chat_transcript.setMinimumHeight(160)
+            self.chat_transcript.setStyleSheet("QTextEdit { background-color: #1e1e1e; color: #eaeaea; border: 1px solid #333; border-radius: 6px; padding: 8px; }")
+            layout.addWidget(self.chat_transcript)
+
+            # Input row
+            input_row = QHBoxLayout()
+            self.chat_input = QLineEdit()
+            self.chat_input.setPlaceholderText("Type your message…")
+            self.chat_input.setMinimumHeight(36)
+            self.chat_input.setStyleSheet("QLineEdit { background-color: #252525; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 8px; }")
+            # Press Enter to send
+            try:
+                self.chat_input.returnPressed.connect(self._on_send_chat_message)
+            except Exception:
+                pass
+            send_btn = QPushButton("Send")
+            send_btn.setMinimumHeight(36)
+            send_btn.setStyleSheet("QPushButton { background-color: #2a82da; color: #fff; border: none; border-radius: 6px; padding: 8px 16px; }")
+            send_btn.clicked.connect(self._on_send_chat_message)
+            input_row.addWidget(self.chat_input)
+            input_row.addWidget(send_btn)
+            layout.addLayout(input_row)
+
+            # Start chat button if no ticket
+            self.start_chat_btn = QPushButton("Start Chat")
+            self.start_chat_btn.setMinimumHeight(32)
+            self.start_chat_btn.setStyleSheet("QPushButton { background-color: #27ae60; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; }")
+            self.start_chat_btn.clicked.connect(self._on_start_chat)
+            layout.addWidget(self.start_chat_btn)
+
+            # Hook realtime
+            try:
+                if self.support_manager:
+                    self.support_manager.support_message_received.connect(self._on_support_message)
+            except Exception:
+                pass
+
+            # Initialize state
+            self._load_or_create_ticket()
+
+            self.tab_widget.addTab(chat_widget, "💬 Live Chat")
+        except Exception as e:
+            logger.error(f"Error creating live chat tab: {e}")
+
+    def _load_or_create_ticket(self):
+        try:
+            self._ensure_support_manager()
+            if not self.support_manager:
+                return
+            ticket = self.support_manager.get_or_create_open_ticket(subject="Support Chat")
+            self.current_ticket = ticket
+            if ticket:
+                # Load history
+                messages = self.support_manager.get_ticket_messages(ticket["id"], limit=200)
+                self.chat_transcript.clear()
+                for m in messages:
+                    self._append_transcript(m)
+                # Hide start button when active
+                if hasattr(self, "start_chat_btn") and self.start_chat_btn:
+                    self.start_chat_btn.setVisible(False)
+        except Exception as e:
+            logger.debug(f"_load_or_create_ticket error: {e}")
+
+    def _on_start_chat(self):
+        # Ensure current user is bound then (re)attempt ticket creation
+        self._load_or_create_ticket()
+
+    def _on_send_chat_message(self):
+        try:
+            if not self.current_ticket or not self.chat_input:
+                return
+            text = self.chat_input.text().strip()
+            if not text:
+                return
+            ok = self.support_manager and self.support_manager.send_message(self.current_ticket["id"], text)
+            if ok:
+                # Optimistic echo
+                self._append_transcript({
+                    "sender_id": "me",
+                    "content": text,
+                    "created_at": ""
+                })
+                self.chat_input.clear()
+        except Exception as e:
+            logger.debug(f"send message failed: {e}")
+
+    def _on_support_message(self, row: dict):
+        try:
+            if not self.current_ticket:
+                return
+            if row.get("ticket_id") == self.current_ticket.get("id"):
+                self._append_transcript(row)
+        except Exception as e:
+            logger.debug(f"on_support_message error: {e}")
+
+    def _append_transcript(self, msg: dict):
+        try:
+            sender = msg.get("sender_id", "")
+            prefix = "You: " if sender in ("me", getattr(self.support_manager, "current_user_id", None)) else "Support: "
+            content = msg.get("content", "")
+            self.chat_transcript.append(f"{prefix}{content}")
+        except Exception:
+            pass
+
+    def on_auth_state_changed(self, authenticated: bool | None = None):
+        """Handle auth changes from the main window to keep live chat working."""
+        try:
+            self._ensure_support_manager()
+            if authenticated:
+                # On login, auto start or resume the user's chat and refresh realtime
+                self._load_or_create_ticket()
+        except Exception:
+            pass
+
+    # ==============================
+    # TEAM Inbox UI
+    # ==============================
+    def create_team_inbox_tab_safe(self):
+        try:
+            self._ensure_support_manager()
+            if not self.support_manager or not self.support_manager.is_team_user():
+                return
+            inbox_widget = QWidget()
+            layout = QVBoxLayout(inbox_widget)
+            layout.setContentsMargins(15, 15, 15, 15)
+            layout.setSpacing(8)
+
+            header = QLabel("TEAM Inbox")
+            header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+            header.setStyleSheet("color: white; margin-bottom: 8px;")
+            layout.addWidget(header)
+
+            # Controls row
+            controls = QHBoxLayout()
+            refresh_btn = QPushButton("Refresh")
+            refresh_btn.clicked.connect(self._refresh_team_inbox)
+            take_btn = QPushButton("Assign To Me")
+            take_btn.clicked.connect(self._on_take_ticket)
+            close_btn = QPushButton("Close Ticket")
+            close_btn.clicked.connect(self._on_close_ticket)
+            pri_combo = QComboBox()
+            pri_combo.addItems(["low", "medium", "high", "critical"])
+            pri_set_btn = QPushButton("Set Priority")
+            pri_set_btn.clicked.connect(lambda: self._on_set_priority(pri_combo.currentText()))
+            controls.addWidget(refresh_btn)
+            controls.addWidget(take_btn)
+            controls.addWidget(close_btn)
+            controls.addWidget(QLabel("Priority:"))
+            controls.addWidget(pri_combo)
+            controls.addWidget(pri_set_btn)
+            controls.addStretch()
+            layout.addLayout(controls)
+
+            # Lists
+            lists_row = QHBoxLayout()
+            self.unassigned_list = QListWidget()
+            self.my_tickets_list = QListWidget()
+            self.unassigned_list.itemSelectionChanged.connect(self._on_unassigned_selected)
+            self.my_tickets_list.itemSelectionChanged.connect(self._on_my_ticket_selected)
+            lists_col_left = QVBoxLayout()
+            lists_col_left.addWidget(QLabel("Unassigned"))
+            lists_col_left.addWidget(self.unassigned_list)
+            lists_col_right = QVBoxLayout()
+            lists_col_right.addWidget(QLabel("My Tickets"))
+            lists_col_right.addWidget(self.my_tickets_list)
+            lists_row.addLayout(lists_col_left)
+            lists_row.addLayout(lists_col_right)
+            layout.addLayout(lists_row)
+
+            self._refresh_team_inbox()
+
+            self.tab_widget.addTab(inbox_widget, "🧰 TEAM Inbox")
+        except Exception as e:
+            logger.debug(f"create_team_inbox_tab_safe error: {e}")
+
+    def _refresh_team_inbox(self):
+        try:
+            if not self.support_manager or not self.support_manager.is_team_user():
+                return
+            self.unassigned_list.clear()
+            self.my_tickets_list.clear()
+            for t in self.support_manager.list_unassigned():
+                item = QListWidgetItem(self._format_ticket_list_text(t))
+                item.setData(Qt.ItemDataRole.UserRole, t)
+                self.unassigned_list.addItem(item)
+            for t in self.support_manager.list_my_tickets():
+                item = QListWidgetItem(self._format_ticket_list_text(t))
+                item.setData(Qt.ItemDataRole.UserRole, t)
+                self.my_tickets_list.addItem(item)
+        except Exception as e:
+            logger.debug(f"_refresh_team_inbox error: {e}")
+
+    def _format_ticket_list_text(self, t: dict) -> str:
+        try:
+            subject = t.get("subject", "(no subject)")
+            priority = t.get("priority", "medium")
+            status = t.get("status", "open")
+            return f"[{priority}] {subject} — {status}"
+        except Exception:
+            return "(ticket)"
+
+    def _get_selected_ticket(self) -> dict | None:
+        try:
+            w = None
+            if self.my_tickets_list and self.my_tickets_list.selectedItems():
+                w = self.my_tickets_list
+            elif self.unassigned_list and self.unassigned_list.selectedItems():
+                w = self.unassigned_list
+            if not w:
+                return None
+            item = w.selectedItems()[0]
+            return item.data(Qt.ItemDataRole.UserRole)
+        except Exception:
+            return None
+
+    def _on_unassigned_selected(self):
+        try:
+            t = self._get_selected_ticket()
+            if t:
+                self.current_ticket = t
+                msgs = self.support_manager.get_ticket_messages(t["id"], limit=200)
+                self.chat_transcript.clear()
+                for m in msgs:
+                    self._append_transcript(m)
+        except Exception:
+            pass
+
+    def _on_my_ticket_selected(self):
+        self._on_unassigned_selected()
+
+    def _on_take_ticket(self):
+        try:
+            t = self._get_selected_ticket()
+            if not t:
+                return
+            if self.support_manager.assign_ticket_to_me(t["id"]):
+                self._refresh_team_inbox()
+        except Exception:
+            pass
+
+    def _on_close_ticket(self):
+        try:
+            t = self._get_selected_ticket()
+            if not t:
+                return
+            if self.support_manager.update_ticket(t["id"], status="closed"):
+                self._refresh_team_inbox()
+        except Exception:
+            pass
+
+    def _on_set_priority(self, p: str):
+        try:
+            t = self._get_selected_ticket()
+            if not t:
+                return
+            if self.support_manager.update_ticket(t["id"], priority=p):
+                self._refresh_team_inbox()
+        except Exception:
+            pass
     
     def create_submit_ticket_tab_safe(self):
         """Create the submit ticket tab with proper scrolling."""

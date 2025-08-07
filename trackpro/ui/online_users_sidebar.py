@@ -10,12 +10,13 @@ from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
     QScrollArea, QFrame, QButtonGroup, QLineEdit, QMessageBox,
-    QMenu
+    QMenu, QSpacerItem, QSizePolicy
 )
 from PyQt6.QtGui import QAction
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QParallelAnimationGroup
 from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont
 from PyQt6.QtGui import QPainterPath
+from .avatar_manager import AvatarManager
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ class OnlineUserItem(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 4, 2, 4)
         layout.setSpacing(6)
+        # Keep a reference for compact/expanded toggling
+        self.main_layout = layout
         
         # Avatar container with online status indicator
         self.avatar_container = QWidget()
@@ -66,6 +69,12 @@ class OnlineUserItem(QWidget):
         self.avatar_label = self.create_avatar()
         avatar_container_layout.addWidget(self.avatar_label)
         logger.debug(f"Avatar created and added to container for user: {self.user_data.get('display_name', 'Unknown')}")
+
+        # Ensure the avatar has no background/border that could cover the pixmap
+        try:
+            self.avatar_label.setStyleSheet("QLabel { background: transparent; border: none; }")
+        except Exception:
+            pass
         
         # Online status dot on avatar (positioned absolutely)
         self.avatar_status_dot = QLabel(self.avatar_container)
@@ -123,6 +132,39 @@ class OnlineUserItem(QWidget):
         
         # Make clickable
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_compact_mode(self, is_compact: bool) -> None:
+        """Toggle compact (collapsed) mode: hide text and center avatar.
+
+        This avoids re-parenting child widgets which caused layout glitches.
+        """
+        # Lazily create spacers
+        if not hasattr(self, '_left_spacer'):
+            self._left_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        if not hasattr(self, '_right_spacer'):
+            self._right_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        # Ensure labels exist
+        has_labels = hasattr(self, 'username_label') and hasattr(self, 'status_label')
+        if has_labels:
+            self.username_label.setVisible(not is_compact)
+            self.status_label.setVisible(not is_compact)
+
+        # Remove spacers if already present to avoid duplicates
+        # Note: removeItem is safe even if the item is not currently in the layout
+        self.main_layout.removeItem(getattr(self, '_left_spacer', None))
+        self.main_layout.removeItem(getattr(self, '_right_spacer', None))
+
+        if is_compact:
+            # Center the avatar within the row
+            self.main_layout.insertItem(0, self._left_spacer)
+            # Ensure avatar container stays sized tightly
+            self.avatar_container.setFixedSize(32, 32)
+            self.main_layout.setAlignment(self.avatar_container, Qt.AlignmentFlag.AlignHCenter)
+            self.main_layout.addItem(self._right_spacer)
+        else:
+            # Expanded mode: avatar on the left, text visible
+            self.main_layout.setAlignment(self.avatar_container, Qt.AlignmentFlag.AlignLeft)
     
     def refresh_online_status(self):
         """Refresh the online status dot based on current user data."""
@@ -168,76 +210,22 @@ class OnlineUserItem(QWidget):
         name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
         logger.debug(f"Creating avatar for user: {name}")
         
-        # Check if user has a profile image URL
-        avatar_url = self.user_data.get('avatar_url')
-        if avatar_url:
-            logger.debug(f"User has avatar URL: {avatar_url}")
-            # Start async loading of the profile image
-            self.load_avatar_from_url(avatar_url, 32, avatar_label)
-            # For now, return fallback avatar - it will be updated when image loads
-            fallback_avatar = self.create_fallback_avatar(name)
-            fallback_avatar.setPixmap(fallback_avatar.pixmap())
-            return fallback_avatar
-        
-        # No avatar URL, create fallback with initials
-        logger.debug(f"Creating fallback avatar with initials for user: {name}")
-        return self.create_fallback_avatar(name)
+        # Unified avatar setting
+        # Let the pixmap draw without label background interference
+        try:
+            avatar_label.setStyleSheet("QLabel { background: transparent; border: none; }")
+        except Exception:
+            pass
+        AvatarManager.instance().set_label_avatar(avatar_label, self.user_data.get('avatar_url'), name, size=32)
+        return avatar_label
     
     def load_avatar_from_url(self, url: str, size: int = 32, avatar_label: QLabel = None) -> QPixmap:
-        """Load and display avatar from URL."""
-        # TEMPORARILY DISABLE AVATAR LOADING TO PREVENT CRASHES
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning("⚠️ TEMPORARILY SKIPPING AVATAR LOADING TO PREVENT CRASHES")
-        return
-        
-        try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        if not pixmap.isNull():
-                            # Scale and make circular
-                            scaled_pixmap = pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            circular_pixmap = self.make_circular_pixmap(scaled_pixmap, size)
-                            
-                            # Update the avatar label with the loaded image
-                            if avatar_label:
-                                avatar_label.setPixmap(circular_pixmap)
-                                logger.debug(f"Successfully updated avatar with image from URL: {url}")
-                        else:
-                            logger.warning(f"Failed to load avatar image from URL: {url}")
-                    else:
-                        logger.warning(f"Network error loading avatar: {reply.errorString()}")
-                except Exception as e:
-                    logger.error(f"Error processing avatar image: {e}")
-                finally:
-                    reply.deleteLater()
-            
-            # Connect the finished signal to our callback
-            reply.finished.connect(on_avatar_downloaded)
-            
-            # Return None initially, the image will be loaded asynchronously
-            logger.debug(f"Started async avatar download from URL: {url}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error loading avatar from URL: {e}")
-            return None
+        """Deprecated: use AvatarManager via create_avatar/set_label_avatar instead."""
+        if avatar_label is None:
+            return QPixmap()
+        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'User')
+        AvatarManager.instance().set_label_avatar(avatar_label, url, name, size=size)
+        return QPixmap()
     
     def make_circular_pixmap(self, pixmap: QPixmap, size: int) -> QPixmap:
         """Make a pixmap circular with a border."""
@@ -571,13 +559,41 @@ class OnlineUsersSidebar(QWidget):
         """)
         self.title_label.setVisible(False)
         header_layout.addWidget(self.title_label, 1)
+
+        # Add Friend toggle button (reveals the search bar without shifting on open)
+        self.add_friend_toggle_btn = QPushButton("Add")
+        self.add_friend_toggle_btn.setFixedHeight(28)
+        self.add_friend_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #5865f2;
+                border: none;
+                border-radius: 4px;
+                color: #ffffff;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 0px 10px;
+            }
+            QPushButton:hover {
+                background-color: #4752c4;
+            }
+            QPushButton:pressed {
+                background-color: #3c45a5;
+            }
+        """)
+        self.add_friend_toggle_btn.setVisible(False)
+        self.add_friend_toggle_btn.clicked.connect(self.toggle_add_friend_bar)
+        header_layout.addWidget(self.add_friend_toggle_btn)
         
         self.main_layout.addWidget(header_container)
     
     def create_add_friend_bar(self):
         """Create the 'Add a Friend' search bar."""
         self.add_friend_container = QWidget()
-        self.add_friend_container.setVisible(False)  # Hidden when collapsed
+        # Keep it in the layout but collapsed to avoid layout jumps
+        self.add_friend_container.setVisible(True)
+        self.add_friend_container.setMaximumHeight(0)
+        self.add_friend_is_open = False
+        self.add_friend_anim = None
         
         add_friend_layout = QVBoxLayout(self.add_friend_container)
         add_friend_layout.setContentsMargins(8, 4, 8, 4)
@@ -647,6 +663,29 @@ class OnlineUsersSidebar(QWidget):
         add_friend_layout.addWidget(button_container)
         
         self.main_layout.addWidget(self.add_friend_container)
+
+    def toggle_add_friend_bar(self):
+        """Toggle the visibility of the Add Friend bar with a smooth slide."""
+        target_open = not getattr(self, 'add_friend_is_open', False)
+        # Stop any ongoing animation
+        if getattr(self, 'add_friend_anim', None):
+            try:
+                self.add_friend_anim.stop()
+            except Exception:
+                pass
+        # Animate maximumHeight for smooth expand/collapse
+        self.add_friend_anim = QPropertyAnimation(self.add_friend_container, b"maximumHeight")
+        self.add_friend_anim.setDuration(200)
+        self.add_friend_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        start_h = self.add_friend_container.maximumHeight()
+        end_h = 80 if target_open else 0
+        self.add_friend_anim.setStartValue(start_h)
+        self.add_friend_anim.setEndValue(end_h)
+        self.add_friend_anim.start()
+        self.add_friend_is_open = target_open
+        if target_open:
+            # Focus input shortly after animation starts
+            QTimer.singleShot(220, self.friend_search_input.setFocus)
     
     def create_users_container(self):
         """Create the scrollable users list container."""
@@ -730,30 +769,39 @@ class OnlineUsersSidebar(QWidget):
     
     def animate_to_width(self, target_width: int):
         """Animate the sidebar to target width."""
-        if self.animation:
-            self.animation.stop()
+        if getattr(self, 'animation', None):
+            try:
+                self.animation.stop()
+            except Exception:
+                pass
         
         self.is_animating = True
         
-        # Create width animation
-        self.animation = QPropertyAnimation(self, b"minimumWidth")
-        self.animation.setDuration(self.animation_duration)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.animation.setStartValue(self.width())
-        self.animation.setEndValue(target_width)
-        
-        # Connect animation finished
+        # Build a parallel animation group to keep min/max in sync (prevents layout thrash)
+        group = QParallelAnimationGroup(self)
+
+        anim_min = QPropertyAnimation(self, b"minimumWidth")
+        anim_min.setDuration(self.animation_duration)
+        anim_min.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim_min.setStartValue(self.width())
+        anim_min.setEndValue(target_width)
+        group.addAnimation(anim_min)
+
+        anim_max = QPropertyAnimation(self, b"maximumWidth")
+        anim_max.setDuration(self.animation_duration)
+        anim_max.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim_max.setStartValue(self.width())
+        anim_max.setEndValue(target_width)
+        group.addAnimation(anim_max)
+
+        # Keep a reference for lifecycle and connect completion
+        self.animation = group
         self.animation.finished.connect(self.on_animation_finished)
-        
-        # Update state and UI elements during animation
-        if target_width == self.expanded_width:
-            self.is_expanded = True
-            # Show elements immediately for smooth transition
-            self.title_label.setVisible(True)
-            self.user_count_label.setVisible(True)
-            self.add_friend_container.setVisible(True)
-            self.update_toggle_button()
-        
+
+        # Update state for toggle icon, but defer heavy child visibility until finished
+        self.is_expanded = (target_width == self.expanded_width)
+        self.update_toggle_button()
+
         self.animation.start()
     
     def on_animation_finished(self):
@@ -762,7 +810,12 @@ class OnlineUsersSidebar(QWidget):
         
         # Update fixed width
         if self.animation:
-            final_width = self.animation.endValue()
+            # All animations in the group end at the same value
+            try:
+                # Read from one of the child animations
+                final_width = self.expanded_width if self.is_expanded else self.collapsed_width
+            except Exception:
+                final_width = self.width()
             self.setFixedWidth(final_width)
             self.setMaximumWidth(final_width)
             self.setMinimumWidth(final_width)
@@ -772,7 +825,20 @@ class OnlineUsersSidebar(QWidget):
                 self.is_expanded = False
                 self.title_label.setVisible(False)
                 self.user_count_label.setVisible(False)
-                self.add_friend_container.setVisible(False)
+                if hasattr(self, 'add_friend_toggle_btn'):
+                    self.add_friend_toggle_btn.setVisible(False)
+                # Ensure the add-friend bar is collapsed when sidebar is collapsed
+                self.add_friend_is_open = False
+                try:
+                    self.add_friend_container.setMaximumHeight(0)
+                except Exception:
+                    pass
+            else:
+                # Now that width is settled, reveal heavier child widgets to reduce repaint churn during resize
+                self.title_label.setVisible(True)
+                self.user_count_label.setVisible(True)
+                if hasattr(self, 'add_friend_toggle_btn'):
+                    self.add_friend_toggle_btn.setVisible(True)
             
             self.update_toggle_button()
             
@@ -784,7 +850,9 @@ class OnlineUsersSidebar(QWidget):
             try:
                 parent_widget = self.parent()
                 if parent_widget is not None:
-                    parent_widget.update()
+                    parent_update = getattr(parent_widget, 'update', None)
+                    if callable(parent_update):
+                        parent_update()
             except Exception as e:
                 logger.error(f"Error updating parent widget: {e}")
         
@@ -1034,9 +1102,15 @@ class OnlineUsersSidebar(QWidget):
             if not user_manager.supabase:
                 logger.error("No Supabase client available for user query")
                 return
-            response = user_manager.supabase.from_("user_profiles").select(
-                "user_id, username, display_name, avatar_url, user_stats(last_active)"
-            ).execute()
+            # Prefer public view when available for avatar_url/display info
+            try:
+                response = user_manager.supabase.from_("public_user_profiles").select(
+                    "user_id, username, display_name, avatar_url, is_online, last_seen"
+                ).limit(500).execute()
+            except Exception:
+                response = user_manager.supabase.from_("user_profiles").select(
+                    "user_id, username, display_name, avatar_url, user_stats(last_active)"
+                ).execute()
             
             # Get real online status for all users
             from trackpro.utils.app_tracker import get_online_users
@@ -1063,12 +1137,13 @@ class OnlineUsersSidebar(QWidget):
                 if user['user_id'] == self.current_user_id:
                     continue
                 
-                # Extract last_active from nested user_stats structure
-                user_stats = user.get('user_stats', {})
-                last_active = user_stats.get('last_active') if user_stats else None
+                # Extract last activity
+                last_active = user.get('last_seen') or (
+                    (user.get('user_stats') or {}).get('last_active') if isinstance(user.get('user_stats'), dict) else None
+                )
                 
                 # Check real online status from database
-                is_online = user['user_id'] in online_user_ids
+                is_online = user.get('is_online') or (user['user_id'] in online_user_ids)
                 
                 user_data = {
                     'user_id': user['user_id'],
@@ -1367,16 +1442,12 @@ class OnlineUsersSidebar(QWidget):
             container_layout.setContentsMargins(0, 0, 0, 0)
             
             if not self.is_expanded:
-                # When collapsed, center the avatar container (which includes the status dot)
-                container_layout.addStretch()
-                container_layout.addWidget(user_widget.avatar_container)
-                container_layout.addStretch()
-                # Hide text elements
-                user_widget.username_label.setVisible(False)
-                user_widget.status_label.setVisible(False)
-                user_widget.online_indicator.setVisible(False)
+                # Collapsed: show compact user item centered
+                user_widget.set_compact_mode(True)
+                container_layout.addWidget(user_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
             else:
-                # When expanded, show full item
+                # Expanded: show full item
+                user_widget.set_compact_mode(False)
                 container_layout.addWidget(user_widget)
             
             self.users_layout.addWidget(container)
@@ -1571,31 +1642,70 @@ class OnlineUsersSidebar(QWidget):
             logger.error(f"❌ Error in online users sidebar force refresh: {e}")
 
     def load_users_from_database(self):
-        """Load users from the database."""
+        """Load users from the database and update the list for both authenticated and anonymous users."""
         try:
             logger.info("🔄 Loading users from database...")
-            
+
+            # Fetch all known users
             from trackpro.social.user_manager import EnhancedUserManager
             user_manager = EnhancedUserManager()
-            
-            # Get all users
-            users = user_manager.get_all_users()
+            users = user_manager.get_all_users() or []
             logger.info(f"✅ Retrieved {len(users)} users from database")
-            
-            # Clear current list
-            self.clear_user_list()
-            logger.info("✅ Cleared current user list")
-            
-            # Add users to the list
-            for user in users:
+
+            # Fallback for anonymous users: use public online view if main list is empty
+            if not users:
                 try:
-                    self.add_user_to_list(user)
-                    logger.info(f"✅ Added user to list: {user.get('display_name', 'Unknown')}")
-                except Exception as add_error:
-                    logger.error(f"❌ Error adding user to list: {add_error}")
-            
+                    public_online = user_manager.get_online_users(limit=200) or []
+                    logger.info(f"🔄 Fallback to public online users: {len(public_online)} found")
+                    users = public_online
+                except Exception as e_pub:
+                    logger.warning(f"⚠️ Public online users fallback failed: {e_pub}")
+
+            # Determine online users from app tracker (works without auth)
+            try:
+                from trackpro.utils.app_tracker import get_online_users
+                online_info = get_online_users() or []
+                online_user_ids = {u.get('user_id') for u in online_info}
+            except Exception as e_online:
+                logger.warning(f"⚠️ Could not fetch online user info: {e_online}")
+                online_user_ids = set()
+
+            # Determine friend relationships if authenticated (optional)
+            friends_ids = set()
+            try:
+                current_user_id = self.get_current_user_id()
+                if current_user_id:
+                    from trackpro.social.friends_manager import FriendsManager
+                    fm = FriendsManager()
+                    flist = fm.get_friends_list(current_user_id, include_online_status=False) or []
+                    friends_ids = {f.get('friend_id') for f in flist}
+            except Exception as e_friends:
+                logger.debug(f"Friends lookup skipped or failed: {e_friends}")
+
+            # Build unified list used by refresh for counts and rendering
+            self.all_users = []
+            for u in users:
+                uid = u.get('user_id') or u.get('id')
+                if not uid:
+                    continue
+                is_online = uid in online_user_ids
+                self.all_users.append({
+                    'user_id': uid,
+                    'username': u.get('username') or u.get('email'),
+                    'display_name': u.get('display_name') or u.get('username') or u.get('email', 'User'),
+                    'avatar_url': u.get('avatar_url'),
+                    'is_friend': uid in friends_ids,
+                    'is_online': is_online,
+                    'status': 'Online' if is_online else 'Offline',
+                })
+
+            # Drive UI update through the centralized refresher
+            self.refresh_users_list()
             logger.info("✅ Users loaded from database successfully")
-            
+
+            # Keep add-friend bar in correct enabled/disabled state
+            self.update_add_friend_ui_state()
+
         except Exception as e:
             logger.error(f"❌ Error loading users from database: {e}")
 

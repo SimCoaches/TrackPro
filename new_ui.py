@@ -59,6 +59,8 @@ import time
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
+import msvcrt
+import tempfile
 
 # CRITICAL: Set Qt attributes BEFORE any QApplication instance can be created AND before importing QtWebEngineWidgets
 # Additional crash prevention attributes
@@ -93,6 +95,24 @@ global_handbrake_hardware = None
 global_handbrake_thread = None
 global_handbrake_stop_event = None
 global_handbrake_data_queue = None
+
+_single_instance_lock_handle = None
+
+def _acquire_single_instance_lock() -> bool:
+    """Prevent multiple app instances by locking a file for the process lifetime."""
+    global _single_instance_lock_handle
+    try:
+        lock_dir = os.path.join(os.path.expanduser("~"), ".trackpro")
+        os.makedirs(lock_dir, exist_ok=True)
+        lock_path = os.path.join(lock_dir, "trackpro_app.lock")
+        _single_instance_lock_handle = open(lock_path, "w")
+        # _LK_NBLCK: non-blocking exclusive lock on Windows
+        msvcrt.locking(_single_instance_lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+        _single_instance_lock_handle.write(str(os.getpid()))
+        _single_instance_lock_handle.flush()
+        return True
+    except Exception:
+        return False
 
 def initialize_global_handbrake_system():
     """Initialize the global handbrake hardware system."""
@@ -722,6 +742,11 @@ def main():
     start_time = time.time()
     logger.info("🚀 Starting Modern TrackPro UI with Authentication and iRacing Telemetry...")
     
+    # Single-instance guard
+    if not _acquire_single_instance_lock():
+        logger.info("⚠️ TrackPro is already running. Exiting this instance.")
+        return 0
+    
     # Create QApplication
     app = QApplication(sys.argv)
     app.setApplicationName("TrackPro by Sim Coaches")
@@ -793,87 +818,82 @@ def main():
     app.aboutToQuit.connect(cleanup_all_global_systems)
     
     try:
-        # Set up OAuth handler first (like run_app.py does) - NON-BLOCKING
+        # Set up OAuth handler (non-blocking)
         splash.showMessage("Setting up authentication system...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
         app.processEvents()
-        
-        # Create OAuth handler without blocking initialization
         from trackpro.auth import oauth_handler
         oauth_handler_instance = oauth_handler.OAuthHandler()
-        
-        # Don't perform any blocking operations during OAuth handler creation
-        # The actual authentication will happen when needed
-        
-        # PERFORMANCE OPTIMIZATION: Initialize hardware systems in parallel with better error handling
-        splash.showMessage("Initializing hardware systems...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
-        app.processEvents()
-        logger.info("🚀 Starting parallel initialization of hardware systems...")
-        
-        import concurrent.futures
-        import threading
-        
-        # Create a thread pool for parallel initialization with reduced workers
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            # Submit hardware initialization tasks (reduced from 3 to 2 workers)
-            pedal_future = executor.submit(initialize_global_pedal_system)
-            handbrake_future = executor.submit(initialize_global_handbrake_system)
-            
-            # Wait for hardware systems to complete (with timeout)
-            try:
-                concurrent.futures.wait([pedal_future, handbrake_future], timeout=20)
-                logger.info("✅ Hardware systems initialized in parallel")
-            except concurrent.futures.TimeoutError:
-                logger.warning("⚠️ Hardware systems took longer than 20 seconds to initialize")
-            
-            # Check for any exceptions
-            for future_name, future in [("pedal", pedal_future), ("handbrake", handbrake_future)]:
-                try:
-                    future.result(timeout=1)  # Quick check for exceptions
-                except Exception as e:
-                    logger.error(f"❌ Error initializing {future_name} system: {e}")
-        
-        # Initialize iRacing connection after hardware systems are ready
-        splash.showMessage("Initializing iRacing connection...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
-        app.processEvents()
-        initialize_global_iracing_connection()
-        
-        logger.info("🏁 All systems initialized successfully")
-        
-        # Import the modern TrackPro app class
+
+        # Create the main application and show window ASAP
         splash.showMessage("Creating main application...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
         app.processEvents()
         from trackpro.modern_main import ModernTrackProApp
-        
-        # Create the modern TrackPro app with authentication and global iRacing access
-        # PERFORMANCE: Authentication check is now non-blocking - UI will appear immediately
         logger.info("🏗️ Creating modern TrackPro application with non-blocking authentication...")
         trackpro_app = ModernTrackProApp(oauth_handler=oauth_handler_instance, start_time=start_time, app=app)
-        
-        # Make the global iRacing API available to the app
-        if hasattr(trackpro_app, 'set_global_iracing_api'):
-            trackpro_app.set_global_iracing_api(get_global_iracing_api())
-        
-        # Make the global pedal system available to the app
-        if hasattr(trackpro_app, 'set_global_pedal_system'):
-            trackpro_app.set_global_pedal_system(get_global_hardware(), get_global_output(), get_global_pedal_data_queue())
-        
-        # Make the global handbrake system available to the app
-        if hasattr(trackpro_app, 'set_global_handbrake_system'):
-            trackpro_app.set_global_handbrake_system(get_global_handbrake_hardware(), get_global_handbrake_data_queue())
-        
-        # Final initialization complete
-        splash.showMessage("Ready to race!", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+
+        # Start background initialization without blocking the UI
+        splash.showMessage("Starting background initialization...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
         app.processEvents()
-        
-        # Close splash screen after a brief moment
+        logger.info("🚀 Starting background initialization of hardware and telemetry...")
+
+        import concurrent.futures
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        futures = {
+            'pedal': executor.submit(initialize_global_pedal_system),
+            'handbrake': executor.submit(initialize_global_handbrake_system),
+            'iracing': executor.submit(initialize_global_iracing_connection),
+        }
+
+        # Periodically attach globals to the app as they become available
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(500, splash.close)
-        
-        # Calculate total startup time
+        def _attach_when_ready():
+            should_reschedule = False
+            try:
+                # Attach pedal system once
+                if not getattr(trackpro_app, "_pedal_attached", False):
+                    if hasattr(trackpro_app, 'set_global_pedal_system') and get_global_hardware() and get_global_output() and get_global_pedal_data_queue():
+                        trackpro_app.set_global_pedal_system(get_global_hardware(), get_global_output(), get_global_pedal_data_queue())
+                        setattr(trackpro_app, "_pedal_attached", True)
+                    else:
+                        should_reschedule = True
+
+                # Attach handbrake system once
+                if not getattr(trackpro_app, "_handbrake_attached", False):
+                    if hasattr(trackpro_app, 'set_global_handbrake_system') and get_global_handbrake_hardware() and get_global_handbrake_data_queue():
+                        trackpro_app.set_global_handbrake_system(get_global_handbrake_hardware(), get_global_handbrake_data_queue())
+                        setattr(trackpro_app, "_handbrake_attached", True)
+                    else:
+                        should_reschedule = True
+
+                # Attach iRacing API once
+                if not getattr(trackpro_app, "_iracing_attached", False):
+                    if hasattr(trackpro_app, 'set_global_iracing_api') and get_global_iracing_api():
+                        trackpro_app.set_global_iracing_api(get_global_iracing_api())
+                        setattr(trackpro_app, "_iracing_attached", True)
+                    else:
+                        should_reschedule = True
+            except Exception:
+                # In case of transient errors, try again shortly
+                should_reschedule = True
+            finally:
+                # Only keep checking while not all systems are attached
+                if should_reschedule:
+                    QTimer.singleShot(500, _attach_when_ready)
+
+        QTimer.singleShot(500, _attach_when_ready)
+
+        # Keep executor alive for the duration of startup
+        try:
+            setattr(trackpro_app, "_background_init_executor", executor)
+        except Exception:
+            pass
+
+        # Close splash quickly; window is shown by app.run()
+        QTimer.singleShot(300, splash.close)
+
         total_startup_time = time.time() - start_time
-        logger.info(f"✅ Modern TrackPro UI launched successfully in {total_startup_time:.2f} seconds!")
-        
-        # Run the application
+        logger.info(f"✅ Modern TrackPro UI initial window ready in {total_startup_time:.2f} seconds (background init continues)")
+
         return trackpro_app.run()
         
     except ImportError as e:

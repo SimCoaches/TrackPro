@@ -539,6 +539,57 @@ def get_user_race_pass_progress() -> Tuple[Optional[Dict[str, Any]], str]:
         logger.error(f"Failed to retrieve race pass progress: {e}")
         return None, f"Failed to retrieve race pass progress: {e}"
 
+def claim_race_pass_reward(reward_id: str) -> Tuple[bool, str]:
+    """Claim a race pass reward via RPC. Returns success and message."""
+    if not supabase.is_authenticated():
+        return False, "Not logged in. Please log in to claim rewards"
+    try:
+        result = supabase.client.rpc('claim_race_pass_reward', { 'p_reward_id': reward_id }).execute()
+        if result.data and isinstance(result.data, list) and len(result.data) > 0:
+            row = result.data[0]
+            return bool(row.get('success', False)), row.get('message', '')
+        return False, "Unexpected response"
+    except Exception as e:
+        logger.error(f"Failed to claim race pass reward: {e}")
+        return False, f"Failed to claim reward: {e}"
+
+def get_trackcoins_balance() -> Tuple[Optional[int], str]:
+    """Return the current user's TrackCoins balance."""
+    if not supabase.is_authenticated():
+        return None, "Not logged in"
+    try:
+        profile, _ = get_user_profile()
+        if profile is None:
+            return None, "Profile not found"
+        return int(profile.get('trackcoins_balance', 0)), "OK"
+    except Exception as e:
+        logger.error(f"Failed to fetch TrackCoins balance: {e}")
+        return None, f"{e}"
+
+def spend_trackcoins(amount: int, reason: str = 'purchase', metadata: Dict[str, Any] | None = None) -> Tuple[bool, str]:
+    """Spend TrackCoins via RPC."""
+    if not supabase.is_authenticated():
+        return False, "Not logged in"
+    try:
+        user = supabase.get_user()
+        user_id = getattr(user, 'id', None) or (getattr(user, 'user', None).id if getattr(user, 'user', None) else None)
+        if not user_id:
+            return False, "User ID not found"
+        meta = metadata or {}
+        res = supabase.client.rpc('spend_trackcoins', {
+            'p_user_id': user_id,
+            'p_amount': amount,
+            'p_reason': reason,
+            'p_meta': json.dumps(meta)
+        }).execute()
+        if res.data and isinstance(res.data, list) and len(res.data) > 0:
+            row = res.data[0]
+            return bool(row.get('success', False)), row.get('message', '')
+        return False, "Unexpected response"
+    except Exception as e:
+        logger.error(f"Failed to spend TrackCoins: {e}")
+        return False, f"{e}"
+
 def activate_race_pass_season(season_id: str) -> Tuple[bool, str]:
     """
     Activate a Race Pass season for the current user.

@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap
 from ...modern.shared.base_page import BasePage
+from ...shared_imports import RacePassViewWidget, GAMIFICATION_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,24 @@ class RacePassPage(BasePage):
         super().__init__("Race Pass", global_managers)
         
     def init_page(self):
-        """Initialize the Race Pass Coming Soon page layout."""
+        """Initialize the Race Pass page layout."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(30)
-        
-        # Create the coming soon content
-        self.create_coming_soon_content(layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        if GAMIFICATION_AVAILABLE:
+            try:
+                self._race_pass_view = RacePassViewWidget()
+                layout.addWidget(self._race_pass_view)
+                return
+            except Exception:
+                pass
+
+        fallback_layout = QVBoxLayout()
+        fallback_layout.setContentsMargins(40, 40, 40, 40)
+        fallback_layout.setSpacing(30)
+        self.create_coming_soon_content(fallback_layout)
+        layout.addLayout(fallback_layout)
         
     def create_coming_soon_content(self, layout):
         """Create the coming soon UI content."""
@@ -136,14 +148,14 @@ class RacePassPage(BasePage):
                 border-radius: 7px;
             }
         """)
-        progress_fill.setFixedWidth(200)  # Simulate 60% progress
+        progress_fill.setFixedWidth(100)
         progress_bar_layout.addWidget(progress_fill)
         progress_bar_layout.addStretch()
         
         progress_layout.addWidget(progress_bar_frame)
         
         # Progress text
-        progress_text = QLabel("60% Complete")
+        progress_text = QLabel("30% Complete")
         progress_text.setStyleSheet("""
             color: #00d4ff;
             font-size: 14px;

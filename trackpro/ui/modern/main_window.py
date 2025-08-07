@@ -598,65 +598,19 @@ class ModernMainWindow(QMainWindow):
         
         logger.info("✅ Home page integrated into modern UI")
         
-        # PRE-LOAD COMMONLY USED PAGES: Create pages that users access frequently
-        # This eliminates the lag when switching between pages for the first time
-        logger.info("🚀 PRE-LOADING: Creating commonly used pages for instant access...")
-        
-        # Pre-load Community page (very commonly used)
-        try:
-            # Check if community page already exists to prevent multiple instances
-            if "community" not in self.pages:
-                logger.info("🏗️ Creating Community page for pre-loading...")
-                self.pages["community"] = CommunityPage(self.global_managers)
-                self.content_stack.addWidget(self.pages["community"])
-                logger.info("✅ Community page pre-loaded")
-            else:
-                logger.warning("⚠️ Community page already exists, skipping pre-loading")
-        except Exception as e:
-            logger.error(f"Failed to pre-load community page: {e}")
-            self.pages["community"] = self.create_placeholder_page("community")
-            self.content_stack.addWidget(self.pages["community"])
-        
-        # Pre-load Race Coach page (commonly used)
-        try:
-            from ..pages.race_coach import CoachPage
-            self.pages["race_coach"] = CoachPage(self.global_managers)
-            self.content_stack.addWidget(self.pages["race_coach"])
-            logger.info("✅ Race Coach page pre-loaded")
-        except Exception as e:
-            logger.error(f"Failed to pre-load race coach page: {e}")
-            self.pages["race_coach"] = self.create_placeholder_page("race_coach")
-            self.content_stack.addWidget(self.pages["race_coach"])
-        
-        # Pre-load Pedals page (commonly used)
-        try:
-            from ..pages.pedals import PedalsPage
-            self.pages["pedals"] = PedalsPage(self.global_managers)
-            self.content_stack.addWidget(self.pages["pedals"])
-            
-            # Connect pedal calibration signal
-            if hasattr(self.pages["pedals"], 'pedal_calibrated'):
-                self.pages["pedals"].pedal_calibrated.connect(
-                    lambda pedal, data: self.calibration_updated.emit(pedal)
-                )
-            logger.info("✅ Pedals page pre-loaded")
-        except Exception as e:
-            logger.error(f"Failed to pre-load pedals page: {e}")
-            self.pages["pedals"] = self.create_placeholder_page("pedals")
-            self.content_stack.addWidget(self.pages["pedals"])
-        
-        # LAZY LOADING: Only lazy-load less frequently used pages
-        # This keeps startup fast while eliminating lag for common pages
+        # LAZY LOADING: Do not pre-load heavy pages on startup. Create on demand.
         self._lazy_pages = {
-            "overlays": {"class": None, "created": False},  # Dynamic import
-            "race_pass": {"class": None, "created": False},  # Dynamic import
-            "handbrake": {"class": None, "created": False},  # Special handling needed
-            "support": {"class": None, "created": False},  # Special handling needed
-            "account": {"class": None, "created": False}
-            # Note: community page is pre-loaded, not lazy-loaded
+            "community": {"class": None, "created": False},  # Dynamic import
+            "race_coach": {"class": None, "created": False},  # Dynamic import
+            "pedals": {"class": None, "created": False},      # Dynamic import
+            "overlays": {"class": None, "created": False},
+            "race_pass": {"class": None, "created": False},
+            "handbrake": {"class": None, "created": False},
+            "support": {"class": None, "created": False},
+            "account": {"class": None, "created": False},
         }
         
-        logger.info("🚀 PERFORMANCE: Common pages pre-loaded, less-used pages will be lazy-loaded")
+        logger.info("🚀 PERFORMANCE: Startup minimized. Pages will be created on first use (lazy-loaded)")
     
     def create_placeholder_page(self, page_name: str):
         from PyQt6.QtWidgets import QLabel
@@ -769,34 +723,34 @@ class ModernMainWindow(QMainWindow):
             logger.info(f"🏗️ LAZY LOADING: Creating {page_name} page...")
             
             if page_config.get("placeholder", False):
-                # Create placeholder pages
                 page_widget = self.create_placeholder_page(page_name)
+            elif page_name == "community":
+                from ..pages.community import CommunityPage
+                page_widget = CommunityPage(self.global_managers)
             elif page_name == "pedals":
-                # Dynamic import for pedals page
                 from ..pages.pedals import PedalsPage
                 page_widget = PedalsPage(self.global_managers)
             elif page_name == "race_coach":
-                # Dynamic import for race coach page
-                from ..pages.race_coach import CoachPage
-                page_widget = CoachPage(self.global_managers)
+                from ..pages.race_coach.coming_soon_page import RaceCoachComingSoonPage
+                page_widget = RaceCoachComingSoonPage(self.global_managers)
             elif page_name == "overlays":
-                # Dynamic import for overlays page
                 from ..pages.overlays import OverlaysPage
                 page_widget = OverlaysPage(self.global_managers)
             elif page_name == "race_pass":
-                # Dynamic import for race pass page
                 from ..pages.race_pass import RacePassPage
                 page_widget = RacePassPage(self.global_managers)
             elif page_name == "handbrake":
-                # Special handling for handbrake page
                 from ..pages.handbrake import HandbrakePage
                 page_widget = HandbrakePage(self.global_managers)
             elif page_name == "support":
-                # Special handling for support page
                 from ..pages.support import SupportPage
                 page_widget = SupportPage(self.global_managers)
+                # Keep support chat synced with auth changes for live updates
+                try:
+                    self.auth_state_changed.connect(page_widget.on_auth_state_changed)
+                except Exception:
+                    pass
             elif page_name == "account":
-                # Special handling for account page
                 page_widget = self.create_account_page()
                 
                 # Connect avatar upload signal to sidebar refresh
@@ -1558,16 +1512,12 @@ class ModernMainWindow(QMainWindow):
         except Exception as page_schedule_error:
             logger.error(f"❌ Error scheduling page updates: {page_schedule_error}")
         
-        # TEMPORARILY DISABLE SIDEBAR REFRESH TO ISOLATE CRASH CAUSE
-        # This is often the most problematic operation that causes silent crashes
+        # Schedule sidebar refresh (deferred)
         try:
-            logger.info("🔄 TEMPORARILY SKIPPING sidebar refresh to isolate crash...")
-            # TODO: Re-enable once crash is resolved
-            # from PyQt6.QtCore import QTimer
-            # QTimer.singleShot(1000, lambda: self._deferred_sidebar_refresh())
-            logger.info("✅ Sidebar refresh SKIPPED (temporary)")
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(1000, lambda: self._deferred_sidebar_refresh())
         except Exception as sidebar_schedule_error:
-            logger.error(f"❌ Error with sidebar refresh logic: {sidebar_schedule_error}")
+            logger.error(f"❌ Error with sidebar refresh scheduling: {sidebar_schedule_error}")
         
         # Mark as completed
         try:
@@ -1955,11 +1905,6 @@ class ModernMainWindow(QMainWindow):
         try:
             logger.info("🔄 Executing deferred page auth state updates...")
             for page_name, page in self.pages.items():
-                # TEMPORARILY SKIP COMMUNITY PAGE TO PREVENT CRASHES
-                if page_name == "community":
-                    logger.warning(f"⚠️ TEMPORARILY SKIPPING {page_name} page updates to prevent crashes")
-                    continue
-                    
                 if hasattr(page, 'on_auth_state_changed'):
                     try:
                         logger.info(f"🔄 Updating page: {page_name}")

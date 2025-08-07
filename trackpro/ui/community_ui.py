@@ -9,9 +9,9 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QCheckBox, QGroupBox, QFormLayout, QScrollArea,
     QFrame, QSizePolicy, QMessageBox, QDialog, QTabWidget, QListWidget,
     QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QSpacerItem,
-    QGridLayout
+    QGridLayout, QDateTimeEdit, QSpinBox, QApplication
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QDateTime
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QPalette, QColor
 from datetime import datetime, timedelta
 import json
@@ -547,22 +547,36 @@ class EventCard(QWidget):
             if isinstance(start_time, str):
                 start_time = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
             time_str = start_time.strftime("%B %d, %Y at %I:%M %p")
-            time_label = QLabel(f"📅 {time_str}")
+            # Timezone (from entry_requirements if available)
+            timezone_str = None
+            try:
+                timezone_str = (self.event_data.get('entry_requirements') or {}).get('timezone')
+            except Exception:
+                timezone_str = None
+            tz_suffix = f" ({timezone_str})" if timezone_str else ""
+            time_label = QLabel(f"📅 {time_str}{tz_suffix}")
             time_label.setFont(QFont(*CommunityTheme.FONTS['caption']))
             time_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']};")
             details_layout.addWidget(time_label)
         
-        # Track and car info
+        # Track and car info (prefer names from entry_requirements)
+        entry = self.event_data.get('entry_requirements') or {}
+        track_display = entry.get('track')
+        cars_display = entry.get('cars')
         track_id = self.event_data.get('track_id')
         car_id = self.event_data.get('car_id')
-        if track_id or car_id:
-            track_car_text = []
-            if track_id:
-                track_car_text.append(f"Track: {track_id}")
-            if car_id:
-                track_car_text.append(f"Car: {car_id}")
-            
-            track_car_label = QLabel(f"🏎️ {' • '.join(track_car_text)}")
+        parts = []
+        if track_display:
+            parts.append(f"Track: {track_display}")
+        elif track_id:
+            parts.append(f"Track ID: {track_id}")
+        if cars_display:
+            cars_joined = ", ".join(cars_display) if isinstance(cars_display, list) else str(cars_display)
+            parts.append(f"Car/s: {cars_joined}")
+        elif car_id:
+            parts.append(f"Car ID: {car_id}")
+        if parts:
+            track_car_label = QLabel(f"🏎️ {' • '.join(parts)}")
             track_car_label.setFont(QFont(*CommunityTheme.FONTS['caption']))
             track_car_label.setStyleSheet(f"color: {CommunityTheme.COLORS['text_secondary']};")
             details_layout.addWidget(track_car_label)
@@ -1153,16 +1167,26 @@ class EventsWidget(QWidget):
     def load_events(self):
         """Load events from the community manager"""
         try:
-            # Get all events
-            all_events_result = self.community_manager.get_events()
-            if all_events_result['success']:
-                self.events = all_events_result['events']
-                self.display_events()
+            result = None
+            if hasattr(self, 'community_manager') and self.community_manager and hasattr(self.community_manager, 'get_events'):
+                result = self.community_manager.get_events()
+
+            if result and result.get('success'):
+                self.events = result.get('events', [])
             else:
-                self.show_error("Failed to load events")
-                
+                # Graceful fallback when events are unavailable (e.g., table missing)
+                self.events = []
+
+            self.display_events()
         except Exception as e:
-            self.show_error(f"Error loading events: {str(e)}")
+            # Do not raise a blocking modal on startup; show a soft empty state instead
+            try:
+                import logging
+                logging.getLogger(__name__).debug(f"Events load fallback due to error: {e}")
+            except Exception:
+                pass
+            self.events = []
+            self.display_events()
             
     def display_events(self):
         """Display events in the appropriate tabs"""
@@ -1174,28 +1198,42 @@ class EventsWidget(QWidget):
         all_events = []
         
         for event in self.events:
-            event_card = EventCard(event, self.user_id)
-            event_card.event_clicked.connect(self.show_event_details)
-            event_card.register_requested.connect(self.register_for_event)
-            event_card.unregister_requested.connect(self.unregister_from_event)
-            
-            all_events.append(event_card)
-            
-            # Check if user is registered or created the event
-            if (event_card.is_registered or 
-                event.get('created_by') == self.user_id):
-                my_event_card = EventCard(event, self.user_id)
-                my_event_card.event_clicked.connect(self.show_event_details)
-                my_event_card.register_requested.connect(self.register_for_event)
-                my_event_card.unregister_requested.connect(self.unregister_from_event)
-                my_events.append(my_event_card)
+            try:
+                event_card = EventCard(event, self.user_id)
+                event_card.event_clicked.connect(self.show_event_details)
+                event_card.register_requested.connect(self.register_for_event)
+                event_card.unregister_requested.connect(self.unregister_from_event)
+                all_events.append(event_card)
+                # Check if user is registered or created the event
+                if (getattr(event_card, 'is_registered', False) or 
+                    event.get('created_by') == self.user_id):
+                    my_event_card = EventCard(event, self.user_id)
+                    my_event_card.event_clicked.connect(self.show_event_details)
+                    my_event_card.register_requested.connect(self.register_for_event)
+                    my_event_card.unregister_requested.connect(self.unregister_from_event)
+                    my_events.append(my_event_card)
+            except Exception:
+                continue
         
         # Add cards to layouts
-        for card in all_events:
-            self.all_events_layout.addWidget(card)
+        if all_events:
+            for card in all_events:
+                self.all_events_layout.addWidget(card)
+        else:
+            # Friendly empty state
+            from PyQt6.QtWidgets import QLabel
+            empty = QLabel("No upcoming events yet. Check back soon!")
+            empty.setStyleSheet("color: #cccccc;")
+            self.all_events_layout.addWidget(empty)
             
-        for card in my_events:
-            self.my_events_layout.addWidget(card)
+        if my_events:
+            for card in my_events:
+                self.my_events_layout.addWidget(card)
+        else:
+            from PyQt6.QtWidgets import QLabel
+            empty_me = QLabel("You’re not registered for any events.")
+            empty_me.setStyleSheet("color: #cccccc;")
+            self.my_events_layout.addWidget(empty_me)
             
         # Add stretch to push cards to top
         self.all_events_layout.addStretch()
@@ -1542,95 +1580,123 @@ class CreateEventDialog(QDialog):
         
     def setup_ui(self):
         """Setup the create event dialog UI"""
-        layout = QVBoxLayout(self)
-        
+        outer = QVBoxLayout(self)
+        form = QFormLayout()
+
         # Event title
-        layout.addWidget(QLabel("Event Title:"))
         self.title_input = QLineEdit()
         self.title_input.setPlaceholderText("Enter event title...")
-        layout.addWidget(self.title_input)
-        
+        form.addRow(QLabel("Event Title"), self.title_input)
+
+        # Hosted session name
+        self.hosted_session_input = QLineEdit()
+        self.hosted_session_input.setPlaceholderText("Enter hosted session name...")
+        form.addRow(QLabel("Hosted Session Name"), self.hosted_session_input)
+
+        # Password
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Optional password for the session")
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow(QLabel("Password"), self.password_input)
+
         # Event type
-        layout.addWidget(QLabel("Event Type:"))
         self.type_combo = QComboBox()
         self.type_combo.addItems(['time_trial', 'race', 'championship', 'practice', 'endurance'])
-        layout.addWidget(self.type_combo)
-        
-        # Description
-        layout.addWidget(QLabel("Description:"))
-        self.description_input = QTextEdit()
-        self.description_input.setPlaceholderText("Describe the event...")
-        self.description_input.setMaximumHeight(80)
-        layout.addWidget(self.description_input)
-        
-        # Start time
-        layout.addWidget(QLabel("Start Time:"))
+        form.addRow(QLabel("Event Type"), self.type_combo)
+
+        # Date & Time + Timezone
         self.start_time_input = QDateTimeEdit()
         self.start_time_input.setDateTime(QDateTime.currentDateTime().addDays(1))
         self.start_time_input.setCalendarPopup(True)
-        layout.addWidget(self.start_time_input)
-        
-        # End time
-        layout.addWidget(QLabel("End Time:"))
+        form.addRow(QLabel("Start Date & Time"), self.start_time_input)
+
         self.end_time_input = QDateTimeEdit()
         self.end_time_input.setDateTime(QDateTime.currentDateTime().addDays(1).addSecs(3600))
         self.end_time_input.setCalendarPopup(True)
-        layout.addWidget(self.end_time_input)
-        
-        # Track ID (simplified)
-        layout.addWidget(QLabel("Track ID (optional):"))
-        self.track_input = QLineEdit()
-        self.track_input.setPlaceholderText("Enter track ID...")
-        layout.addWidget(self.track_input)
-        
-        # Car ID (simplified)
-        layout.addWidget(QLabel("Car ID (optional):"))
-        self.car_input = QLineEdit()
-        self.car_input.setPlaceholderText("Enter car ID...")
-        layout.addWidget(self.car_input)
-        
+        form.addRow(QLabel("End Date & Time"), self.end_time_input)
+
+        self.timezone_combo = QComboBox()
+        # Provide a concise set of common timezones
+        common_tzs = [
+            "UTC", "US/Eastern", "US/Central", "US/Mountain", "US/Pacific",
+            "Europe/London", "Europe/Berlin", "Europe/Paris"
+        ]
+        for tz in common_tzs:
+            self.timezone_combo.addItem(tz)
+        self.timezone_combo.setCurrentText("UTC")
+        form.addRow(QLabel("Time Zone"), self.timezone_combo)
+
+        # Track and Cars (free text; IDs optional)
+        self.track_name_input = QLineEdit()
+        self.track_name_input.setPlaceholderText("Track name or ID (optional)")
+        form.addRow(QLabel("Track"), self.track_name_input)
+
+        self.car_names_input = QLineEdit()
+        self.car_names_input.setPlaceholderText("Car(s) e.g. GT3, Porsche 911 (comma separated)")
+        form.addRow(QLabel("Car/s"), self.car_names_input)
+
+        # Description
+        self.description_input = QTextEdit()
+        self.description_input.setPlaceholderText("Describe the event...")
+        self.description_input.setMaximumHeight(100)
+        form.addRow(QLabel("Description"), self.description_input)
+
         # Max participants
-        layout.addWidget(QLabel("Maximum Participants (optional):"))
         self.max_participants_input = QSpinBox()
         self.max_participants_input.setRange(0, 1000)
         self.max_participants_input.setValue(0)  # 0 means unlimited
         self.max_participants_input.setSpecialValueText("Unlimited")
-        layout.addWidget(self.max_participants_input)
-        
+        form.addRow(QLabel("Maximum Participants"), self.max_participants_input)
+
+        outer.addLayout(form)
+
         # Buttons
         button_layout = QHBoxLayout()
-        
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
-        
         create_button = QPushButton("Create Event")
         create_button.clicked.connect(self.accept)
-        
+        button_layout.addStretch()
         button_layout.addWidget(cancel_button)
         button_layout.addWidget(create_button)
-        
-        layout.addLayout(button_layout)
+        outer.addLayout(button_layout)
         
     def get_event_data(self) -> Dict[str, Any]:
         """Get the event data from the form"""
-        data = {
-            'title': self.title_input.text(),
-            'description': self.description_input.toPlainText(),
+        data: Dict[str, Any] = {
+            'title': self.title_input.text().strip(),
+            'description': self.description_input.toPlainText().strip(),
             'event_type': self.type_combo.currentText(),
             'start_time': self.start_time_input.dateTime().toPyDateTime(),
-            'end_time': self.end_time_input.dateTime().toPyDateTime()
+            'end_time': self.end_time_input.dateTime().toPyDateTime(),
         }
-        
-        # Optional fields
-        if self.track_input.text():
-            data['track_id'] = int(self.track_input.text()) if self.track_input.text().isdigit() else None
-            
-        if self.car_input.text():
-            data['car_id'] = int(self.car_input.text()) if self.car_input.text().isdigit() else None
-            
+
+        # Optional numeric IDs from free-text if user typed a number
+        track_text = self.track_name_input.text().strip()
+        if track_text:
+            if track_text.isdigit():
+                data['track_id'] = int(track_text)
+            # Always keep human-readable track as well
+        car_text = self.car_names_input.text().strip()
+        if car_text and car_text.isdigit():
+            data['car_id'] = int(car_text)
+
         if self.max_participants_input.value() > 0:
             data['max_participants'] = self.max_participants_input.value()
-            
+
+        # Store advanced fields in entry_requirements to avoid schema changes
+        entry: Dict[str, Any] = {
+            'hosted_session_name': self.hosted_session_input.text().strip() or None,
+            'password': self.password_input.text() or None,
+            'timezone': self.timezone_combo.currentText(),
+            'cars': [s.strip() for s in car_text.split(',')] if car_text else [],
+            'track': track_text or None,
+        }
+        # Remove None values
+        entry = {k: v for k, v in entry.items() if v not in (None, [])}
+        if entry:
+            data['entry_requirements'] = entry
+
         return data
 
 # Placeholder detail dialogs

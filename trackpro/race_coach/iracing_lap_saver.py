@@ -578,6 +578,11 @@ class IRacingLapSaver:
                     logger.warning(f"✅ IMMEDIATE SAVE SUCCESS (RESET): Lap {lap_number} saved to Supabase")
                 else:
                     logger.info(f"✅ IMMEDIATE SAVE SUCCESS: Lap {lap_number} saved to Supabase")
+                # Trigger gamification updates in background (non-blocking)
+                try:
+                    threading.Thread(target=self._handle_post_lap_gamification, args=(lap_data,), daemon=True).start()
+                except Exception as _e:
+                    logger.debug(f"Gamification post-lap hook failed to start: {_e}")
             else:
                 logger.error(f"❌ IMMEDIATE SAVE FAILED: Lap {lap_number} could not be saved")
                 

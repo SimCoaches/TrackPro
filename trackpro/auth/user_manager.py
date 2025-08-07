@@ -55,6 +55,14 @@ def get_current_user():
                         is_dev=False,  # Default during startup
                         is_moderator=False  # Default during startup
                     )
+                    # Hardcode top-level privileges for Lawrence regardless of DB state
+                    try:
+                        if (_current_user.email or '').lower() == 'lawrence@simcoaches.com':
+                            _current_user.hierarchy_level = 'TEAM'
+                            _current_user.is_dev = True
+                            _current_user.is_moderator = True
+                    except Exception:
+                        pass
                     logger.info(f"Found authenticated user from Supabase: {_current_user.email} (using default hierarchy during startup)")
                     
                     # TEMPORARILY DISABLE HIERARCHY CHECK TO PREVENT CRASHES

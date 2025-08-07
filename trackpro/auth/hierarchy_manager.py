@@ -313,6 +313,16 @@ class HierarchyManager:
         Returns:
             User's hierarchy level (defaults to PADDOCK)
         """
+        # Prefer hardcoded admin fast-path when available (UI context)
+        try:
+            from .user_manager import get_current_user
+            current_user = get_current_user()
+            if current_user and current_user.id == user_id:
+                if (current_user.email or "") and self.is_admin(current_user.email):
+                    return HierarchyLevel.TEAM
+        except Exception:
+            pass
+
         hierarchy = self.get_user_hierarchy(user_id)
         return hierarchy.hierarchy_level if hierarchy else HierarchyLevel.PADDOCK
     
@@ -326,7 +336,16 @@ class HierarchyManager:
         Returns:
             True if modification is allowed, False otherwise
         """
-        # Dev users can modify anyone
+        # Dev users can modify anyone. Include hardcoded admin fast-path.
+        try:
+            from .user_manager import get_current_user
+            current_user = get_current_user()
+            if current_user and current_user.id == modifier_id:
+                if (current_user.email or "") and self.is_admin(current_user.email):
+                    return True
+        except Exception:
+            pass
+
         if self.is_user_dev(modifier_id):
             return True
         

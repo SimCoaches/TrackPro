@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor, QBrush
+from ..ui.avatar_manager import AvatarManager
 
 logger = logging.getLogger(__name__)
 
@@ -21,114 +22,28 @@ class PrivateMessageWidget(QWidget):
         self.setup_ui()
     
     def create_avatar(self, user_name, user_data=None):
-        """Create a circular avatar with user profile picture or initials."""
+        """Return a cached avatar pixmap and schedule async update via manager."""
         size = 32
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        # Check if user has an avatar URL
-        avatar_url = None
-        if user_data:
-            avatar_url = user_data.get('avatar_url')
-        
-        # Load avatar from URL if available
-        if avatar_url:
-            return self.load_avatar_from_url(avatar_url, size)
-        
-        # Fallback to initials
-        # Generate initials from the name
-        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
-        
-        # Create pixmap for avatar
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Draw circle background using TrackPro colors
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
-        color_index = hash(user_name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, size, size)
-        
-        # Draw initials
-        painter.setPen(QColor('#ffffff'))
-        font = painter.font()
-        font.setPixelSize(12)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
-        
-        painter.end()
-        return pixmap
+        url = user_data.get('avatar_url') if user_data else None
+        pix = AvatarManager.instance().get_cached_pixmap(url or "", user_name, size=size)
+        # If label exists, schedule async update
+        try:
+            if hasattr(self, 'avatar_label') and self.avatar_label is not None:
+                AvatarManager.instance().set_label_avatar(self.avatar_label, url, user_name, size=size)
+        except Exception:
+            pass
+        return pix
     
     def load_avatar_from_url(self, url: str, size: int = 32) -> QPixmap:
-        """Load and display avatar from URL."""
+        """Deprecated: use AvatarManager via create_avatar/set_label_avatar instead."""
+        # Keep compatibility: return cached and schedule update if label is available
+        pix = AvatarManager.instance().get_cached_pixmap(url or "", "U", size=size)
         try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Scale to fit avatar size
-                            scaled_pixmap = pixmap.scaled(
-                                size, size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(size, size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, size, size)
-                            painter.end()
-                            
-                            # Update avatar display if this widget is still valid
-                            if hasattr(self, 'avatar_label') and self.avatar_label:
-                                self.avatar_label.setPixmap(circular_pixmap)
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Error processing downloaded avatar: {e}")
-                    # Fallback to initials
-                    fallback_pixmap = self.create_fallback_avatar(size, user_name)
-                    if hasattr(self, 'avatar_label') and self.avatar_label:
-                        self.avatar_label.setPixmap(fallback_pixmap)
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-            # Return a placeholder pixmap while loading
-            placeholder = QPixmap(size, size)
-            placeholder.fill(Qt.GlobalColor.transparent)
-            return placeholder
-            
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error loading avatar from URL: {e}")
-            # Fallback to initials
-            return self.create_fallback_avatar(size, user_name)
+            if hasattr(self, 'avatar_label') and self.avatar_label is not None:
+                AvatarManager.instance().set_label_avatar(self.avatar_label, url, "User", size=size)
+        except Exception:
+            pass
+        return pix
     
     def create_fallback_avatar(self, size: int = 32, user_name: str = 'U') -> QPixmap:
         """Create a fallback avatar with initials when image loading fails."""

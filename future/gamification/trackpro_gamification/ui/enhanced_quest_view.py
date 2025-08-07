@@ -9,7 +9,7 @@ import logging
 
 # Import the quest card widget and Supabase functions
 from .quest_card_widget import QuestCardWidget
-from .notifications import LevelUpNotification, XPGainNotification
+from .notifications import LevelUpNotification, XPGainNotification, show_level_up_notification
 from trackpro.gamification.supabase_gamification import (
     get_user_quests, claim_quest_reward, assign_daily_quests, 
     assign_weekly_quests, get_user_profile
@@ -667,10 +667,17 @@ class EnhancedQuestViewWidget(QWidget):
             
     def _show_level_up_notification(self, notification_data):
         """Show level up notification"""
+        try:
+            # Play sound and small toast using the shared notification manager (no specific parent for global overlay)
+            show_level_up_notification(None, notification_data.get("new_level", 1))
+        except Exception:
+            pass
+
+        # Show the epic overlay on top of all windows
         level_up_notification = LevelUpNotification(
-            self,
-            notification_data["old_level"],
-            notification_data["new_level"]
+            None,
+            notification_data.get("old_level", 1),
+            notification_data.get("new_level", 1)
         )
         level_up_notification.show_notification()
         

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QFont, QPen
+from .avatar_manager import AvatarManager
 
 logger = logging.getLogger(__name__)
 
@@ -525,192 +526,32 @@ class UserProfilePopup(QDialog):
                     self.private_message_btn.setEnabled(True)
     
     def create_avatar(self, size: int = 64) -> QPixmap:
-        """Create a circular avatar with user initials or load from URL."""
-        # Check if user has an avatar URL
-        avatar_url = self.user_data.get('avatar_url')
-        if avatar_url:
-            # Load avatar from URL
-            return self.load_avatar_from_url(avatar_url, size)
-        
-        # Fallback to initials if no avatar URL
-        # Use real name for current user, fallback to display name or username
-        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
-        
-        # For current user, try to use first and last name if available
-        if self.user_data.get('user_id') == self.current_user_id:
-            first_name = self.user_data.get('first_name', '')
-            last_name = self.user_data.get('last_name', '')
-            if first_name or last_name:
-                name = f"{first_name} {last_name}".strip()
-        
-        # Generate initials from the name
-        initials = self._generate_initials(name)
-        
-        # Create pixmap for avatar
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Draw circle background using TrackPro colors
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
-        color_index = hash(name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, size, size)
-        
-        # Draw initials
-        painter.setPen(QColor('#ffffff'))
-        font = painter.font()
-        font.setPixelSize(size // 3)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
-        
-        # Draw online status indicator
-        is_online = self.user_data.get('is_online', False)
-        if is_online:
-            status_size = size // 5
-            status_x = size - status_size - 2
-            status_y = size - status_size - 2
-            
-            painter.setBrush(QBrush(QColor('#3ba55c')))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(status_x, status_y, status_size, status_size)
-        
-        painter.end()
-        return pixmap
+        """Create or load an avatar using the centralized manager."""
+        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'User')
+        url = self.user_data.get('avatar_url')
+        # Use cached pixmap synchronously to return an immediate image
+        pix = AvatarManager.instance().get_cached_pixmap(url, name, size=size) if url else AvatarManager.instance().get_cached_pixmap("", name, size=size)
+        # Also kick off async refresh in case cache is stale
+        try:
+            AvatarManager.instance().set_label_avatar(self.avatar_label, url, name, size=size)
+        except Exception:
+            pass
+        return pix
     
     def load_avatar_from_url(self, url: str, size: int = 64) -> QPixmap:
-        """Load and display avatar from URL."""
+        """Deprecated: use AvatarManager via create_avatar/set_label_avatar instead."""
+        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'User')
+        pix = AvatarManager.instance().get_cached_pixmap(url, name, size=size)
         try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Scale to fit avatar size
-                            scaled_pixmap = pixmap.scaled(
-                                size, size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(size, size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, size, size)
-                            
-                            # Draw online status indicator if needed
-                            is_online = self.user_data.get('is_online', False)
-                            if is_online:
-                                status_size = size // 5
-                                status_x = size - status_size - 2
-                                status_y = size - status_size - 2
-                                
-                                painter.setBrush(QBrush(QColor('#3ba55c')))
-                                painter.setPen(Qt.PenStyle.NoPen)
-                                painter.drawEllipse(status_x, status_y, status_size, status_size)
-                            
-                            painter.end()
-                            
-                            # Update avatar display
-                            self.avatar_label.setPixmap(circular_pixmap)
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Error processing downloaded avatar: {e}")
-                    # Fallback to initials
-                    fallback_pixmap = self.create_fallback_avatar(size)
-                    self.avatar_label.setPixmap(fallback_pixmap)
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-            # Return a placeholder pixmap while loading
-            placeholder = QPixmap(size, size)
-            placeholder.fill(Qt.GlobalColor.transparent)
-            return placeholder
-            
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error loading avatar from URL: {e}")
-            # Fallback to initials
-            return self.create_fallback_avatar(size)
+            AvatarManager.instance().set_label_avatar(self.avatar_label, url, name, size=size)
+        except Exception:
+            pass
+        return pix
     
     def create_fallback_avatar(self, size: int = 64) -> QPixmap:
-        """Create a fallback avatar with initials when image loading fails."""
-        # Use real name for current user, fallback to display name or username
-        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
-        
-        # For current user, try to use first and last name if available
-        if self.user_data.get('user_id') == self.current_user_id:
-            first_name = self.user_data.get('first_name', '')
-            last_name = self.user_data.get('last_name', '')
-            if first_name or last_name:
-                name = f"{first_name} {last_name}".strip()
-        
-        # Generate initials from the name
-        initials = self._generate_initials(name)
-        
-        # Create pixmap for avatar
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Draw circle background using TrackPro colors
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
-        color_index = hash(name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, size, size)
-        
-        # Draw initials
-        painter.setPen(QColor('#ffffff'))
-        font = painter.font()
-        font.setPixelSize(size // 3)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
-        
-        # Draw online status indicator
-        is_online = self.user_data.get('is_online', False)
-        if is_online:
-            status_size = size // 5
-            status_x = size - status_size - 2
-            status_y = size - status_size - 2
-            
-            painter.setBrush(QBrush(QColor('#3ba55c')))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(status_x, status_y, status_size, status_size)
-        
-        painter.end()
-        return pixmap
+        """Create a fallback avatar with initials using the manager."""
+        name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'User')
+        return AvatarManager.instance().get_cached_pixmap("", name, size=size)
     
     def load_user_data(self):
         """Load and display user data."""

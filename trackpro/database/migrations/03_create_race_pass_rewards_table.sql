@@ -8,6 +8,11 @@ CREATE TABLE IF NOT EXISTS "race_pass_rewards" (
     "is_premium_reward" BOOLEAN NOT NULL DEFAULT FALSE,
     "reward_type" TEXT NOT NULL CHECK (reward_type IN ('title', 'badge', 'cosmetic', 'xp_boost', 'currency')),
     "reward_details" JSONB NOT NULL,
+    -- Visual/metadata for Fortnite-style UI
+    "rarity" TEXT,
+    "icon_url" TEXT,
+    "preview_url" TEXT,
+    "entitlement_payload" JSONB,
     "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     

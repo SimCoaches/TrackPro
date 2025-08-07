@@ -107,6 +107,12 @@ class AppTracker:
             
             # Stop heartbeat
             self._stop_heartbeat()
+            
+            # Explicitly mark the user as offline to avoid lingering online presence
+            try:
+                self.update_online_status(False)
+            except Exception as offline_err:
+                logger.warning(f"Failed to mark user offline during session end: {offline_err}")
             self.is_running = False
             
             logger.info(f"Ended app session for user {self.user_id}")
@@ -117,6 +123,11 @@ class AppTracker:
             # Ensure we clean up even if there's an error
             self.is_running = False
             self._stop_heartbeat()
+            try:
+                if self.user_id:
+                    self.update_online_status(False)
+            except Exception:
+                pass
             return False
     
     def update_user_id(self, user_id: str) -> bool:

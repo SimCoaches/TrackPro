@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QPen, QBrush
+from ...avatar_manager import AvatarManager
 
 # Import user management functions
 from trackpro.auth.user_manager import is_current_user_dev
@@ -1680,26 +1681,12 @@ Total: ~128.0 MB | Last updated: Just now"""
             if not mime_type:
                 mime_type = 'image/jpeg'  # Default fallback
             
-            # Upload to Supabase Storage
+            # Upload to Supabase Storage via centralized manager
             try:
-                # Skip bucket list check since it's not working reliably
-                # The bucket exists in the database, so we'll try direct access
-                logger.info("Skipping bucket list check - proceeding with direct upload")
-                
-                storage_response = supabase_client.storage.from_('avatars').upload(
-                    filename,
-                    file_data,
-                    {
-                        'content-type': mime_type,
-                        'cache-control': '3600',
-                        'upsert': 'true'
-                    }
-                )
-                logger.info(f"Storage upload response: {storage_response}")
+                public_url = AvatarManager.instance().upload_avatar(user_id, file_path)
+                if not public_url:
+                    raise RuntimeError("Avatar upload failed")
                 progress.setValue(90)
-                
-                # Get public URL
-                public_url = supabase_client.storage.from_('avatars').get_public_url(filename)
                 avatar_url = public_url
                 
                 # Update user profile with new avatar URL
@@ -1713,7 +1700,8 @@ Total: ~128.0 MB | Last updated: Just now"""
                 
                 if success:
                     # Update local avatar display
-                    self.load_avatar_from_url(avatar_url)
+                    display_name = self.user_data.get('display_name') or self.user_data.get('username') or 'User'
+                    AvatarManager.instance().set_label_avatar(self.profile_avatar, avatar_url, display_name, size=self.profile_avatar.width())
                     
                     from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.information(self, "Success", "Avatar uploaded successfully!")
@@ -1751,62 +1739,9 @@ Total: ~128.0 MB | Last updated: Just now"""
             QMessageBox.critical(self, "Error", f"Failed to upload avatar: {str(e)}")
     
     def load_avatar_from_url(self, url):
-        """Load and display avatar from URL."""
-        try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Get the avatar size from the profile_avatar widget
-                            avatar_size = self.profile_avatar.width() if hasattr(self, 'profile_avatar') else 80
-                            
-                            # Scale to fit avatar size
-                            scaled_pixmap = pixmap.scaled(
-                                avatar_size, avatar_size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(avatar_size, avatar_size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
-                            painter.end()
-                            
-                            # Update avatar display
-                            if hasattr(self, 'profile_avatar'):
-                                self.profile_avatar.setPixmap(circular_pixmap)
-                                self.profile_avatar.setText("")  # Clear text
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    logger.error(f"Error processing downloaded avatar: {e}")
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-        except Exception as e:
-            logger.error(f"Error loading avatar from URL: {e}")
+        """Deprecated: use AvatarManager to set avatar directly."""
+        display_name = self.user_data.get('display_name') or self.user_data.get('username') or 'User'
+        AvatarManager.instance().set_label_avatar(self.profile_avatar, url, display_name, size=self.profile_avatar.width())
     
 
     
@@ -2684,13 +2619,77 @@ Total: ~128.0 MB | Last updated: Just now"""
         level_layout.addWidget(self.dev_checkbox)
         level_layout.addWidget(self.mod_checkbox)
         
+        # Quick action buttons row
+        quick_row = QHBoxLayout()
+        quick_team_btn = ModernButton("Set TEAM", "secondary")
+        quick_sponsored_btn = ModernButton("Set SPONSORED_DRIVERS", "secondary")
+        quick_drivers_btn = ModernButton("Set DRIVERS", "secondary")
+        quick_paddock_btn = ModernButton("Set PADDOCK", "secondary")
+
+        def _set_level(text: str):
+            idx = self.level_combo.findText(text)
+            if idx >= 0:
+                self.level_combo.setCurrentIndex(idx)
+
+        quick_team_btn.clicked.connect(lambda: _set_level("TEAM"))
+        quick_sponsored_btn.clicked.connect(lambda: _set_level("SPONSORED_DRIVERS"))
+        quick_drivers_btn.clicked.connect(lambda: _set_level("DRIVERS"))
+        quick_paddock_btn.clicked.connect(lambda: _set_level("PADDOCK"))
+
+        quick_row.addWidget(quick_team_btn)
+        quick_row.addWidget(quick_sponsored_btn)
+        quick_row.addWidget(quick_drivers_btn)
+        quick_row.addWidget(quick_paddock_btn)
+        level_layout.addLayout(quick_row)
+
         # Update button
-        update_btn = ModernButton("Update User", "primary")
+        update_btn = ModernButton("Apply Changes", "primary")
         update_btn.clicked.connect(lambda: self.update_user_hierarchy(user_data['user_id']))
         level_layout.addWidget(update_btn)
         
         level_group.setLayout(level_layout)
         self.user_results_layout.addWidget(level_group)
+
+        # Moderation actions
+        mod_group = QGroupBox("Moderation")
+        mod_layout = QHBoxLayout()
+
+        ban_btn = ModernButton("Ban (Block)", "danger")
+        unban_btn = ModernButton("Unban (Unblock)", "success")
+
+        def _ban_user():
+            try:
+                from trackpro.social.friends_manager import FriendsManager
+                from trackpro.auth.user_manager import get_current_user
+                current_user = get_current_user()
+                if not current_user:
+                    return
+                FriendsManager().block_user(current_user.id, user_data['user_id'])
+                QMessageBox.information(self, "Success", "User has been blocked.")
+            except Exception as e:
+                logger.error(f"Error blocking user: {e}")
+                QMessageBox.warning(self, "Error", "Failed to block user")
+
+        def _unban_user():
+            try:
+                from trackpro.social.friends_manager import FriendsManager
+                from trackpro.auth.user_manager import get_current_user
+                current_user = get_current_user()
+                if not current_user:
+                    return
+                FriendsManager().unblock_user(current_user.id, user_data['user_id'])
+                QMessageBox.information(self, "Success", "User has been unblocked.")
+            except Exception as e:
+                logger.error(f"Error unblocking user: {e}")
+                QMessageBox.warning(self, "Error", "Failed to unblock user")
+
+        ban_btn.clicked.connect(_ban_user)
+        unban_btn.clicked.connect(_unban_user)
+
+        mod_layout.addWidget(ban_btn)
+        mod_layout.addWidget(unban_btn)
+        mod_group.setLayout(mod_layout)
+        self.user_results_layout.addWidget(mod_group)
     
     def clear_user_results(self):
         """Clear the user results area."""

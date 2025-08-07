@@ -369,11 +369,20 @@ class EnhancedUserManager(DatabaseManager):
                 logger.warning("Supabase client not available - returning empty user list")
                 return []
             
-            # Get all users from user_profiles table
+            # Prefer public view to avoid RLS masking of avatar_url and basic fields
+            try:
+                response = self.supabase.from_("public_user_profiles").select(
+                    "user_id, username, display_name, avatar_url, level, is_online, last_seen"
+                ).limit(limit).execute()
+                if response and response.data:
+                    return response.data
+            except Exception:
+                pass
+
+            # Fallback to direct table (requires appropriate RLS for non-self rows)
             response = self.supabase.from_("user_profiles").select(
                 "user_id, username, display_name, avatar_url, level, reputation_score"
             ).limit(limit).execute()
-            
             return response.data or []
             
         except Exception as e:

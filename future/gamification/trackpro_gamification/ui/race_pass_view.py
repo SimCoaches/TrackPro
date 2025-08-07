@@ -9,6 +9,7 @@ import json
 import logging
 
 from .enhanced_quest_view import EnhancedQuestViewWidget
+from .notifications import NotificationManager
 from ..supabase_gamification import (
     get_current_season, get_race_pass_rewards, get_user_race_pass_progress,
     purchase_premium_race_pass, get_user_profile
@@ -200,13 +201,31 @@ class RacePassOverviewWidget(QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
         
-        # Title
-        title_label = QLabel("Race Pass Overview")
-        title_font = QFont("Arial", 18, QFont.Weight.Bold)
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("color: #e67e22; margin-bottom: 10px;")
-        main_layout.addWidget(title_label)
+        # Hero header with background and countdown
+        self.hero_frame = QFrame()
+        self.hero_frame.setStyleSheet("QFrame { border-radius: 10px; overflow: hidden; }")
+        hero_layout = QVBoxLayout(self.hero_frame)
+        hero_layout.setContentsMargins(16, 16, 16, 16)
+        hero_layout.setSpacing(6)
+
+        self.hero_background = QLabel()
+        self.hero_background.setMinimumHeight(140)
+        self.hero_background.setStyleSheet("background-color: #1b1b1b; border-radius: 10px;")
+        self.hero_background.setScaledContents(True)
+        hero_layout.addWidget(self.hero_background)
+
+        header_row = QHBoxLayout()
+        self.hero_title = QLabel("Race Pass Overview")
+        self.hero_title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        self.hero_title.setStyleSheet("color: #e67e22;")
+        header_row.addWidget(self.hero_title)
+        header_row.addStretch()
+        self.countdown_label = QLabel("")
+        self.countdown_label.setStyleSheet("color: #f39c12; font-weight: bold;")
+        header_row.addWidget(self.countdown_label)
+        hero_layout.addLayout(header_row)
+
+        main_layout.addWidget(self.hero_frame)
         
         # Create a splitter for side-by-side layout
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -305,11 +324,74 @@ class RacePassOverviewWidget(QWidget):
         layout.addLayout(xp_layout)
         
         # Time remaining
-        self.time_remaining_label = QLabel("28 days remaining")
+        self.time_remaining_label = QLabel("")
         self.time_remaining_label.setStyleSheet("color: #f39c12; font-weight: bold; margin-top: 10px;")
         layout.addWidget(self.time_remaining_label)
         
         return frame
+
+    def update_overview_data(self, season_data, user_progress, stats):
+        """Populate overview with live season info including background and countdown."""
+        try:
+            # Title and season name
+            name = season_data.get('name') or 'Race Pass'
+            self.hero_title.setText(name)
+            self.season_name_label.setText(name)
+
+            # Countdown to season end
+            end = season_data.get('end_date') or season_data.get('end_date_time') or season_data.get('end_date_ts')
+            if end:
+                # Try to format relative time
+                from datetime import datetime, timezone
+                try:
+                    # Supabase returns ISO timestamps
+                    end_dt = datetime.fromisoformat(str(end).replace('Z', '+00:00'))
+                    now = datetime.now(timezone.utc)
+                    delta = end_dt - now
+                    days = max(0, delta.days)
+                    self.countdown_label.setText(f"Ends in: {days} days")
+                    self.time_remaining_label.setText(f"{days} days remaining")
+                except Exception:
+                    self.countdown_label.setText("")
+            else:
+                self.countdown_label.setText("")
+
+            # Background image if provided
+            bg_url = season_data.get('background_url')
+            if bg_url:
+                try:
+                    from PyQt6.QtGui import QImage
+                    import urllib.request
+                    data = urllib.request.urlopen(bg_url, timeout=5).read()
+                    image = QImage()
+                    if image.loadFromData(data):
+                        self.hero_background.setPixmap(QPixmap.fromImage(image).scaled(self.hero_background.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation))
+                except Exception:
+                    pass
+
+            # Tiers and XP
+            current_tier = user_progress.get('tier', 0)
+            max_tier = (season_data.get('tier_count') or 50)
+            self.current_tier_label.setText(f"Current Tier: {current_tier}")
+            self.max_tier_label.setText(f"/ {max_tier}")
+
+            # Progress bar (approximate if no granular XP)
+            self.tier_progress_bar.setValue(min(100, int((user_progress.get('xp', 0) % 1000) / 10)))
+            self.current_xp_label.setText(f"{user_progress.get('xp', 0):,} XP")
+
+            # Stats
+            self.quests_completed_label.setText(str(stats.get('quests_completed', 0)))
+            self.total_xp_label.setText(f"{stats.get('total_xp', 0):,}")
+            claimed = 0
+            available = 0
+            rewards = (user_progress.get('rewards') or [])
+            for r in rewards:
+                available += 1
+                if r.get('is_claimed'):
+                    claimed += 1
+            self.rewards_claimed_label.setText(f"{claimed} / {available}")
+        except Exception:
+            pass
         
     def _create_actions_section(self):
         """Create the quick actions and stats section."""
@@ -1031,6 +1113,24 @@ class RacePassTrackWidget(QWidget):
             """)
             
         reward_layout.addWidget(reward_name)
+
+        # Claim button area (wired later to supabase claim RPC)
+        claim_btn = QPushButton("Claim")
+        claim_btn.setEnabled(is_unlocked and (not is_premium or premium_active))
+        claim_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        claim_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-weight: bold;
+            }
+            QPushButton:disabled { background-color: #555; color: #aaa; }
+        """)
+        # Placeholder: will be connected to real reward_id when loading from Supabase
+        claim_btn.clicked.connect(lambda: QMessageBox.information(self, "Claim", "This is a demo claim. Live claim wiring will use Supabase."))
+        reward_layout.addWidget(claim_btn)
         
         return reward_widget
 
@@ -1143,6 +1243,7 @@ class RacePassViewWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("RacePassViewWidget")
+        self._last_tier = None
         
         # Set minimum size to ensure tabs display properly
         self.setMinimumSize(800, 600)
@@ -1227,6 +1328,8 @@ class RacePassViewWidget(QWidget):
 
         # Load initial data
         self.load_race_pass_data()
+        # Subscribe to realtime updates for auto-refresh (if available)
+        self._setup_realtime_subscriptions()
 
     def showEvent(self, event):
         """Handle show event to ensure proper sizing."""
@@ -1239,7 +1342,12 @@ class RacePassViewWidget(QWidget):
         """Load race pass data from Supabase with fallback to offline mode."""
         try:
             # Try to load real data from Supabase if available
-            from ..supabase_gamification import get_current_season, get_user_race_pass_progress
+            from ..supabase_gamification import (
+                get_current_season,
+                get_user_race_pass_progress,
+                claim_race_pass_reward,
+                get_trackcoins_balance,
+            )
             
             # Check if we have network connectivity
             try:
@@ -1259,7 +1367,97 @@ class RacePassViewWidget(QWidget):
                     }
                     
                     self.overview_widget.update_overview_data(season_data, user_progress, stats)
-                    return
+
+                    # TrackCoins balance sync (if widget present)
+                    try:
+                        balance_tuple = get_trackcoins_balance()
+                        if balance_tuple and balance_tuple[0] is not None and hasattr(self.race_pass_track_widget, 'trackcoins_balance'):
+                            self.race_pass_track_widget.trackcoins_balance.update_balance(int(balance_tuple[0]))
+                    except Exception:
+                        pass
+
+                    # Render the pass tiers with live data
+                    try:
+                        rewards = user_progress.get('rewards', []) or []
+                        # Group by tier into free/premium
+                        tiers = {}
+                        for r in rewards:
+                            t = r.get('tier')
+                            tiers.setdefault(t, {'free': None, 'premium': None})
+                            if r.get('is_premium_reward'):
+                                tiers[t]['premium'] = r
+                            else:
+                                tiers[t]['free'] = r
+
+                        # Clear and rebuild UI
+                        while self.race_pass_track_widget.tiers_layout.count():
+                            item = self.race_pass_track_widget.tiers_layout.takeAt(0)
+                            if item.widget():
+                                item.widget().deleteLater()
+
+                        max_tier = season_data.get('tier_count', 50)
+                        current_tier_val = user_progress.get('tier', 0)
+                        premium_active = user_progress.get('is_premium', False)
+                        for tier_num in range(1, max_tier + 1):
+                            data = tiers.get(tier_num, {'free': None, 'premium': None})
+                            unlocked = tier_num <= current_tier_val
+
+                            def to_reward_payload(r):
+                                if not r:
+                                    return None
+                                return {
+                                    'id': r.get('reward_id'),
+                                    'name': r.get('reward_details', {}).get('name') or r.get('reward_type'),
+                                    'icon': r.get('reward_details', {}).get('icon', '🎁'),
+                                    'is_unlocked': bool(r.get('is_unlocked')),
+                                    'is_claimed': bool(r.get('is_claimed')),
+                                    'is_premium': bool(r.get('is_premium_reward')),
+                                }
+
+                            free_payload = to_reward_payload(data['free'])
+                            premium_payload = to_reward_payload(data['premium'])
+
+                            # Build tier widget using existing helper, but patch claim button when present
+                            tier_widget = self.race_pass_track_widget._create_horizontal_tier_widget(
+                                tier_num,
+                                free_payload or {'name': '—', 'icon': '—'},
+                                premium_payload,
+                                unlocked,
+                                premium_active,
+                            )
+
+                            # Connect claim buttons if found
+                            def connect_claims(widget, payload):
+                                if not payload or not payload.get('id'):
+                                    return
+                                for btn in widget.findChildren(QPushButton):
+                                    if btn.text() == 'Claim' and btn.isEnabled():
+                                        btn.clicked.disconnect()
+                                        btn.clicked.connect(lambda _, rid=payload['id']: self._claim_and_refresh(rid))
+
+                            connect_claims(tier_widget, free_payload)
+                            if premium_payload:
+                                connect_claims(tier_widget, premium_payload)
+
+                            self.race_pass_track_widget.tiers_layout.addWidget(tier_widget)
+
+                        self.race_pass_track_widget.tiers_layout.addStretch()
+
+                        # Tier-up overlay detection
+                        try:
+                            if isinstance(current_tier_val, int):
+                                if self._last_tier is not None and current_tier_val > self._last_tier:
+                                    try:
+                                        nm = NotificationManager(self.window())
+                                        nm.show_race_pass_tier_up(current_tier_val)
+                                    except Exception:
+                                        pass
+                                self._last_tier = current_tier_val
+                        except Exception:
+                            pass
+                        return
+                    except Exception as render_err:
+                        print(f"Race Pass: Render error, falling back to offline tiers: {render_err}")
                     
             except Exception as network_error:
                 # Network error - fall back to offline mode
@@ -1294,6 +1492,24 @@ class RacePassViewWidget(QWidget):
         }
         
         self.overview_widget.update_overview_data(season_data, user_progress, stats)
+
+    def _claim_and_refresh(self, reward_id: str):
+        try:
+            from ..supabase_gamification import claim_race_pass_reward
+            ok, msg = claim_race_pass_reward(reward_id)
+            if ok:
+                # Show toast and refresh
+                try:
+                    from .notifications import ToastNotification
+                    toast = ToastNotification(self, "Reward claimed!", 2200, "success")
+                    toast.show_notification()
+                except Exception:
+                    QMessageBox.information(self, "Reward Claimed", "Reward claimed successfully!")
+                self.load_race_pass_data()
+            else:
+                QMessageBox.warning(self, "Claim Failed", msg or "Could not claim reward")
+        except Exception as e:
+            QMessageBox.warning(self, "Claim Error", str(e))
     
     def _on_trackcoins_purchased(self, coins):
         """Handle when TrackCoins are purchased from the store tab."""
@@ -1320,6 +1536,40 @@ class RacePassViewWidget(QWidget):
             'rewards_available': len(tiers_data) if tiers_data else 0
         }
         self.overview_widget.update_overview_data(season_info, user_progress, stats)
+
+    def _setup_realtime_subscriptions(self):
+        """Subscribe to user profile and claims updates to auto-refresh the UI."""
+        try:
+            from trackpro.database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            if not client:
+                return
+            self._realtime_channels = getattr(self, '_realtime_channels', [])
+            # User profiles: tier/xp changes
+            ch_profile = client.channel("realtime:public:user_profiles")
+            ch_profile.on(
+                "postgres_changes",
+                {"event": "UPDATE", "schema": "public", "table": "user_profiles"},
+                lambda payload: self._on_realtime_update()
+            ).subscribe()
+            self._realtime_channels.append(ch_profile)
+            # Claims table: claim events
+            ch_claims = client.channel("realtime:public:user_race_pass_claims")
+            ch_claims.on(
+                "postgres_changes",
+                {"event": "INSERT", "schema": "public", "table": "user_race_pass_claims"},
+                lambda payload: self._on_realtime_update()
+            ).subscribe()
+            self._realtime_channels.append(ch_claims)
+        except Exception:
+            pass
+
+    def _on_realtime_update(self):
+        try:
+            # Debounce minimal: trigger a reload
+            self.load_race_pass_data()
+        except Exception:
+            pass
 
 
 # Example usage (for testing standalone)

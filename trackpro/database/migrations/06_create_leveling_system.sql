@@ -57,7 +57,7 @@ CREATE OR REPLACE FUNCTION check_and_apply_race_pass_tier_up()
 RETURNS TRIGGER AS $$
 DECLARE
     season_record RECORD;
-    xp_per_tier INTEGER := 1000; -- Default value, could be made configurable per season
+    xp_per_tier INTEGER := 1000; -- Default fallback; overridden by season.xp_per_tier if present
 BEGIN
     -- Only run if race pass XP has increased
     IF NEW.race_pass_xp > OLD.race_pass_xp AND NEW.race_pass_season_id IS NOT NULL THEN
@@ -67,6 +67,10 @@ BEGIN
         WHERE season_id = NEW.race_pass_season_id;
         
         IF FOUND THEN
+            -- Use season-configured xp_per_tier if available
+            IF season_record IS NOT NULL AND season_record.xp_per_tier IS NOT NULL THEN
+                xp_per_tier := season_record.xp_per_tier;
+            END IF;
             -- Calculate new tier based on XP
             NEW.race_pass_tier := LEAST(
                 FLOOR(NEW.race_pass_xp / xp_per_tier)::INTEGER,
