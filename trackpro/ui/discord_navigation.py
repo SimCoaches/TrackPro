@@ -637,8 +637,12 @@ class DiscordNavigation(QWidget):
             # Generate avatar initials from name
             avatar_text = self._generate_avatar_initials(username)
             
+            # TEMPORARILY DISABLE AVATAR LOADING TO PREVENT CRASHES
             # Update the display with avatar URL if available
-            self.set_user_info(username, avatar_text, avatar_url)
+            # self.set_user_info(username, avatar_text, avatar_url)
+            # Use initials only to prevent network/image loading crashes
+            self.set_user_info(username, avatar_text, None)
+            logger.warning("⚠️ TEMPORARILY SKIPPING AVATAR LOADING TO PREVENT CRASHES")
             
         else:
             # User is not logged in - show default

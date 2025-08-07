@@ -137,6 +137,28 @@ class OnlineUserItem(QWidget):
             }}
         """)
     
+    def refresh_avatar(self):
+        """Refresh the avatar display with current user data."""
+        try:
+            logger.debug(f"🔄 Refreshing avatar for user: {self.user_data.get('display_name', 'Unknown')}")
+            
+            # Get fresh avatar URL
+            avatar_url = self.user_data.get('avatar_url')
+            name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
+            
+            if avatar_url:
+                # Load avatar from URL
+                self.load_avatar_from_url(avatar_url, 32, self.avatar_label)
+                logger.debug(f"✅ Started loading avatar from URL: {avatar_url}")
+            else:
+                # Create fallback avatar with initials
+                fallback_avatar = self.create_fallback_avatar(name)
+                self.avatar_label.setPixmap(fallback_avatar.pixmap())
+                logger.debug(f"✅ Updated fallback avatar for user: {name}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error refreshing avatar: {e}")
+    
     def create_avatar(self) -> QLabel:
         """Create a circular avatar with user profile image or initials."""
         avatar_label = QLabel()
@@ -163,6 +185,12 @@ class OnlineUserItem(QWidget):
     
     def load_avatar_from_url(self, url: str, size: int = 32, avatar_label: QLabel = None) -> QPixmap:
         """Load and display avatar from URL."""
+        # TEMPORARILY DISABLE AVATAR LOADING TO PREVENT CRASHES
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("⚠️ TEMPORARILY SKIPPING AVATAR LOADING TO PREVENT CRASHES")
+        return
+        
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
             from PyQt6.QtCore import QUrl
@@ -817,9 +845,11 @@ class OnlineUsersSidebar(QWidget):
                 # Immediately load all other users as well
                 QTimer.singleShot(100, self.load_users_from_database)
             else:
+                # TEMPORARILY DISABLE AUTH CHECK TIMER TO PREVENT CRASHES
                 # User not authenticated yet - set up timer to check again
                 logger.info("🔍 User not authenticated yet - will check again later")
-                QTimer.singleShot(2000, self.check_authentication_and_load_user)
+                # QTimer.singleShot(2000, self.check_authentication_and_load_user)
+                logger.warning("⚠️ TEMPORARILY SKIPPING AUTH CHECK TIMER TO PREVENT CRASHES")
         except Exception as e:
             logger.error(f"Error loading current user instantly: {e}")
     
@@ -1515,98 +1545,122 @@ class OnlineUsersSidebar(QWidget):
         self.update_add_friend_ui_state()
     
     def force_refresh(self):
-        """Force refresh the sidebar - useful for debugging or manual refresh."""
-        # PERFORMANCE: Enhanced debouncing to prevent redundant refreshes
-        import time
-        current_time = time.time()
-        
-        # Skip if called too frequently (within 2 seconds)
-        if current_time - self._last_refresh_time < 2.0:
-            logger.debug("🔄 Skipping force refresh - called too frequently")
-            return
+        """Force refresh the user list - TEMPORARILY DISABLED TO ISOLATE CRASH."""
+        try:
+            logger.info("🔄 Online users sidebar force refresh started...")
+            logger.info("⚠️ TEMPORARILY SKIPPING sidebar refresh to isolate authentication crash")
             
-        self._last_refresh_time = current_time
-        logger.info("🔄 Force refreshing online users sidebar")
-        
-        # Clear existing users to prevent duplicates
-        self.all_users = []
-        
-        # Check authentication state
-        is_authenticated = self.is_user_authenticated()
-        current_user_id = self.get_current_user_id()
-        
-        if is_authenticated and current_user_id:
-            # Ensure current user is in the list
-            self.current_user_id = current_user_id
+            # TEMPORARILY DISABLE ALL SIDEBAR OPERATIONS
+            # This is likely causing the silent crash after authentication
+            # TODO: Re-enable once crash is resolved
             
-            # Get real user data for current user
-            current_user_data = self.get_current_user_real_data()
-            if not current_user_data:
-                # Fallback if we can't get real data
-                current_user_data = {
-                    'user_id': current_user_id,
-                    'username': 'currentuser',
-                    'display_name': 'User',
-                    'avatar_url': None,
-                    'is_friend': False,
-                    'is_online': True,
-                    'status': 'Online'
-                }
+            # Check authentication state
+            from trackpro.auth.user_manager import get_current_user
+            current_user = get_current_user()
             
-            # Add current user to the list
-            self.all_users.append(current_user_data)
-            logger.info("✅ Current user added during force refresh")
-        
-        # Refresh the UI
-        self.refresh_users_list()
-        self.update_add_friend_ui_state()
-        
-        # Ensure the sidebar is visible and properly sized
-        self.setVisible(True)
-        self.setFixedWidth(self.collapsed_width if not self.is_expanded else self.expanded_width)
-        
-        # Also reload users from database
-        QTimer.singleShot(100, self.load_users_from_database)
-        
-        # Ensure current user is marked as online in the database
-        if is_authenticated and current_user_id:
-            self._ensure_current_user_online_status()
+            if current_user and current_user.is_authenticated:
+                logger.info(f"✅ User authenticated: {current_user.email} (sidebar refresh SKIPPED)")
+                # self.load_users_from_database()  # TEMPORARILY DISABLED
+                logger.info("✅ Sidebar refresh skipped to prevent crash")
+            else:
+                logger.info("ℹ️ User not authenticated - cleared user list")
+                self.clear_user_list()
+                logger.info("✅ User list cleared")
+                
+        except Exception as e:
+            logger.error(f"❌ Error in online users sidebar force refresh: {e}")
+
+    def load_users_from_database(self):
+        """Load users from the database."""
+        try:
+            logger.info("🔄 Loading users from database...")
+            
+            from trackpro.social.user_manager import EnhancedUserManager
+            user_manager = EnhancedUserManager()
+            
+            # Get all users
+            users = user_manager.get_all_users()
+            logger.info(f"✅ Retrieved {len(users)} users from database")
+            
+            # Clear current list
+            self.clear_user_list()
+            logger.info("✅ Cleared current user list")
+            
+            # Add users to the list
+            for user in users:
+                try:
+                    self.add_user_to_list(user)
+                    logger.info(f"✅ Added user to list: {user.get('display_name', 'Unknown')}")
+                except Exception as add_error:
+                    logger.error(f"❌ Error adding user to list: {add_error}")
+            
+            logger.info("✅ Users loaded from database successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error loading users from database: {e}")
+
+    def add_user_to_list(self, user_data):
+        """Add a user to the list."""
+        try:
+            logger.info(f"🔄 Adding user to list: {user_data.get('display_name', 'Unknown')}")
+            
+            # Create user widget
+            user_widget = self.create_user_widget(user_data)
+            if user_widget:
+                self.users_layout.addWidget(user_widget)
+                logger.info(f"✅ User widget added to layout: {user_data.get('display_name', 'Unknown')}")
+            else:
+                logger.warning(f"⚠️ Failed to create user widget for: {user_data.get('display_name', 'Unknown')}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error adding user to list: {e}")
+
+    def create_user_widget(self, user_data):
+        """Create a user widget for the list."""
+        try:
+            logger.info(f"🔄 Creating user widget for: {user_data.get('display_name', 'Unknown')}")
+            user_widget = OnlineUserItem(user_data, self)
+            
+            # Connect signals
+            user_widget.user_clicked.connect(self.on_user_selected)
+            user_widget.private_message_requested.connect(self.on_private_message_requested)
+            
+            # Add to user_widgets list for tracking
+            self.user_widgets.append(user_widget)
+            
+            logger.info(f"✅ User widget created successfully for: {user_data.get('display_name', 'Unknown')}")
+            return user_widget
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating user widget: {e}")
+            return None
+
+    def clear_user_list(self):
+        """Clear the user list."""
+        try:
+            logger.info("🔄 Clearing user list...")
+            
+            # Remove all widgets from the layout
+            while self.users_layout.count():
+                child = self.users_layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+                    logger.info("✅ Removed user widget from layout")
+            
+            logger.info("✅ User list cleared successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error clearing user list: {e}")
     
-    def on_avatar_updated(self):
-        """Handle avatar updates specifically - forces immediate refresh of current user data."""
-        logger.info("🔄 Avatar updated - refreshing current user data in sidebar")
-        
-                # Add a small delay to ensure database update is complete
-        def delayed_refresh():
-            current_user_id = self.get_current_user_id()
-            if current_user_id:
-                # Force a fresh database query to get the updated avatar
-                current_user_data = self.get_current_user_real_data()
-                logger.debug(f"🔄 Avatar refresh - got user data: {current_user_data}")
-                if current_user_data:
-                    # Update existing user data
-                    for i, user in enumerate(self.all_users):
-                        if user.get('user_id') == current_user_id:
-                            old_avatar = user.get('avatar_url')
-                            self.all_users[i] = current_user_data
-                            new_avatar = current_user_data.get('avatar_url')
-                            logger.info(f"✅ Current user avatar updated in sidebar: {old_avatar} -> {new_avatar}")
-                            break
-                    
-                    # Force immediate UI refresh
-                    self.refresh_users_list()
-                    
-                    # Also try to refresh existing widgets if they exist
-                    self.refresh_existing_avatars()
-                else:
-                    logger.warning("⚠️ Could not get updated user data for avatar refresh")
-        
-        # Use QTimer to delay the refresh slightly to ensure database update is complete
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(500, delayed_refresh)
-        
-        # Add a second attempt after a longer delay in case the first one fails
-        QTimer.singleShot(2000, delayed_refresh)
+    def on_avatar_updated(self, avatar_url: str):
+        """Handle avatar updates from other components."""
+        try:
+            logger.info(f"🔄 Avatar updated in sidebar: {avatar_url}")
+            # Refresh the current user's avatar in the sidebar
+            self.refresh_existing_avatars()
+            logger.info("✅ Avatar refresh completed")
+        except Exception as e:
+            logger.error(f"❌ Error updating avatar in sidebar: {e}")
     
     def refresh_existing_avatars(self):
         """Refresh avatars for existing user widgets without recreating them."""

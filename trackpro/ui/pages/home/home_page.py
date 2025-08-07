@@ -168,8 +168,8 @@ class HomePage(BasePage):
         # Add auth buttons to welcome layout
         welcome_layout.addWidget(self.auth_buttons_container)
         
-        # Initially hide auth buttons
-        self.auth_buttons_container.setVisible(False)
+        # Show auth buttons by default for non-authenticated users
+        self.auth_buttons_container.setVisible(True)
         
         return welcome_frame
         
@@ -364,6 +364,12 @@ class HomePage(BasePage):
     
     def load_avatar_from_url(self, url: str):
         """Load and display avatar from URL."""
+        # TEMPORARILY DISABLE AVATAR LOADING TO PREVENT CRASHES
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("⚠️ TEMPORARILY SKIPPING AVATAR LOADING TO PREVENT CRASHES")
+        return
+        
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
             from PyQt6.QtCore import QUrl
@@ -573,61 +579,78 @@ class HomePage(BasePage):
     def on_auth_state_changed(self):
         """Handle authentication state changes."""
         try:
-            # Try to get complete user profile first (includes avatar_url)
-            try:
-                from ....social import enhanced_user_manager
-                complete_profile = enhanced_user_manager.get_complete_user_profile()
-                if complete_profile:
-                    # Update welcome message
-                    name = complete_profile.get('display_name') or complete_profile.get('username') or complete_profile.get('name', 'User')
-                    self.welcome_label.setText(f"Welcome back, {name}!")
-                    
-                    # Update avatar with complete user data (includes avatar_url)
-                    self.update_user_avatar(complete_profile)
-                    
-                    # Hide auth buttons when authenticated
-                    self.auth_buttons_container.setVisible(False)
-                    
-                    logger.info(f"✅ Authenticated with complete profile: {name}")
-                    
-                    self._auth_check_completed = True
-                    self._cached_auth_state = True
-                    return
-            except Exception as profile_error:
-                logger.debug(f"Could not get complete user profile: {profile_error}")
+            logger.info("🔄 Home page auth state changed - starting...")
             
-            # Fallback to basic user manager
-            from ....auth.user_manager import get_current_user
+            # Check if user is authenticated
+            from trackpro.auth.user_manager import get_current_user
             current_user = get_current_user()
             
             if current_user and current_user.is_authenticated:
-                self.welcome_label.setText(f"Welcome back, {current_user.name}!")
-                
-                # Update avatar with user data
-                user_data = {
-                    'name': current_user.name,
-                    'email': current_user.email,
-                    'user_id': current_user.id
-                }
-                self.update_user_avatar(user_data)
-                
-                # Hide auth buttons when authenticated
-                self.auth_buttons_container.setVisible(False)
-                
-                logger.info(f"✅ Authenticated via user manager")
+                logger.info(f"✅ User authenticated: {current_user.email}")
+                self.refresh_header()
+                logger.info("✅ Home page header refreshed after auth state change")
             else:
-                self.welcome_label.setText("Welcome to TrackPro!")
+                logger.info("ℹ️ User not authenticated")
+                self.refresh_header()
+                logger.info("✅ Home page header refreshed (not authenticated)")
                 
-                # Show auth buttons when not authenticated
-                self.auth_buttons_container.setVisible(True)
+        except Exception as e:
+            logger.error(f"❌ Error in home page auth state change: {e}")
+
+    def refresh_header(self):
+        """Refresh the header with current user information."""
+        try:
+            logger.info("🔄 Home page refresh_header started...")
+            
+            # Get current user
+            from trackpro.auth.user_manager import get_current_user
+            current_user = get_current_user()
+            
+            if current_user and current_user.is_authenticated:
+                logger.info(f"✅ User authenticated: {current_user.email}")
+                
+                # Update welcome message
+                if hasattr(self, 'welcome_label'):
+                    try:
+                        self.welcome_label.setText(f"Welcome back, {current_user.name or current_user.email}!")
+                        logger.info("✅ Welcome label updated")
+                    except Exception as welcome_error:
+                        logger.error(f"❌ Error updating welcome label: {welcome_error}")
+                
+                # Hide auth buttons container for authenticated users
+                if hasattr(self, 'auth_buttons_container'):
+                    try:
+                        self.auth_buttons_container.setVisible(False)
+                        logger.info("✅ Auth buttons container hidden")
+                    except Exception as auth_error:
+                        logger.error(f"❌ Error hiding auth buttons container: {auth_error}")
+                
+                logger.info("✅ Authenticated with complete profile: {current_user.name or current_user.email}")
+            else:
+                logger.info("ℹ️ User not authenticated")
+                
+                # Update welcome message for non-authenticated users
+                if hasattr(self, 'welcome_label'):
+                    try:
+                        self.welcome_label.setText("Welcome to TrackPro! Please log in to get started.")
+                        logger.info("✅ Welcome label updated for non-authenticated user")
+                    except Exception as welcome_error:
+                        logger.error(f"❌ Error updating welcome label: {welcome_error}")
+                
+                # Show auth buttons container for non-authenticated users
+                if hasattr(self, 'auth_buttons_container'):
+                    try:
+                        self.auth_buttons_container.setVisible(True)
+                        logger.info("✅ Auth buttons container shown")
+                    except Exception as auth_error:
+                        logger.error(f"❌ Error showing auth buttons container: {auth_error}")
                 
                 logger.info("ℹ️ Not authenticated")
-                
-            self._auth_check_completed = True
-            self._cached_auth_state = current_user.is_authenticated if current_user else False
+            
+            logger.info("✅ Home page refresh_header completed successfully")
             
         except Exception as e:
-            logger.error(f"Error checking authentication: {e}")
+            logger.error(f"❌ Error in home page refresh_header: {e}")
             
     def on_external_auth_change(self):
         """Handle external authentication state changes."""

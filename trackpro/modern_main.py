@@ -167,8 +167,15 @@ class ModernTrackProApp:
             
             # PERFORMANCE: Non-blocking auth check during startup
             # Don't block the UI for authentication check - do it in background
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(100, self.perform_background_auth_check)
+            from PyQt6.QtCore import QTimer, QThread
+            try:
+                # Ensure we're on the main thread
+                if QThread.currentThread() == self.app.thread():
+                    QTimer.singleShot(100, self.perform_background_auth_check)
+                else:
+                    logger.warning("Not on main thread - skipping background auth check")
+            except Exception as e:
+                logger.error(f"Error setting up background auth check: {e}")
             
             # Connect window closing to cleanup
             self.window.destroyed.connect(self.cleanup)
@@ -180,54 +187,44 @@ class ModernTrackProApp:
             raise
     
     def handle_auth_state_change(self, is_authenticated):
-        """Handle authentication state changes."""
+        """Handle authentication state changes - SIMPLIFIED TO PREVENT CRASHES."""
         try:
             logger.info(f"🔐 Authentication state changed: {is_authenticated}")
             
-            # Update online status
-            if is_authenticated:
-                # Set user as online (status = 1)
-                try:
-                    from trackpro.database.supabase_client import get_supabase_client
-                    from trackpro.social.user_manager import EnhancedUserManager
-                    
-                    client = get_supabase_client()
-                    if client:
-                        session = client.auth.get_session()
-                        if session and hasattr(session, 'user'):
-                            user_id = session.user.id
-                            user_manager = EnhancedUserManager()
-                            user_manager.update_online_status(user_id, True)
-                            logger.info(f"✅ Set user {user_id} as online")
-                except Exception as e:
-                    logger.warning(f"Could not set user as online: {e}")
-            else:
-                # Set user as offline (status = 0)
-                try:
-                    from trackpro.database.supabase_client import get_supabase_client
-                    from trackpro.social.user_manager import EnhancedUserManager
-                    
-                    client = get_supabase_client()
-                    if client:
-                        session = client.auth.get_session()
-                        if session and hasattr(session, 'user'):
-                            user_id = session.user.id
-                            user_manager = EnhancedUserManager()
-                            user_manager.update_online_status(user_id, False)
-                            logger.info(f"✅ Set user {user_id} as offline")
-                except Exception as e:
-                    logger.warning(f"Could not set user as offline: {e}")
-            
-            # Update window authentication state
+            # SIMPLIFIED: Only update the main window's auth state
+            # Defer all other operations to prevent immediate crashes
             if hasattr(self.window, 'update_auth_state'):
                 self.window.update_auth_state(is_authenticated)
+                logger.info("✅ Main window auth state updated")
             
-            # Emit signal for other components
-            if hasattr(self.window, 'auth_state_changed'):
-                self.window.auth_state_changed.emit(is_authenticated)
+            # DEFER: Schedule online status updates to prevent blocking/crashes
+            from PyQt6.QtCore import QTimer
+            if is_authenticated:
+                QTimer.singleShot(2000, lambda: self._deferred_online_status_update(True))
+            else:
+                QTimer.singleShot(2000, lambda: self._deferred_online_status_update(False))
                 
         except Exception as e:
             logger.error(f"❌ Error handling auth state change: {e}")
+            # Don't let auth errors crash the app
+    
+    def _deferred_online_status_update(self, is_online):
+        """Deferred online status update to prevent immediate crashes."""
+        try:
+            logger.info(f"🔄 Executing deferred online status update: {is_online}")
+            from trackpro.database.supabase_client import get_supabase_client
+            from trackpro.social.user_manager import EnhancedUserManager
+            
+            client = get_supabase_client()
+            if client:
+                session = client.auth.get_session()
+                if session and hasattr(session, 'user'):
+                    user_id = session.user.id
+                    user_manager = EnhancedUserManager()
+                    user_manager.update_online_status(user_id, is_online)
+                    logger.info(f"✅ Set user {user_id} as {'online' if is_online else 'offline'}")
+        except Exception as e:
+            logger.warning(f"Could not update online status: {e}")
     
     def perform_background_auth_check(self):
         """Perform authentication check in background without blocking UI."""

@@ -687,9 +687,17 @@ class LoginDialog(BaseAuthDialog):
     # Make sure to stop the timer when the dialog is closed or destroyed
     def closeEvent(self, event):
         """Override close event to clean up resources."""
-        if hasattr(self, '_google_auth_timer') and self._google_auth_timer.isActive():
-            logger.info("Stopping Google auth timer during dialog close")
-            self._google_auth_timer.stop()
+        try:
+            if hasattr(self, '_google_auth_timer') and self._google_auth_timer.isActive():
+                logger.info("Stopping Google auth timer during dialog close")
+                self._google_auth_timer.stop()
+        except Exception as e:
+            logger.error(f"Error stopping Google auth timer: {e}")
+        
+        # Clear any completion flags
+        if hasattr(self, '_auth_completion_in_progress'):
+            self._auth_completion_in_progress = False
+            
         super().closeEvent(event)
     
     def check_google_auth_status(self):
@@ -715,6 +723,10 @@ class LoginDialog(BaseAuthDialog):
                 
                 # Get user info
                 user_response = _supabase_manager.get_user()
+                if not user_response or not hasattr(user_response, 'user'):
+                    logger.error("Failed to get user info after Google auth")
+                    self._auth_completion_in_progress = False
+                    return
                 
                 # Check 2FA before proceeding
                 # 2FA temporarily disabled - commented out for now
@@ -739,7 +751,10 @@ class LoginDialog(BaseAuthDialog):
                 # Ensure session is saved
                 if hasattr(_supabase_manager, '_save_session') and user_response:
                     logger.info(f"Explicitly saving Google session with remember_me={remember_me}")
-                    _supabase_manager._save_session(user_response, remember_me=remember_me)
+                    try:
+                        _supabase_manager._save_session(user_response, remember_me=remember_me)
+                    except Exception as save_error:
+                        logger.error(f"Error saving Google session: {save_error}")
                 
                 # PERFORMANCE: Single consolidated auth state update
                 try:
@@ -752,22 +767,38 @@ class LoginDialog(BaseAuthDialog):
                         # Use the optimized force refresh method if available
                         if hasattr(parent, 'force_auth_refresh_after_login'):
                             logger.info("🔄 Using optimized force_auth_refresh_after_login")
-                            parent.force_auth_refresh_after_login()
+                            try:
+                                parent.force_auth_refresh_after_login()
+                            except Exception as refresh_error:
+                                logger.error(f"Error in force_auth_refresh_after_login: {refresh_error}")
                         elif hasattr(parent, 'update_auth_state'):
                             logger.info("🔄 Using direct update_auth_state")
-                            parent.update_auth_state(True)
+                            try:
+                                parent.update_auth_state(True)
+                            except Exception as update_error:
+                                logger.error(f"Error in update_auth_state: {update_error}")
                         
                         QApplication.processEvents()
                 except Exception as e:
                     logger.error(f"Error updating parent window: {e}")
                 
+                # Clear the completion flag
+                self._auth_completion_in_progress = False
+                
                 # Show confirmation message and close dialog
-                QMessageBox.information(self, "Login Successful", 
-                                      f"You are now logged in as {user_email}")
+                try:
+                    QMessageBox.information(self, "Login Successful", 
+                                          f"You are now logged in as {user_email}")
+                except Exception as msg_error:
+                    logger.error(f"Error showing success message: {msg_error}")
+                
                 self.accept()
                 
                 # Emit our own signal for consistency
-                self.auth_completed.emit(True, user_response)
+                try:
+                    self.auth_completed.emit(True, user_response)
+                except Exception as signal_error:
+                    logger.error(f"Error emitting auth completed signal: {signal_error}")
                 
                 # Stop the timer
                 if hasattr(self, '_google_auth_timer'):
@@ -781,6 +812,9 @@ class LoginDialog(BaseAuthDialog):
                 
         except Exception as e:
             logger.error(f"Error checking Google auth status: {e}")
+            # Clear the completion flag on error
+            if hasattr(self, '_auth_completion_in_progress'):
+                self._auth_completion_in_progress = False
             # Don't stop the timer on error, just keep trying
     
 
@@ -840,17 +874,19 @@ class LoginDialog(BaseAuthDialog):
     def on_oauth_completed(self, success, response):
         """Handle OAuth completion."""
         try:
+            logger.info("🔄 OAuth completion started - logging entire process")
+            
             if not success:
-                logger.error("OAuth completion failed")
+                logger.error("❌ OAuth completion failed - success=False")
                 self.show_error("Authentication failed. Please try again.")
                 return
             
             if not response:
-                logger.error("OAuth completion failed - no response")
+                logger.error("❌ OAuth completion failed - no response")
                 self.show_error("Authentication failed. Please try again.")
                 return
             
-            logger.info(f"OAuth completion successful for provider: {self.pending_provider}")
+            logger.info(f"✅ OAuth completion successful for provider: {self.pending_provider}")
             
             # PERFORMANCE: Prevent multiple simultaneous auth completions
             if hasattr(self, '_auth_completion_in_progress') and self._auth_completion_in_progress:
@@ -859,52 +895,97 @@ class LoginDialog(BaseAuthDialog):
                 
             # Set flag to prevent duplicate completions
             self._auth_completion_in_progress = True
+            logger.info("🔒 Set auth completion flag to prevent duplicates")
             
             # Get the Supabase manager (not the client)
+            logger.info("🔍 Getting Supabase manager...")
             from trackpro.database.supabase_client import _supabase_manager
             if not _supabase_manager:
-                logger.error("Supabase manager not initialized in on_oauth_completed")
+                logger.error("❌ Supabase manager not initialized in on_oauth_completed")
+                self._auth_completion_in_progress = False
                 return
             
+            logger.info("✅ Supabase manager found")
+            
             # Get user info
+            logger.info("🔍 Getting user info from Supabase...")
             user_response = _supabase_manager.get_user()
             if not user_response or not hasattr(user_response, 'user'):
-                logger.error("Failed to get user info after OAuth completion")
+                logger.error("❌ Failed to get user info after OAuth completion")
                 self.show_error("Authentication failed. Please try again.")
+                self._auth_completion_in_progress = False
                 return
+            
+            logger.info("✅ User info retrieved successfully")
             
             user = user_response.user
             user_email = user.email if hasattr(user, 'email') else 'User'
+            logger.info(f"👤 User email: {user_email}")
             
             # Check 2FA before proceeding
+            logger.info("🔍 Checking 2FA...")
             if not self.check_and_handle_2fa(user.id, user_email):
                 # 2FA failed, logout and return
+                logger.error("❌ 2FA check failed")
                 try:
                     _supabase_manager.sign_out()
                 except:
                     pass
+                self._auth_completion_in_progress = False
                 return
             
+            logger.info("✅ 2FA check passed")
+            
             # Check profile completeness
+            logger.info("🔍 Checking profile completeness...")
             self.check_profile_completeness_and_redirect(user.id)
+            logger.info("✅ Profile completeness check completed")
             
-            # Get remember_me preference if checkbox exists
+            # Get remember_me preference
             remember_me = self.remember_me_checkbox.isChecked() if hasattr(self, 'remember_me_checkbox') and self.remember_me_checkbox else True
+            logger.info(f"💾 Remember me setting: {remember_me}")
             
-            # Force save the session
-            if hasattr(_supabase_manager, '_save_session'):
-                logger.info(f"Explicitly saving session after OAuth completion with remember_me={remember_me}")
-                _supabase_manager._save_session(user_response, remember_me=remember_me)
+            # Save session - Note: Session should already be saved during OAuth process
+            logger.info("💾 Checking session status...")
+            # The session is already saved during the OAuth process in oauth_handler.py
+            # We don't need to save it again here since the OAuth response contains the tokens
+            logger.info("✅ Session already saved during OAuth process")
             
             # PERFORMANCE: Single consolidated auth state update
-            if hasattr(self.parent(), 'force_auth_refresh_after_login'):
-                logger.info("🔄 Single consolidated auth state update after OAuth completion")
-                refresh_success = self.parent().force_auth_refresh_after_login()
-                logger.info(f"🔄 Force auth refresh result: {refresh_success}")
-            else:
-                logger.warning("⚠️ Parent window doesn't have force_auth_refresh_after_login method")
+            logger.info("🔄 Starting auth state update...")
+            try:
+                parent = self.parent()
+                if parent:
+                    logger.info("✅ Parent window found")
+                    from PyQt6.QtWidgets import QApplication
+                    logger.info("🔄 Single consolidated auth state update after OAuth login")
+                    QApplication.processEvents()
+                    
+                    # Use the optimized force refresh method if available
+                    if hasattr(parent, 'force_auth_refresh_after_login'):
+                        logger.info("🔄 Using optimized force_auth_refresh_after_login")
+                        try:
+                            parent.force_auth_refresh_after_login()
+                            logger.info("✅ Force auth refresh completed")
+                        except Exception as refresh_error:
+                            logger.error(f"❌ Error in force_auth_refresh_after_login: {refresh_error}")
+                    elif hasattr(parent, 'update_auth_state'):
+                        logger.info("🔄 Using direct update_auth_state")
+                        try:
+                            parent.update_auth_state(True)
+                            logger.info("✅ Update auth state completed")
+                        except Exception as update_error:
+                            logger.error(f"❌ Error in update_auth_state: {update_error}")
+                    
+                    QApplication.processEvents()
+                    logger.info("✅ QApplication.processEvents() completed")
+                else:
+                    logger.warning("⚠️ Parent window doesn't have force_auth_refresh_after_login method")
+            except Exception as e:
+                logger.error(f"❌ Error updating parent window: {e}")
             
             # Verify user is still set after refresh
+            logger.info("🔍 Verifying user after refresh...")
             try:
                 from trackpro.auth.user_manager import get_current_user
                 current_user = get_current_user()
@@ -915,12 +996,21 @@ class LoginDialog(BaseAuthDialog):
             except Exception as verify_error:
                 logger.error(f"❌ Error verifying user after refresh: {verify_error}")
             
+            # Clear the completion flag
+            logger.info("🔓 Clearing auth completion flag")
+            self._auth_completion_in_progress = False
+            
             # Close the dialog
+            logger.info("🚪 Closing login dialog...")
             self.accept()
+            logger.info("✅ Login dialog closed successfully")
             
         except Exception as e:
-            logger.error(f"Error in OAuth completion: {e}")
+            logger.error(f"❌ Error in OAuth completion: {e}")
             self.show_error(f"Authentication error: {str(e)}")
+            # Clear the completion flag on error
+            if hasattr(self, '_auth_completion_in_progress'):
+                self._auth_completion_in_progress = False
     
     def on_password_reset_required(self, access_token, refresh_token):
         """Handle password reset completion - this follows the exact same pattern as OAuth."""
@@ -1238,15 +1328,25 @@ class LoginDialog(BaseAuthDialog):
                 from trackpro.database.supabase_client import _supabase_manager
                 if hasattr(_supabase_manager, '_save_session') and response:
                     logger.info(f"Explicitly saving session with remember_me={remember_me}")
-                    _supabase_manager._save_session(response, remember_me=remember_me)
+                    try:
+                        _supabase_manager._save_session(response, remember_me=remember_me)
+                    except Exception as save_error:
+                        logger.error(f"Error saving session after password login: {save_error}")
                 
                 # PERFORMANCE: Single consolidated auth state update
-                if hasattr(self.parent(), 'force_auth_refresh_after_login'):
-                    logger.info("🔄 Single consolidated auth state update after password login")
-                    refresh_success = self.parent().force_auth_refresh_after_login()
-                    logger.info(f"🔄 Force auth refresh result: {refresh_success}")
-                else:
-                    logger.warning("⚠️ Parent window doesn't have force_auth_refresh_after_login method")
+                try:
+                    parent = self.parent()
+                    if parent and hasattr(parent, 'force_auth_refresh_after_login'):
+                        logger.info("🔄 Single consolidated auth state update after password login")
+                        try:
+                            refresh_success = parent.force_auth_refresh_after_login()
+                            logger.info(f"🔄 Force auth refresh result: {refresh_success}")
+                        except Exception as refresh_error:
+                            logger.error(f"Error in force_auth_refresh_after_login: {refresh_error}")
+                    else:
+                        logger.warning("⚠️ Parent window doesn't have force_auth_refresh_after_login method")
+                except Exception as parent_error:
+                    logger.error(f"Error accessing parent window: {parent_error}")
                 
                 # Verify user is still set after refresh
                 try:

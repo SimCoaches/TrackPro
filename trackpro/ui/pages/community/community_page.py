@@ -2499,87 +2499,96 @@ class CommunityPage(BasePage):
         try:
             logger.info("🏗️ Initializing heavy community components...")
             
+            # TEMPORARILY DISABLE HEAVY INITIALIZATION TO PREVENT CRASHES
+            logger.warning("⚠️ TEMPORARILY SKIPPING HEAVY COMMUNITY INITIALIZATION TO PREVENT CRASHES")
+            logger.warning("⚠️ Community features will be limited until crash is resolved")
+            
+            # Skip all heavy operations that might cause crashes
+            return
+            
+            # ORIGINAL CODE COMMENTED OUT FOR DEBUGGING:
             # Initialize community manager
-            try:
-                logger.info("🔧 Attempting to initialize CommunityManager...")
-                from trackpro.community.community_manager import CommunityManager
-                
-                # Check if CommunityManager has get_instance method (singleton pattern)
-                if hasattr(CommunityManager, 'get_instance'):
-                    self.community_manager = CommunityManager.get_instance()
-                    logger.info("✅ CommunityManager instance created using singleton pattern")
-                else:
-                    # Create normal instance if singleton pattern not implemented
-                    self.community_manager = CommunityManager()
-                    logger.info("✅ CommunityManager instance created normally")
-                
-                if self._community_manager:
-                    logger.info("✅ CommunityManager instance created successfully")
-                else:
-                    logger.error("❌ CommunityManager creation returned None")
-                    self._community_manager = None
-                
-            except ImportError as import_error:
-                logger.error(f"❌ Failed to import CommunityManager: {import_error}")
-                self.community_manager = None
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize community manager: {e}")
-                import traceback
-                logger.error(f"📋 Traceback: {traceback.format_exc()}")
-                self.community_manager = None
+            # try:
+            #     logger.info("🔧 Attempting to initialize CommunityManager...")
+            #     from trackpro.community.community_manager import CommunityManager
+            #     
+            #     # Check if CommunityManager has get_instance method (singleton pattern)
+            #     if hasattr(CommunityManager, 'get_instance'):
+            #         self.community_manager = CommunityManager.get_instance()
+            #         logger.info("✅ CommunityManager instance created using singleton pattern")
+            #     else:
+            #         # Create normal instance if singleton pattern not implemented
+            #         self.community_manager = CommunityManager()
+            #         logger.info("✅ CommunityManager instance created normally")
+            #     
+            #     if self._community_manager:
+            #         logger.info("✅ CommunityManager instance created successfully")
+            #     else:
+            #         logger.error("❌ CommunityManager creation returned None")
+            #         self._community_manager = None
+            #     
+            # except ImportError as import_error:
+            #     logger.error(f"❌ Failed to import CommunityManager: {import_error}")
+            #     self.community_manager = None
+            # except Exception as e:
+            #     logger.error(f"❌ Failed to initialize community manager: {e}")
+            #     import traceback
+            #     logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            #     self.community_manager = None
+            # 
+            # # Set current user
+            # self.set_current_user()
+            # 
+            # # Add a small delay to ensure user is set before loading data
+            # import time
+            # time.sleep(0.5)
             
-            # Set current user
-            self.set_current_user()
-            
-            # Add a small delay to ensure user is set before loading data
-            import time
-            time.sleep(0.5)
-            
-            # Verify current user is set
-            if hasattr(self, '_community_manager') and self._community_manager:
-                current_user_id = self._community_manager.get_current_user_id()
-                if not current_user_id:
-                    logger.warning("⚠️ Current user not set, retrying...")
-                    self.set_current_user()
-                    time.sleep(0.5)
-                    current_user_id = self._community_manager.get_current_user_id()
-                    if current_user_id:
-                        logger.info(f"✅ Current user set after retry: {current_user_id}")
-                    else:
-                        logger.error("❌ Failed to set current user after retry")
-                else:
-                    logger.info(f"✅ Current user already set: {current_user_id}")
-            
-            # START VOICE SERVER DURING PRE-LOADING FOR FASTER ACCESS
-            if VOICE_COMPONENTS_AVAILABLE:
-                try:
-                    if not is_voice_server_running():
-                        logger.info("🎤 Starting voice server during pre-loading...")
-                        start_voice_server()
-                        logger.info("✅ Voice server startup initiated during pre-loading")
-                    else:
-                        logger.info("✅ Voice server is already running")
-                except Exception as e:
-                    logger.error(f"❌ Failed to start voice server during pre-loading: {e}")
-            
-            # LOAD DATA DURING PRE-LOADING FOR FASTER ACCESS
-            try:
-                logger.info("📋 Loading channels and messages during pre-loading...")
-                self.load_channels_from_database()
-                self.load_private_messages()
-                self.load_friends_list()
-                self.load_friend_requests()
-                
-                # Add debug button for testing
-                self.add_debug_button()
-                
-                logger.info("✅ Data loading completed during pre-loading")
-            except Exception as e:
-                logger.error(f"❌ Failed to load data during pre-loading: {e}")
+            # ORIGINAL CODE COMMENTED OUT FOR DEBUGGING:
+            # # Verify current user is set
+            # if hasattr(self, '_community_manager') and self._community_manager:
+            #     current_user_id = self._community_manager.get_current_user_id()
+            #     if not current_user_id:
+            #         logger.warning("⚠️ Current user not set, retrying...")
+            #         self.set_current_user()
+            #         time.sleep(0.5)
+            #         current_user_id = self._community_manager.get_current_user_id()
+            #         if current_user_id:
+            #             logger.info(f"✅ Current user set after retry: {current_user_id}")
+            #         else:
+            #             logger.error("❌ Failed to set current user after retry")
+            #     else:
+            #         logger.info(f"✅ Current user already set: {current_user_id}")
+            # 
+            # # START VOICE SERVER DURING PRE-LOADING FOR FASTER ACCESS
+            # if VOICE_COMPONENTS_AVAILABLE:
+            #     try:
+            #         if not is_voice_server_running():
+            #             logger.info("🎤 Starting voice server during pre-loading...")
+            #             start_voice_server()
+            #             logger.info("✅ Voice server startup initiated during pre-loading")
+            #         else:
+            #             logger.info("✅ Voice server is already running")
+            #     except Exception as e:
+            #         logger.error(f"❌ Failed to start voice server during pre-loading: {e}")
+            # 
+            # # LOAD DATA DURING PRE-LOADING FOR FASTER ACCESS
+            # try:
+            #     logger.info("📋 Loading channels and messages during pre-loading...")
+            #     self.load_channels_from_database()
+            #     self.load_private_messages()
+            #     self.load_friends_list()
+            #     self.load_friend_requests()
+            #     
+            #     # Add debug button for testing
+            #     self.add_debug_button()
+            #     
+            #     logger.info("✅ Data loading completed during pre-loading")
+            # except Exception as e:
+            #     logger.error(f"❌ Failed to load data during pre-loading: {e}")
             
             self._initialization_complete = True
-            CommunityPage._heavy_components_initialized = True  # Set global flag
-            logger.info("✅ Heavy components initialization completed")
+            CommunityPage._heavy_components_initialized = True  # Set global flag (even when skipped)
+            logger.info("✅ Heavy components initialization completed (SKIPPED for debugging)")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize heavy components: {e}")

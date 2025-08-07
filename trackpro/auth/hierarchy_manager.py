@@ -43,9 +43,11 @@ class HierarchyManager:
         self.dynamic_admin_emails = set()
         # Defer loading dynamic admins to prevent startup hanging
         self._admins_loaded = False
+        # TEMPORARILY DISABLE ADMIN LOADING TO PREVENT CRASHES
         # Schedule admin loading for later
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(3000, self._load_dynamic_admins_async)
+        # from PyQt6.QtCore import QTimer
+        # QTimer.singleShot(3000, self._load_dynamic_admins_async)
+        logger.warning("⚠️ TEMPORARILY SKIPPING DYNAMIC ADMIN LOADING TO PREVENT CRASHES")
     
     def _load_dynamic_admins_async(self):
         """Load dynamic admin emails asynchronously after startup."""

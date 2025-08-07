@@ -57,9 +57,11 @@ def get_current_user():
                     )
                     logger.info(f"Found authenticated user from Supabase: {_current_user.email} (using default hierarchy during startup)")
                     
+                    # TEMPORARILY DISABLE HIERARCHY CHECK TO PREVENT CRASHES
                     # Schedule hierarchy check for later to prevent startup hanging
-                    from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(5000, _update_user_hierarchy_async)  # Update hierarchy after 5 seconds
+                    # from PyQt6.QtCore import QTimer
+                    # QTimer.singleShot(5000, _update_user_hierarchy_async)  # Update hierarchy after 5 seconds
+                    logger.warning("⚠️ TEMPORARILY SKIPPING HIERARCHY UPDATE TO PREVENT CRASHES")
                     
                     return _current_user
         except Exception as e:

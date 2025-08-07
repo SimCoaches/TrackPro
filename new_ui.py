@@ -61,7 +61,11 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
 # CRITICAL: Set Qt attributes BEFORE any QApplication instance can be created AND before importing QtWebEngineWidgets
+# Additional crash prevention attributes
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
+# Disable hardware acceleration if causing crashes
+# QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

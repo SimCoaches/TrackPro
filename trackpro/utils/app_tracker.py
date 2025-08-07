@@ -87,6 +87,13 @@ class AppTracker:
             if not self.is_running:
                 return True
             
+            # Check if we have a valid user_id before attempting to update
+            if not self.user_id:
+                logger.warning("Cannot end session - no user_id available")
+                self.is_running = False
+                self._stop_heartbeat()
+                return True
+            
             # Update session end time
             update_data = {
                 "session_end": datetime.utcnow().isoformat(),
@@ -107,6 +114,9 @@ class AppTracker:
             
         except Exception as e:
             logger.error(f"Error ending app session: {e}")
+            # Ensure we clean up even if there's an error
+            self.is_running = False
+            self._stop_heartbeat()
             return False
     
     def update_user_id(self, user_id: str) -> bool:
@@ -160,6 +170,7 @@ class AppTracker:
         """Update user's online status."""
         try:
             if not self.user_id:
+                logger.warning("Cannot update online status - no user_id available")
                 return False
             
             # Check if Supabase client is available
@@ -183,7 +194,7 @@ class AppTracker:
                 logger.debug(f"Updated online status: {is_online} for user {self.user_id}")
                 return True
             else:
-                logger.error("Failed to update online status")
+                logger.warning(f"Failed to update online status for user {self.user_id}")
                 return False
                 
         except Exception as e:

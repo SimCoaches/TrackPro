@@ -465,6 +465,7 @@ class ModernMainWindow(QMainWindow):
         # Set window icon to match system tray icon (only if not already set by application)
         try:
             # Check if application already set an icon
+            from PyQt6.QtWidgets import QApplication
             app_icon = QApplication.instance().windowIcon()
             if app_icon.isNull():
                 import os
@@ -1279,31 +1280,59 @@ class ModernMainWindow(QMainWindow):
     def show_login_dialog(self):
         """Show the login dialog."""
         try:
+            logger.info("🔄 show_login_dialog started - logging entire process")
+            
             from trackpro.auth.login_dialog import LoginDialog
             
+            logger.info("✅ LoginDialog imported successfully")
+            
             login_dialog = LoginDialog(self, oauth_handler=self.oauth_handler)
+            logger.info("✅ LoginDialog created successfully")
+            
+            logger.info("🔄 Executing login dialog...")
             result = login_dialog.exec()
+            logger.info(f"✅ Login dialog executed with result: {result}")
             
             if result == 1:  # Dialog was accepted (user logged in)
+                logger.info("🔐 User successfully logged in - processing post-login tasks")
+                
                 # Get user info and start app tracking
+                logger.info("🔍 Getting current user info...")
                 user_info = self.get_current_user_info()
                 if user_info and user_info.get('id'):
+                    logger.info(f"✅ Got user info: {user_info.get('name', 'Unknown')}")
+                    
+                    logger.info("🔄 Starting app tracking...")
                     self.start_app_tracking(user_info['id'])
+                    logger.info("✅ App tracking started")
+                    
+                    logger.info("🔄 Updating user online status...")
                     self.update_user_online_status(user_info['id'], True)
+                    logger.info("✅ User online status updated")
                     
                     # Force refresh sidebar to show current user
+                    logger.info("🔄 Forcing refresh of online users sidebar...")
                     if hasattr(self, 'online_users_sidebar'):
                         self.online_users_sidebar.force_refresh()
+                        logger.info("✅ Online users sidebar refreshed")
+                    else:
+                        logger.warning("⚠️ No online_users_sidebar found")
+                else:
+                    logger.warning("⚠️ No user info available after login")
                 
                 # Update authentication state immediately
+                logger.info("🔄 Updating authentication state...")
                 self.update_auth_state(True)
+                logger.info("✅ Authentication state updated")
+                
                 logger.info("🔐 User successfully logged in - updating navigation")
                 return True
             else:
+                logger.info("❌ Login dialog was cancelled or failed")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error showing login dialog: {e}")
+            logger.error(f"❌ Error showing login dialog: {e}")
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 self, 
@@ -1396,6 +1425,11 @@ class ModernMainWindow(QMainWindow):
     
     def update_auth_state(self, authenticated):
         """Update the entire UI based on authentication state."""
+        logger.info(f"🔄 update_auth_state called with authenticated={authenticated}")
+        
+        # CRITICAL: Use defensive programming to prevent crashes
+        # Each operation is isolated so failures don't cascade
+        
         try:
             # PERFORMANCE: Enhanced debouncing to prevent redundant auth state updates
             import time
@@ -1424,72 +1458,130 @@ class ModernMainWindow(QMainWindow):
             self._last_auth_state = authenticated
             self._last_auth_update_time = current_time
             
-            # Get user information if authenticated (cache it to avoid repeated calls)
-            user_info = None
-            if authenticated:
+        except Exception as setup_error:
+            logger.error(f"❌ Error in auth state setup: {setup_error}")
+            # Continue with auth update even if setup fails
+        
+        # Get user information if authenticated (ISOLATED)
+        user_info = None
+        if authenticated:
+            try:
+                logger.info("🔍 Getting user info for authenticated user...")
                 if self._cached_user_info is None:
                     self._cached_user_info = self.get_current_user_info()
                 user_info = self._cached_user_info
-            
-            # Update navigation with authentication state
+                logger.info(f"✅ User info retrieved: {user_info}")
+            except Exception as user_info_error:
+                logger.error(f"❌ Error getting user info: {user_info_error}")
+                # Continue without user info
+        
+        # Update navigation with authentication state (ISOLATED)
+        try:
+            logger.info("🔄 Updating navigation...")
             if hasattr(self, 'navigation') and hasattr(self.navigation, 'update_authentication_state'):
                 self.navigation.update_authentication_state(authenticated, user_info)
-                logger.info(f"🔐 Updated navigation with user info: {user_info}")
-            
-            # Update account page if it exists
+                logger.info(f"✅ Updated navigation with user info")
+            else:
+                logger.warning("⚠️ No navigation found or missing update_authentication_state method")
+        except Exception as nav_error:
+            logger.error(f"❌ Error updating navigation: {nav_error}")
+            # Continue with other updates
+        
+        # Update account page (ISOLATED)
+        try:
+            logger.info("🔄 Updating account page...")
             if "account" in self.pages and hasattr(self.pages["account"], 'update_auth_status'):
                 self.pages["account"].update_auth_status(authenticated)
+                logger.info("✅ Account page auth status updated")
             else:
                 # Call the method directly
                 self.update_account_page_auth_status(authenticated)
-            
-            # Update menu bar logout action visibility
+                logger.info("✅ Account page auth status updated via direct method")
+        except Exception as account_error:
+            logger.error(f"❌ Error updating account page: {account_error}")
+            # Continue with other updates
+        
+        # Update menu elements (ISOLATED)
+        try:
+            logger.info("🔄 Updating menu elements...")
             if hasattr(self, 'logout_action'):
                 self.logout_action.setVisible(authenticated)
-            
-            # Update menu bar logout button visibility
             if hasattr(self, 'logout_btn'):
                 self.logout_btn.setVisible(authenticated)
-            
-            # Update menu bar login/signup button visibility
             if hasattr(self, 'login_btn'):
                 self.login_btn.setVisible(not authenticated)
             if hasattr(self, 'signup_btn'):
                 self.signup_btn.setVisible(not authenticated)
-            
-            # Emit signal for other components
+            logger.info("✅ Menu elements updated")
+        except Exception as menu_error:
+            logger.error(f"❌ Error updating menu elements: {menu_error}")
+            # Continue with other updates
+        
+        # Emit signal for other components (ISOLATED)
+        try:
+            logger.info("🔄 Emitting auth state changed signal...")
             self.auth_state_changed.emit(authenticated)
-            
-            # Handle app tracking based on authentication state
+            logger.info("✅ Auth state changed signal emitted")
+        except Exception as signal_error:
+            logger.error(f"❌ Error emitting auth state signal: {signal_error}")
+            import traceback
+            logger.error(f"📋 Signal error traceback: {traceback.format_exc()}")
+            # Continue with other updates
+        
+        # Handle app tracking (ISOLATED)
+        try:
+            logger.info("🔄 Handling app tracking...")
             if authenticated and user_info:
-                # Start app tracking for authenticated user
                 user_id = user_info.get('id')
                 if user_id:
                     logger.info(f"🔐 Starting app tracking for authenticated user: {user_id}")
-                    # Use the global app tracker update function
                     success = update_app_tracker_user_id(user_id)
                     if success:
                         logger.info(f"✅ App tracking started for user: {user_id}")
                     else:
                         logger.warning(f"⚠️ Failed to start app tracking for user: {user_id}")
             else:
-                # Stop app tracking when user logs out
                 logger.info("🔐 Stopping app tracking - user logged out")
                 self.stop_app_tracking()
-            
-            # Force refresh sidebar when authentication state changes
-            self.force_refresh_sidebar()
-            
-            # Update all pages that need authentication state
-            for page_name, page in self.pages.items():
-                if hasattr(page, 'on_auth_state_changed'):
-                    page.on_auth_state_changed()
-            
-            # Mark startup auth check as completed
+                logger.info("✅ App tracking stopped")
+        except Exception as tracking_error:
+            logger.error(f"❌ Error with app tracking: {tracking_error}")
+            # Continue with other updates
+        
+        # Update pages (ISOLATED) - DEFER TO REDUCE CRASH RISK
+        try:
+            logger.info("🔄 Scheduling deferred page updates...")
+            from PyQt6.QtCore import QTimer
+            # Defer page updates to reduce immediate crash risk
+            QTimer.singleShot(500, lambda: self._update_pages_auth_state())
+            logger.info("✅ Page updates scheduled")
+        except Exception as page_schedule_error:
+            logger.error(f"❌ Error scheduling page updates: {page_schedule_error}")
+        
+        # TEMPORARILY DISABLE SIDEBAR REFRESH TO ISOLATE CRASH CAUSE
+        # This is often the most problematic operation that causes silent crashes
+        try:
+            logger.info("🔄 TEMPORARILY SKIPPING sidebar refresh to isolate crash...")
+            # TODO: Re-enable once crash is resolved
+            # from PyQt6.QtCore import QTimer
+            # QTimer.singleShot(1000, lambda: self._deferred_sidebar_refresh())
+            logger.info("✅ Sidebar refresh SKIPPED (temporary)")
+        except Exception as sidebar_schedule_error:
+            logger.error(f"❌ Error with sidebar refresh logic: {sidebar_schedule_error}")
+        
+        # Mark as completed
+        try:
             self._startup_auth_check_completed = True
-            
-        except Exception as e:
-            logger.error(f"Error updating auth state: {e}")
+            logger.info("✅ Auth state update completed successfully")
+        except Exception as completion_error:
+            logger.error(f"❌ Error marking auth update complete: {completion_error}")
+            try:
+                # At minimum, try to emit the signal
+                self.auth_state_changed.emit(False)
+                logger.info("✅ Emitted fallback auth state signal")
+            except:
+                logger.error("❌ Failed to emit fallback auth state signal")
+                pass
     
     def refresh_auth_state(self):
         """Manually refresh authentication state - useful for fixing sync issues."""
@@ -1553,6 +1645,8 @@ class ModernMainWindow(QMainWindow):
     def force_auth_refresh_after_login(self):
         """Force refresh authentication state after successful login."""
         try:
+            logger.info("🔄 Force auth refresh started - logging entire process")
+            
             # PERFORMANCE: Prevent multiple simultaneous auth refreshes
             if hasattr(self, '_auth_refresh_in_progress') and self._auth_refresh_in_progress:
                 logger.debug("🔄 Auth refresh already in progress, skipping duplicate call")
@@ -1560,28 +1654,40 @@ class ModernMainWindow(QMainWindow):
                 
             # Set flag to prevent duplicate refreshes
             self._auth_refresh_in_progress = True
+            logger.info("🔒 Set auth refresh flag to prevent duplicates")
             
             logger.info("🔄 Force refreshing authentication state after login...")
             
             # First, check if we have a user in the user manager
+            logger.info("🔍 Checking user manager for authenticated user...")
             from trackpro.auth.user_manager import get_current_user
             current_user = get_current_user()
             if current_user and current_user.is_authenticated:
                 logger.info(f"✅ Found authenticated user in user manager: {current_user.email}")
+                logger.info("🔄 Updating auth state to True...")
                 self.update_auth_state(True)
+                logger.info("✅ Auth state updated successfully")
                 
                 # Also update all pages that need authentication state
+                logger.info("🔄 Updating home page...")
                 if "home" in self.pages:
-                    self.pages["home"].refresh_header()
-                    # Also call the auth state changed method
-                    if hasattr(self.pages["home"], 'on_auth_state_changed'):
-                        self.pages["home"].on_auth_state_changed()
+                    try:
+                        self.pages["home"].refresh_header()
+                        logger.info("✅ Home page header refreshed")
+                        # Also call the auth state changed method
+                        if hasattr(self.pages["home"], 'on_auth_state_changed'):
+                            self.pages["home"].on_auth_state_changed()
+                            logger.info("✅ Home page auth state changed")
+                    except Exception as home_error:
+                        logger.error(f"❌ Error updating home page: {home_error}")
                 
                 # Clear the flag after successful completion
                 self._auth_refresh_in_progress = False
+                logger.info("🔓 Cleared auth refresh flag")
                 return True
             
             # If no user in user manager, try Supabase client
+            logger.info("🔍 No user in user manager, trying Supabase client...")
             from trackpro.database.supabase_client import get_supabase_client
             supabase_client = get_supabase_client()
             
@@ -1593,17 +1699,22 @@ class ModernMainWindow(QMainWindow):
                     if _supabase_manager:
                         _supabase_manager.initialize()
                         supabase_client = get_supabase_client()
+                        logger.info("✅ Supabase client reinitialized")
+                    else:
+                        logger.warning("⚠️ No Supabase manager available")
                 except Exception as e:
-                    logger.error(f"Error during Supabase reinitialization: {e}")
+                    logger.error(f"❌ Error during Supabase reinitialization: {e}")
             
             if supabase_client:
                 # Force a session refresh
+                logger.info("🔍 Getting session from Supabase...")
                 try:
                     session = supabase_client.auth.get_session()
                     if session and session.user:
                         logger.info("✅ Found valid session, updating UI...")
                         
                         # Ensure user is set in user manager
+                        logger.info("🔍 Setting user in user manager...")
                         from trackpro.auth.user_manager import User, set_current_user
                         authenticated_user = User(
                             id=session.user.id,
@@ -1614,26 +1725,35 @@ class ModernMainWindow(QMainWindow):
                         set_current_user(authenticated_user)
                         logger.info(f"✅ Set user in user manager from session: {authenticated_user.email}")
                         
+                        logger.info("🔄 Updating auth state to True...")
                         self.update_auth_state(True)
+                        logger.info("✅ Auth state updated successfully")
                         
                         # Also update all pages that need authentication state
+                        logger.info("🔄 Updating home page...")
                         if "home" in self.pages:
-                            self.pages["home"].refresh_header()
-                            # Also call the auth state changed method
-                            if hasattr(self.pages["home"], 'on_auth_state_changed'):
-                                self.pages["home"].on_auth_state_changed()
+                            try:
+                                self.pages["home"].refresh_header()
+                                logger.info("✅ Home page header refreshed")
+                                # Also call the auth state changed method
+                                if hasattr(self.pages["home"], 'on_auth_state_changed'):
+                                    self.pages["home"].on_auth_state_changed()
+                                    logger.info("✅ Home page auth state changed")
+                            except Exception as home_error:
+                                logger.error(f"❌ Error updating home page: {home_error}")
                         
                         # Clear the flag after successful completion
                         self._auth_refresh_in_progress = False
+                        logger.info("🔓 Cleared auth refresh flag")
                         return True
                     else:
-                        logger.warning("No valid session found after login")
+                        logger.warning("❌ No valid session found after login")
                         self.update_auth_state(False)
                         # Clear the flag after completion
                         self._auth_refresh_in_progress = False
                         return False
                 except Exception as session_error:
-                    logger.error(f"Error getting session: {session_error}")
+                    logger.error(f"❌ Error getting session: {session_error}")
                     self.update_auth_state(False)
                     # Clear the flag after completion
                     self._auth_refresh_in_progress = False
@@ -1646,130 +1766,68 @@ class ModernMainWindow(QMainWindow):
                 return False
             
         except Exception as e:
-            logger.error(f"Error in force_auth_refresh_after_login: {e}")
+            logger.error(f"❌ Error in force_auth_refresh_after_login: {e}")
             self.update_auth_state(False)
             # Clear the flag after completion
             self._auth_refresh_in_progress = False
             return False
     
     def get_current_user_info(self):
-        """Get current user information from the authentication system and profile database."""
+        """Get current user information."""
         try:
-            from trackpro.database.supabase_client import get_supabase_client
-            from trackpro.social import enhanced_user_manager
+            logger.info("🔄 get_current_user_info started...")
             
-            supabase_client = get_supabase_client()
-            if not supabase_client:
-                # Fallback to user manager if Supabase client isn't available
-                try:
-                    from trackpro.auth.user_manager import get_current_user
-                    current_user = get_current_user()
-                    if current_user is None:
-                        return None
-                    if current_user and current_user.is_authenticated:
-                        return {
-                            'email': current_user.email,
-                            'name': current_user.name,
-                            'user_id': current_user.id
-                        }
-                except Exception as fallback_error:
-                    logger.error(f"Error getting user from user manager: {fallback_error}")
-                return None
+            # Try to get user from user manager first
+            logger.info("🔍 Getting user from user manager...")
+            from trackpro.auth.user_manager import get_current_user
+            current_user = get_current_user()
             
-            # Use the correct auth.get_user method
-            user_response = supabase_client.auth.get_user()
-            
-            # Also try to get session info as fallback
-            if not user_response or not user_response.user:
-                session = supabase_client.auth.get_session()
-                if session and session.user:
-                    user_response = session
-            
-            if user_response and hasattr(user_response, 'user') and user_response.user:
-                user = user_response.user
+            if current_user and current_user.is_authenticated:
+                logger.info(f"✅ Found authenticated user in user manager: {current_user.email}")
                 
-                email = user.email or "No email available"
-                user_id = user.id
-                
-                # Try to get complete user profile first (includes avatar_url)
+                # Get complete user profile if available
+                logger.info("🔍 Getting complete user profile...")
                 try:
-                    complete_profile = enhanced_user_manager.get_complete_user_profile()
+                    from trackpro.social.user_manager import EnhancedUserManager
+                    user_manager = EnhancedUserManager()
+                    complete_profile = user_manager.get_complete_user_profile(current_user.id)
+                    
                     if complete_profile:
-                        # Use complete profile data which includes avatar_url
-                        name = complete_profile.get('display_name') or complete_profile.get('username') or "User"
-                        avatar_url = complete_profile.get('avatar_url')
-                        
-                        return {
-                            'email': email,
-                            'name': name,
-                            'user_id': user_id,
-                            'avatar_url': avatar_url
+                        logger.info(f"✅ Got complete profile for user: {complete_profile.get('display_name', 'Unknown')}")
+                        user_info = {
+                            'id': current_user.id,
+                            'email': current_user.email,
+                            'name': complete_profile.get('display_name') or complete_profile.get('username') or current_user.name,
+                            'avatar_url': complete_profile.get('avatar_url'),
+                            'username': complete_profile.get('username'),
+                            'display_name': complete_profile.get('display_name')
                         }
+                        logger.info(f"✅ Returning complete user info: {user_info.get('name', 'Unknown')}")
+                        return user_info
+                    else:
+                        logger.warning("⚠️ No complete profile found, using basic user info")
                 except Exception as profile_error:
-                    logger.debug(f"Could not get complete user profile: {profile_error}")
+                    logger.error(f"❌ Error getting complete profile: {profile_error}")
                 
-                # Fallback to basic user info if complete profile fails
-                name = "User"  # Default fallback
-                
-                # First, try to get name from user metadata (fastest and already available)
-                metadata = getattr(user, 'user_metadata', {})
-                
-                # Try different metadata fields for name
-                if metadata.get('full_name'):
-                    name = metadata['full_name']
-                elif metadata.get('name'):
-                    name = metadata['name']
-                elif metadata.get('first_name') and metadata.get('last_name'):
-                    # Handle case sensitivity - first_name might be uppercase
-                    first_name = metadata['first_name']
-                    last_name = metadata['last_name']
-                    # Convert to proper case if all caps
-                    if first_name.isupper():
-                        first_name = first_name.title()
-                    if last_name.isupper():
-                        last_name = last_name.title()
-                    name = f"{first_name} {last_name}"
-                elif metadata.get('first_name'):
-                    first_name = metadata['first_name']
-                    if first_name.isupper():
-                        first_name = first_name.title()
-                    name = first_name
-                elif metadata.get('display_name'):
-                    name = metadata['display_name']
-                elif metadata.get('username'):
-                    name = metadata['username']
-                elif metadata.get('preferred_username'):
-                    name = metadata['preferred_username']
-                
-                # If no name from metadata, fallback to user_details table
-                if name == "User":
-                    try:
-                        profile_result = supabase_client.table('user_details').select('first_name, last_name').eq('user_id', user_id).execute()
-                        
-                        if profile_result.data and len(profile_result.data) > 0:
-                            profile = profile_result.data[0]
-                            
-                            # Combine first and last name from user_details table
-                            if profile.get('first_name') and profile.get('last_name'):
-                                name = f"{profile['first_name']} {profile['last_name']}"
-                            elif profile.get('first_name'):
-                                name = profile['first_name']
-                    except Exception as db_error:
-                        logger.debug(f"Could not get user details from database: {db_error}")
-                
-                return {
-                    'email': email,
-                    'name': name,
-                    'user_id': user_id
+                # Fallback to basic user info
+                user_info = {
+                    'id': current_user.id,
+                    'email': current_user.email,
+                    'name': current_user.name or current_user.email,
+                    'avatar_url': None,
+                    'username': None,
+                    'display_name': current_user.name or current_user.email
                 }
-            
-            return None
-            
+                logger.info(f"✅ Returning basic user info: {user_info.get('name', 'Unknown')}")
+                return user_info
+            else:
+                logger.info("ℹ️ No authenticated user found in user manager")
+                return None
+                
         except Exception as e:
-            logger.error(f"Error getting current user info: {e}")
+            logger.error(f"❌ Error in get_current_user_info: {e}")
             return None
     
-
     def on_avatar_uploaded(self, avatar_url: str):
         """Handle avatar upload events and refresh navigation."""
         try:
@@ -1867,22 +1925,57 @@ class ModernMainWindow(QMainWindow):
     
     def force_refresh_sidebar(self):
         """Force refresh the online users sidebar."""
-        # PERFORMANCE: Add debouncing to prevent redundant sidebar refreshes
-        import time
-        current_time = time.time()
-        
-        # Skip if called too frequently (within 1 second)
-        if hasattr(self, '_last_sidebar_refresh_time'):
-            if current_time - self._last_sidebar_refresh_time < 1.0:
-                logger.debug("🔄 Skipping sidebar refresh - called too frequently")
-                return
+        try:
+            logger.info("🔄 force_refresh_sidebar started...")
+            
+            if hasattr(self, 'online_users_sidebar'):
+                logger.info("✅ Online users sidebar found")
+                try:
+                    self.online_users_sidebar.force_refresh()
+                    logger.info("✅ Online users sidebar force refresh completed")
+                except Exception as sidebar_error:
+                    logger.error(f"❌ Error in online users sidebar force refresh: {sidebar_error}")
+            else:
+                logger.warning("⚠️ No online_users_sidebar found")
                 
-        self._last_sidebar_refresh_time = current_time
-        
-        if hasattr(self, 'online_users_sidebar'):
-            self.online_users_sidebar.force_refresh()
-            logger.info("🔄 Forced refresh of online users sidebar")
-        # Could save preference or adjust layout here if needed
+        except Exception as e:
+            logger.error(f"❌ Error in force_refresh_sidebar: {e}")
+    
+    def _deferred_sidebar_refresh(self):
+        """Deferred sidebar refresh to prevent immediate crashes."""
+        try:
+            logger.info("🔄 Executing deferred sidebar refresh...")
+            self.force_refresh_sidebar()
+            logger.info("✅ Deferred sidebar refresh completed")
+        except Exception as e:
+            logger.error(f"❌ Error in deferred sidebar refresh: {e}")
+    
+    def _update_pages_auth_state(self):
+        """Deferred page auth state updates to prevent immediate crashes."""
+        try:
+            logger.info("🔄 Executing deferred page auth state updates...")
+            for page_name, page in self.pages.items():
+                # TEMPORARILY SKIP COMMUNITY PAGE TO PREVENT CRASHES
+                if page_name == "community":
+                    logger.warning(f"⚠️ TEMPORARILY SKIPPING {page_name} page updates to prevent crashes")
+                    continue
+                    
+                if hasattr(page, 'on_auth_state_changed'):
+                    try:
+                        logger.info(f"🔄 Updating page: {page_name}")
+                        page.on_auth_state_changed()
+                        logger.info(f"✅ Updated page: {page_name}")
+                    except Exception as page_error:
+                        logger.error(f"❌ Error updating page {page_name}: {page_error}")
+                        import traceback
+                        logger.error(f"📋 Traceback for {page_name}: {traceback.format_exc()}")
+                        # Continue with other pages even if one fails
+                        continue
+            logger.info("✅ Deferred page updates completed")
+        except Exception as e:
+            logger.error(f"❌ Error in deferred page updates: {e}")
+            import traceback
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
     
     def debug_sidebar_issues(self):
         """Debug method to help diagnose sidebar issues."""

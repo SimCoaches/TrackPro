@@ -710,12 +710,17 @@ class OAuthHandler(QObject):
                     # Emit auth completed signal
                     self.parent.auth_completed.emit(True, mock_response)
                     
-                    # Show success message
-                    QTimer.singleShot(1000, lambda: QMessageBox.information(
-                        None, 
-                        "Authentication Successful", 
-                        f"You are now logged in as {mock_response.user.email}!"
-                    ))
+                    # Show success message - ensure we're on the GUI thread
+                    from PyQt6.QtCore import QThread
+                    from PyQt6.QtWidgets import QApplication
+                    if QThread.currentThread() == QApplication.instance().thread():
+                        QTimer.singleShot(1000, lambda: QMessageBox.information(
+                            None, 
+                            "Authentication Successful", 
+                            f"You are now logged in as {mock_response.user.email}!"
+                        ))
+                    else:
+                        logger.warning("Cannot show success message - not on GUI thread")
                     
                 except Exception as e:
                     logger.error(f"Error processing tokens: {e}", exc_info=True)
@@ -812,7 +817,12 @@ class OAuthHandler(QObject):
                                 # Emit the appropriate signal based on profile completeness
                                 if not has_complete_profile:
                                     logger.info(f"Queueing public profile_completion_required emit for user {result.user.email}")
-                                    QTimer.singleShot(0, lambda: self.profile_completion_required.emit(result))
+                                    from PyQt6.QtCore import QThread
+                                    from PyQt6.QtWidgets import QApplication
+                                    if QThread.currentThread() == QApplication.instance().thread():
+                                        QTimer.singleShot(0, lambda: self.profile_completion_required.emit(result))
+                                    else:
+                                        logger.warning("Not on GUI thread - skipping profile completion signal")
                                 else:
                                     logger.info(f"User has complete profile, proceeding with normal auth flow")
                             except Exception as profile_e:
@@ -836,32 +846,65 @@ class OAuthHandler(QObject):
                                 logger.warning("Supabase manager not available for session verification")
                             
                             # Show success message in separate thread to avoid blocking
-                            QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful", 
-                                                           "You have been successfully signed in!"))
+                            from PyQt6.QtCore import QThread
+                            from PyQt6.QtWidgets import QApplication
+                            if QThread.currentThread() == QApplication.instance().thread():
+                                QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful", 
+                                                               "You have been successfully signed in!"))
+                            else:
+                                logger.warning("Not on GUI thread - skipping success message")
                             
                             # Emit signal to parent
                             self.parent.auth_completed.emit(True, result)
 
                             # Force update the main window if it exists
-                            QTimer.singleShot(1000, lambda: self.update_main_window())
+                            try:
+                                from PyQt6.QtCore import QThread
+                                if QThread.currentThread() == QApplication.instance().thread():
+                                    QTimer.singleShot(1000, lambda: self.update_main_window())
+                                else:
+                                    logger.warning("Not on main thread - skipping main window update")
+                            except Exception as timer_error:
+                                logger.error(f"Error setting up main window update timer: {timer_error}")
                         else:
                             logger.error("Failed to exchange code for session")
                             error_detail = getattr(result, 'error', 'Unknown error during code exchange')
                             # Show error message in separate thread to avoid blocking
-                            QTimer.singleShot(500, lambda: QMessageBox.warning(None, "Authentication Failed",
+                            try:
+                                from PyQt6.QtCore import QThread
+                                if QThread.currentThread() == QApplication.instance().thread():
+                                    QTimer.singleShot(500, lambda: QMessageBox.warning(None, "Authentication Failed",
                                                        f"Failed to complete authentication: {error_detail}. Please try again."))
+                                else:
+                                    logger.warning("Not on main thread - skipping error message")
+                            except Exception as timer_error:
+                                logger.error(f"Error setting up error message timer: {timer_error}")
                             self.parent.auth_completed.emit(False, None)
                     except Exception as e:
                         logger.error(f"Error exchanging code: {e}", exc_info=True)
-                        QTimer.singleShot(500, lambda: QMessageBox.critical(None, "Authentication Error", 
+                        try:
+                            from PyQt6.QtCore import QThread
+                            if QThread.currentThread() == QApplication.instance().thread():
+                                QTimer.singleShot(500, lambda: QMessageBox.critical(None, "Authentication Error", 
                                                   f"Error exchanging code: {str(e)}"))
+                            else:
+                                logger.warning("Not on main thread - skipping error message")
+                        except Exception as timer_error:
+                            logger.error(f"Error setting up error message timer: {timer_error}")
                         self.parent.auth_completed.emit(False, None)
                         
                 except Exception as e:
                     logger.error(f"Error processing callback: {e}", exc_info=True) # Log traceback
                     # Show error message for exceptions
-                    QTimer.singleShot(500, lambda: QMessageBox.critical(None, "Authentication Error", 
-                                                   f"Error during authentication: {str(e)}"))
+                    try:
+                        from PyQt6.QtCore import QThread
+                        if QThread.currentThread() == QApplication.instance().thread():
+                            QTimer.singleShot(500, lambda: QMessageBox.critical(None, "Authentication Error", 
+                                               f"Error during authentication: {str(e)}"))
+                        else:
+                            logger.warning("Not on main thread - skipping error message")
+                    except Exception as timer_error:
+                        logger.error(f"Error setting up error message timer: {timer_error}")
                     self.parent.auth_completed.emit(False, None)
 
             def update_main_window(self):
@@ -916,11 +959,18 @@ class OAuthHandler(QObject):
                         
                         if main_window:
                             # Show success notification
-                            QTimer.singleShot(500, lambda: QMessageBox.information(
-                                main_window, 
-                                "Login Successful",
-                                f"Welcome back! You are now logged in as {user_response.user.email}"
-                            ))
+                            try:
+                                from PyQt6.QtCore import QThread
+                                if QThread.currentThread() == QApplication.instance().thread():
+                                    QTimer.singleShot(500, lambda: QMessageBox.information(
+                                        main_window, 
+                                        "Login Successful",
+                                        f"Welcome back! You are now logged in as {user_response.user.email}"
+                                    ))
+                                else:
+                                    logger.warning("Not on main thread - skipping success notification")
+                            except Exception as timer_error:
+                                logger.error(f"Error setting up success notification timer: {timer_error}")
                         else:
                             logger.warning("Could not find main window to show success notification")
                     else:
@@ -928,12 +978,19 @@ class OAuthHandler(QObject):
 
                 except Exception as e:
                     logger.error(f"Error updating main window: {e}", exc_info=True) # Log traceback
-                    QTimer.singleShot(1000, lambda: QMessageBox.critical(
-                        None, 
-                        "Error", 
-                        f"Error updating authentication state: {str(e)}\n\n"
-                        "Please restart the application."
-                    ))
+                    try:
+                        from PyQt6.QtCore import QThread
+                        if QThread.currentThread() == QApplication.instance().thread():
+                            QTimer.singleShot(1000, lambda: QMessageBox.critical(
+                                None, 
+                                "Error", 
+                                f"Error updating authentication state: {str(e)}\n\n"
+                                "Please restart the application."
+                            ))
+                        else:
+                            logger.warning("Not on main thread - skipping error notification")
+                    except Exception as timer_error:
+                        logger.error(f"Error setting up error notification timer: {timer_error}")
         
         # Create the server in a separate thread
         handler = CallbackHandler
