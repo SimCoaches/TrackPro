@@ -13,9 +13,10 @@ from PyQt6.QtWidgets import (
     QMenu
 )
 from PyQt6.QtGui import QAction
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QThread, QMetaObject
 from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont
 from PyQt6.QtGui import QPainterPath
+from PyQt6.QtWidgets import QApplication
 
 logger = logging.getLogger(__name__)
 
@@ -196,15 +197,25 @@ class OnlineUserItem(QWidget):
             return None
     
     def _on_avatar_loaded(self, pixmap, avatar_label):
-        """Handle avatar loaded callback."""
+        """Handle avatar loaded callback with thread safety."""
         try:
             if avatar_label:
-                avatar_label.setPixmap(pixmap)
-                logger.debug(f"Successfully updated avatar with image")
+                # Ensure we're on the main thread for UI updates
+                if QThread.currentThread() == QApplication.instance().thread():
+                    # We're on the main thread, update directly
+                    avatar_label.setPixmap(pixmap)
+                else:
+                    # We're on a background thread, invoke on main thread
+                    QMetaObject.invokeMethod(
+                        avatar_label,
+                        lambda: avatar_label.setPixmap(pixmap),
+                        Qt.ConnectionType.QueuedConnection
+                    )
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error updating avatar label: {e}")
+            logger.error(f"Error updating avatar in sidebar: {e}")
+            # Fallback to initials
+            if avatar_label:
+                avatar_label.setText("U")
         
         try:
             from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest

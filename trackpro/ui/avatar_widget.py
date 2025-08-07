@@ -9,7 +9,8 @@ for consistent avatar display.
 import logging
 from typing import Optional
 from PyQt6.QtWidgets import QLabel
-from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject, QThread, QApplication
+from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject, QThread
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap
 
 from .avatar_manager import get_avatar_manager, AvatarSize

@@ -5,8 +5,9 @@ from PyQt6.QtWidgets import (
     QComboBox, QCheckBox, QFileDialog, QMessageBox, QSpinBox,
     QGroupBox, QGridLayout, QSizePolicy, QSpacerItem
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer, QPropertyAnimation, QEasingCurve, QThread, QMetaObject
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QPen, QBrush
+from PyQt6.QtWidgets import QApplication
 
 # Import user management functions
 from trackpro.auth.user_manager import is_current_user_dev
@@ -1775,12 +1776,27 @@ Total: ~128.0 MB | Last updated: Just now"""
                 self.profile_avatar.setText(f"{first_initial}{last_initial}")
     
     def _on_avatar_loaded(self, pixmap):
-        """Handle avatar loaded callback."""
+        """Handle avatar loaded callback with thread safety."""
         try:
-            # Update avatar display
-            if hasattr(self, 'profile_avatar'):
-                self.profile_avatar.setPixmap(pixmap)
-                self.profile_avatar.setText("")  # Clear text
+            # Ensure we're on the main thread for UI updates
+            if QThread.currentThread() == QApplication.instance().thread():
+                # We're on the main thread, update directly
+                if hasattr(self, 'profile_avatar'):
+                    self.profile_avatar.setPixmap(pixmap)
+                    self.profile_avatar.setText("")  # Clear text
+            else:
+                # We're on a background thread, invoke on main thread
+                if hasattr(self, 'profile_avatar'):
+                    QMetaObject.invokeMethod(
+                        self.profile_avatar,
+                        lambda: self.profile_avatar.setPixmap(pixmap),
+                        Qt.ConnectionType.QueuedConnection
+                    )
+                    QMetaObject.invokeMethod(
+                        self.profile_avatar,
+                        lambda: self.profile_avatar.setText(""),
+                        Qt.ConnectionType.QueuedConnection
+                    )
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -1790,64 +1806,6 @@ Total: ~128.0 MB | Last updated: Just now"""
                 first_initial = self.user_data.get("first_name", "U")[0].upper()
                 last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
                 self.profile_avatar.setText(f"{first_initial}{last_initial}")
-        
-        try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Get the avatar size from the profile_avatar widget
-                            avatar_size = self.profile_avatar.width() if hasattr(self, 'profile_avatar') else 80
-                            
-                            # Scale to fit avatar size
-                            scaled_pixmap = pixmap.scaled(
-                                avatar_size, avatar_size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(avatar_size, avatar_size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, avatar_size, avatar_size)
-                            painter.end()
-                            
-                            # Update avatar display
-                            if hasattr(self, 'profile_avatar'):
-                                self.profile_avatar.setPixmap(circular_pixmap)
-                                self.profile_avatar.setText("")  # Clear text
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    logger.error(f"Error processing downloaded avatar: {e}")
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-        except Exception as e:
-            logger.error(f"Error loading avatar from URL: {e}")
-    
-
     
     def remove_avatar(self):
         """Remove the current avatar."""

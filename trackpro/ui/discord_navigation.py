@@ -7,10 +7,11 @@ from PyQt6.QtWidgets import (
     QFrame, QToolTip, QSizePolicy
 )
 from PyQt6.QtCore import (
-    Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QRect
+    Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QRect, QThread, QMetaObject
 )
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QBrush, QPen
 from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWidgets import QApplication
 
 class DiscordNavigationButton(QPushButton):
     """Individual navigation button with Discord-style styling."""
@@ -571,16 +572,32 @@ class DiscordNavigation(QWidget):
             self.user_avatar_btn.setText("U")
     
     def _on_avatar_loaded(self, pixmap):
-        """Handle avatar loaded callback."""
+        """Handle avatar loaded callback with thread safety."""
         try:
-            # Update avatar display
-            self.user_avatar_btn.setIcon(QIcon(pixmap))
-            self.user_avatar_btn.setText("")  # Clear text
-            self.current_avatar_url = self.current_avatar_url  # Keep track of current URL
+            # Ensure we're on the main thread for UI updates
+            if QThread.currentThread() == QApplication.instance().thread():
+                # We're on the main thread, update directly
+                self.user_avatar_btn.setIcon(QIcon(pixmap))
+                self.user_avatar_btn.setText("")  # Clear text
+                self.current_avatar_url = self.current_avatar_url  # Keep track of current URL
+            else:
+                # We're on a background thread, invoke on main thread
+                QMetaObject.invokeMethod(
+                    self.user_avatar_btn,
+                    lambda: self.user_avatar_btn.setIcon(QIcon(pixmap)),
+                    Qt.ConnectionType.QueuedConnection
+                )
+                QMetaObject.invokeMethod(
+                    self.user_avatar_btn,
+                    lambda: self.user_avatar_btn.setText(""),
+                    Qt.ConnectionType.QueuedConnection
+                )
+                # Keep track of current URL (this is already set, just ensuring thread safety)
+                self.current_avatar_url = self.current_avatar_url
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f"Error updating avatar display: {e}")
+            logger.error(f"Error updating avatar in navigation: {e}")
             # Fallback to initials
             self.user_avatar_btn.setText("U")
         

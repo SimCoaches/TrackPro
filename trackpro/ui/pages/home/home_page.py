@@ -4,7 +4,8 @@ import logging
 from datetime import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QScrollArea, QFrame, QGridLayout, QPushButton)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread, QMetaObject
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor, QPen
 from ...modern.shared.base_page import BasePage
 
@@ -384,10 +385,19 @@ class HomePage(BasePage):
             self.create_avatar_with_initials("U", "User")
     
     def _on_avatar_loaded(self, pixmap):
-        """Handle avatar loaded callback."""
+        """Handle avatar loaded callback with thread safety."""
         try:
-            # Update avatar display
-            self.avatar_label.setPixmap(pixmap)
+            # Ensure we're on the main thread for UI updates
+            if QThread.currentThread() == QApplication.instance().thread():
+                # We're on the main thread, update directly
+                self.avatar_label.setPixmap(pixmap)
+            else:
+                # We're on a background thread, invoke on main thread
+                QMetaObject.invokeMethod(
+                    self.avatar_label,
+                    lambda: self.avatar_label.setPixmap(pixmap),
+                    Qt.ConnectionType.QueuedConnection
+                )
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
