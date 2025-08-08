@@ -878,6 +878,24 @@ class UserProfilePopup(QDialog):
         if user_id:
             logger.info(f"Viewing profile for user: {user_id}")
             self.view_profile_requested.emit(user_id)
+            # Also attempt immediate navigation if a main window is present
+            try:
+                main_window = self.window()
+                if main_window and hasattr(main_window, 'content_stack'):
+                    page_key = f"public_profile:{user_id}"
+                    if hasattr(main_window, 'pages') and page_key in getattr(main_window, 'pages', {}):
+                        main_window.content_stack.setCurrentWidget(main_window.pages[page_key])
+                        main_window.current_page = page_key
+                    else:
+                        from .pages.profile.public_profile_page import PublicProfilePage
+                        profile_widget = PublicProfilePage(getattr(main_window, 'global_managers', None), user_id, parent=main_window)
+                        main_window.content_stack.addWidget(profile_widget)
+                        if hasattr(main_window, 'pages') and isinstance(main_window.pages, dict):
+                            main_window.pages[page_key] = profile_widget
+                        main_window.content_stack.setCurrentWidget(profile_widget)
+                        main_window.current_page = page_key
+            except Exception as nav_error:
+                logger.debug(f"Inline navigation to public profile failed: {nav_error}")
         self.accept()
     
     def on_send_friend_request(self):

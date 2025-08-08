@@ -424,7 +424,31 @@ class OnlineUserItem(QWidget):
     
     def on_view_profile_requested(self):
         """Handle view profile request."""
-        self.user_clicked.emit(self.user_data)
+        try:
+            user_id = self.user_data.get('user_id')
+            if not user_id:
+                self.user_clicked.emit(self.user_data)
+                return
+            main_window = self.window()
+            if not main_window or not hasattr(main_window, 'content_stack'):
+                self.user_clicked.emit(self.user_data)
+                return
+            page_key = f"public_profile:{user_id}"
+            if hasattr(main_window, 'pages') and page_key in getattr(main_window, 'pages', {}):
+                main_window.content_stack.setCurrentWidget(main_window.pages[page_key])
+                main_window.current_page = page_key
+                return
+            from .pages.profile.public_profile_page import PublicProfilePage
+            profile_widget = PublicProfilePage(getattr(main_window, 'global_managers', None), user_id, parent=main_window)
+            main_window.content_stack.addWidget(profile_widget)
+            if hasattr(main_window, 'pages') and isinstance(main_window.pages, dict):
+                main_window.pages[page_key] = profile_widget
+            main_window.content_stack.setCurrentWidget(profile_widget)
+            main_window.current_page = page_key
+        except Exception as e:
+            logger.error(f"Failed to open profile from item: {e}")
+            # Fallback to legacy behavior
+            self.user_clicked.emit(self.user_data)
     
     def on_friend_request_requested(self):
         """Handle friend request request."""
@@ -1551,9 +1575,35 @@ class OnlineUsersSidebar(QWidget):
     def on_view_profile_requested(self, user_id: str):
         """Handle view profile request from popup."""
         logger.info(f"View profile requested for user: {user_id}")
-        # TODO: Navigate to user profile page
-        # This would typically emit a signal to the main window to navigate
-        # to the user's profile page
+        try:
+            # Find the main window and switch to a public profile page
+            main_window = self.window()
+            if not main_window:
+                return
+            # Create or switch to profile page dynamically
+            # Page key includes user id to allow multiple distinct profiles in stack
+            page_key = f"public_profile:{user_id}"
+            if hasattr(main_window, 'pages') and page_key in getattr(main_window, 'pages', {}):
+                main_window.content_stack.setCurrentWidget(main_window.pages[page_key])
+                main_window.current_page = page_key
+                return
+
+            # Lazy-create profile page
+            try:
+                from .pages.profile.public_profile_page import PublicProfilePage
+            except Exception as import_error:
+                logger.error(f"Could not import PublicProfilePage: {import_error}")
+                return
+
+            if hasattr(main_window, 'global_managers') and hasattr(main_window, 'content_stack'):
+                profile_widget = PublicProfilePage(main_window.global_managers, user_id, parent=main_window)
+                main_window.content_stack.addWidget(profile_widget)
+                if hasattr(main_window, 'pages') and isinstance(main_window.pages, dict):
+                    main_window.pages[page_key] = profile_widget
+                main_window.content_stack.setCurrentWidget(profile_widget)
+                main_window.current_page = page_key
+        except Exception as e:
+            logger.error(f"Failed to open public profile page: {e}")
     
     def on_friend_request_sent(self, user_id: str):
         """Handle friend request sent from popup."""

@@ -109,6 +109,7 @@ class DeadzoneWidget(QWidget):
         max_deadzone_plus = QPushButton("+")
         max_deadzone_minus.setFixedSize(20, 20)
         max_deadzone_plus.setFixedSize(20, 20)
+        
         max_deadzone_minus.setStyleSheet(deadzone_btn_style)
         max_deadzone_plus.setStyleSheet(deadzone_btn_style)
         
@@ -120,11 +121,16 @@ class DeadzoneWidget(QWidget):
         max_deadzone_layout.addWidget(max_deadzone_plus)
         
         deadzone_controls.addLayout(min_deadzone_layout)
-        deadzone_controls.addStretch()
         deadzone_controls.addLayout(max_deadzone_layout)
         
         group_layout.addLayout(deadzone_controls)
         layout.addWidget(group)
+    
+    def set_global_pedal_system(self, hardware, output, data_queue):
+        """Update the hardware input when it becomes available."""
+        # Store the hardware reference for potential future use
+        self.hardware_input = hardware
+        logger.info(f"✅ Hardware input updated for {self.pedal_name} deadzone widget")
     
     def adjust_min_deadzone(self, direction: int):
         self.min_deadzone = max(0, min(50, self.min_deadzone + direction))

@@ -10,10 +10,14 @@ logger = logging.getLogger(__name__)
 HID_USAGE_X = 0x30
 HID_USAGE_Y = 0x31
 HID_USAGE_Z = 0x32
-VJD_STAT_FREE = 0
-VJD_STAT_OWN = 1
+
+# vJoy device status (per SDK)
+# 0: OWN, 1: FREE, 2: BUSY, 3: MISS
+VJD_STAT_OWN = 0
+VJD_STAT_FREE = 1
 VJD_STAT_BUSY = 2
 VJD_STAT_MISS = 3
+
 AXIS_MIN = 0
 AXIS_MAX = 65535
 
@@ -80,11 +84,11 @@ class VirtualJoystick:
         self.vjoy_device_id = 4
         self.vjoy_acquired = False
         
-        # Try multiple device IDs if enabled
-        device_ids_to_try = [4]  # Start with device 4 as primary
+        # Try multiple device IDs
+        # Prefer common defaults first (1..8). Many systems only enable ID 1 by default.
+        device_ids_to_try = [1]
         if use_alt_devices:
-            # Add alternative device IDs to try (5, 6, 7)
-            device_ids_to_try.extend([5, 6, 7])
+            device_ids_to_try.extend([2, 3, 4, 5, 6, 7, 8])
         
         # Try to acquire a vJoy device
         acquired = False
@@ -96,20 +100,15 @@ class VirtualJoystick:
             # Try multiple times to acquire this device ID
             for attempt in range(retry_count):
                 try:
-                    # Check if vJoy device exists
-                    if not self.vjoy_dll.GetVJDStatus(device_id):
-                        logger.warning(f"vJoy Device {device_id} does not exist")
-                        continue
-                    
                     # Get device status
                     status = self.vjoy_dll.GetVJDStatus(device_id)
-                    
-                    if status == 0:  # VJD_STAT_OWN
+
+                    if status == VJD_STAT_OWN:
                         logger.info(f"vJoy Device {device_id} is already owned by this feeder")
                         self.vjoy_acquired = True
                         acquired = True
                         break
-                    elif status == 1:  # VJD_STAT_FREE
+                    elif status == VJD_STAT_FREE:
                         if self.vjoy_dll.AcquireVJD(device_id):
                             logger.info(f"Acquired vJoy Device {device_id}")
                             self.vjoy_acquired = True
@@ -118,13 +117,13 @@ class VirtualJoystick:
                         else:
                             last_error = f"Failed to acquire vJoy Device {device_id}"
                             logger.warning(last_error)
-                    elif status == 2:  # VJD_STAT_BUSY
+                    elif status == VJD_STAT_BUSY:
                         last_error = f"vJoy device {device_id} is already owned by another feeder"
                         logger.warning(last_error)
                         # Wait briefly before retrying
                         import time
                         time.sleep(0.5)
-                    elif status == 3:  # VJD_STAT_MISS
+                    elif status == VJD_STAT_MISS:
                         last_error = f"vJoy device {device_id} is not installed or disabled"
                         logger.warning(last_error)
                         break  # No point retrying this device ID

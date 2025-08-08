@@ -128,88 +128,48 @@ class PrivateMessageWidget(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
         
-        if self.is_own_message:
-            # Own message: content on right, avatar on right
-            layout.addStretch()
-            
-            # Message content
-            content_layout = QVBoxLayout()
-            content_layout.setSpacing(2)
-            
-            # Message text
-            message_label = QLabel(self.message_data.get('content', ''))
-            message_label.setWordWrap(True)
-            message_label.setStyleSheet("""
-                color: #ffffff; 
-                font-size: 13px; 
-                line-height: 1.4;
-                background-color: #3498db;
-                border-radius: 8px;
-                padding: 8px 12px;
-            """)
-            content_layout.addWidget(message_label)
-            
-            # Timestamp
-            timestamp = self.message_data.get('created_at', '')
-            if timestamp:
-                time_str = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%H:%M')
-                time_label = QLabel(time_str)
-                time_label.setStyleSheet("color: #888888; font-size: 11px; text-align: right;")
-                time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-                content_layout.addWidget(time_label)
-            
-            layout.addLayout(content_layout)
-            
-            # User avatar
-            user_profiles = self.message_data.get('user_profiles', {})
-            user_name = user_profiles.get('display_name') or user_profiles.get('username') or 'You'
-            self.avatar_label = QLabel()
-            self.avatar_label.setFixedSize(32, 32)
-            self.avatar_label.setPixmap(self.create_avatar(user_name, user_profiles))
-            layout.addWidget(self.avatar_label)
-            
-        else:
-            # Other's message: avatar on left, content on left
-            # User avatar
-            user_profiles = self.message_data.get('user_profiles', {})
-            user_name = user_profiles.get('display_name') or user_profiles.get('username') or 'User'
-            self.avatar_label = QLabel()
-            self.avatar_label.setFixedSize(32, 32)
-            self.avatar_label.setPixmap(self.create_avatar(user_name, user_profiles))
-            layout.addWidget(self.avatar_label)
-            
-            # Message content
-            content_layout = QVBoxLayout()
-            content_layout.setSpacing(2)
-            
-            # Username
-            username_label = QLabel(user_name)
-            username_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 12px;")
-            content_layout.addWidget(username_label)
-            
-            # Message text
-            message_label = QLabel(self.message_data.get('content', ''))
-            message_label.setWordWrap(True)
-            message_label.setStyleSheet("""
-                color: #ffffff; 
-                font-size: 13px; 
-                line-height: 1.4;
-                background-color: #2d2d2d;
-                border-radius: 8px;
-                padding: 8px 12px;
-            """)
-            content_layout.addWidget(message_label)
-            
-            # Timestamp
-            timestamp = self.message_data.get('created_at', '')
-            if timestamp:
-                time_str = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%H:%M')
-                time_label = QLabel(time_str)
-                time_label.setStyleSheet("color: #888888; font-size: 11px;")
-                content_layout.addWidget(time_label)
-            
-            layout.addLayout(content_layout, 1)
-            layout.addStretch()
+        # Unified left-aligned layout for all messages (own and others)
+        user_profiles = self.message_data.get('user_profiles', {})
+        user_name = user_profiles.get('display_name') or user_profiles.get('username') or ('You' if self.is_own_message else 'User')
+        
+        # Avatar on left
+        self.avatar_label = QLabel()
+        self.avatar_label.setFixedSize(32, 32)
+        self.avatar_label.setPixmap(self.create_avatar(user_name, user_profiles))
+        layout.addWidget(self.avatar_label)
+        
+        # Content on left
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(2)
+        
+        # Username
+        username_label = QLabel(user_name)
+        username_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 12px;")
+        content_layout.addWidget(username_label)
+        
+        # Message text (consistent style)
+        message_label = QLabel(self.message_data.get('content', ''))
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet("""
+            color: #ffffff; 
+            font-size: 13px; 
+            line-height: 1.4;
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 8px 12px;
+        """)
+        content_layout.addWidget(message_label)
+        
+        # Timestamp
+        timestamp = self.message_data.get('created_at', '')
+        if timestamp:
+            time_str = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%H:%M')
+            time_label = QLabel(time_str)
+            time_label.setStyleSheet("color: #888888; font-size: 11px;")
+            content_layout.addWidget(time_label)
+        
+        layout.addLayout(content_layout, 1)
+        layout.addStretch()
         
         # Set background
         self.setStyleSheet("""
@@ -420,6 +380,20 @@ class PrivateConversationWidget(QWidget):
             except Exception:
                 current_user_id = None
             try:
+                # Prefer real user profile data for self (prevents initials "YO")
+                display_name = 'You'
+                username = 'You'
+                avatar_url = None
+                try:
+                    if current_user_id:
+                        from trackpro.community.community_manager import CommunityManager
+                        _mgr = CommunityManager()
+                        me_profile = _mgr._get_user_data(current_user_id) or {}
+                        display_name = me_profile.get('display_name') or me_profile.get('username') or display_name
+                        username = me_profile.get('username') or username
+                        avatar_url = me_profile.get('avatar_url')
+                except Exception:
+                    pass
                 from datetime import datetime as _dt
                 local_msg = {
                     'conversation_id': self.conversation_id,
@@ -428,8 +402,9 @@ class PrivateConversationWidget(QWidget):
                     'created_at': _dt.utcnow().isoformat() + 'Z',
                     'user_profiles': {
                         'user_id': current_user_id or 'me',
-                        'display_name': 'You',
-                        'username': 'You'
+                        'display_name': display_name,
+                        'username': username,
+                        'avatar_url': avatar_url,
                     }
                 }
                 self.add_message(local_msg, is_own_message=True)
@@ -507,11 +482,11 @@ class PrivateConversationWidget(QWidget):
                 is_own = bool(me and me.is_authenticated and message_data.get('sender_id') == me.id)
             except Exception:
                 pass
-            # Skip duplicate if we just optimistically added the same content
+            # Skip duplicate if we just optimistically added the same content (compare trimmed content)
             try:
                 import time
                 sender_id = message_data.get('sender_id')
-                content = message_data.get('content')
+                content = (message_data.get('content') or '').strip()
                 key = f"{sender_id}|{content}|{self.conversation_id}"
                 expiry = self._recent_sent_keys.get(key)
                 if expiry and expiry > time.time():

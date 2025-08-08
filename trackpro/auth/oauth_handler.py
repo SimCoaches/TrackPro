@@ -678,6 +678,16 @@ class OAuthHandler(QObject):
                             self.refresh_token = token_data.get('refresh_token')
                             self.expires_in = token_data.get('expires_in')
                             self.token_type = token_data.get('token_type', 'bearer')
+                            # Calculate expires_at from expires_in if available
+                            if self.expires_in:
+                                from datetime import datetime, timedelta
+                                # Convert expires_in to integer if it's a string
+                                expires_in_seconds = int(self.expires_in) if isinstance(self.expires_in, str) else self.expires_in
+                                self.expires_at = datetime.now() + timedelta(seconds=expires_in_seconds)
+                            else:
+                                # Default to 1 hour if no expires_in
+                                from datetime import datetime, timedelta
+                                self.expires_at = datetime.now() + timedelta(hours=1)
                     
                     mock_response = MockAuthResponse(token_data)
                     

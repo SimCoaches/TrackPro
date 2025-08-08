@@ -2998,6 +2998,7 @@ class CommunityPage(BasePage):
     
     def _initialize_heavy_components(self):
         """Initialize heavy components that were deferred during construction."""
+        
         try:
             logger.info("🏗️ Initializing heavy community components...")
             # Initialize Community Manager safely
@@ -3609,32 +3610,6 @@ class CommunityPage(BasePage):
             
             if success:
                 logger.info("Private message sent successfully")
-                # Immediately reflect in the open conversation view
-                try:
-                    widget = getattr(self, 'current_conversation_widget', None)
-                    if widget and getattr(widget, 'conversation_id', None) == conversation_id:
-                        from datetime import datetime as _dt
-                        try:
-                            from ...auth.user_manager import get_current_user
-                            user = get_current_user()
-                        except Exception:
-                            user = None
-                        current_user_id = user.id if (user and getattr(user, 'is_authenticated', False)) else None
-                        user_profiles = {
-                            'user_id': current_user_id or 'me',
-                            'display_name': 'You',
-                            'username': 'You'
-                        }
-                        local_msg = {
-                            'conversation_id': conversation_id,
-                            'sender_id': current_user_id,
-                            'content': message_text,
-                            'created_at': _dt.utcnow().isoformat() + 'Z',
-                            'user_profiles': user_profiles,
-                        }
-                        widget.add_message(local_msg, is_own_message=True)
-                except Exception:
-                    pass
                 # Refresh the private messages list
                 self.refresh_private_messages()
             else:

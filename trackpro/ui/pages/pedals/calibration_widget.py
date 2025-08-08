@@ -252,12 +252,24 @@ class PedalCalibrationWidget(QWidget):
         self.max_label = None
         self.curve_selector = None
         self.calibration_chart = None
+        # Deadzone percentages for visualization and output calculation
+        self.min_deadzone = 0
+        self.max_deadzone = 0
         
         # Curve data
         self.curve_x = [0, 25, 50, 75, 100]
         self.curve_y = [0, 25, 50, 75, 100]
         self.curve_line = None
         self.scatter = None
+        self.response_dot = None
+        
+        # Caches to avoid redundant UI updates (reduce perceived lag)
+        self._last_input_progress = -1
+        self._last_output_progress = -1
+        self._last_input_label = None
+        self._last_output_label = None
+        self._last_dot_x = None
+        self._last_dot_y = None
         
         # Flag to prevent recursive validation
         self._is_fixing_curve = False
@@ -426,6 +438,24 @@ class PedalCalibrationWidget(QWidget):
             self.calibration_chart.setXRange(0, 100)
             self.calibration_chart.setYRange(0, 100)
             self.calibration_chart.setLimits(xMin=0, xMax=100, yMin=0, yMax=100)
+            # Enable high-performance, immediate mode updates for smooth dot motion
+            try:
+                self.calibration_chart.setClipToView(True)  # reduce overdraw
+            except Exception:
+                pass
+            try:
+                vb = self.calibration_chart.getViewBox()
+                if hasattr(vb, 'setMouseEnabled'):
+                    vb.setMouseEnabled(x=False, y=False)
+                if hasattr(vb, 'setDefaultPadding'):
+                    vb.setDefaultPadding(0.0)
+                if hasattr(vb, 'enableAutoRange'):
+                    vb.enableAutoRange(x=False, y=False)
+                if hasattr(vb, 'setOptimumAxisRange'):
+                    # not available in all versions; ignore if missing
+                    vb.setOptimumAxisRange()
+            except Exception:
+                pass
             
             # Add grid
             self.calibration_chart.showGrid(x=True, y=True, alpha=0.3)
@@ -433,6 +463,8 @@ class PedalCalibrationWidget(QWidget):
             # Initialize deadzone visualization
             self.min_deadzone_rect = None
             self.max_deadzone_rect = None
+            self.min_deadzone = 0
+            self.max_deadzone = 0
             
             # Set up the curve data with callback
             self.draggable_plot.set_curve_data(self.curve_x, self.curve_y, self.on_curve_points_changed)
@@ -441,6 +473,19 @@ class PedalCalibrationWidget(QWidget):
             self.calibration_chart.setMouseEnabled(x=False, y=False)
             
             chart_layout.addWidget(self.calibration_chart)
+            
+            # Add live response dot
+            try:
+                # Use a single-symbol, low-overhead marker for faster updates
+                self.response_dot = self.draggable_plot.pg.ScatterPlotItem(
+                    x=[0], y=[0], symbol='o', size=10,
+                    brush=self.draggable_plot.pg.mkBrush('#ffffff'),
+                    pen=self.draggable_plot.pg.mkPen('#000000', width=1)
+                )
+                self.calibration_chart.addItem(self.response_dot)
+            except Exception:
+                self.response_dot = None
+            
             # logger.info(f"Created draggable pyqtgraph chart for {self.pedal_name}")
         except ImportError:
             chart_placeholder = QLabel("Chart not available - pyqtgraph not installed")
@@ -592,6 +637,10 @@ class PedalCalibrationWidget(QWidget):
                     logger.debug(f"Error getting deadzone values: {e}")
                     min_deadzone = 0
                     max_deadzone = 0
+            else:
+                # Use stored values if widget is not available
+                min_deadzone = getattr(self, 'min_deadzone', 0)
+                max_deadzone = getattr(self, 'max_deadzone', 0)
                 
                 # Add min deadzone rectangle
                 if min_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
@@ -613,7 +662,9 @@ class PedalCalibrationWidget(QWidget):
                     )
                     self.calibration_chart.addItem(self.max_deadzone_rect)
                 
-                # Only log in debug mode if needed
+                # Persist for response dot clamping
+                self.min_deadzone = min_deadzone
+                self.max_deadzone = max_deadzone
                 # logger.debug(f"Updated deadzone visualization for {self.pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
                 
         except ImportError:
@@ -816,19 +867,60 @@ class PedalCalibrationWidget(QWidget):
         self.current_input = value
         
         if self.input_label:
-            self.input_label.setText(f"Raw Input: {value}")
+            text = f"Raw Input: {value}"
+            if text != self._last_input_label:
+                self.input_label.setText(text)
+                self._last_input_label = text
         
         if self.input_progress:
-            self.input_progress.setValue(value)
+            if value != self._last_input_progress:
+                self.input_progress.setValue(value)
+                self._last_input_progress = value
         
         # Calculate output based on current curve
         output_percentage = self.calculate_output_with_curve(value)
         
         if self.output_label:
-            self.output_label.setText(f"Output: {output_percentage:.1f}%")
+            out_text = f"Output: {output_percentage:.1f}%"
+            if out_text != self._last_output_label:
+                self.output_label.setText(out_text)
+                self._last_output_label = out_text
         
         if self.output_progress:
-            self.output_progress.setValue(int(output_percentage))
+            out_int = int(output_percentage)
+            if out_int != self._last_output_progress:
+                self.output_progress.setValue(out_int)
+                self._last_output_progress = out_int
+        
+        # Update the response dot on the curve respecting deadzones
+        try:
+            if PYTQTGRAPH_AVAILABLE and self.response_dot:
+                if self.max_value != self.min_value:
+                    normalized_input = ((value - self.min_value) / (self.max_value - self.min_value)) * 100.0
+                else:
+                    normalized_input = 0.0
+                normalized_input = max(0.0, min(100.0, normalized_input))
+                
+                lower = float(getattr(self, 'min_deadzone', 0))
+                upper = 100.0 - float(getattr(self, 'max_deadzone', 0))
+                if upper < lower:
+                    upper = lower
+                x_in = max(lower, min(upper, normalized_input))
+                
+                # Linear interpolation on the curve to get y at x
+                y_out = x_in
+                for i in range(len(self.curve_x) - 1):
+                    x1, y1 = self.curve_x[i], self.curve_y[i]
+                    x2, y2 = self.curve_x[i + 1], self.curve_y[i + 1]
+                    if x1 <= x_in <= x2:
+                        t = 0.0 if x2 == x1 else (x_in - x1) / (x2 - x1)
+                        y_out = y1 + t * (y2 - y1)
+                        break
+                # Always update the dot to keep motion perfectly responsive
+                self.response_dot.setData([x_in], [y_out])
+                self._last_dot_x, self._last_dot_y = x_in, y_out
+        except Exception:
+            pass
     
     def calculate_output_with_curve(self, raw_value: int) -> float:
         """Calculate output percentage based on input and current curve."""
@@ -838,6 +930,20 @@ class PedalCalibrationWidget(QWidget):
         # Normalize input to 0-100 range
         normalized_input = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
         normalized_input = max(0, min(100, normalized_input))
+        
+        # Apply deadzones: ignore below min_deadzone; clamp to 100 above (100 - max_deadzone)
+        min_dz = float(getattr(self, 'min_deadzone', 0))
+        max_dz = float(getattr(self, 'max_deadzone', 0))
+        if normalized_input <= min_dz:
+            return 0.0
+        if normalized_input > (100.0 - max_dz):
+            normalized_input = 100.0
+        # Rescale between deadzones to preserve 0..100 output span
+        if (min_dz > 0 or max_dz > 0) and normalized_input > min_dz and normalized_input < (100.0 if max_dz == 0 else 100.0):
+            usable = 100.0 - min_dz - max_dz
+            if usable > 0:
+                normalized_input = ((normalized_input - min_dz) / usable) * 100.0
+                normalized_input = max(0.0, min(100.0, normalized_input))
         
         # Sort points by x-coordinate for proper interpolation
         points = list(zip(self.curve_x, self.curve_y))
@@ -958,3 +1064,12 @@ class PedalCalibrationWidget(QWidget):
             'current_input': self.current_input,
             'curve_points': list(zip(self.curve_x, self.curve_y))
         }
+
+    def set_deadzone_values(self, min_deadzone: int, max_deadzone: int):
+        """Set deadzone percentages and refresh overlays/dot constraints."""
+        try:
+            self.min_deadzone = max(0, min(50, int(min_deadzone)))
+            self.max_deadzone = max(0, min(50, int(max_deadzone)))
+            self.update_deadzone_visualization()
+        except Exception:
+            pass

@@ -288,13 +288,24 @@ class PedalCalibrationPage(QWizardPage):
         self.current_value = 0
         self.values_collected = []
         self.calibration_started = False
+
+        # Axis detection helpers
+        self._baseline_ready = False
+        self._baseline_samples_needed = 15
+        self._baseline_accumulators = []  # running sums per axis
+        self._baseline_counts = 0
+        self._movement_confirm_frames = 0
+        self._candidate_axis = -1
+        # Absolute delta in 0..65535 space (lower for brake to reduce "stuck" feel)
+        self._movement_threshold = 4000
+        if self.pedal_name == "brake":
+            self._movement_threshold = 2500
         
         self.setup_ui()
         
-        # Timer for input updates
+        # Timer for input updates (started when page is active)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_input)
-        self.timer.start(16)  # ~60 FPS for smooth updates
 
     def setup_ui(self):
         """Setup the UI for this calibration page."""
@@ -407,6 +418,20 @@ class PedalCalibrationPage(QWizardPage):
         """Initialize the page when shown."""
         logger.info(f"Initializing calibration for {self.pedal_name}")
         self.reset_calibration()
+        # Start timer when the page becomes active
+        try:
+            if self.timer and not self.timer.isActive():
+                self.timer.start(16)
+        except Exception:
+            pass
+
+    def cleanupPage(self):
+        """Called by QWizard when the user leaves this page."""
+        try:
+            if self.timer and self.timer.isActive():
+                self.timer.stop()
+        except Exception:
+            pass
 
     def reset_calibration(self):
         """Reset calibration to initial state."""
@@ -416,6 +441,14 @@ class PedalCalibrationPage(QWizardPage):
         self.max_value = 0
         self.values_collected = []
         self.calibration_started = False
+
+        # Reset baseline detection
+        self._baseline_ready = False
+        self._baseline_samples_needed = 15
+        self._baseline_accumulators = []
+        self._baseline_counts = 0
+        self._movement_confirm_frames = 0
+        self._candidate_axis = -1
         
         self.instructions.setText(f"Press the {self.pedal_name.upper()} pedal FULLY and then RELEASE it completely")
         self.status.setText("Ready to calibrate. Press and release the pedal when ready.")
@@ -427,6 +460,14 @@ class PedalCalibrationPage(QWizardPage):
 
     def update_input(self):
         """Update input values and detect calibration."""
+        # Only process input when this page is the active wizard page
+        try:
+            wiz = self.wizard()
+            if wiz and wiz.currentPage() is not self:
+                return
+        except Exception:
+            pass
+
         if not self.hardware_input or not self.hardware_input.joystick:
             self.status.setText("⚠️ Sim Coaches P1 Pro Pedals not connected")
             return
@@ -447,17 +488,60 @@ class PedalCalibrationPage(QWizardPage):
                 scaled_value = int((raw_value + 1) * 32767.5)
                 current_raw_values.append(scaled_value)
 
-            # Auto-detect axis during calibration
-            if self.calibration_stage == "waiting":
-                # Look for significant movement to start calibration
+            # Build/update baseline for robust axis detection
+            if not self._baseline_ready:
+                axis_count = len(current_raw_values)
+                if not self._baseline_accumulators or len(self._baseline_accumulators) != axis_count:
+                    self._baseline_accumulators = [0] * axis_count
+                    self._baseline_counts = 0
+
                 for i, value in enumerate(current_raw_values):
-                    if abs(value - 32767) > 8000:  # Significant deviation from center
-                        self.detected_axis = i
+                    self._baseline_accumulators[i] += value
+                self._baseline_counts += 1
+
+                if self._baseline_counts >= self._baseline_samples_needed:
+                    # Convert sums to averages
+                    self._baseline_values = [acc // self._baseline_counts for acc in self._baseline_accumulators]
+                    self._baseline_ready = True
+
+            # Auto-detect axis during calibration (relative to baseline, excluding already used axes)
+            if self.calibration_stage == "waiting" and self._baseline_ready:
+                # Exclude axes already assigned in previous pages
+                used_axes = set()
+                try:
+                    wiz = self.wizard()
+                    if hasattr(wiz, 'used_axes'):
+                        used_axes = wiz.used_axes
+                except Exception:
+                    used_axes = set()
+
+                chosen_axis = -1
+                # Determine candidate by largest movement over threshold among unused axes
+                best_delta = 0
+                for i, value in enumerate(current_raw_values):
+                    if i in used_axes:
+                        continue
+                    delta = abs(value - self._baseline_values[i])
+                    if delta > self._movement_threshold and delta > best_delta:
+                        best_delta = delta
+                        chosen_axis = i
+
+                # Require a few consecutive frames confirming the same axis to avoid noise
+                if chosen_axis >= 0:
+                    if self._candidate_axis == chosen_axis:
+                        self._movement_confirm_frames += 1
+                    else:
+                        self._candidate_axis = chosen_axis
+                        self._movement_confirm_frames = 1
+
+                    if self._movement_confirm_frames >= 3:
+                        self.detected_axis = self._candidate_axis
                         self.calibration_stage = "calibrating"
                         self.calibration_started = True
-                        self.status.setText(f"🎯 Axis {i} detected! Continue moving the pedal...")
-                        logger.info(f"Auto-detected axis {i} for {self.pedal_name}")
-                        break
+                        self.status.setText(f"🎯 Axis {self.detected_axis} detected! Continue moving the pedal...")
+                        logger.info(f"Auto-detected axis {self.detected_axis} for {self.pedal_name}")
+                        # Enable Next button as soon as axis is detected
+                        self.completeChanged.emit()
 
             elif self.calibration_stage == "calibrating":
                 if self.detected_axis >= 0 and self.detected_axis < len(current_raw_values):
@@ -478,9 +562,17 @@ class PedalCalibrationPage(QWizardPage):
                         self.max_label.setText(f"Max: {self.max_value}")
                     
                     # Check if we have good calibration data
-                    if len(self.values_collected) > 60:  # About 1 second of data
+                    if len(self.values_collected) > 40:  # ~0.65s of data, quicker completion
                         range_size = self.max_value - self.min_value
-                        if range_size > 20000:  # Good range detected
+                        # Per-pedal required range so pages mark complete reliably
+                        required_range = 20000
+                        if self.pedal_name == "throttle":
+                            required_range = 7500
+                        elif self.pedal_name == "brake":
+                            required_range = 12000
+                        elif self.pedal_name == "clutch":
+                            required_range = 15000
+                        if range_size > required_range:  # Good range detected
                             self.calibration_stage = "complete"
                             self.status.setText("✅ Calibration complete! Good range detected.")
                             self.instructions.setText(f"✅ {self.pedal_name.capitalize()} calibration successful!")
@@ -489,9 +581,24 @@ class PedalCalibrationPage(QWizardPage):
                             self.setField(f"{self.pedal_name}_min", str(self.min_value))
                             self.setField(f"{self.pedal_name}_max", str(self.max_value))
                             self.setField(f"{self.pedal_name}_axis", str(self.detected_axis))
+
+                            # Mark axis as used so subsequent pages don't reuse it
+                            try:
+                                wiz = self.wizard()
+                                if hasattr(wiz, 'used_axes'):
+                                    wiz.used_axes.add(self.detected_axis)
+                            except Exception:
+                                pass
                             
                             self.completeChanged.emit()
                             logger.info(f"Calibration complete for {self.pedal_name}: min={self.min_value}, max={self.max_value}, axis={self.detected_axis}")
+
+            elif self.calibration_stage == "complete":
+                # Keep the live percentage/progress updating so the UI doesn't look frozen
+                if self.detected_axis >= 0 and self.detected_axis < len(current_raw_values):
+                    self.current_value = current_raw_values[self.detected_axis]
+                    self.current_label.setText(f"Current: {self.current_value}")
+                    self.progress_bar.setValue(self.current_value)
 
         except Exception as e:
             logger.error(f"Error during calibration: {e}")
@@ -499,16 +606,40 @@ class PedalCalibrationPage(QWizardPage):
 
     def isComplete(self):
         """Check if calibration is complete."""
-        return self.calibration_stage == "complete"
+        # Allow proceeding once axis has been detected; final values will be committed in validatePage
+        return self.calibration_stage in ("calibrating", "complete")
 
     def validatePage(self):
         """Validate before moving to next page."""
+        # If already complete, proceed
         if self.calibration_stage == "complete":
             return True
-        else:
-            QMessageBox.information(self, "Calibration Incomplete", 
-                                  f"Please complete the {self.pedal_name} calibration by pressing and releasing the pedal fully.")
-            return False
+
+        # If we're in calibrating state (axis detected), finalize with current observed min/max
+        if self.calibration_stage == "calibrating" and self.detected_axis >= 0:
+            try:
+                # Commit fields so finish handler can persist them
+                self.setField(f"{self.pedal_name}_min", str(self.min_value if self.min_value != 65535 else 0))
+                self.setField(f"{self.pedal_name}_max", str(self.max_value if self.max_value != 0 else 65535))
+                self.setField(f"{self.pedal_name}_axis", str(self.detected_axis))
+
+                # Mark axis as used for subsequent pages
+                try:
+                    wiz = self.wizard()
+                    if hasattr(wiz, 'used_axes'):
+                        wiz.used_axes.add(self.detected_axis)
+                except Exception:
+                    pass
+
+                # Optionally set to complete to keep state consistent
+                self.calibration_stage = "complete"
+                return True
+            except Exception:
+                pass
+
+        QMessageBox.information(self, "Calibration Incomplete", 
+                                f"Please complete the {self.pedal_name} calibration by pressing and releasing the pedal fully.")
+        return False
 
 class CongratulationsPage(QWizardPage):
     """Final congratulations page."""
@@ -619,7 +750,7 @@ class CalibrationWizard(QWizard):
     PAGE_THROTTLE = 1
     PAGE_BRAKE = 2
     PAGE_CLUTCH = 3
-    PAGE_COMPLETE = 4
+    PAGE_COMPLETE = 4  # No longer used (final page removed)
     
     calibration_complete = pyqtSignal(dict)
     
@@ -632,6 +763,9 @@ class CalibrationWizard(QWizard):
         
         # Store calibration results
         self.calibration_results = {}
+
+        # Track which physical axes have already been assigned by prior pages
+        self.used_axes = set()
         
         # Wizard options
         self.setOption(QWizard.WizardOption.IndependentPages, False)
@@ -718,15 +852,16 @@ class CalibrationWizard(QWizard):
             }
         """)
 
-        # Add pages
+        # Add pages (remove the final congratulations page per UX request)
         self.addPage(PedalSetSelectionPage(self))
         self.addPage(PedalCalibrationPage("throttle", self.hardware_input, self))
         self.addPage(PedalCalibrationPage("brake", self.hardware_input, self))
         self.addPage(PedalCalibrationPage("clutch", self.hardware_input, self))
-        self.addPage(CongratulationsPage(self))
         
         # Connect signals
         self.finished.connect(self.handle_finish)
+        # If there is no final page, make the Finish button appear on the last calibration step
+        self.setOption(QWizard.WizardOption.HaveFinishButtonOnEarlyPages, True)
         
         # Set size
         self.resize(600, 500)
@@ -746,9 +881,9 @@ class CalibrationWizard(QWizard):
             if hasattr(selection_page, 'get_pedal_count') and selection_page.get_pedal_count() == 3:
                 return self.PAGE_CLUTCH
             else:
-                return self.PAGE_COMPLETE
+                return -1
         elif current_id == self.PAGE_CLUTCH:
-            return self.PAGE_COMPLETE
+            return -1
         else:
             return -1
 
@@ -774,12 +909,18 @@ class CalibrationWizard(QWizard):
                     try:
                         min_field = self.field(f"{pedal}_min")
                         max_field = self.field(f"{pedal}_max")
-                        axis_field = self.field(f"{pedal}_axis")
                         
-                        # Parse values
+                        # Parse min/max from fields (labels)
                         min_val = int(min_field.replace("Min: ", "")) if isinstance(min_field, str) and "Min: " in min_field else int(min_field) if min_field else 0
                         max_val = int(max_field.replace("Max: ", "")) if isinstance(max_field, str) and "Max: " in max_field else int(max_field) if max_field else 65535
-                        axis_val = int(axis_field) if str(axis_field).isdigit() else -1
+
+                        # Read axis directly from the corresponding page attribute to avoid label parsing issues
+                        page_for_axis = {
+                            'throttle': self.page(self.PAGE_THROTTLE),
+                            'brake': self.page(self.PAGE_BRAKE),
+                            'clutch': self.page(self.PAGE_CLUTCH)
+                        }.get(pedal)
+                        axis_val = int(getattr(page_for_axis, 'detected_axis', -1)) if page_for_axis else -1
                         
                         results[pedal] = {
                             'min': min_val,
@@ -797,6 +938,15 @@ class CalibrationWizard(QWizard):
                 
                 # Emit completion signal
                 self.calibration_complete.emit(results)
+
+                # Proactively stop the per-page timers after finishing to avoid handle leaks
+                try:
+                    for page_id in [self.PAGE_THROTTLE, self.PAGE_BRAKE, self.PAGE_CLUTCH]:
+                        page = self.page(page_id)
+                        if page and hasattr(page, 'timer') and page.timer.isActive():
+                            page.timer.stop()
+                except Exception:
+                    pass
                 
             except Exception as e:
                 logger.error(f"Error processing calibration results: {e}")
