@@ -10,7 +10,7 @@ import logging
 # Import the quest card widget and Supabase functions
 from .quest_card_widget import QuestCardWidget
 from .notifications import LevelUpNotification, XPGainNotification, show_level_up_notification
-from trackpro.gamification.supabase_gamification import (
+from ..supabase_gamification import (
     get_user_quests, claim_quest_reward, assign_daily_quests, 
     assign_weekly_quests, get_user_profile
 )

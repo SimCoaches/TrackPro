@@ -115,8 +115,12 @@ class EnhancedUserManager(DatabaseManager):
                 
                 # Use upsert for user_profiles to handle cases where the record doesn't exist yet
                 profile_update['user_id'] = user_id
-                # Add select() to ensure data is returned after upsert
-                response = self.supabase.from_("user_profiles").upsert(profile_update, on_conflict='user_id').select().execute()
+                # Ensure data is returned after upsert using returning='representation'
+                response = self.supabase.from_("user_profiles").upsert(
+                    profile_update,
+                    on_conflict='user_id',
+                    returning='representation'
+                ).execute()
                 # Check for errors
                 if hasattr(response, 'error') and response.error:
                     logger.error(f"Failed to upsert user_profiles for user {user_id}: {response.error}")
@@ -127,8 +131,11 @@ class EnhancedUserManager(DatabaseManager):
                 # Use upsert for user_details to handle cases where the record doesn't exist yet
                 details_update['user_id'] = user_id
                 try:
-                    # Add select() to ensure data is returned after upsert
-                    response = self.supabase.from_("user_details").upsert(details_update, on_conflict='user_id').select().execute()
+                    response = self.supabase.from_("user_details").upsert(
+                        details_update,
+                        on_conflict='user_id',
+                        returning='representation'
+                    ).execute()
                     # Check for errors
                     if hasattr(response, 'error') and response.error:
                         logger.error(f"Failed to upsert user_details for user {user_id}: {response.error}")
@@ -158,7 +165,11 @@ class EnhancedUserManager(DatabaseManager):
                             logger.info("Created user_details table")
                             
                             # Now try the upsert again
-                            response = self.supabase.from_("user_details").upsert(details_update, on_conflict='user_id').select().execute()
+                            response = self.supabase.from_("user_details").upsert(
+                                details_update,
+                                on_conflict='user_id',
+                                returning='representation'
+                            ).execute()
                             if hasattr(response, 'error') and response.error:
                                 logger.error(f"Failed to upsert user_details for user {user_id} after table creation: {response.error}")
                                 return False
@@ -180,8 +191,10 @@ class EnhancedUserManager(DatabaseManager):
             if stats_update:
                 stats_update['updated_at'] = datetime.utcnow().isoformat()
                 response = self.supabase.from_("user_stats").upsert(
-                    {**stats_update, 'user_id': user_id}, on_conflict='user_id'
-                ).select().execute()
+                    {**stats_update, 'user_id': user_id},
+                    on_conflict='user_id',
+                    returning='representation'
+                ).execute()
                 if hasattr(response, 'error') and response.error:
                     logger.error(f"Failed to upsert user_stats for user {user_id}: {response.error}")
                     return False

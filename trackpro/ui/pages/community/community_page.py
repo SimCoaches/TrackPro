@@ -427,6 +427,7 @@ class ChatMessageWidget(QWidget):
         super().__init__()
         self.message_data = message_data
         self.user_role = user_role
+        self._context_menu_enabled = True
         
         # Debug logging to see the message data structure
         import logging
@@ -436,6 +437,60 @@ class ChatMessageWidget(QWidget):
         logger.info(f"🔍 Message user_profiles: {message_data.get('user_profiles', 'NOT_FOUND')}")
         
         self.setup_ui()
+
+    def contextMenuEvent(self, event):
+        try:
+            if not self._context_menu_enabled:
+                return
+            from PyQt6.QtWidgets import QMenu
+            menu = QMenu(self)
+            delete_action = menu.addAction("Delete Message")
+            action = menu.exec(event.globalPos())
+            if action == delete_action:
+                message_id = self.message_data.get("message_id")
+                if message_id:
+                    # Check current user permissions via hierarchy_manager
+                    can_delete = False
+                    try:
+                        from trackpro.auth.user_manager import get_current_user
+                        from trackpro.auth.hierarchy_manager import hierarchy_manager
+                        user = get_current_user()
+                        if user and user.is_authenticated:
+                            # Admin/TEAM users can delete any message
+                            if hierarchy_manager.is_admin(user.email):
+                                can_delete = True
+                            else:
+                                # Allow deleting own messages
+                                can_delete = (self.message_data.get("sender_id") == user.id)
+                    except Exception:
+                        can_delete = False
+
+                    if can_delete:
+                        try:
+                            # Execute deletion through community manager
+                            from trackpro.community.community_manager import CommunityManager
+                            mgr = CommunityManager()
+                            if mgr.delete_message(message_id):
+                                # Remove from UI list
+                                try:
+                                    from PyQt6.QtWidgets import QListWidget
+                                    parent_list = self.parent()
+                                    # Walk up to find QListWidget item
+                                    while parent_list and not isinstance(parent_list, QListWidget):
+                                        parent_list = parent_list.parent()
+                                    if parent_list:
+                                        # Find the item hosting this widget
+                                        for idx in range(parent_list.count()):
+                                            itm = parent_list.item(idx)
+                                            if parent_list.itemWidget(itm) is self:
+                                                parent_list.takeItem(idx)
+                                                break
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     
     def create_avatar(self):
         """Create or load avatar using centralized manager (cached + async)."""
@@ -842,13 +897,22 @@ class VoiceChannelWidget(QWidget):
             channel_id = self.channel_data.get('id', 'general')
             logger.info(f"Attempting to join voice channel: {channel_id}")
             
-            # Check if voice components are available
-            if not VOICE_COMPONENTS_AVAILABLE:
-                logger.warning("Voice components not available")
-                from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.information(self, "Voice Chat", 
-                                      "Voice chat components are not available. Please install required dependencies.")
-                return
+            # If WebRTC is enabled, skip PyAudio dependency checks
+            webrtc_enabled = False
+            try:
+                from trackpro.config import config
+                webrtc_enabled = getattr(config, 'voice_chat_webrtc_enabled', False) and bool(config.voice_chat_livekit_token_url)
+            except Exception:
+                webrtc_enabled = False
+
+            # Check if voice components are available only when not using WebRTC
+            if not webrtc_enabled:
+                if not VOICE_COMPONENTS_AVAILABLE:
+                    logger.warning("Voice components not available")
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.information(self, "Voice Chat", 
+                                          "Voice chat components are not available. Please install required dependencies.")
+                    return
             
             # Get user name from current user
             try:
@@ -861,31 +925,65 @@ class VoiceChannelWidget(QWidget):
             except Exception:
                 user_name = 'Unknown'
             
-            # Check if voice server is running
-            if not is_voice_server_running():
-                logger.info(f"Voice server not running - starting on-demand for channel: {channel_id}")
-                try:
-                    # Start the voice server on-demand
-                    start_voice_server()
-                    import time
-                    time.sleep(3)  # Give more time for network server to start
-                    
-                    if not is_voice_server_running():
-                        raise Exception("Voice server failed to start on-demand")
-                    
-                    logger.info(f"Voice server started on-demand for channel: {channel_id}")
-                    
-                except Exception as e:
-                    logger.error(f"Failed to start voice server on-demand: {e}")
-                    from PyQt6.QtWidgets import QMessageBox
-                    QMessageBox.warning(self, "Voice Chat Error", 
-                                      f"Failed to start voice server on-demand: {str(e)}")
-                    return
-            else:
-                logger.info(f"Voice server already running - joining channel: {channel_id}")
+            # If using WebRTC, skip starting local websocket server
+            if not webrtc_enabled:
+                # Check if voice server is running
+                if not is_voice_server_running():
+                    logger.info(f"Voice server not running - starting on-demand for channel: {channel_id}")
+                    try:
+                        # Start the voice server on-demand
+                        start_voice_server()
+                        import time
+                        time.sleep(3)  # Give more time for network server to start
+                        
+                        if not is_voice_server_running():
+                            raise Exception("Voice server failed to start on-demand")
+                        
+                        logger.info(f"Voice server started on-demand for channel: {channel_id}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to start voice server on-demand: {e}")
+                        from PyQt6.QtWidgets import QMessageBox
+                        QMessageBox.warning(self, "Voice Chat Error", 
+                                          f"Failed to start voice server on-demand: {str(e)}")
+                        return
+                else:
+                    logger.info(f"Voice server already running - joining channel: {channel_id}")
             
-            # Start voice chat with the HighQualityVoiceManager
-            server_url = "ws://localhost:8080"
+            # Prefer WebRTC when enabled (LiveKit)
+            if webrtc_enabled:
+                try:
+                    # Launch WebRTC voice (embedded web view)
+                    self.start_webrtc_voice(channel_id)
+                    logger.info("Started WebRTC voice for channel via LiveKit")
+                    # Add current user to participants and update UI before returning
+                    self.add_current_user_to_participants()
+                    self.play_join_notification()
+                    self.join_button.setText("Leave Channel")
+                    self.join_button.setStyleSheet("""
+                        QPushButton {
+                            background-color: #e74c3c;
+                            border: none;
+                            padding: 8px 16px;
+                            border-radius: 4px;
+                            color: #ffffff;
+                            font-weight: bold;
+                        }
+                        QPushButton:hover {
+                            background-color: #c0392b;
+                        }
+                    """)
+                    logger.info(f"Successfully joined WebRTC voice channel: {channel_id}")
+                    return
+                except Exception as _e:
+                    logger.debug(f"WebRTC not enabled or failed to initialize: {_e}")
+
+            # Fallback to WebSocket voice server
+            try:
+                from trackpro.config import config
+                server_url = config.voice_chat_server_url
+            except Exception:
+                server_url = "ws://localhost:8080"
             
             logger.info(f"Starting voice chat - Server: {server_url}, Channel: {channel_id}, User: {user_name}")
             
@@ -950,6 +1048,96 @@ class VoiceChannelWidget(QWidget):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Voice Chat Error", 
                               f"Failed to join voice channel: {str(e)}")
+
+    def start_webrtc_voice(self, channel_id: str):
+        """Start WebRTC voice using an embedded QWebEngineView with LiveKit JS.
+
+        Assumes a Supabase Edge Function (or similar) provides a LiveKit access token
+        at config.voice_chat_livekit_token_url. This keeps the API secret off clients.
+        """
+        try:
+            from PyQt6.QtWebEngineWidgets import QWebEngineView
+            from PyQt6.QtCore import QUrl
+            from trackpro.config import config
+
+            token_url = config.voice_chat_livekit_token_url
+            host_url = config.voice_chat_livekit_host_url
+            if not token_url or not host_url:
+                raise RuntimeError("LiveKit token or host URL not configured")
+
+            # Fetch LiveKit token on the Python side to avoid browser CORS issues
+            livekit_token = None
+            try:
+                import requests
+                params = {"room": channel_id}
+                headers = {}
+                try:
+                    # Attempt to add Supabase auth bearer if available
+                    from trackpro.database.supabase_client import get_supabase_client
+                    sb = get_supabase_client()
+                    if sb and hasattr(sb, 'auth'):
+                        sess = sb.auth.get_session()
+                        access_token = getattr(sess, 'access_token', None) if sess else None
+                        if access_token:
+                            headers['Authorization'] = f"Bearer {access_token}"
+                except Exception:
+                    pass
+                resp = requests.get(token_url, params=params, headers=headers, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                livekit_token = data.get('token') or data.get('access_token')
+                if not livekit_token:
+                    raise RuntimeError('Token endpoint did not return token')
+            except Exception as fetch_err:
+                raise RuntimeError(f"Failed to fetch LiveKit token: {fetch_err}")
+
+            # Inline HTML: minimal LiveKit client (token injected)
+            html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+  <title>TrackPro Voice</title>
+  <script src='https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.min.js'></script>
+  <style>body{{margin:0;background:#1e1f22;color:#fff;font:14px sans-serif}}</style>
+  <script>
+    async function start() {{
+      try {{
+        const channelId = {json.dumps(channel_id)};
+        const token = {json.dumps(livekit_token)};
+
+        const room = new LiveKit.Room();
+        room.on(LiveKit.RoomEvent.TrackSubscribed, (track, publication, participant) => {{
+          if (track.kind === 'audio') {{ track.attach(); }}
+        }});
+        await room.connect('{host_url}', token);
+        const localStream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+        await room.localParticipant.publishTrack(localStream.getAudioTracks()[0]);
+        window._room = room;
+      }} catch (e) {{
+        document.body.innerText = 'Voice error: ' + e;
+      }}
+    }}
+    window.addEventListener('load', start);
+  </script>
+</head>
+<body>Connecting voice...</body>
+</html>
+"""
+
+            view = QWebEngineView(self)
+            view.setHtml(html, QUrl("about:blank"))
+            # Keep a reference to avoid GC
+            self._webrtc_view = view
+            # Display or embed as needed in your UI (minimal integration; can refine later)
+            view.setWindowTitle("TrackPro Voice")
+            view.resize(480, 240)
+            view.show()
+        except Exception as e:
+            logger.error(f"Failed to start WebRTC voice: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Voice Chat Error", f"WebRTC initialization failed: {str(e)}")
     
     def on_voice_connected(self):
         """Handle voice connection established."""
@@ -1113,6 +1301,15 @@ class VoiceChannelWidget(QWidget):
     
     def leave_voice_channel(self):
         """Leave the voice channel."""
+        # Stop WebRTC view if present
+        if hasattr(self, '_webrtc_view') and self._webrtc_view:
+            try:
+                self._webrtc_view.deleteLater()
+            except Exception:
+                pass
+            self._webrtc_view = None
+
+        # Stop legacy/WebSocket voice if present
         if hasattr(self, 'voice_client') and self.voice_client:
             self.voice_client.stop_voice_chat()
         self.remove_current_user_from_participants()
@@ -1865,6 +2062,12 @@ class CommunityPage(BasePage):
                 background-color: #2d2d2d;
             }
         """)
+        # Context menu for local actions (e.g., Delete Chat)
+        try:
+            self.private_messages_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.private_messages_list.customContextMenuRequested.connect(self.on_private_messages_context_menu)
+        except Exception:
+            pass
         scroll_layout.addWidget(self.private_messages_list)
         
         # Friends section
@@ -1992,6 +2195,14 @@ class CommunityPage(BasePage):
         self.content_stack.setStyleSheet("""
             QWidget { background-color: #1e1e1e; }
         """)
+        # Ensure the content area always has a layout so children expand properly
+        try:
+            from PyQt6.QtWidgets import QVBoxLayout
+            self.content_stack_layout = QVBoxLayout(self.content_stack)
+            self.content_stack_layout.setContentsMargins(0, 0, 0, 0)
+            self.content_stack_layout.setSpacing(0)
+        except Exception:
+            self.content_stack_layout = None
         chat_tab_layout.addWidget(self.content_stack)
 
         self.content_tabs.addTab(chat_tab, "💬 Chat")
@@ -3236,6 +3447,16 @@ class CommunityPage(BasePage):
             self.private_messages_list.clear()
             
             for conversation in conversations:
+                # Respect local deletion cutoff for last_message preview
+                try:
+                    cutoff = self._get_local_delete_cutoff(conversation.get('conversation_id'))
+                    if cutoff:
+                        last_msg = conversation.get('last_message') or {}
+                        created_at = last_msg.get('created_at')
+                        if created_at and not self._is_after_cutoff(created_at, cutoff):
+                            conversation['last_message'] = None
+                except Exception:
+                    pass
                 # Create conversation list item widget
                 conversation_widget = PrivateConversationListItem(conversation)
                 conversation_widget.conversation_selected.connect(self.on_private_conversation_selected)
@@ -3272,6 +3493,16 @@ class CommunityPage(BasePage):
             self.private_messages_list.clear()
             
             for conversation in conversations:
+                # Respect local deletion cutoff for last_message preview
+                try:
+                    cutoff = self._get_local_delete_cutoff(conversation.get('conversation_id'))
+                    if cutoff:
+                        last_msg = conversation.get('last_message') or {}
+                        created_at = last_msg.get('created_at')
+                        if created_at and not self._is_after_cutoff(created_at, cutoff):
+                            conversation['last_message'] = None
+                except Exception:
+                    pass
                 # Create conversation list item widget
                 conversation_widget = PrivateConversationListItem(conversation)
                 conversation_widget.conversation_selected.connect(self.on_private_conversation_selected)
@@ -3312,8 +3543,8 @@ class CommunityPage(BasePage):
             
             logger.info(f"✅ Got conversation data: {conversation_data.get('conversation_id', 'No ID')}")
             
-            # Create conversation widget with proper user data
-            conversation_widget = PrivateConversationWidget(conversation_data)
+            # Create conversation widget with proper user data (parented to content area)
+            conversation_widget = PrivateConversationWidget(conversation_data, parent=self.content_stack)
             conversation_widget.message_sent.connect(lambda text: self.on_private_message_sent(conversation_id, text))
             
             # Add messages to the conversation with proper user data
@@ -3326,6 +3557,14 @@ class CommunityPage(BasePage):
             except Exception as e:
                 logger.debug(f"Could not get current user: {e}")
             
+            # Apply local deletion cutoff to message history (client-side only)
+            try:
+                cutoff = self._get_local_delete_cutoff(conversation_id)
+                if cutoff:
+                    messages = [m for m in messages if self._is_after_cutoff(m.get('created_at'), cutoff)]
+            except Exception:
+                pass
+
             for message in messages:
                 is_own_message = current_user_id and message.get('sender_id') == current_user_id
                 # Ensure message has proper user data
@@ -3370,6 +3609,32 @@ class CommunityPage(BasePage):
             
             if success:
                 logger.info("Private message sent successfully")
+                # Immediately reflect in the open conversation view
+                try:
+                    widget = getattr(self, 'current_conversation_widget', None)
+                    if widget and getattr(widget, 'conversation_id', None) == conversation_id:
+                        from datetime import datetime as _dt
+                        try:
+                            from ...auth.user_manager import get_current_user
+                            user = get_current_user()
+                        except Exception:
+                            user = None
+                        current_user_id = user.id if (user and getattr(user, 'is_authenticated', False)) else None
+                        user_profiles = {
+                            'user_id': current_user_id or 'me',
+                            'display_name': 'You',
+                            'username': 'You'
+                        }
+                        local_msg = {
+                            'conversation_id': conversation_id,
+                            'sender_id': current_user_id,
+                            'content': message_text,
+                            'created_at': _dt.utcnow().isoformat() + 'Z',
+                            'user_profiles': user_profiles,
+                        }
+                        widget.add_message(local_msg, is_own_message=True)
+                except Exception:
+                    pass
                 # Refresh the private messages list
                 self.refresh_private_messages()
             else:
@@ -3377,6 +3642,103 @@ class CommunityPage(BasePage):
                 
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
+
+    # ----------------------------
+    # Local-only Delete Chat support
+    # ----------------------------
+    def on_private_messages_context_menu(self, pos):
+        try:
+            from PyQt6.QtWidgets import QMenu
+            item = self.private_messages_list.itemAt(pos)
+            if not item:
+                return
+            widget = self.private_messages_list.itemWidget(item)
+            conversation_id = getattr(widget, 'conversation_id', None) or getattr(widget, 'conversation_data', {}).get('conversation_id')
+            if not conversation_id:
+                return
+            menu = QMenu(self)
+            delete_action = menu.addAction("Delete Chat")
+            action = menu.exec(self.private_messages_list.mapToGlobal(pos))
+            if action == delete_action:
+                self._mark_chat_deleted_locally(conversation_id)
+                # If this conversation is currently open, clear the view
+                try:
+                    if getattr(self, 'current_conversation_widget', None) and self.current_conversation_widget.conversation_id == conversation_id:
+                        lst = self.current_conversation_widget.messages_list
+                        lst.clear()
+                except Exception:
+                    pass
+                # Refresh sidebar
+                self.refresh_private_messages()
+        except Exception:
+            pass
+
+    def _get_local_delete_cutoff(self, conversation_id: str):
+        try:
+            import json, os
+            from ...utils.resource_utils import get_data_directory
+            # Identify current user
+            try:
+                from ...auth.user_manager import get_current_user
+                user = get_current_user()
+                uid = user.id if (user and getattr(user, 'is_authenticated', False)) else None
+            except Exception:
+                uid = None
+            if not uid:
+                return None
+            path = os.path.join(get_data_directory(), 'deleted_private_chats.json')
+            if not os.path.exists(path):
+                return None
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f) or {}
+            return (data.get(str(uid)) or {}).get(str(conversation_id))
+        except Exception:
+            return None
+
+    def _mark_chat_deleted_locally(self, conversation_id: str):
+        try:
+            import json, os
+            from datetime import datetime as _dt
+            from ...utils.resource_utils import get_data_directory
+            # Identify current user
+            try:
+                from ...auth.user_manager import get_current_user
+                user = get_current_user()
+                uid = user.id if (user and getattr(user, 'is_authenticated', False)) else None
+            except Exception:
+                uid = None
+            if not uid:
+                return
+            path = os.path.join(get_data_directory(), 'deleted_private_chats.json')
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f) or {}
+            except Exception:
+                data = {}
+            data.setdefault(str(uid), {})[str(conversation_id)] = _dt.utcnow().isoformat() + 'Z'
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _is_after_cutoff(self, created_at: str, cutoff_iso: str) -> bool:
+        try:
+            from datetime import datetime as _dt
+            if not created_at:
+                return False
+            # Normalize ISO strings
+            def _parse(s: str):
+                try:
+                    return _dt.fromisoformat(s.replace('Z', '+00:00'))
+                except Exception:
+                    return None
+            msg_dt = _parse(created_at)
+            cut_dt = _parse(cutoff_iso)
+            if not msg_dt or not cut_dt:
+                return False
+            return msg_dt > cut_dt
+        except Exception:
+            return False
     
     def on_new_private_message_clicked(self):
         """Handle new private message button click."""
@@ -3935,21 +4297,28 @@ class CommunityPage(BasePage):
             # Store the conversation widget for potential reuse
             self.current_conversation_widget = conversation_widget
             
-            # Clear current content - since content_stack is a QWidget, we need to clear its layout
-            if hasattr(self.content_stack, 'layout') and self.content_stack.layout():
-                # Remove all widgets from the layout
-                while self.content_stack.layout().count() > 0:
-                    item = self.content_stack.layout().takeAt(0)
-                    if item.widget():
+            # Ensure a single persistent layout on content_stack
+            try:
+                from PyQt6.QtWidgets import QVBoxLayout
+                # Always get the actual current layout from the live widget
+                layout = self.content_stack.layout()
+                if layout is None:
+                    layout = QVBoxLayout(self.content_stack)
+                    layout.setContentsMargins(0, 0, 0, 0)
+                    layout.setSpacing(0)
+                # Keep a reference for future use but don't rely on it
+                self.content_stack_layout = layout
+                # Clear existing widgets from the layout
+                while layout.count() > 0:
+                    item = layout.takeAt(0)
+                    if item and item.widget():
                         item.widget().setParent(None)
-            
-            # Add conversation widget to the layout
-            if hasattr(self.content_stack, 'layout') and self.content_stack.layout():
-                self.content_stack.layout().addWidget(conversation_widget)
-            else:
-                # If no layout, create one
-                layout = QVBoxLayout(self.content_stack)
-                layout.addWidget(conversation_widget)
+                # Add the conversation widget with stretch so it fills the area
+                layout.addWidget(conversation_widget, 1)
+            except Exception:
+                # Fallback: show the widget directly
+                conversation_widget.setParent(self.content_stack)
+                conversation_widget.show()
             
             conversation_widget.show()
             
@@ -3957,6 +4326,17 @@ class CommunityPage(BasePage):
             self.update_channel_display_for_private_conversation(conversation_widget)
             
             logger.info("✅ Private conversation view displayed inline")
+            # Ensure the Chat tab is active and input focused
+            try:
+                if hasattr(self, 'content_tabs'):
+                    self.content_tabs.setCurrentIndex(0)
+            except Exception:
+                pass
+            try:
+                if hasattr(conversation_widget, 'message_input'):
+                    conversation_widget.message_input.setFocus()
+            except Exception:
+                pass
             
         except Exception as e:
             logger.error(f"❌ Error showing private conversation: {e}")

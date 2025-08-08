@@ -1,7 +1,8 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QScrollArea, QFrame, QGridLayout, 
                              QProgressBar, QGroupBox, QTabWidget, QSplitter, QSizePolicy,
-                             QMessageBox, QDialog, QLineEdit, QFormLayout, QDialogButtonBox)
+                             QMessageBox, QDialog, QLineEdit, QFormLayout, QDialogButtonBox,
+                             QGraphicsDropShadowEffect)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 import requests
@@ -203,7 +204,7 @@ class RacePassOverviewWidget(QWidget):
         
         # Hero header with background and countdown
         self.hero_frame = QFrame()
-        self.hero_frame.setStyleSheet("QFrame { border-radius: 10px; overflow: hidden; }")
+        self.hero_frame.setStyleSheet("QFrame { border-radius: 10px; }")
         hero_layout = QVBoxLayout(self.hero_frame)
         hero_layout.setContentsMargins(16, 16, 16, 16)
         hero_layout.setSpacing(6)
@@ -602,16 +603,16 @@ class RacePassTrackWidget(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 4)
         
-        title_label = QLabel("Race Pass - Season 1: Genesis")
-        title_font = QFont("Arial", 14, QFont.Weight.Bold)
+        title_label = QLabel("Race Pass")
+        title_font = QFont("Arial", 16, QFont.Weight.Bold)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         header_layout.addWidget(title_label)
         
         header_layout.addStretch()
         
-        self.season_progress_label = QLabel("Your Tier: 5 / 50 | Ends in: 28 days")
-        self.season_progress_label.setStyleSheet("color: #DDD; font-size: 10pt;")
+        self.season_progress_label = QLabel("Your Tier • Ends in: —")
+        self.season_progress_label.setStyleSheet("color: #AAA; font-size: 9pt;")
         header_layout.addWidget(self.season_progress_label)
         
         main_layout.addLayout(header_layout)
@@ -620,12 +621,12 @@ class RacePassTrackWidget(QWidget):
         purchase_frame = QFrame()
         purchase_frame.setStyleSheet("""
             QFrame {
-                background-color: #1a1a1a;
-                border: 2px solid #e67e22;
-                border-radius: 8px;
-                padding: 8px 12px;
-                margin-bottom: 8px;
-                max-height: 60px;
+                background-color: #141414;
+                border: 1px solid #2b2b2b;
+                border-radius: 10px;
+                padding: 10px 14px;
+                margin-bottom: 10px;
+                max-height: 64px;
             }
         """)
         purchase_layout = QHBoxLayout(purchase_frame)
@@ -638,8 +639,8 @@ class RacePassTrackWidget(QWidget):
         premium_title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         premium_title.setStyleSheet("color: #e67e22;")
         
-        premium_desc = QLabel("• Exclusive rewards • Double XP • Season-long access")
-        premium_desc.setStyleSheet("color: #CCC; font-size: 9pt;")
+        premium_desc = QLabel("Exclusive rewards • Double XP • Season-long access")
+        premium_desc.setStyleSheet("color: #BBB; font-size: 9pt;")
         
         premium_info_layout.addWidget(premium_title)
         premium_info_layout.addWidget(QLabel(" - "))
@@ -653,23 +654,23 @@ class RacePassTrackWidget(QWidget):
         purchase_layout.addWidget(self.trackcoins_balance)
         
         # Compact purchase button with TrackCoins
-        self.purchase_pass_button = QPushButton("Unlock for 1,000 🪙")
+        self.purchase_pass_button = QPushButton("Unlock Premium (1,000 🪙)")
         self.purchase_pass_button.setStyleSheet("""
             QPushButton {
-                padding: 8px 16px;
-                background-color: #f39c12;
+                padding: 8px 14px;
+                background-color: #e67e22;
                 color: white;
-                border-radius: 6px;
+                border-radius: 8px;
                 font-weight: bold;
                 font-size: 10pt;
                 min-width: 140px;
                 max-height: 36px;
             }
             QPushButton:hover {
-                background-color: #e67e22;
+                background-color: #d35400;
             }
             QPushButton:pressed {
-                background-color: #d35400;
+                background-color: #a84300;
             }
             QPushButton:disabled {
                 background-color: #27ae60;
@@ -707,9 +708,9 @@ class RacePassTrackWidget(QWidget):
         track_selector_layout.setContentsMargins(0, 4, 0, 8)
         track_selector_layout.addWidget(QLabel("View:"))
         
-        self.free_track_btn = QPushButton("Free Track")
-        self.premium_track_btn = QPushButton("Premium Track")
-        self.both_tracks_btn = QPushButton("Both Tracks")
+        self.free_track_btn = QPushButton("Free")
+        self.premium_track_btn = QPushButton("Premium")
+        self.both_tracks_btn = QPushButton("Both")
         
         for btn in [self.free_track_btn, self.premium_track_btn, self.both_tracks_btn]:
             btn.setStyleSheet("""
@@ -727,8 +728,8 @@ class RacePassTrackWidget(QWidget):
                     background-color: #444;
                 }
                 QPushButton:checked {
-                    background-color: #e67e22;
-                    border-color: #e67e22;
+                    background-color: #2d2d2d;
+                    border-color: #5a5a5a;
                 }
             """)
             btn.setCheckable(True)
@@ -883,8 +884,8 @@ class RacePassTrackWidget(QWidget):
         self.both_tracks_btn.setChecked(view_type == 'both')
         
         # Reload tiers with new view
-        current_tier = int(self.season_progress_label.text().split("Your Tier: ")[1].split(" / ")[0])
-        num_tiers = int(self.season_progress_label.text().split(" / ")[1].split(" | ")[0])
+        current_tier = getattr(self, '_current_tier', 0) or 0
+        num_tiers = getattr(self, '_num_tiers', 50) or 50
         self._load_placeholder_tiers(num_tiers, current_tier, self.premium_active)
 
     def _load_placeholder_tiers(self, num_tiers, current_tier=0, premium_active=False):
@@ -934,6 +935,16 @@ class RacePassTrackWidget(QWidget):
         tier_frame.setMinimumWidth(220)  # Increased minimum width for better text readability
         tier_frame.setMaximumWidth(280)  # Allow more flexibility
         tier_frame.setMinimumHeight(380)  # Increased height for better content fit with larger reward boxes
+        
+        # Soft shadow for card effect
+        try:
+            shadow = QGraphicsDropShadowEffect(tier_frame)
+            shadow.setBlurRadius(18)
+            shadow.setOffset(0, 4)
+            shadow.setColor(QColor(0, 0, 0, 150))
+            tier_frame.setGraphicsEffect(shadow)
+        except Exception:
+            pass
         
         # Styling based on unlock status
         if unlocked:
@@ -1024,15 +1035,12 @@ class RacePassTrackWidget(QWidget):
         reward_layout.setContentsMargins(10, 10, 10, 10)
         reward_layout.setSpacing(6)
 
-        # Track type label
+        # Track type row (with optional premium lock ribbon on the right)
         track_label_text = track_type
-        if is_premium and not premium_active:
-            track_label_text += " 🔒"
-        
         track_label = QLabel(track_label_text)
-        track_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))  # Increased font size for better readability
+        track_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         track_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        track_label.setFixedHeight(25)  # Fixed height for consistent layout
+        track_label.setFixedHeight(25)
         
         if is_premium and premium_active:
             track_label.setStyleSheet("""
@@ -1062,11 +1070,27 @@ class RacePassTrackWidget(QWidget):
                 padding: 4px;
             """)
         
-        reward_layout.addWidget(track_label)
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.addWidget(track_label, 1)
+        if is_premium and not premium_active:
+            ribbon = QLabel("Premium 🔒")
+            ribbon.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            ribbon.setStyleSheet("""
+                color: #ffb536;
+                background-color: rgba(255, 181, 54, 0.12);
+                border: 1px solid rgba(255, 181, 54, 0.35);
+                border-radius: 6px;
+                padding: 2px 8px;
+                font-weight: bold;
+                font-size: 9pt;
+            """)
+            top_row.addWidget(ribbon, 0)
+        reward_layout.addLayout(top_row)
 
         # Reward icon (placeholder for future image support)
         icon_container = QFrame()
-        icon_container.setFixedHeight(50)
+        icon_container.setFixedHeight(68)
         icon_container.setStyleSheet("""
             QFrame {
                 background-color: rgba(255, 255, 255, 0.05);
@@ -1078,7 +1102,7 @@ class RacePassTrackWidget(QWidget):
         icon_layout.setContentsMargins(0, 0, 0, 0)
         
         reward_icon = QLabel(reward_data.get("icon", "🎁"))
-        reward_icon.setFont(QFont("Arial", 24))  # Larger icon for better visibility
+        reward_icon.setFont(QFont("Arial", 32))
         reward_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_layout.addWidget(reward_icon)
         reward_layout.addWidget(icon_container)
@@ -1114,24 +1138,80 @@ class RacePassTrackWidget(QWidget):
             
         reward_layout.addWidget(reward_name)
 
+        # Rarity and type pill badges
+        rarity = (reward_data.get("rarity") or "").lower()
+        reward_type = (reward_data.get("type") or reward_data.get("reward_type") or "Reward").title()
+        rarity_colors = {
+            "common": ("#a0a7b4", "#1f232a"),
+            "rare": ("#4aa3ff", "#11263d"),
+            "epic": ("#b36bff", "#25183b"),
+            "legendary": ("#ffb536", "#3a2500"),
+        }
+        base_color, base_bg = rarity_colors.get(rarity, ("#6b7a8d", "#1b1f24"))
+
+        badges_row = QHBoxLayout()
+        badges_row.setContentsMargins(0, 0, 0, 0)
+        badges_row.setSpacing(6)
+        rarity_badge = QLabel((rarity or "Common").title())
+        rarity_badge.setStyleSheet(f"""
+            color: {base_color};
+            background-color: {base_bg};
+            border: 1px solid {base_color}33;
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-weight: bold;
+            font-size: 9pt;
+        """)
+        type_badge = QLabel(reward_type)
+        type_badge.setStyleSheet("""
+            color: #cfd6dd;
+            background-color: #0f1317;
+            border: 1px solid #cfd6dd33;
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-size: 9pt;
+        """)
+        badges_row.addStretch()
+        badges_row.addWidget(rarity_badge)
+        badges_row.addWidget(type_badge)
+        badges_row.addStretch()
+        reward_layout.addLayout(badges_row)
+
         # Claim button area (wired later to supabase claim RPC)
         claim_btn = QPushButton("Claim")
         claim_btn.setEnabled(is_unlocked and (not is_premium or premium_active))
         claim_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         claim_btn.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2ecc71, stop:1 #27ae60);
                 color: white;
-                border-radius: 6px;
-                padding: 6px 10px;
+                border-radius: 8px;
+                padding: 8px 12px;
                 font-weight: bold;
+                border: 1px solid #1f8f4e;
             }
-            QPushButton:disabled { background-color: #555; color: #aaa; }
+            QPushButton:hover {
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #31d479, stop:1 #2abb67);
+            }
+            QPushButton:pressed {
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #27ae60, stop:1 #1f8f4e);
+            }
+            QPushButton:disabled { background-color: #4a4f55; color: #aab0b6; border: 1px solid #3c4045; }
         """)
         # Placeholder: will be connected to real reward_id when loading from Supabase
         claim_btn.clicked.connect(lambda: QMessageBox.information(self, "Claim", "This is a demo claim. Live claim wiring will use Supabase."))
         reward_layout.addWidget(claim_btn)
         
+        # Soft shadow for reward card
+        try:
+            rshadow = QGraphicsDropShadowEffect(reward_widget)
+            rshadow.setBlurRadius(14)
+            rshadow.setOffset(0, 3)
+            rshadow.setColor(QColor(0, 0, 0, 140))
+            reward_widget.setGraphicsEffect(rshadow)
+        except Exception:
+            pass
+
         return reward_widget
 
     def on_purchase_pass(self):
@@ -1157,14 +1237,23 @@ class RacePassTrackWidget(QWidget):
                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             
             if reply == QMessageBox.StandardButton.Yes:
-                # Spend TrackCoins and activate premium
-                self.trackcoins_balance.update_balance(current_balance - required_coins)
-                self._activate_premium_track()
+                # Spend TrackCoins via server and activate premium persistently
+                try:
+                    from ..supabase_gamification import unlock_premium_with_trackcoins
+                    ok, msg = unlock_premium_with_trackcoins(required_coins)
+                except Exception as e:
+                    ok, msg = False, str(e)
+                if ok:
+                    self.trackcoins_balance.update_balance(current_balance - required_coins)
+                    self._activate_premium_track()
+                else:
+                    QMessageBox.warning(self, "Purchase Failed", msg or "Could not unlock premium with TrackCoins")
                 
-                QMessageBox.information(self, "Premium Unlocked!", 
-                                       f"🎉 Premium Race Pass unlocked!\n\n"
-                                       f"Spent: {required_coins:,} 🪙\n"
-                                       f"Remaining balance: {current_balance - required_coins:,} 🪙")
+                if ok:
+                    QMessageBox.information(self, "Premium Unlocked!", 
+                                           f"🎉 Premium Race Pass unlocked!\n\n"
+                                           f"Spent: {required_coins:,} 🪙\n"
+                                           f"Remaining balance: {current_balance - required_coins:,} 🪙")
         else:
             # Not enough TrackCoins
             needed = required_coins - current_balance
@@ -1222,8 +1311,8 @@ class RacePassTrackWidget(QWidget):
         self.premium_track_btn.setEnabled(True)
         
         # Re-render tiers with premium active
-        current_tier = int(self.season_progress_label.text().split("Your Tier: ")[1].split(" / ")[0])
-        num_tiers = int(self.season_progress_label.text().split(" / ")[1].split(" | ")[0])
+        current_tier = getattr(self, '_current_tier', 0) or 0
+        num_tiers = getattr(self, '_num_tiers', 50) or 50
         self._load_placeholder_tiers(num_tiers, current_tier, premium_active=True)
         
         # Show success message
@@ -1244,6 +1333,8 @@ class RacePassViewWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("RacePassViewWidget")
         self._last_tier = None
+        self._current_tier = 0
+        self._num_tiers = 50
         
         # Set minimum size to ensure tabs display properly
         self.setMinimumSize(800, 600)
@@ -1397,6 +1488,9 @@ class RacePassViewWidget(QWidget):
 
                         max_tier = season_data.get('tier_count', 50)
                         current_tier_val = user_progress.get('tier', 0)
+                        # Persist state for safe refreshes
+                        self.race_pass_track_widget._num_tiers = int(max_tier or 50)
+                        self.race_pass_track_widget._current_tier = int(current_tier_val or 0)
                         premium_active = user_progress.get('is_premium', False)
                         for tier_num in range(1, max_tier + 1):
                             data = tiers.get(tier_num, {'free': None, 'premium': None})

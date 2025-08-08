@@ -659,14 +659,14 @@ class ModernMainWindow(QMainWindow):
                     is_authenticated = bool(user_response and user_response.user)
                     logger.info(f"🔐 Account page auth check: user_response={user_response is not None}, has_user={user_response.user is not None if user_response else False}")
                 
-                # Additional check: if the home page shows a user name, we're authenticated
-                # This handles cases where the session might be temporarily inconsistent
+                # Remove unsafe bypass: rely strictly on Supabase manager auth state
                 if not is_authenticated:
-                    # Check if we have user info that indicates authentication
-                    user_info = self.get_current_user_info()
-                    if user_info and user_info.get('email'):
-                        logger.info(f"🔐 Auth check bypass: Found user info {user_info.get('email')}, treating as authenticated")
-                        is_authenticated = True
+                    try:
+                        from trackpro.database.supabase_client import supabase as supabase_manager
+                        is_authenticated = supabase_manager.is_authenticated()
+                        logger.info(f"🔐 Verified auth via manager: {is_authenticated}")
+                    except Exception:
+                        is_authenticated = False
                 
                 if not is_authenticated:
                     # Show login dialog immediately when user clicks account
@@ -1349,9 +1349,33 @@ class ModernMainWindow(QMainWindow):
                 # Stop app tracking before logout
                 self.stop_app_tracking()
                 
-                # Perform logout
-                from trackpro.database.supabase_client import supabase
-                supabase.sign_out()
+                # Mark user offline (best effort) before clearing session
+                try:
+                    current = self.get_current_user_info()
+                    if current and current.get('id'):
+                        self.update_user_online_status(current.get('id'), False)
+                except Exception:
+                    pass
+                
+                # Perform logout with forced session clear and clear in user manager
+                try:
+                    # Use the Supabase manager directly to avoid attribute mismatches
+                    from trackpro.database.supabase_client import supabase as supabase_manager
+                    supabase_manager.sign_out(force_clear=True, respect_remember_me=False)
+                except Exception:
+                    # Fall back to global instance if available
+                    try:
+                        from trackpro.database.supabase_client import supabase
+                        supabase.sign_out(force_clear=True, respect_remember_me=False)
+                    except Exception:
+                        pass
+                
+                # Clear cached/current user in local manager
+                try:
+                    from trackpro.auth.user_manager import logout_current_user
+                    logout_current_user()
+                except Exception:
+                    pass
                 
                 # Update UI immediately
                 self.update_auth_state(False)

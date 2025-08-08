@@ -38,7 +38,16 @@ def get_current_user():
         # During startup, don't perform authentication checks that could hang
         # This prevents the splash screen from freezing on "Setting up authentication system..."
         try:
-            from ..database.supabase_client import get_supabase_client
+            # First, require that a saved session exists to trust any auth state
+            # This prevents stale in-memory sessions from re-authenticating after logout
+            from ..database.supabase_client import supabase as supabase_manager, get_supabase_client
+            try:
+                if not supabase_manager.is_authenticated():
+                    return None
+            except Exception:
+                # If we cannot verify, be conservative and treat as not authenticated
+                return None
+
             client = get_supabase_client()
             if client and hasattr(client, 'auth') and client.auth.get_session():
                 session = client.auth.get_session()
@@ -65,10 +74,7 @@ def get_current_user():
                         pass
                     logger.info(f"Found authenticated user from Supabase: {_current_user.email} (using default hierarchy during startup)")
                     
-                    # TEMPORARILY DISABLE HIERARCHY CHECK TO PREVENT CRASHES
-                    # Schedule hierarchy check for later to prevent startup hanging
-                    # from PyQt6.QtCore import QTimer
-                    # QTimer.singleShot(5000, _update_user_hierarchy_async)  # Update hierarchy after 5 seconds
+                    # TEMPORARILY DISABLE HIERARCHY UPDATE TO PREVENT CRASHES
                     logger.warning("⚠️ TEMPORARILY SKIPPING HIERARCHY UPDATE TO PREVENT CRASHES")
                     
                     return _current_user
@@ -150,13 +156,11 @@ def logout_current_user():
     logger.info("Logged out current user")
 
     try:
-        from ..database.supabase_client import get_supabase_client
-        client = get_supabase_client()
-        if client and hasattr(client, 'auth'):
-            # For explicit logout actions, force clear the session regardless of remember_me setting
-            # But give users the option to preserve credentials if they want
-            client.sign_out(force_clear=True, respect_remember_me=False)
-            logger.info("Signed out from Supabase (forced clear for explicit logout)")
+        # Use the Supabase manager to ensure proper sign-out and session clearing
+        from ..database.supabase_client import supabase as supabase_manager
+        # For explicit logout actions, force clear the session regardless of remember_me setting
+        supabase_manager.sign_out(force_clear=True, respect_remember_me=False)
+        logger.info("Signed out from Supabase (forced clear for explicit logout)")
     except Exception as e:
         logger.warning(f"Error signing out from Supabase: {e}")
 

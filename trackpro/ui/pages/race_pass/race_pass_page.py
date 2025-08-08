@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class RacePassPage(BasePage):
     """
-    Race Pass page - Coming Soon
+    Race Pass page
     """
     
     # Signals for communication with parent window
@@ -22,19 +22,12 @@ class RacePassPage(BasePage):
         super().__init__("Race Pass", global_managers)
         
     def init_page(self):
-        """Initialize the Race Pass page layout."""
+        """Initialize the Race Pass page layout (Coming Soon placeholder)."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        if GAMIFICATION_AVAILABLE:
-            try:
-                self._race_pass_view = RacePassViewWidget()
-                layout.addWidget(self._race_pass_view)
-                return
-            except Exception:
-                pass
-
+        # Always show the Coming Soon placeholder for Race Pass
         fallback_layout = QVBoxLayout()
         fallback_layout.setContentsMargins(40, 40, 40, 40)
         fallback_layout.setSpacing(30)

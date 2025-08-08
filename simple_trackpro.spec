@@ -271,6 +271,7 @@ optimize_hiddenimports = [
         # Matplotlib for charts and graphs
         # Reduce matplotlib backends to required ones only
         'matplotlib',
+        'matplotlib.backends.backend_qtagg',
         'matplotlib.backends.backend_qt6agg',
         
         # Audio/game essentials

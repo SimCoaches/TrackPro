@@ -321,6 +321,20 @@ class TrackCoinsStoreWidget(QWidget):
     
     def _add_trackcoins(self, coins):
         """Add TrackCoins to user balance."""
+        try:
+            # Persist balance via server (optional top-up path)
+            from ..supabase_gamification import supabase
+            user = supabase.get_user()
+            user_id = getattr(user, 'id', None) or (getattr(user, 'user', None).id if getattr(user, 'user', None) else None)
+            if user_id:
+                # Use add_trackcoins by calling spend/add pair or direct table update if allowed
+                res = supabase.client.rpc('add_trackcoins', {
+                    'p_user_id': user_id,
+                    'p_amount': coins,
+                    'p_reason': 'store_topup'
+                }).execute()
+        except Exception:
+            pass
         self.user_trackcoins += coins
         self.balance_label.setText(f"{self.user_trackcoins:,}")
         self.coins_purchased.emit(coins)
@@ -332,11 +346,21 @@ class TrackCoinsStoreWidget(QWidget):
     
     def spend_trackcoins(self, amount):
         """Spend TrackCoins (returns True if successful)."""
-        if self.user_trackcoins >= amount:
-            self.user_trackcoins -= amount
-            self.balance_label.setText(f"{self.user_trackcoins:,}")
-            return True
-        return False
+        try:
+            from ..supabase_gamification import spend_trackcoins
+            ok, _ = spend_trackcoins(amount, 'store_purchase')
+            if ok:
+                self.user_trackcoins = max(0, self.user_trackcoins - amount)
+                self.balance_label.setText(f"{self.user_trackcoins:,}")
+                return True
+            return False
+        except Exception:
+            # Fallback to local balance
+            if self.user_trackcoins >= amount:
+                self.user_trackcoins -= amount
+                self.balance_label.setText(f"{self.user_trackcoins:,}")
+                return True
+            return False
     
     def get_balance(self):
         """Get current TrackCoins balance."""

@@ -531,6 +531,9 @@ def get_user_race_pass_progress() -> Tuple[Optional[Dict[str, Any]], str]:
             "tier": profile.get("race_pass_tier", 0),
             "xp": profile.get("race_pass_xp", 0),
             "is_premium": profile.get("is_premium_pass_active", False),
+            "level": profile.get("level", 1),
+            "current_xp": profile.get("current_xp", 0),
+            "total_xp_needed": profile.get("total_xp_needed", None),
             "rewards": rewards_result.data if rewards_result.data else []
         }
         
@@ -588,6 +591,28 @@ def spend_trackcoins(amount: int, reason: str = 'purchase', metadata: Dict[str, 
         return False, "Unexpected response"
     except Exception as e:
         logger.error(f"Failed to spend TrackCoins: {e}")
+        return False, f"{e}"
+
+def unlock_premium_with_trackcoins(cost: int = 1000) -> Tuple[bool, str]:
+    """Spend TrackCoins and activate premium RP for the current user."""
+    if not supabase.is_authenticated():
+        return False, "Not logged in"
+    ok, msg = spend_trackcoins(cost, 'premium_unlock')
+    if not ok:
+        return False, msg or "Insufficient TrackCoins"
+    try:
+        user = supabase.get_user()
+        user_id = getattr(user, 'id', None) or (getattr(user, 'user', None).id if getattr(user, 'user', None) else None)
+        if not user_id:
+            return False, "User ID not found"
+        res = supabase.client.table(USER_PROFILES_TABLE).update({
+            'is_premium_pass_active': True
+        }).eq('user_id', user_id).execute()
+        if res.data:
+            return True, "Premium unlocked"
+        return False, "Failed to activate premium"
+    except Exception as e:
+        logger.error(f"Failed to unlock premium: {e}")
         return False, f"{e}"
 
 def activate_race_pass_season(season_id: str) -> Tuple[bool, str]:

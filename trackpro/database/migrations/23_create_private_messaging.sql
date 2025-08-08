@@ -75,6 +75,21 @@ CREATE POLICY "Users can delete their own messages"
     ON "private_messages" FOR DELETE 
     USING (auth.uid() = sender_id);
 
+-- Allow TEAM/moderator users to delete any private message for moderation
+CREATE POLICY "TEAM moderators can delete any private message" 
+    ON "private_messages" FOR DELETE 
+    USING (
+        EXISTS (
+            SELECT 1 FROM user_hierarchy uh
+            WHERE uh.user_id = auth.uid()
+              AND (
+                   uh.hierarchy_level = 'TEAM'
+                OR uh.is_moderator = TRUE
+                OR uh.is_dev = TRUE
+              )
+        )
+    );
+
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$

@@ -1,5 +1,5 @@
 import logging
-from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QScrollArea, QPushButton, QLabel
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QScrollArea, QPushButton, QLabel, QFrame
 from PyQt6.QtCore import pyqtSignal, Qt
 from ...modern.shared.base_page import BasePage
 from .handbrake_calibration_widget import HandbrakeCalibrationWidget
@@ -17,69 +17,157 @@ class HandbrakePage(BasePage):
         super().__init__("handbrake", global_managers)
     
     def init_page(self):
-        layout = QVBoxLayout()
-        self.setLayout(layout)
-        
-        # Add header
-        header = QLabel("🤚 Handbrake Configuration")
-        header.setStyleSheet("""
-            QLabel {
-                font-size: 24px;
-                font-weight: bold;
-                color: #2c3e50;
-                margin-bottom: 20px;
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(30)
+        self._create_coming_soon_content(layout)
+
+    def _create_coming_soon_content(self, layout: QVBoxLayout) -> None:
+        main_frame = QFrame()
+        main_frame.setStyleSheet(
+            """
+            QFrame {
+                background-color: #1a1a1a;
+                border: 2px solid #333;
+                border-radius: 12px;
+                padding: 40px;
             }
-        """)
-        layout.addWidget(header)
-        
-        # Add connection status
-        self.status_label = QLabel("Checking for Arduino Leonardo handbrake...")
-        self.status_label.setStyleSheet("""
-            QLabel {
-                font-size: 14px;
-                color: #7f8c8d;
-                margin-bottom: 15px;
+            """
+        )
+        main_layout = QVBoxLayout(main_frame)
+        main_layout.setSpacing(25)
+
+        title_label = QLabel("Handbrake")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet(
+            """
+            color: #ffffff;
+            font-size: 36px;
+            font-weight: bold;
+            text-align: center;
+            """
+        )
+        main_layout.addWidget(title_label)
+
+        coming_soon_label = QLabel("COMING SOON")
+        coming_soon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        coming_soon_label.setStyleSheet(
+            """
+            color: #00d4ff;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            background-color: rgba(0, 212, 255, 0.1);
+            border: 2px solid #00d4ff;
+            border-radius: 20px;
+            padding: 8px 20px;
+            """
+        )
+        main_layout.addWidget(coming_soon_label)
+
+        desc_label = QLabel(
+            "We're building a polished Handbrake configuration experience!\n\n"
+            "Coming soon:\n"
+            "• Guided calibration wizard\n"
+            "• Deadzone and sensitivity tuning\n"
+            "• Curve editor with live preview\n"
+            "• Hardware status and diagnostics"
+        )
+        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(
+            """
+            color: #cccccc;
+            font-size: 16px;
+            text-align: center;
+            line-height: 1.6;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 20px;
+            """
+        )
+        main_layout.addWidget(desc_label)
+
+        progress_frame = QFrame()
+        progress_frame.setStyleSheet(
+            """
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.05);
+                border-radius: 8px;
+                padding: 20px;
             }
-        """)
-        layout.addWidget(self.status_label)
-        
-        # Add calibration wizard button
-        wizard_layout = QHBoxLayout()
-        wizard_btn = QPushButton("🧙 Handbrake Calibration Wizard")
-        wizard_btn.setMaximumWidth(220)
-        wizard_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                font-weight: bold;
-                padding: 6px 12px;
-                border: none;
-                border-radius: 4px;
-                font-size: 11px;
-                max-width: 220px;
+            """
+        )
+        progress_layout = QVBoxLayout(progress_frame)
+
+        progress_title = QLabel("Development Progress")
+        progress_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_title.setStyleSheet(
+            """
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 10px;
+            """
+        )
+        progress_layout.addWidget(progress_title)
+
+        progress_bar_frame = QFrame()
+        progress_bar_frame.setStyleSheet(
+            """
+            QFrame {
+                background-color: #333;
+                border-radius: 10px;
+                padding: 3px;
             }
-            QPushButton:hover {
-                background-color: #c0392b;
+            """
+        )
+        progress_bar_layout = QHBoxLayout(progress_bar_frame)
+        progress_bar_layout.setContentsMargins(0, 0, 0, 0)
+
+        progress_fill = QFrame()
+        progress_fill.setStyleSheet(
+            """
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00d4ff, stop:1 #0099cc);
+                border-radius: 7px;
             }
-            QPushButton:disabled {
-                background-color: #95a5a6;
-                color: #7f8c8d;
-            }
-        """)
-        wizard_btn.clicked.connect(self.open_calibration_wizard)
-        wizard_layout.addWidget(wizard_btn)
-        wizard_layout.addStretch()
-        layout.addLayout(wizard_layout)
-        
-        # Handbrake configuration widget
-        self.create_handbrake_widget(layout)
-        
-        # Update status when hardware becomes available
-        if self.performance_manager:
-            self.performance_manager.ui_update_ready.connect(self.handle_hardware_update)
-        
-        # Update initial status
-        self.update_connection_status()
+            """
+        )
+        progress_fill.setFixedWidth(200)
+        progress_bar_layout.addWidget(progress_fill)
+        progress_bar_layout.addStretch()
+        progress_layout.addWidget(progress_bar_frame)
+
+        progress_text = QLabel("In Progress")
+        progress_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_text.setStyleSheet(
+            """
+            color: #00d4ff;
+            font-size: 14px;
+            font-weight: bold;
+            text-align: center;
+            margin-top: 5px;
+            """
+        )
+        progress_layout.addWidget(progress_text)
+
+        main_layout.addWidget(progress_frame)
+        main_layout.addStretch()
+        layout.addWidget(main_frame)
+
+    def on_page_activated(self):
+        super().on_page_activated()
+        logger.info("Handbrake Coming Soon page activated")
+
+    def lazy_init(self):
+        logger.info("Handbrake Coming Soon page lazy initialization")
+
+    def cleanup(self):
+        logger.info("Handbrake Coming Soon page cleanup")
+        super().cleanup()
     
     def create_handbrake_widget(self, parent_layout):
         """Create the main handbrake configuration widget."""

@@ -21,9 +21,11 @@ class CommunityManager(QObject):
     
     # Signals
     message_received = pyqtSignal(dict)  # New message received
+    private_message_received = pyqtSignal(dict)  # New private DM message
     user_joined_channel = pyqtSignal(str, dict)  # channel_id, user_data
     user_left_channel = pyqtSignal(str, str)  # channel_id, user_id
     user_status_changed = pyqtSignal(str, str, dict)  # channel_id, user_id, status_data
+    typing_event = pyqtSignal(str, dict)  # conversation_id, payload
     
     def __new__(cls):
         if cls._instance is None:
@@ -39,6 +41,8 @@ class CommunityManager(QObject):
                     super().__init__()
                     self.current_user_id = None
                     self._realtime_channels = []
+                    self._typing_channels: dict[str, Any] = {}
+                    self._pm_channels: dict[str, Any] = {}
                     # Caches
                     self._friends_cache: Optional[List[Dict[str, Any]]] = None
                     self._friends_cache_time: float = 0.0
@@ -368,6 +372,26 @@ class CommunityManager(QObject):
         except Exception as e:
             logger.error(f"Error sending message: {e}")
             return False
+
+    def delete_message(self, message_id: str) -> bool:
+        """Delete a community message by id. Requires appropriate RLS permissions.
+
+        TEAM/moderators should be allowed by database policies to delete any message.
+        Regular users can delete only their own messages.
+        """
+        try:
+            if not self.client:
+                return False
+            # Perform delete in DB
+            resp = self.client.table("community_messages").delete().eq("message_id", message_id).execute()
+            # Some clients return empty data on delete; consider no error as success
+            if hasattr(resp, "error") and resp.error:
+                logger.error(f"Delete message error: {resp.error}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting community message: {e}")
+            return False
     
     def _setup_realtime_subscriptions(self):
         """Setup real-time subscriptions for messages."""
@@ -401,6 +425,20 @@ class CommunityManager(QObject):
             except Exception as e:
                 logger.warning(f"Failed to subscribe to community_messages realtime: {e}")
 
+            # Subscribe to INSERT on private_messages for DMs
+            try:
+                ch_pm = self.client.channel("realtime:public:private_messages")
+                ch_pm.on(
+                    "postgres_changes",
+                    {"event": "INSERT", "schema": "public", "table": "private_messages"},
+                    self._on_private_message_inserted,
+                )
+                ch_pm.subscribe()
+                self._realtime_channels.append(ch_pm)
+                logger.info("✅ Subscribed to realtime INSERT on private_messages")
+            except Exception as e:
+                logger.warning(f"Failed to subscribe to private_messages realtime: {e}")
+
             # Subscribe to INSERT/UPDATE on community_participants for voice presence
             try:
                 channel_participants = self.client.channel("realtime:public:community_participants")
@@ -422,6 +460,29 @@ class CommunityManager(QObject):
             
         except Exception as e:
             logger.error(f"Failed to setup real-time subscriptions: {e}")
+
+    def _on_private_message_inserted(self, payload):
+        """Handle new private message via realtime."""
+        try:
+            if payload.get('eventType') != 'INSERT':
+                return
+            new_msg = payload.get('new', {}) or {}
+            if not new_msg:
+                return
+            # Enrich with basic user data for UI convenience
+            try:
+                sender_id = new_msg.get('sender_id')
+                if self.client and sender_id:
+                    user_response = self.client.table("user_profiles").select(
+                        "user_id, username, display_name, avatar_url"
+                    ).eq("user_id", sender_id).execute()
+                    if user_response.data:
+                        new_msg['user_profiles'] = user_response.data[0]
+            except Exception:
+                pass
+            self.private_message_received.emit(new_msg)
+        except Exception as e:
+            logger.debug(f"Error handling private DM realtime: {e}")
     
     def _on_message_inserted(self, payload):
         """Handle new message inserted via real-time subscription."""
@@ -714,6 +775,7 @@ class CommunityManager(QObject):
             response1 = self.client.table("private_conversations").select(
                 """
                 conversation_id, created_at, updated_at,
+                user1_id, user2_id,
                 user1:user1_id(user_id, username, display_name, avatar_url),
                 user2:user2_id(user_id, username, display_name, avatar_url)
                 """
@@ -723,6 +785,7 @@ class CommunityManager(QObject):
             response2 = self.client.table("private_conversations").select(
                 """
                 conversation_id, created_at, updated_at,
+                user1_id, user2_id,
                 user1:user1_id(user_id, username, display_name, avatar_url),
                 user2:user2_id(user_id, username, display_name, avatar_url)
                 """
@@ -736,8 +799,9 @@ class CommunityManager(QObject):
             try:
                 user_ids: set[str] = set()
                 for conv in conversations:
-                    u1 = (conv.get("user1") or {}).get("user_id")
-                    u2 = (conv.get("user2") or {}).get("user_id")
+                    # Prefer nested user objects, but also fall back to raw id columns
+                    u1 = (conv.get("user1") or {}).get("user_id") or conv.get("user1_id")
+                    u2 = (conv.get("user2") or {}).get("user_id") or conv.get("user2_id")
                     if u1:
                         user_ids.add(u1)
                     if u2:
@@ -761,14 +825,16 @@ class CommunityManager(QObject):
                 conv['unread_count'] = self._get_unread_private_message_count(conv['conversation_id'])
                 
                 # Determine the other user in the conversation
-                if conv.get('user1', {}).get('user_id') == self.current_user_id:
+                if (conv.get('user1', {}) or {}).get('user_id') == self.current_user_id or conv.get('user1_id') == self.current_user_id:
                     other = dict(conv.get('user2', {}) or {})
+                    other_id = other.get('user_id') or conv.get('user2_id')
                 else:
                     other = dict(conv.get('user1', {}) or {})
+                    other_id = other.get('user_id') or conv.get('user1_id')
 
                 # Enrich with public display info if missing
                 try:
-                    other_id = other.get("user_id")
+                    # if not present from nested relation, use raw column value
                     if other_id and (not other.get("display_name") and not other.get("username")):
                         disp = display_lookup.get(other_id)
                         if disp:
@@ -779,6 +845,9 @@ class CommunityManager(QObject):
                                 other["username"] = disp.get("username")
                             if not other.get("avatar_url"):
                                 other["avatar_url"] = disp.get("avatar_url")
+                    # Always keep user_id on other_user for downstream logic
+                    if other_id and not other.get("user_id"):
+                        other["user_id"] = other_id
                 except Exception:
                     pass
 
@@ -831,6 +900,7 @@ class CommunityManager(QObject):
             response = self.client.table("private_conversations").select(
                 """
                 conversation_id, created_at, updated_at,
+                user1_id, user2_id,
                 user1:user1_id(user_id, username, display_name, avatar_url),
                 user2:user2_id(user_id, username, display_name, avatar_url)
                 """
@@ -846,14 +916,15 @@ class CommunityManager(QObject):
             conversation_data['unread_count'] = self._get_unread_private_message_count(conversation_id)
             
             # Determine the other user in the conversation
-            if conversation_data.get('user1', {}).get('user_id') == self.current_user_id:
+            if (conversation_data.get('user1', {}) or {}).get('user_id') == self.current_user_id or conversation_data.get('user1_id') == self.current_user_id:
                 other = dict(conversation_data.get('user2', {}) or {})
+                other_id = other.get('user_id') or conversation_data.get('user2_id')
             else:
                 other = dict(conversation_data.get('user1', {}) or {})
+                other_id = other.get('user_id') or conversation_data.get('user1_id')
 
             # Enrich other user from public display info if needed
             try:
-                other_id = other.get("user_id")
                 if other_id and (not other.get("display_name") and not other.get("username")):
                     disp_resp = self.client.table("public_user_display_info").select(
                         "user_id, display_name, username, avatar_url"
@@ -866,6 +937,8 @@ class CommunityManager(QObject):
                             other["username"] = disp.get("username")
                         if not other.get("avatar_url"):
                             other["avatar_url"] = disp.get("avatar_url")
+                if other_id and not other.get("user_id"):
+                    other["user_id"] = other_id
             except Exception:
                 pass
 
@@ -1002,6 +1075,90 @@ class CommunityManager(QObject):
             
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
+            return False
+
+    def delete_private_message(self, message_id: str) -> bool:
+        """Delete a private message by id. Requires appropriate RLS permissions.
+
+        TEAM/moderators should be allowed by database policies to delete any message.
+        Regular users can delete only their own messages.
+        """
+        try:
+            if not self.client:
+                return False
+            resp = self.client.table("private_messages").delete().eq("message_id", message_id).execute()
+            if hasattr(resp, "error") and resp.error:
+                logger.error(f"Delete private message error: {resp.error}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting private message: {e}")
+            return False
+
+    # ----------------------------
+    # Private typing indicators (Realtime Broadcast)
+    # ----------------------------
+    def _get_or_create_typing_channel(self, conversation_id: str):
+        try:
+            if not self.client:
+                return None
+            # Reuse a single broadcast channel per conversation
+            ch = self._typing_channels.get(conversation_id)
+            if ch:
+                return ch
+            topic = f"typing:pm:{conversation_id}"
+            ch = self.client.channel(topic)
+            # Listen for broadcast typing events
+            try:
+                ch.on('broadcast', { 'event': 'typing' }, lambda payload: self._on_typing_broadcast(conversation_id, payload))
+            except Exception:
+                # Some python clients expect dict keys as strings only; fall back to kwargs style
+                ch.on('broadcast', {'event': 'typing'}, lambda payload: self._on_typing_broadcast(conversation_id, payload))
+            ch.subscribe()
+            self._typing_channels[conversation_id] = ch
+            return ch
+        except Exception as e:
+            logger.debug(f"Typing channel error: {e}")
+            return None
+
+    def _on_typing_broadcast(self, conversation_id: str, payload: dict):
+        try:
+            # Normalize payload from supabase lib formats
+            data = payload.get('payload') if isinstance(payload, dict) else payload
+            if not isinstance(data, dict):
+                data = {}
+            self.typing_event.emit(conversation_id, data)
+        except Exception as e:
+            logger.debug(f"Typing broadcast handler error: {e}")
+
+    def send_typing_signal(self, conversation_id: str, is_typing: bool, display_name: str = None) -> bool:
+        """Broadcast an ephemeral typing signal for a private conversation.
+
+        Uses Supabase Realtime Broadcast. No database writes.
+        """
+        try:
+            if not self.client or not self.current_user_id:
+                return False
+            ch = self._get_or_create_typing_channel(conversation_id)
+            if not ch:
+                return False
+            payload = {
+                'conversation_id': conversation_id,
+                'user_id': self.current_user_id,
+                'display_name': display_name or 'User',
+                'is_typing': bool(is_typing),
+                'ts': datetime.now().isoformat()
+            }
+            # Send broadcast event
+            try:
+                ch.send({'type': 'broadcast', 'event': 'typing', 'payload': payload})
+                return True
+            except Exception:
+                # Some clients expose send(type=..., event=..., payload=...)
+                ch.send(type='broadcast', event='typing', payload=payload)
+                return True
+        except Exception as e:
+            logger.debug(f"send_typing_signal error: {e}")
             return False
     
     def mark_private_messages_as_read(self, conversation_id: str) -> bool:

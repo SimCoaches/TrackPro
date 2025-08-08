@@ -106,6 +106,21 @@ CREATE POLICY "Users can delete their own messages"
     ON "community_messages" FOR DELETE 
     USING (auth.uid() = sender_id);
 
+-- Allow TEAM/moderator users to delete any message for moderation purposes
+CREATE POLICY "TEAM moderators can delete any message" 
+    ON "community_messages" FOR DELETE 
+    USING (
+        EXISTS (
+            SELECT 1 FROM user_hierarchy uh
+            WHERE uh.user_id = auth.uid()
+              AND (
+                   uh.hierarchy_level = 'TEAM'
+                OR uh.is_moderator = TRUE
+                OR uh.is_dev = TRUE
+              )
+        )
+    );
+
 -- RLS Policies for community_participants
 CREATE POLICY "Anyone can view participants in public channels" 
     ON "community_participants" FOR SELECT 

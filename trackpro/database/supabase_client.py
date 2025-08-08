@@ -846,8 +846,11 @@ class SupabaseManager:
         if self._client and not hasattr(self, '_session_restored'):
             self._session_restored = True
             try:
-                logger.info("🔄 Attempting session restoration on first client access")
-                self._restore_session()
+                logger.info("🔄 Attempting safe session restoration on first client access")
+                # Use the safer restoration flow that preserves refresh tokens and respects remember_me
+                restored = self._restore_session_safely()
+                if not restored:
+                    logger.info("Safe session restoration did not complete; will rely on on-demand auth checks.")
             except Exception as e:
                 logger.warning(f"Session restoration failed on first access: {e}")
         
@@ -860,9 +863,18 @@ class SupabaseManager:
             bool: True if authenticated, False otherwise
         """
         try:
-            # Fast path: check if we have any local session data first
-            if not os.path.exists(self._auth_file):
-                logger.info("🔐 Fast path: No local auth file found - not authenticated")
+            # Fast path: check secure session first, then plaintext session
+            has_secure_session = False
+            if self._secure_session:
+                try:
+                    sec_info = self._secure_session.get_session_info()
+                    has_secure_session = bool(sec_info.get('session_exists'))
+                except Exception:
+                    has_secure_session = False
+            has_plain_session = os.path.exists(self._auth_file)
+
+            if not has_secure_session and not has_plain_session:
+                logger.info("🔐 Fast path: No saved session (secure or plaintext) - not authenticated")
                 return False
             
             # Force initialization if needed for auth checks
@@ -1256,16 +1268,15 @@ class SupabaseManager:
             force_clear: If True, always clear the saved session regardless of remember_me preference
             respect_remember_me: If True, preserve sessions when remember_me=True (default). If False, clear all sessions.
         """
-        if self._offline_mode or not self._client:
-            logger.warning("Cannot sign out - Supabase is not connected")
-            return
-        
         logger.info(f"Signing out user (force_clear={force_clear}, respect_remember_me={respect_remember_me})")
         
         def signout_func():
             try:
-                self._client.auth.sign_out()
-                logger.info("Successfully signed out from Supabase client")
+                if self._client and hasattr(self._client, 'auth'):
+                    self._client.auth.sign_out()
+                    logger.info("Successfully signed out from Supabase client")
+                else:
+                    logger.info("Skipping client sign out (client not available); proceeding with local session clear")
             except Exception as e:
                 logger.warning(f"Error during Supabase sign out: {e}")
                 # Continue with local cleanup even if remote sign out fails
@@ -1306,7 +1317,12 @@ class SupabaseManager:
             logger.info("Sign out process completed successfully")
         
         try:
-            self._execute_with_retry(signout_func)
+            # If offline or client missing, still perform local signout logic without retry wrapper
+            if self._offline_mode or not self._client:
+                logger.warning("Sign out called while offline or client unavailable - performing local session clear")
+                signout_func()
+            else:
+                self._execute_with_retry(signout_func)
         except Exception as e:
             logger.error(f"Error during sign out: {e}")
             # Force clear session on sign out errors to prevent inconsistent state

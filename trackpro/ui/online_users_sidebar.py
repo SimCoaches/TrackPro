@@ -13,8 +13,8 @@ from PyQt6.QtWidgets import (
     QMenu, QSpacerItem, QSizePolicy
 )
 from PyQt6.QtGui import QAction
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QParallelAnimationGroup
-from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QParallelAnimationGroup, QSize, QPointF
+from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont, QIcon
 from PyQt6.QtGui import QPainterPath
 from .avatar_manager import AvatarManager
 
@@ -477,6 +477,7 @@ class OnlineUsersSidebar(QWidget):
         # Auto-refresh timer for online status and user data
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_users_data)
+        self.refresh_timer.setTimerType(Qt.TimerType.CoarseTimer)
         self.refresh_timer.start(30000)  # Refresh every 30 seconds
         
         # Force refresh timer for authentication state
@@ -530,21 +531,24 @@ class OnlineUsersSidebar(QWidget):
         header_layout.setContentsMargins(2, 4, 2, 4)
         header_layout.setSpacing(8)
         
-        # Toggle button
-        self.toggle_btn = QPushButton("👥")
+        # Toggle button (use custom white icons instead of emoji for better contrast)
+        self.toggle_btn = QPushButton()
         self.toggle_btn.setFixedSize(32, 32)
         self.toggle_btn.setStyleSheet("""
             QPushButton {
                 background-color: #40444b;
                 border: none;
                 border-radius: 16px;
-                color: #dcddde;
-                font-size: 14px;
             }
             QPushButton:hover {
                 background-color: #5865f2;
             }
         """)
+        # Pre-create icons
+        self._people_icon = QIcon(self._create_people_icon_pixmap(18, "#ffffff"))
+        self._arrow_icon = QIcon(self._create_arrow_icon_pixmap(18, "#ffffff"))
+        self.toggle_btn.setIcon(self._people_icon)
+        self.toggle_btn.setIconSize(QSize(18, 18))
         self.toggle_btn.clicked.connect(self.toggle_sidebar)
         header_layout.addWidget(self.toggle_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
         
@@ -862,9 +866,56 @@ class OnlineUsersSidebar(QWidget):
     def update_toggle_button(self):
         """Update the toggle button appearance."""
         if self.is_expanded:
-            self.toggle_btn.setText("▶")
+            # Show collapse arrow when expanded
+            self.toggle_btn.setIcon(self._arrow_icon)
         else:
-            self.toggle_btn.setText("👥")
+            # Show people icon when collapsed
+            self.toggle_btn.setIcon(self._people_icon)
+
+    def _create_people_icon_pixmap(self, size: int = 18, color: str = "#ffffff") -> QPixmap:
+        """Create a simple 'people' glyph as a white icon pixmap."""
+        pix = QPixmap(size, size)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        # Heads
+        head_r = size * 0.18
+        painter.drawEllipse(
+            QPointF(size * 0.38, size * 0.35), head_r, head_r
+        )
+        painter.drawEllipse(
+            QPointF(size * 0.68, size * 0.35), head_r, head_r
+        )
+        # Bodies (rounded rectangles approximated with ellipses)
+        body_w = size * 0.28
+        body_h = size * 0.22
+        painter.drawRoundedRect(
+            int(size * 0.24), int(size * 0.55), int(body_w), int(body_h), 3, 3
+        )
+        painter.drawRoundedRect(
+            int(size * 0.56), int(size * 0.55), int(body_w), int(body_h), 3, 3
+        )
+        painter.end()
+        return pix
+
+    def _create_arrow_icon_pixmap(self, size: int = 18, color: str = "#ffffff") -> QPixmap:
+        """Create a simple right-pointing arrow icon pixmap."""
+        pix = QPixmap(size, size)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        path = QPainterPath()
+        path.moveTo(size * 0.35, size * 0.25)
+        path.lineTo(size * 0.75, size * 0.50)
+        path.lineTo(size * 0.35, size * 0.75)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.end()
+        return pix
     
     def get_current_user_id(self) -> Optional[str]:
         """Get the current user's ID."""
@@ -1076,99 +1127,101 @@ class OnlineUsersSidebar(QWidget):
             logger.error(f"Error checking authentication and loading user: {e}")
     
     def load_users_from_database(self):
-        """Load all users from database with friends prioritized."""
-        try:
-            # Get current user ID if not already set
-            if not self.current_user_id:
-                self.current_user_id = self.get_current_user_id()
-                if self.current_user_id is None:
-                    # User manager not ready yet - skip loading users
-                    logger.info("🔍 User manager not ready yet - skipping users loading")
-                    return
-                if not self.current_user_id:
-                    logger.warning("No authenticated user found")
-                    return
-            
-            # Import database managers
-            from trackpro.social.friends_manager import FriendsManager
-            from trackpro.social.user_manager import EnhancedUserManager
-            
-            # Get friends list (non-blocking)
-            friends_manager = FriendsManager()
-            self.friends_list = friends_manager.get_friends_list(self.current_user_id, include_online_status=True)
-            
-            # Get all users from database (optimized query with user_stats join)
-            user_manager = EnhancedUserManager()
-            if not user_manager.supabase:
-                logger.error("No Supabase client available for user query")
-                return
-            # Prefer public view when available for avatar_url/display info
+        """Load all users from database with friends prioritized.
+        Runs in a background thread and applies results on the UI thread to avoid stalling rendering.
+        """
+        import threading
+
+        if getattr(self, "_refresh_in_progress", False):
+            return
+        self._refresh_in_progress = True
+
+        def worker():
             try:
-                response = user_manager.supabase.from_("public_user_profiles").select(
-                    "user_id, username, display_name, avatar_url, is_online, last_seen"
-                ).limit(500).execute()
-            except Exception:
-                response = user_manager.supabase.from_("user_profiles").select(
-                    "user_id, username, display_name, avatar_url, user_stats(last_active)"
-                ).execute()
-            
-            # Get real online status for all users
+                # Build fresh snapshot off the UI thread
+                users_snapshot = self._build_users_snapshot()
+            except Exception as e:
+                logger.error(f"Error loading users from database (bg): {e}")
+                users_snapshot = None
+
+            # Apply on UI thread
+            def apply_result():
+                try:
+                    if users_snapshot is not None:
+                        self.all_users = users_snapshot
+                        self.refresh_users_list()
+                        logger.info(f"✅ Loaded {len(self.all_users)} real users from database (async)")
+                finally:
+                    self._refresh_in_progress = False
+
+            QTimer.singleShot(0, apply_result)
+
+        threading.Thread(target=worker, name="SidebarUsersLoader", daemon=True).start()
+
+    def _build_users_snapshot(self):
+        """Blocking implementation: fetches data and returns the composed users list."""
+        # Get current user ID if not already set
+        if not self.current_user_id:
+            self.current_user_id = self.get_current_user_id()
+
+        # Import database managers
+        from trackpro.social.friends_manager import FriendsManager
+        from trackpro.social.user_manager import EnhancedUserManager
+
+        friends_manager = FriendsManager()
+        friends_list = friends_manager.get_friends_list(self.current_user_id, include_online_status=True)
+
+        user_manager = EnhancedUserManager()
+        if not user_manager.supabase:
+            logger.error("No Supabase client available for user query")
+            return self.all_users
+
+        # Prefer public view when available for avatar_url/display info
+        try:
+            response = user_manager.supabase.from_("public_user_profiles").select(
+                "user_id, username, display_name, avatar_url, is_online, last_seen"
+            ).limit(500).execute()
+        except Exception:
+            response = user_manager.supabase.from_("user_profiles").select(
+                "user_id, username, display_name, avatar_url, user_stats(last_active)"
+            ).execute()
+
+        # Get real online status for all users (best effort)
+        try:
             from trackpro.utils.app_tracker import get_online_users
             online_users_data = get_online_users()
             online_user_ids = {user['user_id'] for user in online_users_data}
-            logger.info(f"🔍 Found {len(online_users_data)} online users: {[user.get('user_id', 'unknown') for user in online_users_data]}")
-            
-            # Clear existing users list to prevent duplicates
-            self.all_users = []
-            
-            # Start with current user if authenticated
-            if self.current_user_id:
-                current_user_data = self.get_current_user_real_data()
-                if current_user_data:
-                    self.all_users.append(current_user_data)
-                    logger.info(f"✅ Added current user to list: {current_user_data.get('display_name', 'Unknown')}")
-            
-            # Get friends list for friend status
-            friends_ids = [friend['friend_id'] for friend in self.friends_list]
-            
-            # Process all users from database
-            for user in (response.data or []):
-                # Skip current user as it's already added
-                if user['user_id'] == self.current_user_id:
-                    continue
-                
-                # Extract last activity
-                last_active = user.get('last_seen') or (
-                    (user.get('user_stats') or {}).get('last_active') if isinstance(user.get('user_stats'), dict) else None
-                )
-                
-                # Check real online status from database
-                is_online = user.get('is_online') or (user['user_id'] in online_user_ids)
-                
-                user_data = {
-                    'user_id': user['user_id'],
-                    'username': user.get('username', 'Unknown'),
-                    'display_name': user.get('display_name'),
-                    'avatar_url': user.get('avatar_url'),
-                    'is_friend': user['user_id'] in friends_ids,
-                    'is_online': is_online,
-                    'status': self._get_user_status(user['user_id'], last_active, is_online)
-                }
-                
-                # Log online status for debugging
-                if is_online:
-                    logger.info(f"✅ User {user.get('display_name', 'Unknown')} ({user['user_id']}) is ONLINE")
-                else:
-                    logger.debug(f"❌ User {user.get('display_name', 'Unknown')} ({user['user_id']}) is OFFLINE")
-                self.all_users.append(user_data)
-            
-            # Update the UI with new users
-            self.refresh_users_list()
-            logger.info(f"✅ Loaded {len(self.all_users)} real users from database")
-            
-        except Exception as e:
-            logger.error(f"Error loading users from database: {e}")
-            # Don't call load_fallback_users() as current user is already shown
+        except Exception:
+            online_user_ids = set()
+
+        users: list = []
+        # Start with current user if authenticated
+        if self.current_user_id:
+            current_user_data = self.get_current_user_real_data()
+            if current_user_data:
+                users.append(current_user_data)
+
+        friends_ids = [friend['friend_id'] for friend in friends_list]
+
+        for user in (response.data or []):
+            if user['user_id'] == self.current_user_id:
+                continue
+            last_active = user.get('last_seen') or (
+                (user.get('user_stats') or {}).get('last_active') if isinstance(user.get('user_stats'), dict) else None
+            )
+            is_online = user.get('is_online') or (user['user_id'] in online_user_ids)
+            user_data = {
+                'user_id': user['user_id'],
+                'username': user.get('username', 'Unknown'),
+                'display_name': user.get('display_name'),
+                'avatar_url': user.get('avatar_url'),
+                'is_friend': user['user_id'] in friends_ids,
+                'is_online': is_online,
+                'status': self._get_user_status(user['user_id'], last_active, is_online)
+            }
+            users.append(user_data)
+
+        return users
     
     def load_fallback_users(self):
         """Load fallback users when database is unavailable."""
@@ -1462,9 +1515,10 @@ class OnlineUsersSidebar(QWidget):
         logger.debug(f"Users list refresh complete. Online: {online_count}, Total: {total_count}")
     
     def refresh_users_data(self):
-        """Refresh users data including online status from the backend."""
-        logger.debug("Refreshing users data...")
-        # Always refresh to get latest data
+        """Refresh users data including online status from the backend.
+        This method is timer-driven on the UI thread, so it schedules background work and returns immediately.
+        """
+        logger.debug("Refreshing users data (async)...")
         self.load_users_from_database()
         self.update_add_friend_ui_state()  # Update UI based on auth status
     
@@ -1616,28 +1670,11 @@ class OnlineUsersSidebar(QWidget):
         self.update_add_friend_ui_state()
     
     def force_refresh(self):
-        """Force refresh the user list - TEMPORARILY DISABLED TO ISOLATE CRASH."""
+        """Force refresh the user list (re-enabled)."""
         try:
             logger.info("🔄 Online users sidebar force refresh started...")
-            logger.info("⚠️ TEMPORARILY SKIPPING sidebar refresh to isolate authentication crash")
-            
-            # TEMPORARILY DISABLE ALL SIDEBAR OPERATIONS
-            # This is likely causing the silent crash after authentication
-            # TODO: Re-enable once crash is resolved
-            
-            # Check authentication state
-            from trackpro.auth.user_manager import get_current_user
-            current_user = get_current_user()
-            
-            if current_user and current_user.is_authenticated:
-                logger.info(f"✅ User authenticated: {current_user.email} (sidebar refresh SKIPPED)")
-                # self.load_users_from_database()  # TEMPORARILY DISABLED
-                logger.info("✅ Sidebar refresh skipped to prevent crash")
-            else:
-                logger.info("ℹ️ User not authenticated - cleared user list")
-                self.clear_user_list()
-                logger.info("✅ User list cleared")
-                
+            self.load_users_from_database()
+            logger.info("✅ Online users sidebar force refresh completed")
         except Exception as e:
             logger.error(f"❌ Error in online users sidebar force refresh: {e}")
 

@@ -6,7 +6,11 @@ Shows the track being traced in real-time during track building process.
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
+# Prefer unified QtAgg backend (works with PyQt6); fallback to explicit Qt6 backend
+try:
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+except Exception:  # pragma: no cover - fallback for older Matplotlib
+    from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QWidget, QGroupBox)

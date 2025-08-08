@@ -597,6 +597,21 @@ class IRacingLapSaver:
             logger.error(f"💥 IMMEDIATE SAVE ERROR: {e}", exc_info=True)
             return False  # Return False on exception
 
+    def _handle_post_lap_gamification(self, lap_data):
+        """Award base XP and Race Pass XP after a lap is saved. Non-blocking background hook."""
+        try:
+            base_xp = 50
+            race_pass_xp = 50
+            try:
+                from future.gamification.trackpro_gamification.supabase_gamification import award_xp as rpc_award_xp
+                ok, _ = rpc_award_xp(base_xp, race_pass_xp)
+                if not ok:
+                    logger.debug("Post-lap XP award RPC returned unsuccessful status")
+            except Exception as e:
+                logger.debug(f"Post-lap XP award failed: {e}")
+        except Exception as e:
+            logger.debug(f"Gamification post-lap hook error: {e}")
+
     def _process_immediate_lap(self, lap_data):
         """
         Process an immediately saved lap using existing infrastructure.

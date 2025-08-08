@@ -204,7 +204,9 @@ class TrackMapGamingOverlay(QWidget):
         if not hasattr(self, 'corner_font_size'):
             self.corner_font_size = 12
         if not hasattr(self, 'overlay_scale'):
-            self.overlay_scale = 0.3  # Match default settings (30%)
+            self.overlay_scale = 0.7  # New default scale (70%)
+        if not hasattr(self, 'overlay_rotation'):
+            self.overlay_rotation = 0  # Degrees
         
         # Colors - set defaults if not loaded
         if not hasattr(self, 'track_color'):
@@ -231,7 +233,8 @@ class TrackMapGamingOverlay(QWidget):
             settings = QSettings('TrackPro', 'TrackMapOverlay')
             
             # Load overlay scale
-            self.overlay_scale = settings.value('overlay_scale', 0.3, type=float)
+            self.overlay_scale = settings.value('overlay_scale', 0.7, type=float)
+            self.overlay_rotation = settings.value('overlay_rotation', 0, type=int)
             
             # Load visual settings
             self.show_corners = settings.value('show_corners', True, type=bool)
@@ -260,6 +263,7 @@ class TrackMapGamingOverlay(QWidget):
             
             # Save overlay scale
             settings.setValue('overlay_scale', self.overlay_scale)
+            settings.setValue('overlay_rotation', self.overlay_rotation)
             
             # Save visual settings
             settings.setValue('show_corners', self.show_corners)
@@ -493,6 +497,16 @@ class TrackMapGamingOverlay(QWidget):
         pad = self.padding_fraction
         nx = pad + (1 - 2*pad) * nx
         ny = pad + (1 - 2*pad) * ny
+        # Apply rotation around center of normalized space
+        if self.overlay_rotation:
+            import math as _m
+            cx, cy = 0.5, 0.5
+            # Translate to center
+            tx, ty = nx - cx, ny - cy
+            rad = _m.radians(self.overlay_rotation)
+            rx = tx * _m.cos(rad) - ty * _m.sin(rad)
+            ry = tx * _m.sin(rad) + ty * _m.cos(rad)
+            nx, ny = rx + cx, ry + cy
         # Convert to screen coordinates (scale is already applied during window resize)
         screen_x = int(nx * self.width())
         screen_y = int((1 - ny) * self.height())
@@ -949,7 +963,7 @@ class TrackMapOverlayManager(QObject):
         self.shared_iracing_api = shared_iracing_api
     
     def start_overlay(self, track_name: str = None, track_config: str = None, centerline_file: str = None):
-        """Start the track map overlay."""
+        """Start the track map overlay (cloud-only data)."""
         if self.is_active:
             logger.warning("Track map overlay already active")
             return False
@@ -959,23 +973,14 @@ class TrackMapOverlayManager(QObject):
             self.overlay = TrackMapGamingOverlay()
             self.overlay.overlay_closed.connect(self.on_overlay_closed)
             
-            # Priority order for loading track data:
-            # 1. Explicit centerline file
-            # 2. Track data from Supabase (includes centerline if available)
-            # 3. Local centerline file
-            # 4. Current track from iRacing (auto-detect)
+            # Priority order for loading track data (cloud-only):
+            # 1. Track data from Supabase by provided name/config
+            # 2. Current track from iRacing (auto-detect) then load from Supabase
             
             data_loaded = False
             data_source = "no data"
             
-            if centerline_file:
-                # 1. Load specific centerline file
-                if self.overlay.load_centerline_track_data(centerline_file):
-                    data_loaded = True
-                    data_source = f"centerline file: {centerline_file}"
-                    logger.info(f"🎯 Loaded centerline track data from {centerline_file}")
-                else:
-                    logger.warning(f"Could not load centerline data from {centerline_file}")
+            # centerline_file ignored (no local files)
             
             if not data_loaded and track_name:
                 # 2. Load track data from Supabase (may include centerline)
@@ -1006,13 +1011,7 @@ class TrackMapOverlayManager(QObject):
                             data_source += f" - {track_config}"
                         logger.info(f"🗺️ Auto-detected and loaded track: {data_source}")
             
-            if not data_loaded:
-                # 4. Fall back to local centerline file (may be for different track)
-                if self.overlay.load_centerline_track_data():
-                    data_loaded = True
-                    data_source = "local centerline file (fallback)"
-                    logger.warning("🗺️ Using local centerline file as fallback - may not match current track")
-                    logger.info("🎯 Loaded local centerline track data")
+            # No local fallback (cloud-only)
             
             # Create and start worker thread with shared iRacing API
             self.worker = TrackMapOverlayWorker(self.shared_iracing_api)
@@ -1175,6 +1174,10 @@ class TrackMapOverlayManager(QObject):
         if 'overlay_scale' in settings:
             scale_value = settings.pop('overlay_scale')  # Remove from dict to avoid double-setting
             self.overlay.update_scale(scale_value)
+        # Handle rotation specially
+        if 'overlay_rotation' in settings:
+            rotation_value = int(settings.pop('overlay_rotation'))
+            self.overlay.overlay_rotation = rotation_value
         
         # Update other overlay settings
         for key, value in settings.items():

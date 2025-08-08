@@ -4,17 +4,19 @@ Overlays Page - Track builder and overlay management
 
 import logging
 import time
+import datetime
 import numpy as np
 import json
 import math
 from typing import List, Tuple
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
                            QProgressBar, QGroupBox, QVBoxLayout, QMessageBox,
-                           QFrame, QGridLayout, QTextEdit, QCheckBox)
+                           QFrame, QGridLayout, QTextEdit, QCheckBox, QTabWidget, QWidget)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 
 from ...modern.shared.base_page import BasePage
+from ....utils.resource_utils import get_resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,22 @@ class SimpleTrackBuilder(QThread):
         self.waiting_for_first_crossing = True
         self.lap_collection_started = False
         self.required_laps = 3
+
+    def get_robust_track_identifier(self):
+        """Return (track_name, track_config, iracing_track_id, iracing_config_id) from the shared iRacing connection."""
+        try:
+            ir = getattr(self.iracing_api, 'ir', None)
+            if not ir or not getattr(ir, 'is_connected', False):
+                return None, None, None, None
+
+            weekend_info = ir.get('WeekendInfo', {})
+            track_name = weekend_info.get('TrackDisplayName', 'Unknown Track')
+            track_config = weekend_info.get('TrackConfigName', 'Unknown Config')
+            iracing_track_id = weekend_info.get('TrackID')
+            iracing_config_id = weekend_info.get('TrackConfigID')
+            return track_name, track_config, iracing_track_id, iracing_config_id
+        except Exception:
+            return None, None, None, None
         
     def run(self):
         """Run the simplified track builder."""
@@ -206,106 +224,80 @@ class SimpleTrackBuilder(QThread):
             self.error_occurred.emit(f"❌ Error generating centerline: {str(e)}")
     
     def save_track_data(self, centerline, corners):
-        """Save track data to local file and Supabase cloud using existing global identification."""
+        """Save track data to local file and Supabase (tracks table)."""
         try:
             import os
             from ....utils.resource_utils import get_track_map_file_path
             from ....database.supabase_client import get_supabase_client
-            
-            # Get robust track identifier using existing global system
+
             track_name, track_config, iracing_track_id, iracing_config_id = self.get_robust_track_identifier()
-            
             if not track_name or not track_config:
                 logger.error("Could not get track identifier - cannot save track map")
                 return False
-            
-            # Calculate track length
+
             track_length = 0
             if len(centerline) > 1:
                 for i in range(1, len(centerline)):
                     dx = centerline[i][0] - centerline[i-1][0]
                     dy = centerline[i][1] - centerline[i-1][1]
                     track_length += math.sqrt(dx*dx + dy*dy)
-            
-            # Save to local file first (for immediate overlay use)
-            local_file_path = get_track_map_file_path(track_name, track_config)
-            track_data = {
-                'track_name': track_name,
-                'track_config': track_config,
-                'iracing_track_id': iracing_track_id,
-                'iracing_config_id': iracing_config_id,
-                'track_length': track_length,
-                'centerline': centerline,
-                'corners': corners,
-                'created_at': datetime.datetime.now().isoformat()
-            }
-            
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            with open(local_file_path, 'w') as f:
-                json.dump(track_data, f, indent=2)
-            
-            logger.info(f"✅ Track map saved locally: {local_file_path}")
-            
-            # Save to Supabase using existing global system
+
+            # No local saving (cloud-only policy)
+
+            # Cloud save (tracks table)
             supabase = get_supabase_client()
             if not supabase:
-                logger.warning("No Supabase connection - track map saved locally only")
-                return True
-            
-            try:
-                # Use the same logic as the global iRacing monitor
-                from ....race_coach.iracing_session_monitor import _find_or_create_base_track, _create_track_config
-                
-                # First, find or create base track
-                base_track_id = _find_or_create_base_track(
-                    supabase, track_name, iracing_track_id, 
-                    length_meters=track_length
-                )
-                
-                if not base_track_id:
-                    logger.error("Failed to create base track in Supabase")
-                    return False
-                
-                # Then create or find track config
-                config_track_id = _create_track_config(
-                    supabase, base_track_id, track_name, track_config,
-                    iracing_track_id or 0, iracing_config_id or 0,
-                    length_meters=track_length
-                )
-                
-                if not config_track_id:
-                    logger.error("Failed to create track config in Supabase")
-                    return False
-                
-                # Save track map data to the config track
-                track_map_data = {
-                    'track_id': config_track_id,
-                    'centerline': centerline,
-                    'corners': corners,
-                    'track_length': track_length,
-                    'created_at': datetime.datetime.now().isoformat(),
-                    'created_by': 'track_builder'
-                }
-                
-                # Insert track map data
-                result = supabase.table('track_maps').insert(track_map_data).execute()
-                
+                logger.warning("No Supabase connection - cannot upload track map")
+                return False
+
+            track_map_data = [{'x': x, 'y': y} for x, y in centerline]
+            corners_data = corners if isinstance(corners, list) else []
+
+            update_data = {
+                'track_map': track_map_data,
+                'corners': corners_data,
+                'analysis_metadata': {
+                    'generation_method': 'simplified_3lap_centerline',
+                    'total_coordinates': len(track_map_data),
+                    'total_corners': len(corners_data),
+                    'generation_timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                    'iracing_track_name': track_name,
+                    'iracing_config_name': track_config
+                },
+                'last_analysis_date': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'data_version': 2
+            }
+
+            # Find or create track row by name+config
+            track_query = supabase.table('tracks').select('*').eq('name', track_name)
+            if track_config and track_config != track_name:
+                track_query = track_query.eq('config', track_config)
+            existing = track_query.execute()
+
+            if existing.data:
+                track_id = existing.data[0]['id']
+                result = supabase.table('tracks').update(update_data).eq('id', track_id).execute()
                 if result.data:
-                    logger.info(f"✅ Track map saved to Supabase: {track_name} - {track_config}")
-                    
-                    # Get total users count for this track
-                    users_result = supabase.table('sessions').select('user_id').eq('track_id', config_track_id).execute()
-                    total_users = len(set([session['user_id'] for session in users_result.data])) if users_result.data else 0
-                    
-                    # Emit upload complete signal
-                    self.upload_complete.emit(f"{track_name} - {track_config}", total_users)
+                    logger.info(f"✅ Updated existing track map: {track_name} - {track_config}")
+                    self.upload_complete.emit(f"{track_name} - {track_config}", 0)
                     return True
-                else:
-                    logger.error("Failed to save track map to Supabase")
-                    return False
-                    
-            except Exception as e:
-                logger.error(f"Error saving to Supabase: {e}")
+                logger.error("Failed to update track map in Supabase")
+                return False
+            else:
+                new_track = {
+                    'name': track_name,
+                    'config': track_config if track_config != track_name else None,
+                    'iracing_track_id': iracing_track_id,
+                    'iracing_config_id': iracing_config_id,
+                    'length_meters': track_length,
+                    **update_data
+                }
+                result = supabase.table('tracks').insert(new_track).execute()
+                if result.data:
+                    logger.info(f"✅ Created new track map: {track_name} - {track_config}")
+                    self.upload_complete.emit(f"{track_name} - {track_config}", 0)
+                    return True
+                logger.error("Failed to create track map in Supabase")
                 return False
                 
         except Exception as e:
@@ -330,6 +322,7 @@ class OverlaysPage(BasePage):
         super().__init__(global_managers)
         self.track_builder = None
         self.track_map_overlay_manager = None
+        self.pedal_overlay_manager = None
         self.iracing_monitor = None
         
         # Track detection state
@@ -352,26 +345,95 @@ class OverlaysPage(BasePage):
                         break
         except Exception as e:
             logger.warning(f"Could not get global iRacing connection: {e}")
-        
-        # Create main layout
+
+        # Create main layout with a grid of overlay tiles
         main_layout = QVBoxLayout()
-        
-        # Track Builder Section
-        self.setup_track_builder_section(main_layout)
-        
-        # Track Map Overlay Section
-        self.setup_track_map_section(main_layout)
-        
-        # Future Overlays Section
-        self.setup_future_overlays_section(main_layout)
-        
-        # Set the main layout
+
+        title = QLabel("Choose an overlay")
+        title.setStyleSheet("font-weight: bold; font-size: 16px; margin: 6px 0 12px 0;")
+        main_layout.addWidget(title)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(24)
+        main_layout.addLayout(grid)
+
+        class ClickableFrame(QFrame):
+            clicked = pyqtSignal()
+            def mouseReleaseEvent(self, event):
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.clicked.emit()
+                super().mouseReleaseEvent(event)
+
+        def make_tile(row: int, col: int, icon_path: str, title_text: str, subtitle: str, desc: str, on_click):
+            card = ClickableFrame()
+            card.setObjectName("overlayCard")
+            card.setStyleSheet(
+                "#overlayCard{background:#1f1f1f;border:1px solid #333;border-radius:8px;}"
+                "#overlayCard:hover{border-color:#4a90e2;}"
+            )
+            v = QVBoxLayout(card)
+            v.setContentsMargins(16, 14, 16, 16)
+            # Icon
+            if icon_path:
+                try:
+                    pix = QPixmap(get_resource_path(icon_path))
+                    if not pix.isNull():
+                        lbl_icon = QLabel()
+                        lbl_icon.setPixmap(pix.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                        v.addWidget(lbl_icon, alignment=Qt.AlignmentFlag.AlignLeft)
+                except Exception:
+                    pass
+            # Texts
+            lbl_title = QLabel(title_text)
+            lbl_title.setStyleSheet("font-size:14px;font-weight:bold;")
+            v.addWidget(lbl_title)
+            if subtitle:
+                lbl_sub = QLabel(subtitle)
+                lbl_sub.setStyleSheet("color:#9aa0a6;font-size:11px;margin-top:-2px;")
+                v.addWidget(lbl_sub)
+            if desc:
+                lbl_desc = QLabel(desc)
+                lbl_desc.setWordWrap(True)
+                lbl_desc.setStyleSheet("color:#bdbdbd;font-size:11px;margin-top:8px;")
+                v.addWidget(lbl_desc)
+            v.addStretch()
+            card.setMinimumSize(300, 160)
+            card.clicked.connect(on_click)
+            grid.addWidget(card, row, col)
+
+        def coming_soon(name: str):
+            def _show():
+                QMessageBox.information(self, f"{name}", f"{name} is coming soon.")
+            return _show
+
+        # Tiles (3 columns)
+        make_tile(
+            0, 0,
+            'trackpro/resources/icons/community.svg',
+            'Track Map Builder',
+            'Build + Overlay',
+            'Generate precise centerlines (3 laps), upload to cloud, and view the overlay while driving.',
+            lambda: self.show_overlay_settings()
+        )
+        make_tile(
+            0, 1,
+            'trackpro/resources/icons/account.svg',
+            'Pedal Input',
+            'Overlay',
+            'Visualize live pedal inputs over the last 5 seconds while you drive.',
+            lambda: self.start_pedal_overlay()
+        )
+        make_tile(0, 2, 'trackpro/resources/icons/community.svg', 'Sector Timing', 'Coming soon', 'Compare sector deltas and visualize improvements per sector.', coming_soon('Sector Timing'))
+        make_tile(1, 0, 'trackpro/resources/icons/account.svg', 'AI Coach Launcher', 'Coming soon', 'Launch voice AI coach with context-aware tips during laps.', coming_soon('AI Coach Launcher'))
+        make_tile(1, 1, 'trackpro/resources/icons/community.svg', 'Setup Tuner', 'Coming soon', 'Guided setup tuning assistant for balance, traction, and tire temps.', coming_soon('Setup Tuner'))
+
+        main_layout.addStretch()
         self.setLayout(main_layout)
-        
-        # Setup automatic track detection
+
+        # Setup automatic track detection (for enabling/disabling actions)
         self.setup_track_detection()
-        
-        logger.info("🎯 Overlays page initialized")
+        logger.info("🎯 Overlays page (tabs home) initialized")
 
     def setup_track_builder_section(self, layout):
         """Setup the track builder section."""
@@ -550,6 +612,19 @@ class OverlaysPage(BasePage):
         
         overlay_group.setLayout(overlay_layout)
         layout.addWidget(overlay_group)
+
+        # Pedal Overlay quick controls
+        pedal_group = QGroupBox("🎛️ Pedal Overlay")
+        pedal_group.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        pedal_layout = QHBoxLayout()
+        self.start_pedal_btn = QPushButton("🎛️ Start Pedal Overlay")
+        self.start_pedal_btn.clicked.connect(self.start_pedal_overlay)
+        self.stop_pedal_btn = QPushButton("🛑 Stop Pedal Overlay")
+        self.stop_pedal_btn.clicked.connect(self.stop_pedal_overlay)
+        pedal_layout.addWidget(self.start_pedal_btn)
+        pedal_layout.addWidget(self.stop_pedal_btn)
+        pedal_group.setLayout(pedal_layout)
+        layout.addWidget(pedal_group)
 
     def setup_future_overlays_section(self, layout):
         """Setup future overlays section."""
@@ -768,6 +843,30 @@ class OverlaysPage(BasePage):
             self.overlay_status_label.setText("No overlay active")
             
             logger.info("🛑 Track map overlay stopped")
+
+    def start_pedal_overlay(self):
+        """Start the pedal overlay (rolling 5s)."""
+        try:
+            if not self.pedal_overlay_manager:
+                from ....race_coach.pedal_overlay import PedalOverlayManager
+                self.pedal_overlay_manager = PedalOverlayManager()
+            success = self.pedal_overlay_manager.start_overlay()
+            if success:
+                logger.info("🎛️ Pedal overlay started")
+            else:
+                QMessageBox.warning(self, "Overlay Failed", "Failed to start pedal overlay.")
+        except Exception as e:
+            logger.error(f"Error starting pedal overlay: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to start pedal overlay: {str(e)}")
+
+    def stop_pedal_overlay(self):
+        """Stop the pedal overlay."""
+        try:
+            if self.pedal_overlay_manager and self.pedal_overlay_manager.is_active:
+                self.pedal_overlay_manager.stop_overlay()
+                logger.info("🛑 Pedal overlay stopped")
+        except Exception as e:
+            logger.error(f"Error stopping pedal overlay: {e}")
     
     def show_overlay_settings(self):
         """Show the track map overlay settings dialog."""

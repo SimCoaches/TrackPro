@@ -230,7 +230,7 @@ class GamificationOverviewWidget(QWidget):
             
             # Try to use notification system if available
             try:
-                from trackpro.gamification.ui.notifications import show_level_up_notification
+                from .notifications import show_level_up_notification
                 main_window = self.window()
                 if main_window and hasattr(show_level_up_notification, '__call__'):
                     show_level_up_notification(main_window, new_level)
@@ -242,7 +242,7 @@ class GamificationOverviewWidget(QWidget):
         
         # Show claimed notification
         try:
-            from trackpro.gamification.ui.notifications import show_quest_completed_notification
+            from .notifications import show_quest_completed_notification
             main_window = self.window()
             if main_window and hasattr(show_quest_completed_notification, '__call__'):
                 show_quest_completed_notification(main_window, quest_title, xp_reward)

@@ -1013,6 +1013,17 @@ class HomePage(BasePage):
                     except Exception as welcome_error:
                         logger.error(f"❌ Error updating welcome label: {welcome_error}")
                 
+                # Reset avatar to default when logged out
+                try:
+                    self.create_avatar_with_initials("TP", "TrackPro")
+                except Exception:
+                    try:
+                        # Fallback: clear the label if drawing fails
+                        if hasattr(self, 'avatar_label'):
+                            self.avatar_label.clear()
+                    except Exception:
+                        pass
+                
                 # Show auth buttons container for non-authenticated users
                 if hasattr(self, 'auth_buttons_container'):
                     try:

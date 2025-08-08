@@ -12,7 +12,6 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QMetaObject
 from PyQt6.QtGui import QColor, QPalette, QFont
 
 from ..track_map_overlay import TrackMapOverlayManager
-from .track_visualization_window import TrackVisualizationWindow
 from ...utils.resource_utils import get_track_map_file_path
 import os
 import json
@@ -333,14 +332,15 @@ class TrackMapOverlaySettingsDialog(QDialog):
     def get_default_settings(self):
         """Get default overlay settings."""
         return {
-            'overlay_scale': 0.3,
+            'overlay_scale': 0.7,
             'show_corners': True,
             'show_position_dot': True,
             'track_line_width': 3,
             'corner_font_size': 12,
             'track_color': QColor(255, 255, 255, 200),
             'corner_color': QColor(255, 255, 0, 200),
-            'position_color': QColor(0, 255, 0, 255)
+            'position_color': QColor(0, 255, 0, 255),
+            'overlay_rotation': 0,
         }
     
     def setup_ui(self):
@@ -933,6 +933,8 @@ The track map has been saved and is ready for use in:
     
     def show_track_visualization(self):
         """Show the live track building visualization window."""
+        # Import lazily to avoid hard dependency at dialog import time
+        from .track_visualization_window import TrackVisualizationWindow
         if self.visualization_window is None:
             self.visualization_window = TrackVisualizationWindow(self)
         
@@ -1047,12 +1049,10 @@ The track map has been saved and is ready for use in:
         QApplication.processEvents()
 
     def on_centerline_generated(self, file_path):
-        """Handle when centerline is generated."""
+        """Handle when centerline is generated (cloud only)."""
         QMessageBox.information(self, "Track Map Complete!", 
-                              f"🎯 Perfect track map generated!\n\n"
-                              f"📁 Saved to: {file_path}\n\n"
-                              f"✅ The track map is now ready for use with the overlay.\n"
-                              f"You can start the overlay to see your perfect centerline!")
+                              "🎯 Perfect track map generated and uploaded to the cloud!\n\n"
+                              "✅ The track map is now available to all users and ready for the overlay.")
         
         # Update the current track info
         self.refresh_current_track_info()
@@ -1111,28 +1111,8 @@ The track map has been saved and is ready for use in:
         QMessageBox.information(self, "Refreshed", "Available track maps refreshed.")
 
     def refresh_current_track_info(self):
-        """Refresh the current track map information."""
-        # Check for the default centerline file
-        centerline_file_path = get_track_map_file_path()
-        
-        if os.path.exists(centerline_file_path):
-            try:
-                # Load track data safely with null byte cleaning
-                track_data = self._load_json_file_safely(centerline_file_path)
-                
-                points = len(track_data.get('centerline_positions', []))
-                length = track_data.get('length_meters', 'Unknown')
-                method = track_data.get('method', 'Unknown')
-                
-                self.current_track_info.setText(
-                    f"📍 Track map - {points} points, {length}m ({method})"
-                )
-            except Exception as e:
-                self.current_track_info.setText(f"❌ Error reading track map file: {str(e)}")
-        else:
-            self.current_track_info.setText("No local track map found. Build one using the Track Builder above!")
-        
-        # Check for cloud track maps
+        """Refresh the current track map information (cloud only)."""
+        self.current_track_info.setText("Cloud-only: checking current track in Supabase...")
         self.check_cloud_track_maps()
 
     def check_cloud_track_maps(self):
@@ -1202,13 +1182,29 @@ The track map has been saved and is ready for use in:
         self.scale_slider = QSlider(Qt.Orientation.Horizontal)
         self.scale_slider.setMinimum(10)
         self.scale_slider.setMaximum(100)
-        self.scale_slider.setValue(30)
+        self.scale_slider.setValue(70)
         scale_layout.addWidget(self.scale_slider, 0, 1)
         
-        self.scale_value_label = QLabel("30%")
+        self.scale_value_label = QLabel("70%")
         scale_layout.addWidget(self.scale_value_label, 0, 2)
         
         layout.addWidget(scale_group)
+
+        # Rotation group
+        rotation_group = QGroupBox("Rotation")
+        rotation_layout = QHBoxLayout(rotation_group)
+        self.rotation_value_label = QLabel("0°")
+        self.rotation_value_label.setMinimumWidth(40)
+        self.rotate_left_button = QPushButton("⟲")
+        self.rotate_right_button = QPushButton("⟳")
+        self.rotate_reset_button = QPushButton("Reset")
+        rotation_layout.addWidget(QLabel("Angle:"))
+        rotation_layout.addWidget(self.rotation_value_label)
+        rotation_layout.addStretch()
+        rotation_layout.addWidget(self.rotate_left_button)
+        rotation_layout.addWidget(self.rotate_right_button)
+        rotation_layout.addWidget(self.rotate_reset_button)
+        layout.addWidget(rotation_group)
         
         # Dragging instructions group
         drag_group = QGroupBox("🖱️ Draggable Positioning")
@@ -1325,6 +1321,11 @@ The track map has been saved and is ready for use in:
         self.corner_color_button.colorChanged.connect(self.update_settings_from_ui)
         self.position_color_button.colorChanged.connect(self.update_settings_from_ui)
 
+        # Rotation controls
+        self.rotate_left_button.clicked.connect(lambda: self.on_rotate_clicked(-15))
+        self.rotate_right_button.clicked.connect(lambda: self.on_rotate_clicked(15))
+        self.rotate_reset_button.clicked.connect(lambda: self.on_rotate_clicked(None))
+
     def on_scale_changed(self, value):
         """Handle scale slider changes."""
         self.scale_value_label.setText(f"{value}%")
@@ -1340,7 +1341,8 @@ The track map has been saved and is ready for use in:
             'corner_font_size': self.font_size_spinbox.value(),
             'track_color': self.track_color_button.get_color(),
             'corner_color': self.corner_color_button.get_color(),
-            'position_color': self.position_color_button.get_color()
+            'position_color': self.position_color_button.get_color(),
+            'overlay_rotation': getattr(self, 'rotation_degrees', 0),
         }
 
     def load_settings(self):
@@ -1357,8 +1359,13 @@ The track map has been saved and is ready for use in:
         self.track_color_button.set_color(settings['track_color'])
         self.corner_color_button.set_color(settings['corner_color'])
         self.position_color_button.set_color(settings['position_color'])
+        # Rotation
+        self.rotation_degrees = settings.get('overlay_rotation', 0)
+        self.rotation_value_label.setText(f"{int(self.rotation_degrees)}°")
         
         self.update_settings_from_ui()
+        # Ensure the scale label reflects the loaded value
+        self.on_scale_changed(self.scale_slider.value())
         
         # Refresh track info on load
         self.refresh_current_track_info()
@@ -1367,6 +1374,15 @@ The track map has been saved and is ready for use in:
         """Apply current settings to the overlay."""
         self.overlay_manager.update_settings(self.settings)
         self.status_label.setText("Settings applied to overlay.")
+
+    def on_rotate_clicked(self, delta):
+        """Handle rotation button clicks."""
+        if delta is None:
+            self.rotation_degrees = 0
+        else:
+            self.rotation_degrees = (getattr(self, 'rotation_degrees', 0) + delta) % 360
+        self.rotation_value_label.setText(f"{int(self.rotation_degrees)}°")
+        self.update_settings_from_ui()
 
     def test_overlay(self):
         """Test the overlay with current settings."""
@@ -1419,131 +1435,19 @@ The track map has been saved and is ready for use in:
             current_track_info = self.get_current_track_info()
             logger.info(f"🔍 Got track info from global connection: {current_track_info}")
             
-            # Priority loading order: 1) Database track map, 2) Local centerline file
-            track_data_loaded = False
-            data_source = "no data"
-            
-            # First, check if we have existing track data in database
+            # Cloud-only flow: try Supabase for current track; no local file fallback
             if current_track_info:
                 track_name, track_config = current_track_info
-                existing_track_data = self.check_existing_track_map()
-                
-                if existing_track_data and existing_track_data.get('track_map'):
-                    logger.info(f"🗺️ Found existing track map in database for {track_name}")
-                    # Start overlay with current track info (it will load from Supabase automatically)
-                    success = self.overlay_manager.start_overlay(track_name, track_config)
-                    if success:
-                        track_data_loaded = True
-                        data_source = f"Supabase: {track_name}"
-                        if track_config and track_config != track_name:
-                            data_source += f" - {track_config}"
-                        self.status_label.setText(f"Track map overlay started with {data_source}!")
-                        logger.info(f"🗺️ Loaded track data from {data_source}")
-            
-            # If no database track data, try to load the centerline track map file
-            centerline_file_path = get_track_map_file_path()
-            if not track_data_loaded and os.path.exists(centerline_file_path):
-                try:
-                    # Load track data safely with null byte cleaning
-                    track_data = self._load_json_file_safely(centerline_file_path)
-                    
-                    # Validate required fields
-                    if 'centerline_positions' not in track_data:
-                        raise KeyError("Missing 'centerline_positions' in track data")
-                    
-                    # Start overlay with current track info (important for auto-detection)
-                    if current_track_info:
-                        track_name, track_config = current_track_info
-                        logger.info(f"🔍 Starting overlay with track: {track_name} ({track_config})")
-                        success = self.overlay_manager.start_overlay(track_name, track_config)
-                    else:
-                        logger.warning("🔍 No current track info available, starting overlay without track data")
-                        success = self.overlay_manager.start_overlay()
-                        
-                    if success and self.overlay_manager.overlay:
-                        self.overlay_manager.overlay.track_coordinates = [
-                            (point[0], point[1]) for point in track_data['centerline_positions']
-                        ]
-                        self.overlay_manager.overlay._calculate_track_bounds()
-                        self.overlay_manager.overlay.update()
-                        
-                        self.status_label.setText("Track map overlay started with centerline data!")
-                        self.start_button.setEnabled(False)
-                        self.stop_button.setEnabled(True)
-                        
-                        QMessageBox.information(
-                            self, "Overlay Started",
-                            "🗺️ Track map overlay is now active!\n\n"
-                            "✨ Using high-quality centerline track map\n"
-                            "🎯 Green dot shows your current position on track\n"
-                            "☁️ Track map automatically loaded from cloud or local file\n"
-                            "🖱️ Click-through - won't interfere with games\n\n"
-                            "Controls:\n"
-                            "• Press 'Q' to close overlay\n"
-                            "• Press 'C' to toggle corner numbers\n"
-                            "• Press 'R' to reload track data\n\n"
-                            "Perfect for:\n"
-                            "• Real-time position awareness during races\n"
-                            "• Learning track layouts\n"
-                            "• Monitoring your racing line\n\n"
-                            "💡 If no track map exists, use the Track Builder tab to create one!"
-                        )
-                    else:
-                        self.status_label.setText("Failed to start overlay. Check if iRacing is running.")
-                        
-                except Exception as e:
-                    logger.error(f"Error loading centerline data: {e}")
-                    # Fall back to normal overlay start with track info
-                    if current_track_info:
-                        track_name, track_config = current_track_info
-                        logger.info(f"🔍 Fallback: Starting overlay with track: {track_name} ({track_config})")
-                        success = self.overlay_manager.start_overlay(track_name, track_config)
-                    else:
-                        logger.warning("🔍 Fallback: No current track info available")
-                        success = self.overlay_manager.start_overlay()
-                        
-                    if success:
-                        self.status_label.setText("Track map overlay started (no centerline data found).")
-                        self.start_button.setEnabled(False)
-                        self.stop_button.setEnabled(True)
-                    else:
-                        self.status_label.setText("Failed to start overlay. Check if iRacing is running.")
+                success = self.overlay_manager.start_overlay(track_name, track_config)
             else:
-                # No centerline data available - start with current track info from database
-                if current_track_info:
-                    track_name, track_config = current_track_info
-                    logger.info(f"🔍 No centerline file: Starting overlay with track: {track_name} ({track_config})")
-                    success = self.overlay_manager.start_overlay(track_name, track_config)
-                else:
-                    logger.warning("🔍 No centerline file and no current track info available")
-                    success = self.overlay_manager.start_overlay()
-                    
-                if success:
-                    if current_track_info:
-                        track_name, track_config = current_track_info
-                        full_name = track_name
-                        if track_config and track_config != track_name:
-                            full_name = f"{track_name} - {track_config}"
-                        self.status_label.setText(f"Track map overlay started for {full_name}!")
-                    else:
-                        self.status_label.setText("Track map overlay started (no track data - use Track Builder to create one!).")
-                    
-                    self.start_button.setEnabled(False)
-                    self.stop_button.setEnabled(True)
-                    
-                    QMessageBox.information(
-                        self, "Overlay Started",
-                        "🗺️ Track map overlay is now active!\n\n"
-                        "ℹ️ Loading track map from database...\n"
-                        "🎯 Use the 'Track Builder' tab to create a perfect track map\n"
-                        "   if no existing map is found.\n\n"
-                        "Current overlay shows:\n"
-                        "• Green dot for your current position\n"
-                        "• Track outline (if available from database)\n\n"
-                        "For the best experience, build a track map first!"
-                    )
-                else:
-                    self.status_label.setText("Failed to start overlay. Check if iRacing is running.")
+                success = self.overlay_manager.start_overlay()
+
+            if success:
+                self.status_label.setText("Track map overlay started (cloud data)")
+                self.start_button.setEnabled(False)
+                self.stop_button.setEnabled(True)
+            else:
+                self.status_label.setText("Failed to start overlay. Check if iRacing is running.")
         else:
             self.status_label.setText("Overlay is already running.")
 

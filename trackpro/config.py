@@ -77,6 +77,10 @@ DEFAULT_CONFIG = {
     },
     'voice_chat': {
         'enabled': True,  # Voice chat enabled by default
+        'server_url': '',  # Optional: wss://voice.yourdomain (falls back to localhost)
+        'webrtc_enabled': False,  # Enable embedded WebRTC (LiveKit)
+        'livekit_host_url': '',   # e.g., wss://your-livekit-host
+        'livekit_token_url': '',  # Supabase Edge Function URL to mint tokens
         'sample_rate': 48000,  # High quality sample rate
         'channels': 1,  # Mono - most microphones are mono
         'bit_depth': 16,  # Reduced bit depth for lower latency
@@ -491,6 +495,31 @@ class Config:
     def voice_chat_enabled(self) -> bool:
         """Get voice chat enabled setting."""
         return self.get('voice_chat.enabled', True)
+
+    @property
+    def voice_chat_server_url(self) -> str:
+        """Get the voice server base URL (e.g., wss://voice.yourdomain). Falls back to localhost for dev."""
+        # Prefer environment variable for easy deployment overrides
+        url = os.getenv('TRACKPRO_VOICE_SERVER_URL') or self.get('voice_chat.server_url', '')
+        if not url:
+            # Development fallback
+            url = 'ws://localhost:8080'
+            logger.info("Voice server URL not configured; using dev fallback ws://localhost:8080")
+        else:
+            logger.info("Using configured voice server URL")
+        return url
+
+    @property
+    def voice_chat_webrtc_enabled(self) -> bool:
+        return bool(os.getenv('TRACKPRO_VOICE_WEBRTC', '').lower() == 'true' or self.get('voice_chat.webrtc_enabled', False))
+
+    @property
+    def voice_chat_livekit_host_url(self) -> str:
+        return os.getenv('TRACKPRO_LIVEKIT_HOST_URL') or self.get('voice_chat.livekit_host_url', '')
+
+    @property
+    def voice_chat_livekit_token_url(self) -> str:
+        return os.getenv('TRACKPRO_LIVEKIT_TOKEN_URL') or self.get('voice_chat.livekit_token_url', '')
     
     @property
     def voice_chat_sample_rate(self) -> int:

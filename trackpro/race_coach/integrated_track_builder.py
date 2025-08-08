@@ -11,7 +11,11 @@ from typing import List, Tuple, Dict, Optional, Any
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import QApplication
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
+# Prefer unified QtAgg backend (works with PyQt6); fallback to explicit Qt6 backend
+try:
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+except Exception:  # pragma: no cover - fallback for older Matplotlib
+    from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from .pyirsdk import irsdk
@@ -494,13 +498,10 @@ class IntegratedTrackBuilderWorker(QThread):
                     'exit_lap_dist_pct': corner.exit_lap_dist_pct
                 })
             
-            # Save local centerline file first (for overlay use)
-            self._save_local_centerline_file(track_map_data, track_name, track_config)
-            
             # Save to Supabase
             supabase = get_supabase_client()
             if not supabase:
-                self.status_update.emit("⚠️ Supabase connection not available - track map saved locally only")
+                self.status_update.emit("⚠️ Supabase connection not available - cannot upload track map")
                 return
             
             # Find or create track record
@@ -566,41 +567,15 @@ class IntegratedTrackBuilderWorker(QThread):
         except Exception as e:
             error_msg = f"❌ Failed to upload track map to cloud: {str(e)}"
             print(error_msg)
-            self.status_update.emit("❌ Cloud upload failed - track map saved locally only")
+            self.status_update.emit("❌ Cloud upload failed")
     
     def stop_building(self):
         """Stop the building process."""
         self.is_running = False
     
     def _save_local_centerline_file(self, track_map_data, track_name, track_config):
-        """Save centerline data to local file for overlay use."""
-        try:
-            import json
-            import os
-            from ...utils.resource_utils import get_track_map_file_path
-            
-            # Create the local centerline file format
-            centerline_data = {
-                'track_name': track_name,
-                'track_config': track_config,
-                'centerline_positions': track_map_data,
-                'generated_timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'total_points': len(track_map_data)
-            }
-            
-            # Use production-safe track map file path
-            file_path = get_track_map_file_path()
-            
-            # Write new file (overwrite existing without backup)
-            with open(file_path, 'w') as f:
-                json.dump(centerline_data, f, indent=2)
-            
-            print(f"💾 Saved new centerline data to {file_path}")
-            print(f"🎯 Track: {track_name} ({track_config})")
-            print(f"📊 Points: {len(track_map_data)}")
-            
-        except Exception as e:
-            print(f"⚠️ Error saving local centerline file: {e}")
+        """Deprecated: Local saving removed (cloud only)."""
+        pass
 
 
 class IntegratedTrackBuilderManager(QObject):

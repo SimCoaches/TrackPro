@@ -4,10 +4,10 @@ import logging
 from datetime import datetime
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QWidget, QFrame, 
-    QListWidget, QListWidgetItem, QTextEdit, QLineEdit, QPushButton
+    QListWidget, QListWidgetItem, QTextEdit, QLineEdit, QPushButton, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor, QBrush
+from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor, QBrush, QPen
 from ..ui.avatar_manager import AvatarManager
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,53 @@ class PrivateMessageWidget(QWidget):
         self.message_data = message_data
         self.is_own_message = is_own_message
         self.setup_ui()
+
+    def contextMenuEvent(self, event):
+        try:
+            from PyQt6.QtWidgets import QMenu
+            menu = QMenu(self)
+            delete_action = menu.addAction("Delete Message")
+            action = menu.exec(event.globalPos())
+            if action == delete_action:
+                message_id = self.message_data.get("message_id")
+                if message_id:
+                    # Permission: TEAM/admin can delete any; otherwise only own
+                    can_delete = False
+                    try:
+                        from trackpro.auth.user_manager import get_current_user
+                        from trackpro.auth.hierarchy_manager import hierarchy_manager
+                        user = get_current_user()
+                        if user and user.is_authenticated:
+                            if hierarchy_manager.is_admin(user.email):
+                                can_delete = True
+                            else:
+                                can_delete = (self.message_data.get("sender_id") == user.id)
+                    except Exception:
+                        can_delete = False
+
+                    if can_delete:
+                        try:
+                            from trackpro.community.community_manager import CommunityManager
+                            mgr = CommunityManager()
+                            if mgr.delete_private_message(message_id):
+                                # Remove from UI list
+                                try:
+                                    from PyQt6.QtWidgets import QListWidget
+                                    parent_list = self.parent()
+                                    while parent_list and not isinstance(parent_list, QListWidget):
+                                        parent_list = parent_list.parent()
+                                    if parent_list:
+                                        for idx in range(parent_list.count()):
+                                            itm = parent_list.item(idx)
+                                            if parent_list.itemWidget(itm) is self:
+                                                parent_list.takeItem(idx)
+                                                break
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     
     def create_avatar(self, user_name, user_data=None):
         """Return a cached avatar pixmap and schedule async update via manager."""
@@ -178,11 +225,28 @@ class PrivateConversationWidget(QWidget):
     
     message_sent = pyqtSignal(str)
     
-    def __init__(self, conversation_data):
-        super().__init__()
+    def __init__(self, conversation_data, parent=None):
+        super().__init__(parent)
         self.conversation_data = conversation_data
         self.conversation_id = conversation_data.get('conversation_id')
+        # Ensure this widget expands to fill its parent container
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Typing indicator state
+        self._typing_users = {}
+        self._typing_cleanup_timer = QTimer(self)
+        self._typing_cleanup_timer.setInterval(1000)
+        self._typing_cleanup_timer.timeout.connect(self._prune_typing_users)
+        self._typing_cleanup_timer.start()
+        self._send_typing_debounce = QTimer(self)
+        self._send_typing_debounce.setSingleShot(True)
+        self._send_typing_debounce.setInterval(1800)
+        self._last_typing_sent_ms = 0
+        # Short-lived dedupe for optimistically added own messages
+        self._recent_sent_keys = {}
         self.setup_ui()
+        self._setup_typing_channel()
+        # Connect once
+        self._send_typing_debounce.timeout.connect(self._send_stop_typing)
     
     def setup_ui(self):
         """Setup the conversation UI."""
@@ -224,6 +288,7 @@ class PrivateConversationWidget(QWidget):
         
         # Messages area
         self.messages_list = QListWidget()
+        self.messages_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.messages_list.setStyleSheet("""
             QListWidget {
                 background-color: #1e1e1e;
@@ -235,7 +300,7 @@ class PrivateConversationWidget(QWidget):
                 padding: 0px;
             }
         """)
-        layout.addWidget(self.messages_list)
+        layout.addWidget(self.messages_list, 1)
         
         # Message input area
         input_widget = QWidget()
@@ -268,120 +333,41 @@ class PrivateConversationWidget(QWidget):
             }
         """)
         self.message_input.returnPressed.connect(self.send_message)
+        # Send typing start on edits, debounce stop
+        self.message_input.textEdited.connect(self._on_text_edited)
         
         input_layout.addWidget(self.message_input)
-        
+
+        # Typing indicator label above input
+        self.typing_label = QLabel("")
+        self.typing_label.setStyleSheet("color: #9aa0a6; font-size: 12px; padding: 6px 12px;")
+        self.typing_label.setVisible(False)
+        layout.addWidget(self.typing_label, 0)
+
         layout.addWidget(input_widget)
     
     def create_user_avatar(self, user_name, user_data=None):
-        """Create a circular avatar with user profile picture or initials."""
+        """Return a cached avatar pixmap and schedule async update via AvatarManager."""
         size = 32
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        # Check if user has an avatar URL
-        avatar_url = None
-        if user_data:
-            avatar_url = user_data.get('avatar_url')
-        
-        # Load avatar from URL if available
-        if avatar_url:
-            return self.load_avatar_from_url(avatar_url, size)
-        
-        # Fallback to initials
-        # Generate initials from the name
-        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
-        
-        # Create pixmap for avatar
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Draw circle background using TrackPro colors
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
-        color_index = hash(user_name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, size, size)
-        
-        # Draw initials
-        painter.setPen(QColor('#ffffff'))
-        font = painter.font()
-        font.setPixelSize(12)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
-        
-        painter.end()
-        return pixmap
+        url = user_data.get('avatar_url') if user_data else None
+        pix = AvatarManager.instance().get_cached_pixmap(url or "", user_name, size=size)
+        try:
+            if hasattr(self, 'avatar_label') and self.avatar_label is not None:
+                AvatarManager.instance().set_label_avatar(self.avatar_label, url, user_name, size=size)
+        except Exception:
+            pass
+        return pix
     
     def load_avatar_from_url(self, url: str, size: int = 32) -> QPixmap:
-        """Load and display avatar from URL."""
+        """Deprecated: use AvatarManager via create_user_avatar/set_label_avatar instead."""
         try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Scale to fit avatar size
-                            scaled_pixmap = pixmap.scaled(
-                                size, size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(size, size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, size, size)
-                            painter.end()
-                            
-                            # Update avatar display if this widget is still valid
-                            if hasattr(self, 'avatar_label') and self.avatar_label:
-                                self.avatar_label.setPixmap(circular_pixmap)
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Error processing downloaded avatar: {e}")
-                    # Fallback to initials
-                    fallback_pixmap = self.create_fallback_avatar(size, user_name)
-                    if hasattr(self, 'avatar_label') and self.avatar_label:
-                        self.avatar_label.setPixmap(fallback_pixmap)
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-            # Return a placeholder pixmap while loading
-            placeholder = QPixmap(size, size)
-            placeholder.fill(Qt.GlobalColor.transparent)
-            return placeholder
-            
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error loading avatar from URL: {e}")
-            # Fallback to initials
-            return self.create_fallback_avatar(size, user_name)
+            if hasattr(self, 'avatar_label') and self.avatar_label is not None:
+                AvatarManager.instance().set_label_avatar(self.avatar_label, url, "User", size=size)
+        except Exception:
+            pass
+        placeholder = QPixmap(size, size)
+        placeholder.fill(Qt.GlobalColor.transparent)
+        return placeholder
     
     def create_fallback_avatar(self, size: int = 32, user_name: str = 'U') -> QPixmap:
         """Create a fallback avatar with initials when image loading fails."""
@@ -419,6 +405,40 @@ class PrivateConversationWidget(QWidget):
         if text:
             self.message_sent.emit(text)
             self.message_input.clear()
+            # Immediately broadcast stop typing
+            try:
+                from trackpro.community.community_manager import CommunityManager
+                mgr = CommunityManager()
+                mgr.send_typing_signal(self.conversation_id, False)
+            except Exception:
+                pass
+            # Optimistically add message to UI and record for dedupe
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                user = get_current_user()
+                current_user_id = user.id if (user and user.is_authenticated) else None
+            except Exception:
+                current_user_id = None
+            try:
+                from datetime import datetime as _dt
+                local_msg = {
+                    'conversation_id': self.conversation_id,
+                    'sender_id': current_user_id,
+                    'content': text,
+                    'created_at': _dt.utcnow().isoformat() + 'Z',
+                    'user_profiles': {
+                        'user_id': current_user_id or 'me',
+                        'display_name': 'You',
+                        'username': 'You'
+                    }
+                }
+                self.add_message(local_msg, is_own_message=True)
+                # Record recent key for 7 seconds to avoid duplicate when realtime arrives
+                import time
+                key = f"{current_user_id}|{text}|{self.conversation_id}"
+                self._recent_sent_keys[key] = time.time() + 7.0
+            except Exception:
+                pass
     
     def add_message(self, message_data, is_own_message=False):
         """Add a message to the conversation."""
@@ -434,6 +454,162 @@ class PrivateConversationWidget(QWidget):
             self.messages_list.scrollToBottom()
         except Exception as e:
             logger.error(f"Error adding message to conversation: {e}")
+
+    # ----------------------------
+    # Typing indicator helpers
+    # ----------------------------
+    def _setup_typing_channel(self):
+        try:
+            from trackpro.community.community_manager import CommunityManager
+            self._community_manager = CommunityManager()
+            # Ensure current user id is set on manager
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                me = get_current_user()
+                if me and me.is_authenticated:
+                    self._community_manager.set_current_user(me.id)
+            except Exception:
+                pass
+            # Connect signal once per widget instance
+            self._community_manager.typing_event.connect(self._on_typing_event)
+            # Listen for private message inserts
+            self._community_manager.private_message_received.connect(self._on_realtime_private_message)
+            # Ensure channel is created/subscribed
+            self._community_manager._get_or_create_typing_channel(self.conversation_id)
+        except Exception as e:
+            logger.debug(f"Typing channel setup failed: {e}")
+
+    def _on_text_edited(self, _):
+        try:
+            from PyQt6.QtCore import QTime
+            now_ms = QTime.currentTime().msecsSinceStartOfDay()
+            # Throttle start typing every ~2000ms
+            if now_ms - getattr(self, '_last_typing_sent_ms', 0) > 2000:
+                from trackpro.community.community_manager import CommunityManager
+                mgr = CommunityManager()
+                mgr.send_typing_signal(self.conversation_id, True)
+                self._last_typing_sent_ms = now_ms
+            # Debounce stop typing by restarting the timer
+            self._send_typing_debounce.stop()
+            self._send_typing_debounce.start()
+        except Exception:
+            pass
+
+    def _on_realtime_private_message(self, message_data: dict):
+        try:
+            if not message_data or message_data.get('conversation_id') != self.conversation_id:
+                return
+            # Determine own vs other
+            is_own = False
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                me = get_current_user()
+                is_own = bool(me and me.is_authenticated and message_data.get('sender_id') == me.id)
+            except Exception:
+                pass
+            # Skip duplicate if we just optimistically added the same content
+            try:
+                import time
+                sender_id = message_data.get('sender_id')
+                content = message_data.get('content')
+                key = f"{sender_id}|{content}|{self.conversation_id}"
+                expiry = self._recent_sent_keys.get(key)
+                if expiry and expiry > time.time():
+                    # Consume the dedupe key and skip adding duplicate
+                    self._recent_sent_keys.pop(key, None)
+                    return
+            except Exception:
+                pass
+            self.add_message(message_data, is_own_message=is_own)
+            # Clear typing state for sender if present
+            sender_id = message_data.get('sender_id')
+            if sender_id in self._typing_users:
+                self._typing_users.pop(sender_id, None)
+                self._update_typing_label()
+        except Exception:
+            pass
+
+    def _send_stop_typing(self):
+        try:
+            from trackpro.community.community_manager import CommunityManager
+            mgr = CommunityManager()
+            mgr.send_typing_signal(self.conversation_id, False)
+        except Exception:
+            pass
+
+    def _on_typing_event(self, conversation_id: str, payload: dict):
+        try:
+            if conversation_id != self.conversation_id:
+                return
+            user_id = payload.get('user_id')
+            is_typing = bool(payload.get('is_typing'))
+            if not user_id:
+                return
+            # Do not show our own typing
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                me = get_current_user()
+                if me and me.is_authenticated and me.id == user_id:
+                    return
+            except Exception:
+                pass
+            import time
+            if is_typing:
+                self._typing_users[user_id] = time.time() + 3.0
+            else:
+                self._typing_users.pop(user_id, None)
+            self._update_typing_label()
+        except Exception:
+            pass
+
+    def _prune_typing_users(self):
+        try:
+            import time
+            now = time.time()
+            removed = False
+            for uid, expiry in list(self._typing_users.items()):
+                if expiry < now:
+                    self._typing_users.pop(uid, None)
+                    removed = True
+            if removed:
+                self._update_typing_label()
+            # Also prune recent sent dedupe keys
+            for k, expiry in list(self._recent_sent_keys.items()):
+                if expiry < now:
+                    self._recent_sent_keys.pop(k, None)
+        except Exception:
+            pass
+
+    def _update_typing_label(self):
+        try:
+            # Map user_ids to display names if we can
+            names = []
+            if not self._typing_users:
+                self.typing_label.setVisible(False)
+                self.typing_label.setText("")
+                return
+            try:
+                from trackpro.community.community_manager import CommunityManager
+                mgr = CommunityManager()
+                for uid in self._typing_users.keys():
+                    info = mgr._get_user_data(uid) or {}
+                    name = info.get('display_name') or info.get('username') or 'User'
+                    names.append(name)
+            except Exception:
+                names = ['User' for _ in self._typing_users.keys()]
+
+            unique_names = list(dict.fromkeys(names))
+            text = ""
+            if len(unique_names) == 1:
+                text = f"{unique_names[0]} is typing…"
+            elif len(unique_names) == 2:
+                text = f"{unique_names[0]} and {unique_names[1]} are typing…"
+            else:
+                text = f"{unique_names[0]}, {unique_names[1]} and {len(unique_names)-2} others are typing…"
+            self.typing_label.setText(text)
+            self.typing_label.setVisible(True)
+        except Exception:
+            pass
 
 
 class PrivateConversationListItem(QWidget):
@@ -538,114 +714,28 @@ class PrivateConversationListItem(QWidget):
         self.mousePressEvent = self.on_click
     
     def create_user_avatar(self, user_name, user_data=None):
-        """Create a circular avatar with user profile picture or initials."""
+        """Return a cached avatar pixmap and schedule async update via AvatarManager."""
         size = 40
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        # Check if user has an avatar URL
-        avatar_url = None
-        if user_data:
-            avatar_url = user_data.get('avatar_url')
-        
-        # Load avatar from URL if available
-        if avatar_url:
-            return self.load_avatar_from_url(avatar_url, size)
-        
-        # Fallback to initials
-        # Generate initials from the name
-        initials = ''.join([word[0].upper() for word in user_name.split()][:2])
-        
-        # Create pixmap for avatar
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Draw circle background using TrackPro colors
-        colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c']
-        color_index = hash(user_name) % len(colors)
-        painter.setBrush(QBrush(QColor(colors[color_index])))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, size, size)
-        
-        # Draw initials
-        painter.setPen(QColor('#ffffff'))
-        font = painter.font()
-        font.setPixelSize(14)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initials)
-        
-        painter.end()
-        return pixmap
+        url = user_data.get('avatar_url') if user_data else None
+        pix = AvatarManager.instance().get_cached_pixmap(url or "", user_name, size=size)
+        try:
+            if hasattr(self, 'avatar_label') and self.avatar_label is not None:
+                AvatarManager.instance().set_label_avatar(self.avatar_label, url, user_name, size=size)
+        except Exception:
+            pass
+        return pix
     
     def load_avatar_from_url(self, url: str, size: int = 40) -> QPixmap:
-        """Load and display avatar from URL."""
+        """Deprecated: use AvatarManager via create_user_avatar/set_label_avatar instead."""
         try:
-            from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-            from PyQt6.QtCore import QUrl
-            
-            # Create network manager if it doesn't exist
-            if not hasattr(self, 'network_manager'):
-                self.network_manager = QNetworkAccessManager(self)
-            
-            # Download image
-            request = QNetworkRequest(QUrl(url))
-            reply = self.network_manager.get(request)
-            
-            def on_avatar_downloaded():
-                try:
-                    if reply.error() == reply.NetworkError.NoError:
-                        image_data = reply.readAll()
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(image_data)
-                        
-                        # Scale and crop to circle
-                        if not pixmap.isNull():
-                            # Scale to fit avatar size
-                            scaled_pixmap = pixmap.scaled(
-                                size, size, 
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation
-                            )
-                            
-                            # Create circular mask
-                            circular_pixmap = QPixmap(size, size)
-                            circular_pixmap.fill(Qt.GlobalColor.transparent)
-                            
-                            painter = QPainter(circular_pixmap)
-                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                            painter.setBrush(QBrush(scaled_pixmap))
-                            painter.setPen(QPen(Qt.GlobalColor.transparent))
-                            painter.drawEllipse(0, 0, size, size)
-                            painter.end()
-                            
-                            # Update avatar display if this widget is still valid
-                            if hasattr(self, 'avatar_label') and self.avatar_label:
-                                self.avatar_label.setPixmap(circular_pixmap)
-                    
-                    reply.deleteLater()
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Error processing downloaded avatar: {e}")
-                    # Fallback to initials
-                    fallback_pixmap = self.create_fallback_avatar(size, user_name)
-                    if hasattr(self, 'avatar_label') and self.avatar_label:
-                        self.avatar_label.setPixmap(fallback_pixmap)
-            
-            reply.finished.connect(on_avatar_downloaded)
-            
-            # Return a placeholder pixmap while loading
-            placeholder = QPixmap(size, size)
-            placeholder.fill(Qt.GlobalColor.transparent)
-            return placeholder
-            
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error loading avatar from URL: {e}")
-            # Fallback to initials
-            return self.create_fallback_avatar(size, user_name)
+            if hasattr(self, 'avatar_label') and self.avatar_label is not None:
+                name = self.conversation_data.get('other_user', {}).get('display_name') or self.conversation_data.get('other_user', {}).get('username') or 'User'
+                AvatarManager.instance().set_label_avatar(self.avatar_label, url, name, size=size)
+        except Exception:
+            pass
+        placeholder = QPixmap(size, size)
+        placeholder.fill(Qt.GlobalColor.transparent)
+        return placeholder
     
     def create_fallback_avatar(self, size: int = 40, user_name: str = 'U') -> QPixmap:
         """Create a fallback avatar with initials when image loading fails."""

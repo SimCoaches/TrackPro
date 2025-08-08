@@ -217,6 +217,7 @@ class AccountPage(QWidget):
         self.current_section = "profile"
         self.user_data = {}
         self.is_initialized = False
+        self._user_load_attempts = 0  # retry counter for non-blocking auth/session readiness
         
         # Initialize Windows startup manager
         self.startup_manager = WindowsStartupManager()
@@ -467,8 +468,14 @@ class AccountPage(QWidget):
         self.email_input.setStyleSheet(self.email_input.styleSheet() + "background-color: #484b51;")
         form_layout.addWidget(self.email_input, 3, 1)
         
+        # Hierarchy Level (read-only)
+        form_layout.addWidget(QLabel("Hierarchy Level"), 4, 0)
+        self.hierarchy_label = QLabel("Loading…")
+        self.hierarchy_label.setStyleSheet("color: #b9bbbe;")
+        form_layout.addWidget(self.hierarchy_label, 4, 1)
+        
         # Date of Birth
-        form_layout.addWidget(QLabel("Date of Birth"), 4, 0)
+        form_layout.addWidget(QLabel("Date of Birth"), 5, 0)
         self.dob_input = QDateEdit()
         self.dob_input.setDate(QDate.currentDate().addYears(-25))
         self.dob_input.setStyleSheet("""
@@ -485,7 +492,7 @@ class AccountPage(QWidget):
                 background-color: #36393f;
             }
         """)
-        form_layout.addWidget(self.dob_input, 4, 1)
+        form_layout.addWidget(self.dob_input, 5, 1)
         
         # Set label styles
         for i in range(form_layout.rowCount()):
@@ -1338,21 +1345,34 @@ Total: ~128.0 MB | Last updated: Just now"""
     def load_user_data(self):
         """Load current user data from the database."""
         try:
-            # Load profile from Supabase
+            # Load profile using the active Supabase client
             from ....database.supabase_client import get_supabase_client
             from ....social.user_manager import EnhancedUserManager
             
-            # Check if user is authenticated
+            # Get client after auth check
             supabase_client = get_supabase_client()
             if not supabase_client:
-                logger.warning("Unable to connect to database for loading user data")
+                # Client may still be initializing – retry shortly without blocking UI
+                if self._user_load_attempts < 3:
+                    self._user_load_attempts += 1
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(250, self.load_user_data)
+                else:
+                    self._user_load_attempts = 0
                 self.user_data = {}
                 return
             
             # Get current user
             user_response = supabase_client.auth.get_user()
             if not user_response or not user_response.user:
-                logger.warning("No authenticated user found")
+                # Session may not be fully restored yet – retry a few times
+                if self._user_load_attempts < 3:
+                    self._user_load_attempts += 1
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(250, self.load_user_data)
+                else:
+                    logger.warning("No authenticated user found after retries")
+                    self._user_load_attempts = 0
                 self.user_data = {}
                 return
             
@@ -1393,6 +1413,9 @@ Total: ~128.0 MB | Last updated: Just now"""
                 }
                 logger.info(f"No profile data found, using auth metadata: {self.user_data}")
             
+            # Reset attempts on success
+            self._user_load_attempts = 0
+
             # Populate form fields
             if hasattr(self, 'first_name_input'):
                 self.first_name_input.setText(self.user_data.get("first_name", ""))
@@ -1426,15 +1449,49 @@ Total: ~128.0 MB | Last updated: Just now"""
                     # Load avatar from URL
                     self.load_avatar_from_url(avatar_url)
                 else:
-                    # Set initials as fallback
-                    first_initial = self.user_data.get("first_name", "U")[0].upper()
-                    last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
+                    # Set initials as fallback (handle None/empty safely)
+                    first_val = self.user_data.get("first_name") or "U"
+                    last_val = self.user_data.get("last_name") or ""
+                    first_initial = (first_val[0] if len(first_val) > 0 else "U").upper()
+                    last_initial = (last_val[0] if len(last_val) > 0 else "").upper()
                     self.profile_avatar.setText(f"{first_initial}{last_initial}")
             
             logger.info("User data loaded successfully")
             
         except Exception as e:
             logger.error(f"Error loading user data: {e}")
+
+        # Update hierarchy display even if user/profile load partially succeeded
+        try:
+            self.refresh_hierarchy_status()
+        except Exception:
+            pass
+
+    def refresh_hierarchy_status(self):
+        """Refresh the displayed hierarchy level and moderation status for the current user."""
+        try:
+            from trackpro.auth.user_manager import get_current_user
+            from trackpro.auth.hierarchy_manager import hierarchy_manager
+            user = get_current_user()
+            if not hasattr(self, 'hierarchy_label'):
+                return
+            if not user or not user.is_authenticated:
+                self.hierarchy_label.setText("Not signed in")
+                return
+
+            # Determine level with admin fast-path, which covers @simcoaches.com + hardcoded
+            level_text = "PADDOCK"
+            if user.email and hierarchy_manager.is_admin(user.email):
+                level_text = "TEAM"
+            else:
+                try:
+                    level = hierarchy_manager.get_user_level(user.id)
+                    level_text = getattr(level, 'value', str(level))
+                except Exception:
+                    level_text = getattr(user, 'hierarchy_level', 'PADDOCK')
+            self.hierarchy_label.setText(level_text)
+        except Exception:
+            pass
     
     def load_startup_settings(self):
         """Load startup settings from config and Windows registry."""
@@ -1525,9 +1582,11 @@ Total: ~128.0 MB | Last updated: Just now"""
             self.user_data.update(profile_data)
             logger.info("Profile saved successfully to Supabase")
             
-            # Update avatar initials
-            first_initial = profile_data["first_name"][0].upper()
-            last_initial = profile_data["last_name"][0].upper() if profile_data["last_name"] else ""
+            # Update avatar initials (handle None/empty safely)
+            fn = profile_data.get("first_name") or "U"
+            ln = profile_data.get("last_name") or ""
+            first_initial = (fn[0] if len(fn) > 0 else "U").upper()
+            last_initial = (ln[0] if len(ln) > 0 else "").upper()
             self.profile_avatar.setText(f"{first_initial}{last_initial}")
             
             QMessageBox.information(self, "Success", "Profile updated successfully!")
@@ -1760,11 +1819,13 @@ Total: ~128.0 MB | Last updated: Just now"""
             
             if reply == QMessageBox.StandardButton.Yes:
                 # TODO: Implement avatar removal from Supabase
-                # Reset to default avatar (initials)
+                # Reset to default avatar (initials) safely
                 if hasattr(self, 'profile_avatar'):
-                    first_initial = self.user_data.get("first_name", "U")[0].upper()
-                    last_initial = self.user_data.get("last_name", "")[0].upper() if self.user_data.get("last_name") else ""
-                    self.profile_avatar.setText(f"{first_initial}{last_initial}")
+                    fv = self.user_data.get("first_name") or "U"
+                    lv = self.user_data.get("last_name") or ""
+                    fi = (fv[0] if len(fv) > 0 else "U").upper()
+                    li = (lv[0] if len(lv) > 0 else "").upper()
+                    self.profile_avatar.setText(f"{fi}{li}")
                 
                 QMessageBox.information(self, "Success", "Avatar removed successfully!")
                 logger.info("Avatar removed")

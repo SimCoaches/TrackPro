@@ -1300,7 +1300,7 @@ class LoginDialog(BaseAuthDialog):
                     return
 
             # Authenticate user
-            response = supabase.client.auth.sign_in_with_password({
+            response = supabase.auth.sign_in_with_password({
                 "email": email,
                 "password": password
             })
@@ -1313,7 +1313,7 @@ class LoginDialog(BaseAuthDialog):
                 if not self.check_and_handle_2fa(response.user.id, user_email):
                     # 2FA failed, logout and return
                     try:
-                        supabase.client.auth.sign_out()
+                        supabase.auth.sign_out()
                     except:
                         pass
                     return

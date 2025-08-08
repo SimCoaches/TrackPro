@@ -111,6 +111,13 @@ class HierarchyManager:
         """
         return email.lower() in {admin.lower() for admin in self.dynamic_admin_emails}
     
+    def is_simcoaches_email(self, email: str) -> bool:
+        """Check if email belongs to the simcoaches.com domain."""
+        try:
+            return bool(email) and email.lower().endswith("@simcoaches.com")
+        except Exception:
+            return False
+    
     def is_admin(self, email: str) -> bool:
         """Check if email has admin access (hardcoded or dynamic).
         
@@ -120,7 +127,12 @@ class HierarchyManager:
         Returns:
             True if admin, False otherwise
         """
-        return self.is_hardcoded_admin(email) or self.is_dynamic_admin(email)
+        # Treat any @simcoaches.com email as admin-level (TEAM) for permissions
+        return (
+            self.is_hardcoded_admin(email)
+            or self.is_dynamic_admin(email)
+            or self.is_simcoaches_email(email)
+        )
     
     def add_dynamic_admin(self, email: str, added_by: str = None) -> Dict[str, Any]:
         """Add a dynamic admin email.

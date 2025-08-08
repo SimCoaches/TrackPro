@@ -2,7 +2,11 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
+# Prefer unified QtAgg backend (works with PyQt6); fallback to explicit Qt6 backend
+try:
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+except Exception:  # pragma: no cover - fallback for older Matplotlib
+    from matplotlib.backends.backend_qt6agg import FigureCanvasQTAgg as FigureCanvas
 import os
 from pathlib import Path
 import json
