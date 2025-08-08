@@ -18,6 +18,9 @@ class PedalsPage(BasePage):
         self.pedal_tabs = None
         self.connection_status_label = None
         self.connection_timer = None
+        # Will be set when global pedal system is provided by the main window
+        self.global_output = None
+        self.global_pedal_data_queue = None
         super().__init__("pedals", global_managers)
     
     def init_page(self):
@@ -162,8 +165,12 @@ class PedalsPage(BasePage):
         curve_manager_widget.curve_changed.connect(
             lambda curve, p=pedal_name: self.curve_changed.emit(p, curve)
         )
+        # Update both the page and the calibration widget when deadzone changes
         deadzone_widget.deadzone_changed.connect(
             lambda pedal, min_dz, max_dz: self.update_deadzone(pedal, min_dz, max_dz, calibration_widget)
+        )
+        deadzone_widget.deadzone_changed.connect(
+            lambda pedal, min_dz, max_dz: calibration_widget.set_deadzone_values(min_dz, max_dz)
         )
         
         scroll_area.setWidget(main_widget)
@@ -173,6 +180,12 @@ class PedalsPage(BasePage):
         try:
             from ....pedals.calibration import CalibrationWizard
             
+            # Fallback to global manager hardware if local reference not set yet
+            if not self.hardware_input and getattr(self, 'global_managers', None):
+                try:
+                    self.hardware_input = getattr(self.global_managers, 'hardware', None)
+                except Exception:
+                    self.hardware_input = None
             if not self.hardware_input:
                 logger.warning("Hardware input not available - cannot open calibration wizard")
                 return
@@ -194,17 +207,26 @@ class PedalsPage(BasePage):
     def update_deadzone(self, pedal_name: str, min_deadzone: int, max_deadzone: int, calibration_widget):
         """Update the deadzone values in the calibration chart."""
         logger.info(f"Updating deadzone for {pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
-        
-        if hasattr(calibration_widget, 'calibration_chart') and calibration_widget.calibration_chart:
-            chart = calibration_widget.calibration_chart
-            if hasattr(chart, 'set_deadzones'):
-                chart.set_deadzones(min_deadzone, max_deadzone)
-                logger.debug(f"Applied deadzone to chart for {pedal_name}")
-        
-        # Update the deadzone visualization on the pyqtgraph chart
+        # Apply to the calibration widget and refresh visualization
+        if hasattr(calibration_widget, 'set_deadzone_values'):
+            calibration_widget.set_deadzone_values(min_deadzone, max_deadzone)
         if hasattr(calibration_widget, 'update_deadzone_visualization'):
             calibration_widget.update_deadzone_visualization()
             logger.debug(f"Updated deadzone visualization for {pedal_name}")
+        
+        # Apply to live hardware so vJoy output uses these deadzones
+        try:
+            if getattr(self, 'hardware_input', None):
+                if pedal_name in self.hardware_input.axis_ranges:
+                    axis_entry = self.hardware_input.axis_ranges.get(pedal_name, {})
+                    axis_entry['min_deadzone'] = int(max(0, min(50, min_deadzone)))
+                    axis_entry['max_deadzone'] = int(max(0, min(50, max_deadzone)))
+                    self.hardware_input.axis_ranges[pedal_name] = axis_entry
+                    # Persist for future sessions
+                    if hasattr(self.hardware_input, 'save_axis_ranges'):
+                        self.hardware_input.save_axis_ranges()
+        except Exception as e:
+            logger.debug(f"Failed to apply deadzones to hardware for {pedal_name}: {e}")
     
     def on_calibration_complete(self, calibration_data):
         logger.info(f"Calibration completed with data: {calibration_data}")
@@ -234,6 +256,23 @@ class PedalsPage(BasePage):
             widget = self.pedal_widgets[pedal]
             widget.setEnabled(available)
     
+    # --- Integration with global pedal system (modern UI) ---
+    def set_global_pedal_system(self, hardware, output, data_queue):
+        """Called by the modern main window once the global pedal system is ready."""
+        self.hardware_input = hardware
+        self.global_output = output
+        self.global_pedal_data_queue = data_queue
+        # Refresh connection indicator immediately
+        self.update_connection_status()
+
+    def update_pedal_values(self, raw_values: dict):
+        """Accept raw pedal values from the global UI updater."""
+        try:
+            if isinstance(raw_values, dict):
+                self.handle_hardware_update(raw_values)
+        except Exception as e:
+            logger.debug(f"Error updating pedal values: {e}")
+
     def get_pedal_calibration(self, pedal: str):
         if pedal in self.pedal_widgets:
             widget = self.pedal_widgets[pedal]

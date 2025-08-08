@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QMessageBox
 from datetime import datetime as dt
 import ctypes
 import time
+import math
 from ..database import calibration_manager, supabase
 from trackpro.database.user_manager import user_manager
 from ..race_coach.debouncer import trackpro_debouncer
@@ -96,6 +97,12 @@ class HardwareInput:
         
         # Setup debounced calibration operations (Phase 3 optimization)
         trackpro_debouncer.setup_calibration_operations(self._execute_calibration_save)
+        # Debounced cloud saves for ranges and mappings to avoid spam during slider moves
+        try:
+            trackpro_debouncer.register_action("save_axis_ranges", self._execute_axis_ranges_save, delay=0.7, max_delay=2.0)
+            trackpro_debouncer.register_action("save_axis_mappings", self._execute_axis_mappings_save, delay=0.7, max_delay=2.0)
+        except Exception:
+            pass
         
         # ABS system functionality removed
         
@@ -181,9 +188,47 @@ class HardwareInput:
                                         'curve_type': data.get('curve_type', curve_name)
                                     }
                                     json.dump(save_data, f, indent=2)
+                # Handle axis ranges and mappings synced per user
+                elif name == 'axis_ranges' and isinstance(data, dict):
+                    try:
+                        self.axis_ranges = data
+                        self.save_axis_ranges()
+                        logger.info("Synced axis ranges from cloud")
+                    except Exception as e:
+                        logger.warning(f"Failed to apply cloud axis ranges: {e}")
+                elif name == 'axis_mappings' and isinstance(data, dict):
+                    try:
+                        self.axis_mappings = data
+                        # Re-validate and persist
+                        self._validate_axis_mappings()
+                        self.save_axis_mappings()
+                        # Update axis constants
+                        self.THROTTLE_AXIS = self.axis_mappings.get('throttle', -1)
+                        self.BRAKE_AXIS = self.axis_mappings.get('brake', -1)
+                        self.CLUTCH_AXIS = self.axis_mappings.get('clutch', -1)
+                        logger.info("Synced axis mappings from cloud")
+                    except Exception as e:
+                        logger.warning(f"Failed to apply cloud axis mappings: {e}")
 
             # Save the combined calibration data
             self._save_calibration_to_file(self.calibration)
+
+            # Ensure axis ranges and mappings are persisted for this user as well
+            try:
+                calibration_manager.save_calibration(
+                    user_id=user_id,
+                    name="axis_ranges",
+                    data=self.axis_ranges
+                )
+                calibration_manager.save_calibration(
+                    user_id=user_id,
+                    name="axis_mappings",
+                    data=self.axis_mappings
+                )
+                logger.info("Ensured axis ranges and mappings are saved to cloud during sync")
+            except Exception as e:
+                logger.warning(f"Failed to persist axis ranges/mappings during sync: {e}")
+
             logger.info("Synced calibration with cloud")
         except Exception as e:
             logger.error(f"Error syncing with cloud: {e}")
@@ -310,6 +355,11 @@ class HardwareInput:
             with open(cal_file, 'w') as f:
                 json.dump(self.axis_ranges, f)
             logger.info("Saved axis ranges")
+            # Debounced per-user cloud sync
+            try:
+                trackpro_debouncer.trigger("save_axis_ranges")
+            except Exception:
+                self._execute_axis_ranges_save()
         except Exception as e:
             logger.error(f"Failed to save axis ranges: {e}")
 
@@ -639,6 +689,11 @@ class HardwareInput:
             with open(mappings_file, 'w') as f:
                 json.dump(mappings, f)
             logger.info(f"Saved axis mappings: {mappings}")
+            # Debounced per-user cloud sync
+            try:
+                trackpro_debouncer.trigger("save_axis_mappings")
+            except Exception:
+                self._execute_axis_mappings_save()
         except Exception as e:
             logger.error(f"Failed to save axis mappings: {e}")
     
@@ -730,6 +785,23 @@ class HardwareInput:
                             name=f"{pedal}_default",
                             data=data
                         )
+                    # Also persist axis ranges and mappings for this user
+                    try:
+                        calibration_manager.save_calibration(
+                            user_id=user_id,
+                            name="axis_ranges",
+                            data=self.axis_ranges
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to save axis ranges to cloud: {e}")
+                    try:
+                        calibration_manager.save_calibration(
+                            user_id=user_id,
+                            name="axis_mappings",
+                            data=self.axis_mappings
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to save axis mappings to cloud: {e}")
                     logger.info("Calibration saved to cloud")
         except Exception as e:
             logger.error(f"Failed to save calibration to cloud: {e}")
@@ -827,26 +899,27 @@ class HardwareInput:
         else:
             normalized = (raw_value / 65535) * 100
             
-        # Clamp to 0-100 range
+        # Clamp to 0-100 range and quantize to avoid early onset around threshold
         normalized = max(0.0, min(100.0, normalized))
+        normalized_q = math.floor(normalized + 1e-9)
         
         # Apply deadzone at minimum (if pedal is barely pressed, treat as not pressed)
-        if normalized < min_deadzone:
+        if normalized_q <= min_deadzone:
             # Return 0 immediately for values in the minimum deadzone
             return 0
         
         # Apply deadzone at maximum (if pedal is almost fully pressed, treat as fully pressed)
-        if normalized > (100.0 - max_deadzone):
-            normalized = 100.0
+        if normalized_q > (100.0 - max_deadzone):
+            normalized_q = 100.0
             
         # If between min_deadzone and (100 - max_deadzone), rescale to full range
         if min_deadzone > 0 or max_deadzone > 0:
-            if normalized > min_deadzone and normalized < 100:
+            if normalized_q > min_deadzone and normalized_q < 100:
                 # Rescale the value between deadzones to use full range (0-100)
                 usable_range = 100.0 - min_deadzone - max_deadzone
                 if usable_range > 0:  # Prevent division by zero
-                    normalized = ((normalized - min_deadzone) / usable_range) * 100.0
-                    normalized = max(0.0, min(100.0, normalized))
+                    normalized_q = ((normalized_q - min_deadzone) / usable_range) * 100.0
+                    normalized_q = max(0.0, min(100.0, normalized_q))
         
         # Apply curve if we have calibration points
         if points:
@@ -857,13 +930,13 @@ class HardwareInput:
             # Find surrounding points
             output_percentage = 0
             for i in range(len(norm_points)-1):
-                if normalized <= norm_points[i+1][0]:
+                if normalized_q <= norm_points[i+1][0]:
                     x1, y1 = norm_points[i]
                     x2, y2 = norm_points[i+1]
                     
                     # Linear interpolation between points
                     if x2 != x1:
-                        t = (normalized - x1) / (x2 - x1)
+                        t = (normalized_q - x1) / (x2 - x1)
                         output_percentage = y1 + t * (y2 - y1)
                     else:
                         output_percentage = y1
@@ -874,13 +947,53 @@ class HardwareInput:
                     output_percentage = norm_points[-1][1]
         else:
             # No calibration points, use linear mapping
-            output_percentage = normalized
+            output_percentage = normalized_q
         
         # Convert back to raw range (0-65535)
         output = int((output_percentage / 100) * 65535)
         output = max(0, min(65535, output))  # Ensure within valid range
         
         return output
+
+    def _execute_axis_ranges_save(self):
+        """Upload axis ranges to cloud (debounced)."""
+        try:
+            if not supabase.is_authenticated():
+                return
+            user = supabase.get_user()
+            if not user:
+                return
+            user_id = user_manager._extract_user_id(user)
+            if not user_id:
+                return
+            calibration_manager.save_calibration(
+                user_id=user_id,
+                name="axis_ranges",
+                data=self.axis_ranges
+            )
+            logger.info("Axis ranges saved to cloud")
+        except Exception as e:
+            logger.debug(f"Axis ranges cloud save skipped: {e}")
+
+    def _execute_axis_mappings_save(self):
+        """Upload axis mappings to cloud (debounced)."""
+        try:
+            if not supabase.is_authenticated():
+                return
+            user = supabase.get_user()
+            if not user:
+                return
+            user_id = user_manager._extract_user_id(user)
+            if not user_id:
+                return
+            calibration_manager.save_calibration(
+                user_id=user_id,
+                name="axis_mappings",
+                data=self.axis_mappings
+            )
+            logger.info("Axis mappings saved to cloud")
+        except Exception as e:
+            logger.debug(f"Axis mappings cloud save skipped: {e}")
 
     def _create_default_curve_presets(self):
         """Create default curve presets for each pedal if they don't exist."""
