@@ -22,12 +22,21 @@ class RacePassPage(BasePage):
         super().__init__("Race Pass", global_managers)
         
     def init_page(self):
-        """Initialize the Race Pass page layout (Coming Soon placeholder)."""
+        """Initialize the Race Pass page layout with real view when available."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Always show the Coming Soon placeholder for Race Pass
+        if GAMIFICATION_AVAILABLE and RacePassViewWidget is not None:
+            try:
+                self.view = RacePassViewWidget()
+                layout.addWidget(self.view)
+                logger.info("🎟️ Race Pass view loaded")
+                return
+            except Exception as e:
+                logger.warning(f"Race Pass view failed to load, using placeholder: {e}")
+
+        # Fallback placeholder
         fallback_layout = QVBoxLayout()
         fallback_layout.setContentsMargins(40, 40, 40, 40)
         fallback_layout.setSpacing(30)

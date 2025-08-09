@@ -6,7 +6,7 @@ using authenticated requests.
 """
 
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from .client import supabase
 from . import auth
 
@@ -626,6 +626,110 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
         logger.error(f"Error in get_sessions: {e}", exc_info=True)
         return None, f"Failed to retrieve sessions: {e}"
 # --- End get_sessions function ---
+
+def get_fastest_laps(track_id: str, car_id: str, limit: int = 50, exclude_user_id: Optional[str] = None) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    """Fetch fastest laps across all users for a given track/car, including username.
+
+    Returns list of dicts with keys: id (lap_id), lap_time, user_id, username, session_id.
+    """
+    try:
+        from trackpro.database.supabase_client import supabase as main_supabase
+    except ImportError:
+        logger.error("Could not import main Supabase client in get_fastest_laps")
+        return None, "Internal error: Cannot access database client"
+
+    if not main_supabase.is_authenticated():
+        return None, "Not logged in. Please log in to view community laps"
+
+    try:
+        # Find sessions for the requested track/car
+        sessions_result = (
+            main_supabase.client
+            .table("sessions")
+            .select("id")
+            .eq("track_id", track_id)
+            .eq("car_id", car_id)
+            .limit(2000)
+            .execute()
+        )
+        if not sessions_result.data:
+            return [], "No sessions found for this track/car"
+        session_ids = [s["id"] for s in sessions_result.data]
+
+        # Get fastest valid laps from those sessions
+        laps_query = (
+            main_supabase.client
+            .table("laps")
+            .select("id, lap_time, user_id, session_id, is_valid, is_valid_for_leaderboard")
+            .in_("session_id", session_ids)
+            .eq("is_valid", True)
+            .order("lap_time", desc=False)
+            .limit(max(1, limit * 2))
+        )
+        laps_result = laps_query.execute()
+
+        raw_laps = laps_result.data or []
+        # Filter out negative/zero times and optionally exclude my own laps
+        filtered_laps: List[Dict[str, Any]] = []
+        for lap in raw_laps:
+            t = lap.get("lap_time", 0)
+            if t and t > 0:
+                if exclude_user_id and lap.get("user_id") == exclude_user_id:
+                    continue
+                filtered_laps.append(lap)
+            if len(filtered_laps) >= limit:
+                break
+
+        if not filtered_laps:
+            return [], "No valid fastest laps found"
+
+        # Fetch usernames and avatars for these user_ids
+        user_ids = sorted({lap.get("user_id") for lap in filtered_laps if lap.get("user_id")})
+        username_map: Dict[str, str] = {}
+        avatar_map: Dict[str, str] = {}
+        try:
+            details_result = (
+                main_supabase.client
+                .table("user_details")
+                .select("id, username")
+                .in_("id", user_ids)
+                .execute()
+            )
+            for row in details_result.data or []:
+                username_map[row.get("id")] = row.get("username") or "Unknown"
+        except Exception as _:
+            # Fallback: leave usernames unknown
+            pass
+
+        try:
+            profiles_result = (
+                main_supabase.client
+                .table("user_profiles")
+                .select("id, avatar_url")
+                .in_("id", user_ids)
+                .execute()
+            )
+            for row in profiles_result.data or []:
+                avatar_map[row.get("id")] = row.get("avatar_url") or ""
+        except Exception as _:
+            pass
+
+        # Build final list with username
+        enriched: List[Dict[str, Any]] = []
+        for lap in filtered_laps:
+            enriched.append({
+                "id": lap.get("id"),
+                "lap_time": lap.get("lap_time"),
+                "user_id": lap.get("user_id"),
+                "username": username_map.get(lap.get("user_id"), "Unknown"),
+                "avatar_url": avatar_map.get(lap.get("user_id"), ""),
+                "session_id": lap.get("session_id"),
+            })
+
+        return enriched, f"Found {len(enriched)} fastest laps"
+    except Exception as e:
+        logger.error(f"Error fetching fastest laps: {e}")
+        return None, f"Database error: {str(e)}"
 
 # --- ML Lap helpers ---
 

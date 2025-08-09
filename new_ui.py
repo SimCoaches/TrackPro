@@ -152,6 +152,20 @@ def initialize_global_pedal_system():
     try:
         logger.info("🎮 Initializing ULTRA-HIGH PERFORMANCE pedal system...")
         
+        # Ensure a known vJoy device is enabled/configured before attempting to acquire it
+        def _ensure_vjoy_device_enabled(device_id: int = 1) -> None:
+            try:
+                from trackpro.pedals.vjoy_installer import VJoyInstaller
+                installer = VJoyInstaller(fail_silently=True)
+                installed, _ = installer.is_vjoy_installed()
+                if installed:
+                    installer.configure_vjoy_device(device_id=device_id, axes=8, buttons=32)
+            except Exception as e:
+                logger.warning(f"Could not auto-configure vJoy device {device_id}: {e}")
+
+        # Prefer vJoy Device 4 per user preference
+        _ensure_vjoy_device_enabled(device_id=4)
+
         # Initialize vJoy output first
         logger.info("🕹️ Initializing vJoy virtual joystick...")
         from trackpro.pedals.output import VirtualJoystick

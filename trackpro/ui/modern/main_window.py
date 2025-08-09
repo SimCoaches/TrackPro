@@ -731,8 +731,8 @@ class ModernMainWindow(QMainWindow):
                 from ..pages.pedals import PedalsPage
                 page_widget = PedalsPage(self.global_managers)
             elif page_name == "race_coach":
-                from ..pages.race_coach.coming_soon_page import RaceCoachComingSoonPage
-                page_widget = RaceCoachComingSoonPage(self.global_managers)
+                from ..pages.race_coach.telemetry_page import TelemetryPage
+                page_widget = TelemetryPage(self.global_managers)
             elif page_name == "overlays":
                 from ..pages.overlays import OverlaysPage
                 page_widget = OverlaysPage(self.global_managers)

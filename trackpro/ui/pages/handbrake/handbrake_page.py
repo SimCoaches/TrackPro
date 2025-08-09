@@ -18,9 +18,15 @@ class HandbrakePage(BasePage):
     
     def init_page(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(30)
-        self._create_coming_soon_content(layout)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        # Status label for hardware connection
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+        # Build full handbrake UI
+        self.create_handbrake_widget(layout)
+        # Initial status
+        self.update_connection_status()
 
     def _create_coming_soon_content(self, layout: QVBoxLayout) -> None:
         main_frame = QFrame()

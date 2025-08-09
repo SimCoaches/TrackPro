@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QAbstractItemView, QSplitter, QProgressBar, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread
-from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor
+from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor, QPixmap, QIcon
 from ...modern.shared.base_page import BasePage
 
 logger = logging.getLogger(__name__)
@@ -169,6 +169,7 @@ class TelemetryControlsWidget(QFrame):
     """Compact telemetry controls with session and lap selection."""
     
     session_changed = pyqtSignal(int)
+    ref_session_changed = pyqtSignal(int)
     lap_selection_changed = pyqtSignal()
     refresh_requested = pyqtSignal()
     
@@ -226,8 +227,8 @@ class TelemetryControlsWidget(QFrame):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(8)
         
-        # Session selection
-        session_label = QLabel("Session:")
+        # Session selection (Mine)
+        session_label = QLabel("My Session:")
         self.session_combo = QComboBox()
         self.session_combo.setMinimumWidth(300)
         self.session_combo.setMaximumWidth(400)
@@ -247,6 +248,13 @@ class TelemetryControlsWidget(QFrame):
         vs_label = QLabel("vs")
         vs_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 11px; margin: 0px 4px;")
         
+        # Reference session (Others)
+        ref_session_label = QLabel("Ref Session:")
+        self.ref_session_combo = QComboBox()
+        self.ref_session_combo.setMinimumWidth(300)
+        self.ref_session_combo.setMaximumWidth(400)
+        self.ref_session_combo.currentIndexChanged.connect(self.ref_session_changed.emit)
+
         lap_b_label = QLabel("Lap B:")
         self.right_lap_combo = QComboBox()
         self.right_lap_combo.setMinimumWidth(120)
@@ -256,6 +264,8 @@ class TelemetryControlsWidget(QFrame):
         layout.addWidget(lap_a_label)
         layout.addWidget(self.left_lap_combo)
         layout.addWidget(vs_label)
+        layout.addWidget(ref_session_label)
+        layout.addWidget(self.ref_session_combo)
         layout.addWidget(lap_b_label)
         layout.addWidget(self.right_lap_combo)
         layout.addWidget(QLabel("|"))  # Separator
@@ -277,9 +287,17 @@ class TelemetryPage(BasePage):
         super().__init__("Race Coach Telemetry", global_managers)
         
         # Initialize data
-        self.sessions = []
-        self.laps = []
-        self.current_session_id = None
+        self.sessions = []  # legacy combined list
+        self.laps = []      # legacy combined list
+        self.current_session_id = None  # legacy current session
+
+        # Separate state for A (mine) and B (reference)
+        self.my_sessions = []
+        self.community_sessions = []
+        self.my_laps = []
+        self.ref_laps = []
+        self.current_my_session_id = None
+        self.current_ref_session_id = None
         
         # Track active threads for cleanup
         self.active_threads = []
@@ -308,6 +326,7 @@ class TelemetryPage(BasePage):
         # Controls
         self.controls = TelemetryControlsWidget()
         self.controls.session_changed.connect(self.on_session_changed)
+        self.controls.ref_session_changed.connect(self.on_ref_session_changed)
         self.controls.lap_selection_changed.connect(self.on_lap_selection_changed)
         self.controls.refresh_requested.connect(self.refresh_session_and_lap_lists)
         layout.addWidget(self.controls)
@@ -530,13 +549,13 @@ class TelemetryPage(BasePage):
         try:
             from Supabase.database import get_sessions, get_laps
             
-            # Load sessions
+            # Load my sessions
             try:
-                sessions_result = get_sessions(user_only=True)
+                sessions_result = get_sessions(user_only=True, only_with_laps=True)
                 if sessions_result[0] is not None:
                     sessions = sessions_result[0]
                     self._on_sessions_loaded(sessions, "Sessions loaded successfully")
-                    logger.info(f"Loaded {len(sessions)} sessions from database")
+                    logger.info(f"Loaded {len(sessions)} MY sessions from database")
                 else:
                     sessions = []
                     self._on_sessions_loaded(sessions, "No sessions found")
@@ -554,16 +573,24 @@ class TelemetryPage(BasePage):
                         laps_result = get_laps(session_id=session_id)
                         if laps_result[0] is not None:
                             laps = laps_result[0]
-                            self._on_laps_loaded(laps, f"Loaded {len(laps)} laps")
-                            logger.info(f"Loaded {len(laps)} laps for session {session_id}")
+                            self._on_my_laps_loaded(recent_session, laps)
+                            logger.info(f"Loaded {len(laps)} laps for MY session {session_id}")
                             
                             # Start preloading telemetry for initial session
                             self._preload_session_telemetry(session_id, laps)
                         else:
-                            self._on_laps_loaded([], "No laps found for session")
+                            self._on_my_laps_loaded(recent_session, [])
                 except Exception as e:
                     logger.error(f"Error loading laps: {e}")
-                    self._on_laps_loaded([], f"Error loading laps: {str(e)}")
+                    self._on_my_laps_loaded(recent_session, [])
+
+            # Load community sessions for Lap B selection
+            try:
+                all_sessions_result = get_sessions(user_only=False, only_with_laps=True)
+                self._on_ref_sessions_loaded(all_sessions_result[0] or [])
+            except Exception as e:
+                logger.error(f"Error loading community sessions: {e}")
+                self._on_ref_sessions_loaded([])
                     
         except Exception as e:
             logger.error(f"Critical error loading initial data: {e}")
@@ -573,25 +600,55 @@ class TelemetryPage(BasePage):
             self.loading_label.setVisible(False)
     
     def _on_sessions_loaded(self, sessions, message):
-        """Handle sessions loaded from database."""
-        self.sessions = sessions
-        logger.info(f"Sessions loaded: {len(sessions)} sessions")
-        
-        # Update session combo
+        """Handle MY sessions loaded from database (Lap A)."""
+        self.my_sessions = sessions or []
+        logger.info(f"My sessions loaded: {len(self.my_sessions)} sessions")
+
+        # Update 'My Session' combo
         self.controls.session_combo.clear()
-        for session in sessions:
+        for session in self.my_sessions:
             session_text = f"{session.get('track_name', 'Unknown Track')} - {session.get('session_date', 'Unknown Date')}"
             self.controls.session_combo.addItem(session_text, session.get('id'))
-        
-        if sessions:
+
+        if self.my_sessions:
             self.controls.session_combo.setCurrentIndex(0)
     
     def _on_laps_loaded(self, laps, message):
-        """Handle laps loaded from database."""
-        self.laps = laps
-        logger.info(f"Laps loaded: {len(laps)} laps")
-        self._update_lap_combos()
+        """Backward-compat no-op: route to MY laps handler."""
+        self._on_my_laps_loaded(None, laps or [])
         self.loading_label.setVisible(False)
+
+    def _on_my_laps_loaded(self, session, laps):
+        """Handle MY laps (Lap A)."""
+        self.my_laps = laps or []
+        if session:
+            self.current_my_session_id = session.get('id')
+        logger.info(f"My laps loaded: {len(self.my_laps)} laps")
+        self._update_left_lap_combo()
+
+    def _on_ref_sessions_loaded(self, sessions):
+        """Handle reference sessions (Lap B). Now replaced by fastest laps listing based on track/car."""
+        # When my sessions are loaded, use the first session's track/car to load fastest laps
+        try:
+            target_session = self.my_sessions[0] if self.my_sessions else None
+            if not target_session:
+                self._on_ref_fastest_laps_loaded([])
+                return
+            track_id = target_session.get('track_id') or (target_session.get('tracks') or {}).get('id')
+            car_id = target_session.get('car_id') or (target_session.get('cars') or {}).get('id')
+            if track_id and car_id:
+                self._load_fastest_ref_laps_for_track_car(track_id, car_id)
+            else:
+                self._on_ref_fastest_laps_loaded([])
+        except Exception as e:
+            logger.error(f"Error computing fastest laps request: {e}")
+            self._on_ref_fastest_laps_loaded([])
+
+    def _on_ref_laps_loaded(self, laps):
+        """Handle reference laps (Lap B)."""
+        self.ref_laps = laps or []
+        logger.info(f"Reference laps loaded: {len(self.ref_laps)} laps")
+        self._update_right_lap_combo()
     
     def _on_initial_load_error(self, error_message):
         """Handle initial load error."""
@@ -599,65 +656,164 @@ class TelemetryPage(BasePage):
         self.loading_label.setText(f"❌ {error_message}")
         QTimer.singleShot(3000, lambda: self.loading_label.setVisible(False))
     
-    def _update_lap_combos(self):
-        """Update lap combo boxes with available laps."""
+    def _update_left_lap_combo(self):
+        """Populate Lap A (mine)."""
         self.controls.left_lap_combo.clear()
-        self.controls.right_lap_combo.clear()
-        
-        if not self.laps:
+        if not self.my_laps:
             return
-            
-        for lap in self.laps:
-            if lap.get('is_valid', True):  # Only show valid laps
+        for lap in self.my_laps:
+            if lap.get('is_valid', True):
                 lap_time = lap.get('lap_time', 0)
                 formatted_time = self._format_lap_time(lap_time) if lap_time else 'No Time'
                 lap_text = f"Lap {lap.get('lap_number', '?')} - {formatted_time}"
-                lap_id = lap.get('id')
-                
-                self.controls.left_lap_combo.addItem(lap_text, lap_id)
-                self.controls.right_lap_combo.addItem(lap_text, lap_id)
-        
-        # Select different laps by default for comparison
-        if len(self.laps) >= 2:
-            self.controls.left_lap_combo.setCurrentIndex(0)
-            self.controls.right_lap_combo.setCurrentIndex(1)
+                self.controls.left_lap_combo.addItem(lap_text, lap.get('id'))
+        self.controls.left_lap_combo.setCurrentIndex(0)
+
+    def _update_right_lap_combo(self):
+        """Populate Lap B (reference)."""
+        self.controls.right_lap_combo.clear()
+        if not self.ref_laps:
+            return
+        for lap in self.ref_laps:
+            if lap.get('is_valid', True):
+                lap_time = lap.get('lap_time', 0)
+                formatted_time = self._format_lap_time(lap_time) if lap_time else 'No Time'
+                lap_text = f"Lap {lap.get('lap_number', '?')} - {formatted_time}"
+                self.controls.right_lap_combo.addItem(lap_text, lap.get('id'))
+        self.controls.right_lap_combo.setCurrentIndex(0)
     
     def on_session_changed(self, index):
         """Handle session selection change."""
-        if index < 0 or index >= len(self.sessions):
+        if index < 0 or index >= len(self.my_sessions):
             return
             
-        session = self.sessions[index]
-        self.current_session_id = session.get('id')
-        logger.info(f"Session changed to: {session.get('track_name')} (ID: {self.current_session_id})")
+        session = self.my_sessions[index]
+        self.current_my_session_id = session.get('id')
+        logger.info(f"My Session changed to: {session.get('track_name')} (ID: {self.current_my_session_id})")
         
         # Load laps for this session
-        self._load_laps_for_session(self.current_session_id)
+        self._load_my_laps_for_session(self.current_my_session_id)
+        
+        # Load fastest reference laps for this session's track/car
+        track_id = session.get('track_id') or (session.get('tracks') or {}).get('id')
+        car_id = session.get('car_id') or (session.get('cars') or {}).get('id')
+        if track_id and car_id:
+            self._load_fastest_ref_laps_for_track_car(track_id, car_id)
     
     def _load_laps_for_session(self, session_id):
-        """Load laps for the selected session."""
+        """Legacy API - map to _load_my_laps_for_session."""
+        return self._load_my_laps_for_session(session_id)
+
+    def _load_my_laps_for_session(self, session_id):
+        """Load laps for the selected MY session (Lap A)."""
         if not session_id:
             return
             
         try:
             from Supabase.database import get_laps
-            logger.info(f"Loading laps for session: {session_id}")
+            logger.info(f"Loading MY laps for session: {session_id}")
             
             laps_result = get_laps(session_id=session_id)
             if laps_result[0] is not None:
-                self.laps = laps_result[0]
-                logger.info(f"Found {len(self.laps)} laps for session {session_id}")
+                self.my_laps = laps_result[0]
+                logger.info(f"Found {len(self.my_laps)} MY laps for session {session_id}")
                 
                 # Start preloading telemetry for all laps in background
-                self._preload_session_telemetry(session_id, self.laps)
+                self._preload_session_telemetry(session_id, self.my_laps)
             else:
-                logger.warning(f"get_laps returned None for session {session_id}: {laps_result[1]}")
-                self.laps = []
-            self._update_lap_combos()
+                logger.warning(f"get_laps returned None for MY session {session_id}: {laps_result[1]}")
+                self.my_laps = []
+            self._update_left_lap_combo()
         except Exception as e:
             logger.error(f"Error loading laps: {e}")
-            self.laps = []
-            self._update_lap_combos()
+            self.my_laps = []
+            self._update_left_lap_combo()
+
+    def on_ref_session_changed(self, index):
+        """When fastest lap selection changes, set Lap B to that lap directly."""
+        lap_id = self.controls.ref_session_combo.currentData()
+        if not lap_id:
+            return
+        # Mirror selection to Lap B combo with the same label
+        label = self.controls.ref_session_combo.currentText()
+        self.controls.right_lap_combo.clear()
+        self.controls.right_lap_combo.addItem(label, lap_id)
+        # Trigger compare
+        self.on_lap_selection_changed()
+
+    def _load_ref_laps_for_session(self, session_id):
+        """Deprecated: using fastest lap list instead."""
+        return
+
+    def _load_fastest_ref_laps_for_track_car(self, track_id: str, car_id: str):
+        """Load top-10 fastest laps globally for track/car and populate Ref Session combo."""
+        try:
+            from trackpro.database.supabase_client import supabase as main_supabase
+            my_user_id = None
+            try:
+                user = main_supabase.get_user()
+                if user:
+                    if hasattr(user, 'id'):
+                        my_user_id = user.id
+                    elif hasattr(user, 'user') and hasattr(user.user, 'id'):
+                        my_user_id = user.user.id
+                    elif isinstance(user, dict):
+                        my_user_id = user.get('id') or (user.get('user') or {}).get('id')
+            except Exception:
+                pass
+            from Supabase.database import get_fastest_laps
+            result = get_fastest_laps(track_id, car_id, limit=10, exclude_user_id=my_user_id)
+            fastest = result[0] or []
+            # Ensure fastest-first (ascending lap_time)
+            fastest.sort(key=lambda x: x.get('lap_time', 999999))
+            self._on_ref_fastest_laps_loaded(fastest)
+        except Exception as e:
+            logger.error(f"Error loading fastest ref laps: {e}")
+            self._on_ref_fastest_laps_loaded([])
+
+    def _on_ref_fastest_laps_loaded(self, fastest_laps):
+        """Populate Ref Session combo from fastest laps (username + lap time)."""
+        combo = self.controls.ref_session_combo
+        combo.clear()
+        for item in fastest_laps:
+            username = item.get('username', 'Unknown')
+            lap_time = item.get('lap_time') or 0
+            label = f"{username} – {self._format_lap_time(lap_time)}"
+            icon = self._make_avatar_icon(item.get('avatar_url'))
+            if icon is not None:
+                combo.addItem(icon, label, item.get('id'))
+            else:
+                combo.addItem(label, item.get('id'))
+
+    def _make_avatar_icon(self, avatar_url: str):
+        """Create a small circular QIcon from an avatar URL if available."""
+        try:
+            if not avatar_url:
+                return None
+            # Load image data (simple QPixmap load; assumes local file path or Qt-supported URL)
+            pixmap = QPixmap()
+            if avatar_url.startswith('http'):
+                # Remote fetch not implemented here; return None to keep UI responsive
+                return None
+            loaded = pixmap.load(avatar_url)
+            if not loaded:
+                return None
+            # Resize and round
+            size = 24
+            pixmap = pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+            # Create circular mask
+            mask = QPixmap(size, size)
+            mask.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(mask)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(QBrush(Qt.GlobalColor.white))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(0, 0, size, size)
+            painter.end()
+            pixmap.setMask(mask.createMaskFromColor(Qt.GlobalColor.transparent))
+            return QIcon(pixmap)
+        except Exception:
+            return None
     
     def _preload_session_telemetry(self, session_id: str, laps: list):
         """Preload telemetry for all laps in the session for instant switching."""
@@ -908,9 +1064,9 @@ class TelemetryPage(BasePage):
     
     def get_track_length(self):
         """Get track length from current session."""
-        if self.current_session_id and self.sessions:
-            for session in self.sessions:
-                if session.get('id') == self.current_session_id:
+        if self.current_my_session_id and self.my_sessions:
+            for session in self.my_sessions:
+                if session.get('id') == self.current_my_session_id:
                     return session.get('track_length', None)
         return None
     
@@ -1190,3 +1346,34 @@ class TelemetryPage(BasePage):
             logger.debug(f"Error getting {data_type} data at distance {distance}: {e}")
         
         return lap_a_data, lap_b_data
+
+    # --- Reference helpers ---
+    def _populate_ref_session_combo(self):
+        """Populate the reference session combo with community sessions."""
+        try:
+            self.controls.ref_session_combo.clear()
+        except Exception:
+            return
+        for session in (self.community_sessions or []):
+            session_text = f"{session.get('track_name', 'Unknown Track')} - {session.get('session_date', 'Unknown Date')}"
+            self.controls.ref_session_combo.addItem(session_text, session.get('id'))
+
+    def _auto_select_matching_ref_session(self, my_session):
+        """Auto-select a reference session that matches my session's track/car if available."""
+        try:
+            if not my_session or not self.community_sessions:
+                return
+            target_track = my_session.get('tracks', {}).get('name') if my_session.get('tracks') else my_session.get('track_name')
+            target_car = my_session.get('cars', {}).get('name') if my_session.get('cars') else my_session.get('car_name')
+            best_index = -1
+            for idx, sess in enumerate(self.community_sessions):
+                track = sess.get('tracks', {}).get('name') if sess.get('tracks') else sess.get('track_name')
+                car = sess.get('cars', {}).get('name') if sess.get('cars') else sess.get('car_name')
+                if track == target_track and car == target_car:
+                    best_index = idx
+                    break
+            if best_index >= 0:
+                self.controls.ref_session_combo.setCurrentIndex(best_index)
+                self.on_ref_session_changed(best_index)
+        except Exception:
+            pass
