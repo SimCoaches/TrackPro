@@ -1654,6 +1654,13 @@ class ModernMainWindow(QMainWindow):
                             logger.info("✅ Home page auth state changed")
                     except Exception as home_error:
                         logger.error(f"❌ Error updating home page: {home_error}")
+                # Best-effort: refresh iRacing snapshot in background
+                try:
+                    user_id_for_refresh = current_user.id
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self._auto_refresh_iracing_snapshot(user_id_for_refresh))
+                except Exception as _:
+                    pass
                 
                 # Clear the flag after successful completion
                 self._auth_refresh_in_progress = False
@@ -1715,6 +1722,13 @@ class ModernMainWindow(QMainWindow):
                                     logger.info("✅ Home page auth state changed")
                             except Exception as home_error:
                                 logger.error(f"❌ Error updating home page: {home_error}")
+                        # Best-effort: refresh iRacing snapshot in background
+                        try:
+                            user_id_for_refresh = authenticated_user.id
+                            from PyQt6.QtCore import QTimer
+                            QTimer.singleShot(0, lambda: self._auto_refresh_iracing_snapshot(user_id_for_refresh))
+                        except Exception as _:
+                            pass
                         
                         # Clear the flag after successful completion
                         self._auth_refresh_in_progress = False
@@ -1745,6 +1759,99 @@ class ModernMainWindow(QMainWindow):
             # Clear the flag after completion
             self._auth_refresh_in_progress = False
             return False
+
+    def _auto_refresh_iracing_snapshot(self, user_id: str) -> None:
+        """Best-effort: if the user has linked iRacing (cookies saved), refresh their stats and upsert to DB.
+        Runs non-blocking via QTimer.singleShot from the caller. Silent on failures.
+        """
+        try:
+            if not user_id:
+                return
+            # Load saved iRacing cookies from secure session
+            try:
+                from trackpro.auth.secure_session import SecureSessionManager
+                ssm = SecureSessionManager("TrackPro")
+                data = ssm.load_session() or {}
+                cookies = (data.get("iracing") or {}).get("cookies") or {}
+            except Exception:
+                cookies = {}
+            if not cookies:
+                return
+
+            import requests
+            session = requests.Session()
+            session.headers.update({"User-Agent": "TrackPro/IRacingLink"})
+            for k, v in cookies.items():
+                try:
+                    session.cookies.set(k, v, domain="members-ng.iracing.com")
+                    session.cookies.set(k, v, domain=".iracing.com")
+                except Exception:
+                    pass
+
+            def fetch_iracing_json(data_url: str, timeout: float = 10.0):
+                try:
+                    r = session.get(data_url, timeout=timeout)
+                    if not r.ok:
+                        return None
+                    ct = r.headers.get("Content-Type", "")
+                    j = r.json() if ct.startswith("application/json") else None
+                    if isinstance(j, dict) and j.get("link"):
+                        rr = session.get(j["link"], timeout=timeout)
+                        if rr.ok and rr.headers.get("Content-Type", "").startswith("application/json"):
+                            return rr.json()
+                        return None
+                    return j
+                except Exception:
+                    return None
+
+            # Fetch summary and career
+            summary = fetch_iracing_json("https://members-ng.iracing.com/data/member/summary") or {}
+            career = fetch_iracing_json("https://members-ng.iracing.com/data/stats/member/career") or {}
+
+            # Map to snapshot
+            snap = {}
+            try:
+                licenses = summary.get("licenses") or summary.get("licenses_info") or {}
+                if isinstance(licenses, list):
+                    d = {}
+                    for item in licenses:
+                        cat = (item.get("category") or item.get("category_name") or "").lower()
+                        d[cat] = item
+                    licenses = d
+                for cat_key, prefix in (("road", "road"), ("oval", "oval"), ("dirt_road", "dirt_road"), ("dirt_oval", "dirt_oval")):
+                    lic = (licenses.get(cat_key) if isinstance(licenses, dict) else None) or {}
+                    snap[f"{prefix}_irating"] = lic.get("irating") or lic.get("iRating") or lic.get("i_rating")
+                    snap[f"{prefix}_sr"] = lic.get("safety_rating") or lic.get("safetyRating") or lic.get("sr")
+                    snap[f"{prefix}_license"] = lic.get("license_level") or lic.get("license") or lic.get("class")
+            except Exception:
+                pass
+
+            try:
+                totals = career.get("career") or career.get("overall") or career
+                if isinstance(totals, list):
+                    totals = next((x for x in totals if (x.get("category") or "").lower() == "overall"), totals[0] if totals else {})
+                snap["wins"] = (totals or {}).get("wins")
+                snap["starts"] = (totals or {}).get("starts") or (totals or {}).get("races")
+            except Exception:
+                pass
+
+            # Upsert to Supabase
+            try:
+                from trackpro.database.supabase_client import get_supabase_client
+                from datetime import datetime
+                client = get_supabase_client()
+                if client:
+                    payload = dict(snap)
+                    payload["user_id"] = user_id
+                    payload["last_updated"] = datetime.utcnow().isoformat() + "Z"
+                    try:
+                        client.from_("user_iracing_snapshot").upsert(payload, on_conflict="user_id").execute()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception:
+            pass
     
     def get_current_user_info(self):
         """Get current user information."""
@@ -1862,29 +1969,45 @@ class ModernMainWindow(QMainWindow):
     def on_private_message_requested(self, user_data):
         """Handle private message request from sidebar."""
         logger.info(f"Private message requested for user: {user_data.get('display_name', 'Unknown')}")
-        
-        # Switch to community page and start private conversation
-        self.switch_to_page("community")
-        
-        # Get the community page and start private conversation
-        community_page = self.get_page("community")
-        if community_page and hasattr(community_page, 'start_private_conversation_with_user'):
-            community_page.start_private_conversation_with_user(user_data)
+        # Open the user's public profile, which now hosts the DM panel
+        try:
+            user_id = user_data.get('user_id')
+            if not user_id:
+                return
+            page_key = f"public_profile:{user_id}"
+            if page_key in self.pages:
+                self.content_stack.setCurrentWidget(self.pages[page_key])
+                self.current_page = page_key
+                return
+            from ..pages.profile.public_profile_page import PublicProfilePage
+            profile_widget = PublicProfilePage(self.global_managers, user_id, parent=self)
+            self.content_stack.addWidget(profile_widget)
+            self.pages[page_key] = profile_widget
+            self.content_stack.setCurrentWidget(profile_widget)
+            self.current_page = page_key
+        except Exception as e:
+            logger.error(f"Error opening profile for DM: {e}")
     
     def start_direct_private_message(self, user_data):
         """Start a direct private message with a user (called from other widgets)."""
         try:
             logger.info(f"🔄 Starting direct private message with user: {user_data.get('display_name', 'Unknown')}")
-            
-            # Switch to community page first
-            self.switch_to_page("community")
-            
-            # Get the community page and start private conversation
-            community_page = self.get_page("community")
-            if community_page and hasattr(community_page, 'start_private_conversation_with_user'):
-                community_page.start_private_conversation_with_user(user_data)
-            else:
-                logger.error("Community page not available for private messaging")
+            # Open the user's public profile page (DM panel lives there now)
+            user_id = user_data.get('user_id') or user_data.get('id')
+            if not user_id:
+                logger.error("No user_id provided for DM")
+                return
+            page_key = f"public_profile:{user_id}"
+            if page_key in self.pages:
+                self.content_stack.setCurrentWidget(self.pages[page_key])
+                self.current_page = page_key
+                return
+            from ..pages.profile.public_profile_page import PublicProfilePage
+            profile_widget = PublicProfilePage(self.global_managers, user_id, parent=self)
+            self.content_stack.addWidget(profile_widget)
+            self.pages[page_key] = profile_widget
+            self.content_stack.setCurrentWidget(profile_widget)
+            self.current_page = page_key
                 
         except Exception as e:
             logger.error(f"Error starting direct private message: {e}")

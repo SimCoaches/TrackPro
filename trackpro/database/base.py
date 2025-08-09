@@ -16,7 +16,11 @@ class DatabaseManager:
             table_name: Name of the table this manager handles
         """
         self.table_name = table_name
-        self.client = supabase.client
+
+    @property
+    def client(self):
+        """Dynamically resolve the Supabase client to avoid capturing a None client at startup."""
+        return supabase.client
     
     def get_all(self) -> List[Dict[str, Any]]:
         """Get all records from the table.

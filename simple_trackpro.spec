@@ -47,6 +47,26 @@ if pyqt6_path:
             pass
             # print(f"WARNING: Missing Qt WebEngine file: {webengine_file}")
 
+    # Include OpenSSL DLLs required by QtNetwork/TLS on some systems
+    openssl_candidates = [
+        'libssl-3-x64.dll', 'libcrypto-3-x64.dll',
+        'libssl-3.dll', 'libcrypto-3.dll'
+    ]
+    for dll_name in openssl_candidates:
+        dll_path = os.path.join(qt_bin_path, dll_name)
+        if os.path.exists(dll_path):
+            binaries_list.append((dll_path, '.'))
+
+    # Include software OpenGL and D3D compiler for broader GPU compatibility
+    angle_candidates = [
+        'opengl32sw.dll',
+        'D3Dcompiler_47.dll',
+    ]
+    for dll_name in angle_candidates:
+        dll_path = os.path.join(qt_bin_path, dll_name)
+        if os.path.exists(dll_path):
+            binaries_list.append((dll_path, '.'))
+
 # Check for vJoy DLL (optional - don't fail build if not found)
 vjoy_paths = [
     'C:\\Program Files\\vJoy\\x64\\vJoyInterface.dll',
@@ -182,7 +202,6 @@ optimize_hiddenimports = [
         
         # Database
         'trackpro.database',
-        'trackpro.database.supabase',
         'trackpro.database.supabase_client',
         'trackpro.database.base',
         'trackpro.database.user_manager',
@@ -253,7 +272,6 @@ optimize_hiddenimports = [
         'PyQt6.QtPrintSupport',
         'PyQt6.QtSvg',
         'PyQt6.QtSvgWidgets',
-        'PyQt6.QtCharts',
         'PyQt6.sip',
         
         # Core scientific computing
@@ -272,7 +290,7 @@ optimize_hiddenimports = [
         # Reduce matplotlib backends to required ones only
         'matplotlib',
         'matplotlib.backends.backend_qtagg',
-        'matplotlib.backends.backend_qt6agg',
+        # keep only supported QtAgg backend (Qt6 uses qtagg)
         
         # Audio/game essentials
         'pygame',
@@ -281,10 +299,6 @@ optimize_hiddenimports = [
         'win32api',
         
         # Database essentials
-        'supabase',
-        'supabase.lib.client_options',
-        'supabase.lib.realtime',
-        'supabase.lib.auth',
         'sqlite3',
         
         # Essential modules for TrackPro
@@ -343,17 +357,7 @@ optimize_hiddenimports = [
         'select',
         'signal',
         'errno',
-        'fcntl',
-        'pwd',
-        'grp',
-        'crypt',
-        'termios',
-        'tty',
-        'pty',
-        'resource',
-        'pipes',
-        'posix',
-        'posixpath',
+        # Drop POSIX-only and Unix-centric modules that do not exist on Windows builds
         'nt',
         'ntpath',
         'stat',
@@ -375,7 +379,7 @@ except Exception:
     enable_upx = False
 
 a = Analysis(
-    ['new_ui.py'],
+    ['tp_boot.py'],
     pathex=[],
     binaries=binaries_list,
     datas=datas_list,
@@ -445,7 +449,8 @@ a = Analysis(
         'sphinx',
     ],
     noarchive=False,
-    optimize=2,  # Stronger Python optimization for smaller size
+    # Use optimize=1 (-O). optimize=2 (-OO) strips docstrings and can break numpy/pyqtgraph
+    optimize=1,
 )
 
 pyz = PYZ(a.pure, a.zipped_data)
@@ -463,7 +468,8 @@ exe = EXE(
     upx=enable_upx,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    # Enable console so startup errors are visible in built versions
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

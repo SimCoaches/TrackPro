@@ -44,8 +44,13 @@ class CurveCache:
     def __init__(self):
         if not CurveCache._initialized:
             self._cache = {}
-            self._cache_file = os.path.join(os.path.dirname(__file__), 'curve_cache.json')
+            # Use pathlib.Path for filesystem operations
+            self._cache_file = Path(os.path.dirname(__file__)) / 'curve_cache.json'
             self._ttl = 3600  # 1 hour cache TTL
+            # Initialize lock for thread safety
+            self.lock = Lock()
+            # Record creation time to support startup grace period logic
+            self._creation_time = time.time()
             self._load_cache()
             CurveCache._initialized = True
             logger.info("CurveCache initialized with TTL 3600s")
@@ -62,7 +67,7 @@ class CurveCache:
         """Load cache from disk if it exists."""
         try:
             if self._cache_file.exists():
-                with open(self._cache_file, 'r') as f:
+                with self._cache_file.open('r', encoding='utf-8') as f:
                     cache_data = json.load(f)
                 
                 # Convert back to CacheEntry objects
@@ -98,7 +103,7 @@ class CurveCache:
                         'is_valid': entry.is_valid
                     }
             
-            with open(self._cache_file, 'w') as f:
+            with self._cache_file.open('w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2)
             
             logger.debug("Curve cache saved to disk")

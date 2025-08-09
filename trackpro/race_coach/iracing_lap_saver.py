@@ -1844,6 +1844,12 @@ class IRacingLapSaver:
                     if retry == max_retries - 1:
                         failed_count += len(telemetry_data_to_insert)
                         failed_batch_indices.append(i // batch_size)
+            # Small pacing sleep to avoid CPU/network spikes when many batches
+            try:
+                import time
+                time.sleep(0.005)
+            except Exception:
+                pass
         
         success = failed_count == 0
         print(f"📊 [TELEMETRY SAVE] Complete! Saved: {saved_count}, Failed: {failed_count}, Success: {success}")

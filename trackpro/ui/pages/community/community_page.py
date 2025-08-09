@@ -497,11 +497,17 @@ class ChatMessageWidget(QWidget):
         from ...avatar_manager import AvatarManager
         size = 32
         avatar_url = None
-        if self.message_data.get('user_display_info'):
-            avatar_url = self.message_data['user_display_info'].get('avatar_url')
-        elif self.message_data.get('user_profiles'):
-            avatar_url = self.message_data['user_profiles'].get('avatar_url')
-        elif self.message_data.get('sender_avatar_url'):
+        # Prefer public_user_display_info avatar if present
+        udi = self.message_data.get('user_display_info') or {}
+        if udi.get('avatar_url'):
+            avatar_url = udi.get('avatar_url')
+        # Fallback to user_profiles avatar if public info had none
+        if not avatar_url:
+            up = self.message_data.get('user_profiles') or {}
+            if up.get('avatar_url'):
+                avatar_url = up.get('avatar_url')
+        # Final fallback to any direct sender avatar field
+        if not avatar_url and self.message_data.get('sender_avatar_url'):
             avatar_url = self.message_data['sender_avatar_url']
 
         name = self.message_data.get('sender_name')
@@ -524,6 +530,25 @@ class ChatMessageWidget(QWidget):
         avatar_label.setFixedSize(32, 32)
         avatar_label.setPixmap(self.create_avatar())
         layout.addWidget(avatar_label)
+
+        # Kick off async avatar fetch so new users' avatars appear even if not cached
+        try:
+            from ...avatar_manager import AvatarManager
+            size = 32
+            avatar_url = None
+            udi = self.message_data.get('user_display_info') or {}
+            if udi.get('avatar_url'):
+                avatar_url = udi.get('avatar_url')
+            if not avatar_url:
+                up = self.message_data.get('user_profiles') or {}
+                if up.get('avatar_url'):
+                    avatar_url = up.get('avatar_url')
+            if not avatar_url:
+                avatar_url = self.message_data.get('sender_avatar_url')
+            name = self.message_data.get('sender_name') or 'U'
+            AvatarManager.instance().set_label_avatar(avatar_label, avatar_url, name, size=size)
+        except Exception:
+            pass
         
         # Message content
         content_layout = QVBoxLayout()
@@ -2009,7 +2034,7 @@ class CommunityPage(BasePage):
         """)
         scroll_layout.addWidget(self.channel_list)
         
-        # Private messages section
+        # Private messages section (disabled - handled via user profile)
         private_header = QLabel("PRIVATE MESSAGES")
         private_header.setStyleSheet("""
             color: #888888; 
@@ -2018,9 +2043,10 @@ class CommunityPage(BasePage):
             padding: 8px 16px 4px 16px;
             background-color: #1e1e1e;
         """)
+        private_header.setVisible(False)
         scroll_layout.addWidget(private_header)
         
-        # New Private Message button
+        # New Private Message button (disabled - handled via user profile)
         self.new_private_message_btn = QPushButton("+ New Private Message")
         self.new_private_message_btn.setStyleSheet("""
             QPushButton {
@@ -2040,10 +2066,10 @@ class CommunityPage(BasePage):
                 background-color: #1f5f35;
             }
         """)
-        self.new_private_message_btn.clicked.connect(self.on_new_private_message_clicked)
+        self.new_private_message_btn.setVisible(False)
         scroll_layout.addWidget(self.new_private_message_btn)
         
-        # Private messages list
+        # Private messages list (disabled - handled via user profile)
         self.private_messages_list = QListWidget()
         self.private_messages_list.setStyleSheet("""
             QListWidget {
@@ -2062,12 +2088,12 @@ class CommunityPage(BasePage):
                 background-color: #2d2d2d;
             }
         """)
-        # Context menu for local actions (e.g., Delete Chat)
         try:
             self.private_messages_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self.private_messages_list.customContextMenuRequested.connect(self.on_private_messages_context_menu)
         except Exception:
             pass
+        self.private_messages_list.setVisible(False)
         scroll_layout.addWidget(self.private_messages_list)
         
         # Friends section
@@ -3050,9 +3076,8 @@ class CommunityPage(BasePage):
 
             # Load core data
             try:
-                logger.info("📋 Loading channels, private messages, friends, and requests...")
+                logger.info("📋 Loading channels, friends, and requests (private messages disabled in community UI)...")
                 self.load_channels_from_database()
-                self.load_private_messages()
                 self.load_friends_list()
                 self.load_friend_requests()
                 logger.info("✅ Community data loaded")
@@ -3590,6 +3615,17 @@ class CommunityPage(BasePage):
             logger.info("🔄 About to show private conversation inline")
             self.show_private_conversation(conversation_widget)
             logger.info("✅ Private conversation should now be displayed inline")
+            # Mark messages as read and clear glow on sidebar
+            try:
+                self.community_manager.mark_private_messages_as_read(conversation_id)
+                main_window = self.window()
+                if main_window and hasattr(main_window, 'online_users_sidebar'):
+                    other = conversation_data.get('other_user', {})
+                    uid = other.get('user_id')
+                    if uid and hasattr(main_window.online_users_sidebar, 'clear_unread_glow_for_user'):
+                        main_window.online_users_sidebar.clear_unread_glow_for_user(uid)
+            except Exception:
+                pass
             
         except Exception as e:
             logger.error(f"Error showing private conversation: {e}")
@@ -4249,20 +4285,28 @@ class CommunityPage(BasePage):
             logger.error(f"Error starting private conversation with user: {e}")
     
     def start_direct_private_message(self, user_data):
-        """Start a direct private message with a user (called from other widgets)."""
+        """Redirect DM requests to the user's public profile page."""
         try:
-            logger.info(f"🔄 Starting direct private message with user: {user_data.get('display_name', 'Unknown')}")
-            
-            # Switch to community page first
             main_window = self.window()
-            if main_window and hasattr(main_window, 'switch_to_page'):
-                main_window.switch_to_page("community")
-            
-            # Start the private conversation
-            self.start_private_conversation_with_user(user_data)
-            
+            if not main_window or not hasattr(main_window, 'content_stack'):
+                return
+            user_id = user_data.get('user_id')
+            if not user_id:
+                return
+            page_key = f"public_profile:{user_id}"
+            if hasattr(main_window, 'pages') and page_key in getattr(main_window, 'pages', {}):
+                main_window.content_stack.setCurrentWidget(main_window.pages[page_key])
+                main_window.current_page = page_key
+                return
+            from ..pages.profile.public_profile_page import PublicProfilePage
+            profile_widget = PublicProfilePage(getattr(main_window, 'global_managers', None), user_id, parent=main_window)
+            main_window.content_stack.addWidget(profile_widget)
+            if hasattr(main_window, 'pages') and isinstance(main_window.pages, dict):
+                main_window.pages[page_key] = profile_widget
+            main_window.content_stack.setCurrentWidget(profile_widget)
+            main_window.current_page = page_key
         except Exception as e:
-            logger.error(f"Error starting direct private message: {e}")
+            logger.error(f"Error redirecting to profile for DM: {e}")
     
     def show_private_conversation(self, conversation_widget):
         """Show private conversation in the main content area like a regular channel."""

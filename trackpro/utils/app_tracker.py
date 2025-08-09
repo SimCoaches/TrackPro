@@ -145,11 +145,18 @@ class AppTracker:
             # Update the current session with the new user_id
             if self.is_running:
                 try:
-                    # Update the active session
+                    # Update the active anonymous session (schema may not include session_id)
                     update_data = {"user_id": user_id}
-                    result = self.supabase.table("app_sessions").update(update_data).eq(
-                        "session_id", self.session_id
-                    ).eq("is_active", True).execute()
+                    q = self.supabase.table("app_sessions").update(update_data).eq("is_active", True)
+                    if old_user_id:
+                        q = q.eq("user_id", old_user_id)
+                    else:
+                        # Update rows where user_id is NULL
+                        try:
+                            q = q.is_("user_id", None)
+                        except Exception:
+                            pass
+                    result = q.execute()
                     
                     if result.data:
                         logger.info(f"Updated session with user_id: {user_id}")

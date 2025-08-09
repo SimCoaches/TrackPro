@@ -11,14 +11,9 @@ logger = logging.getLogger(__name__)
 class CalibrationManager(DatabaseManager):
     """Manages calibration-related database operations."""
     
-    def __init__(self, client=None):
-        """Initialize the calibration manager.
-        
-        Args:
-            client: The Supabase client
-        """
-        super().__init__(client)
-        self.table_name = "user_calibrations"
+    def __init__(self):
+        """Initialize the calibration manager."""
+        super().__init__("user_calibrations")
         self._pending_saves = {}  # Track pending calibration saves by user/name
         self._save_timers = {}    # Track save timers by user/name
     
@@ -32,7 +27,10 @@ class CalibrationManager(DatabaseManager):
             List of calibration records
         """
         try:
-            response = self.client.table(self.table_name).select("*").eq("user_id", user_id).execute()
+            client = self.client
+            if client is None:
+                raise RuntimeError("Supabase client is not available for get_user_calibrations")
+            response = client.table(self.table_name).select("*").eq("user_id", user_id).execute()
             return response.data
         except Exception as e:
             logger.error(f"Error getting calibrations for user {user_id}: {e}")
@@ -110,7 +108,12 @@ class CalibrationManager(DatabaseManager):
                 
                 # Check if calibration with this name already exists
                 # Only select the ID field and limit to 1 result for efficiency
-                existing = self.client.table(self.table_name)\
+                # Resolve client at save-time to ensure we don't use a stale or None client
+                client = self.client
+                if client is None:
+                    raise RuntimeError("Supabase client is not available for calibration save")
+
+                existing = client.table(self.table_name)\
                     .select("id")\
                     .eq("user_id", user_id)\
                     .eq("name", name)\
@@ -119,14 +122,14 @@ class CalibrationManager(DatabaseManager):
                 
                 if existing.data:
                     # Update existing calibration
-                    response = self.client.table(self.table_name)\
+                    response = client.table(self.table_name)\
                         .update(calibration_data)\
                         .eq("id", existing.data[0]["id"])\
                         .execute()
                     logger.info(f"Attempt {attempt+1}: Updated existing calibration '{name}' for user {user_id}")
                 else:
                     # Create new calibration
-                    response = self.client.table(self.table_name)\
+                    response = client.table(self.table_name)\
                         .insert(calibration_data)\
                         .execute()
                     logger.info(f"Attempt {attempt+1}: Created new calibration '{name}' for user {user_id}")
@@ -170,7 +173,10 @@ class CalibrationManager(DatabaseManager):
             True if successful, False otherwise
         """
         try:
-            response = self.client.table(self.table_name)\
+            client = self.client
+            if client is None:
+                raise RuntimeError("Supabase client is not available for delete_calibration")
+            response = client.table(self.table_name)\
                 .delete()\
                 .eq("user_id", user_id)\
                 .eq("name", name)\
@@ -198,7 +204,10 @@ class CalibrationManager(DatabaseManager):
             The calibration data if found, None otherwise
         """
         try:
-            response = self.client.table(self.table_name)\
+            client = self.client
+            if client is None:
+                raise RuntimeError("Supabase client is not available for get_calibration")
+            response = client.table(self.table_name)\
                 .select("*")\
                 .eq("user_id", user_id)\
                 .eq("name", name)\

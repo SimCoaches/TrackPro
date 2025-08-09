@@ -216,7 +216,7 @@ class PrivateConversationWidget(QWidget):
         
         # Conversation header
         header_widget = QWidget()
-        header_widget.setFixedHeight(60)
+        header_widget.setFixedHeight(44)
         header_widget.setStyleSheet("""
             QWidget {
                 background-color: #252525;
@@ -264,7 +264,7 @@ class PrivateConversationWidget(QWidget):
         
         # Message input area
         input_widget = QWidget()
-        input_widget.setFixedHeight(80)
+        input_widget.setFixedHeight(64)
         input_widget.setStyleSheet("""
             QWidget {
                 background-color: #252525;
@@ -277,7 +277,7 @@ class PrivateConversationWidget(QWidget):
         
         # Message input
         self.message_input = QLineEdit()
-        self.message_input.setFixedHeight(40)
+        self.message_input.setFixedHeight(38)
         self.message_input.setPlaceholderText(f"Message {user_name}")
         self.message_input.setStyleSheet("""
             QLineEdit {
@@ -496,6 +496,12 @@ class PrivateConversationWidget(QWidget):
             except Exception:
                 pass
             self.add_message(message_data, is_own_message=is_own)
+            # Auto-scroll to newest after appending
+            try:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self.messages_list.scrollToBottom)
+            except Exception:
+                pass
             # Clear typing state for sender if present
             sender_id = message_data.get('sender_id')
             if sender_id in self._typing_users:

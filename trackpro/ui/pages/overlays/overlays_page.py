@@ -353,6 +353,15 @@ class OverlaysPage(BasePage):
         title.setStyleSheet("font-weight: bold; font-size: 16px; margin: 6px 0 12px 0;")
         main_layout.addWidget(title)
 
+        # Minimal status label so update_track_status() has a target even in tile layout
+        try:
+            self.builder_status_label = QLabel("")
+            self.builder_status_label.setStyleSheet("color:#bdbdbd;font-size:11px;margin:2px 0 8px 0;")
+            main_layout.addWidget(self.builder_status_label)
+        except Exception:
+            # As a last resort, ensure attribute exists to avoid AttributeError elsewhere
+            self.builder_status_label = QLabel("")
+
         grid = QGridLayout()
         grid.setHorizontalSpacing(24)
         grid.setVerticalSpacing(24)
@@ -888,8 +897,9 @@ class OverlaysPage(BasePage):
     def on_builder_progress_updated(self, completed_laps, required_laps):
         """Handle track builder progress updates."""
         try:
-            # Update progress bar
-            self.builder_progress_bar.setValue(completed_laps)
+            # Update progress bar if present in this layout
+            if hasattr(self, 'builder_progress_bar') and self.builder_progress_bar:
+                self.builder_progress_bar.setValue(completed_laps)
             
             # Update status
             if completed_laps > 0:
@@ -914,7 +924,8 @@ class OverlaysPage(BasePage):
             
             # Update UI
             self.builder_status_label.setText(f"🏁 Track map complete! {len(centerline)} points, {len(corners)} corners, {track_length:.0f}m")
-            self.builder_progress_bar.setValue(3)
+            if hasattr(self, 'builder_progress_bar') and self.builder_progress_bar:
+                self.builder_progress_bar.setValue(3)
             
             # Update buttons
             self.start_builder_btn.setEnabled(True)
@@ -939,8 +950,10 @@ class OverlaysPage(BasePage):
     def on_builder_error(self, error_message):
         """Handle track builder errors."""
         self.builder_status_label.setText(f"❌ Error: {error_message}")
-        self.start_builder_btn.setEnabled(True)
-        self.stop_builder_btn.setEnabled(False)
+        if hasattr(self, 'start_builder_btn') and self.start_builder_btn:
+            self.start_builder_btn.setEnabled(True)
+        if hasattr(self, 'stop_builder_btn') and self.stop_builder_btn:
+            self.stop_builder_btn.setEnabled(False)
         
         QMessageBox.critical(self, "Track Builder Error", f"❌ {error_message}")
         logger.error(f"Track builder error: {error_message}")
@@ -972,6 +985,11 @@ class OverlaysPage(BasePage):
         try:
             # Create timer for track detection (check every 2 seconds)
             self.track_detection_timer = QTimer()
+            # Use CoarseTimer to avoid strict 2s cadence sync with UI loop
+            try:
+                self.track_detection_timer.setTimerType(QTimer.TimerType.CoarseTimer)
+            except Exception:
+                pass
             self.track_detection_timer.timeout.connect(self.check_track_changes)
             self.track_detection_timer.start(2000)  # 2 second interval
             
@@ -1065,7 +1083,8 @@ class OverlaysPage(BasePage):
                 self.builder_status_label.setText(status_text)
                 
                 # Enable overlay button since track map exists
-                self.start_overlay_btn.setEnabled(True)
+                if hasattr(self, 'start_overlay_btn') and self.start_overlay_btn:
+                    self.start_overlay_btn.setEnabled(True)
                 
             else:
                 # No track map exists
@@ -1073,7 +1092,8 @@ class OverlaysPage(BasePage):
                 self.builder_status_label.setText(status_text)
                 
                 # Disable overlay button since no track map exists
-                self.start_overlay_btn.setEnabled(False)
+                if hasattr(self, 'start_overlay_btn') and self.start_overlay_btn:
+                    self.start_overlay_btn.setEnabled(False)
             
             logger.info(f"🔄 Updated track status: {track_name} - {track_config}")
             

@@ -149,7 +149,11 @@ class SecureSessionManager:
                 try:
                     import win32security
                     import win32api
-                    import win32con
+                    try:
+                        # Prefer ntsecuritycon for FILE_ALL_ACCESS on some pywin32 builds
+                        import ntsecuritycon as win32con
+                    except Exception:
+                        import win32con
                     
                     # Get current user SID
                     user_sid = win32security.GetTokenInformation(
@@ -159,7 +163,12 @@ class SecureSessionManager:
                     
                     # Create DACL with only current user having full control
                     dacl = win32security.ACL()
-                    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.FILE_ALL_ACCESS, user_sid)
+                    try:
+                        access_mask = win32con.FILE_ALL_ACCESS
+                    except Exception:
+                        # Fallback: GENERIC_ALL if FILE_ALL_ACCESS missing
+                        access_mask = getattr(win32con, 'GENERIC_ALL', 0x10000000)
+                    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, access_mask, user_sid)
                     
                     # Set security descriptor
                     sd = win32security.SECURITY_DESCRIPTOR()
@@ -219,7 +228,7 @@ class SecureSessionManager:
         fernet = Fernet(base64.urlsafe_b64encode(derived_key))
         
         # Serialize and encrypt data
-        json_data = json.dumps(data, separators=(',', ':')).encode()
+        json_data = json.dumps(data, separators=(',', ':'), default=str).encode()
         encrypted_data = fernet.encrypt(json_data)
         
         return encrypted_data, salt
@@ -295,10 +304,33 @@ class SecureSessionManager:
         try:
             # Add timestamp and version info
             import time
+            def _sanitize(obj: Any) -> Any:
+                try:
+                    # Fast path for builtins
+                    if isinstance(obj, (str, int, float, bool)) or obj is None:
+                        return obj
+                    # Datetime-like
+                    try:
+                        from datetime import datetime, date
+                        if isinstance(obj, (datetime, date)):
+                            return obj.isoformat()
+                    except Exception:
+                        pass
+                    # Mappings
+                    if isinstance(obj, dict):
+                        return {k: _sanitize(v) for k, v in obj.items()}
+                    # Iterables
+                    if isinstance(obj, (list, tuple, set)):
+                        return [_sanitize(v) for v in obj]
+                    # Fallback to string
+                    return str(obj)
+                except Exception:
+                    return str(obj)
+
             secure_data = {
                 'version': '1.0',
                 'timestamp': str(int(time.time())),
-                'data': session_data
+                'data': _sanitize(session_data)
             }
             
             # Generate integrity hash

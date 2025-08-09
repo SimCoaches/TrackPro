@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
     QScrollArea, QFrame, QButtonGroup, QLineEdit, QMessageBox,
-    QMenu, QSpacerItem, QSizePolicy
+    QMenu, QSpacerItem, QSizePolicy, QGraphicsDropShadowEffect
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QParallelAnimationGroup, QSize, QPointF
@@ -91,6 +91,9 @@ class OnlineUserItem(QWidget):
         """)
         self.avatar_status_dot.move(22, 22)  # Position at bottom-right of avatar
         
+        # Holder for optional glow effect
+        self._glow_effect = None
+
         layout.addWidget(self.avatar_container, alignment=Qt.AlignmentFlag.AlignHCenter)
         
         # User info container
@@ -132,6 +135,24 @@ class OnlineUserItem(QWidget):
         
         # Make clickable
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_unread_glow(self, enabled: bool) -> None:
+        """Toggle yellow glow around the avatar for unread DMs."""
+        try:
+            if enabled:
+                if self._glow_effect is None:
+                    eff = QGraphicsDropShadowEffect(self.avatar_container)
+                    eff.setBlurRadius(28)
+                    eff.setOffset(0, 0)
+                    eff.setColor(QColor("#f1c40f"))
+                    self.avatar_container.setGraphicsEffect(eff)
+                    self._glow_effect = eff
+            else:
+                if self._glow_effect is not None:
+                    self.avatar_container.setGraphicsEffect(None)
+                    self._glow_effect = None
+        except Exception:
+            pass
 
     def set_compact_mode(self, is_compact: bool) -> None:
         """Toggle compact (collapsed) mode: hide text and center avatar.
@@ -366,12 +387,7 @@ class OnlineUserItem(QWidget):
             }
         """)
         
-        # Private Message action
-        private_message_action = QAction("Send Private Message", self)
-        private_message_action.triggered.connect(self.on_private_message_requested)
-        context_menu.addAction(private_message_action)
-        
-        # Separator
+        # Separator (kept even without DM for visual grouping)
         context_menu.addSeparator()
         
         # View Profile action
@@ -484,6 +500,7 @@ class OnlineUsersSidebar(QWidget):
         self.all_users = []
         self.current_user_id = None
         self.user_widgets = []  # Initialize user_widgets list
+        self._user_id_to_widget: dict[str, OnlineUserItem] = {}
         
         # PERFORMANCE: Cache auth state to prevent duplicate calls
         self._cached_auth_state = None
@@ -1492,6 +1509,7 @@ class OnlineUsersSidebar(QWidget):
         
         # Clear our widget tracking
         self.user_widgets.clear()
+        self._user_id_to_widget.clear()
         
         # Sort users: friends first (by online status), then others (by online status)
         sorted_users = sorted(
@@ -1512,6 +1530,12 @@ class OnlineUsersSidebar(QWidget):
             user_widget.user_clicked.connect(self.on_user_selected)
             user_widget.private_message_requested.connect(self.on_private_message_requested)
             self.user_widgets.append(user_widget)
+            try:
+                uid = user_data.get('user_id')
+                if uid:
+                    self._user_id_to_widget[uid] = user_widget
+            except Exception:
+                pass
             
             # Create container for centering when collapsed
             container = QWidget()
@@ -1537,6 +1561,20 @@ class OnlineUsersSidebar(QWidget):
         self.count_icon.setText(str(online_count))
         
         logger.debug(f"Users list refresh complete. Online: {online_count}, Total: {total_count}")
+
+    # ----------------------------
+    # Unread DM glow management
+    # ----------------------------
+    def set_unread_glow_for_user(self, user_id: str, enabled: bool) -> None:
+        try:
+            widget = self._user_id_to_widget.get(user_id)
+            if widget and hasattr(widget, 'set_unread_glow'):
+                widget.set_unread_glow(enabled)
+        except Exception:
+            pass
+
+    def clear_unread_glow_for_user(self, user_id: str) -> None:
+        self.set_unread_glow_for_user(user_id, False)
     
     def refresh_users_data(self):
         """Refresh users data including online status from the backend.
@@ -1566,7 +1604,7 @@ class OnlineUsersSidebar(QWidget):
             popup = UserProfilePopup(user_data, self.current_user_id, self)
             popup.view_profile_requested.connect(self.on_view_profile_requested)
             popup.friend_request_sent.connect(self.on_friend_request_sent)
-            popup.private_message_requested.connect(self.on_private_message_requested)
+            # Private messages moved to profile; do not connect DM action
             popup.show()
             
         except Exception as e:

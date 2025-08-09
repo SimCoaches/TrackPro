@@ -13,6 +13,9 @@ SolidCompression=yes
 CreateAppDir=yes
 UninstallDisplayName=TrackPro v1.5.6
 UninstallDisplayIcon={app}\TrackPro_v1.5.6.exe
+; Ensure 64-bit registry view so detection checks are accurate on x64 Windows
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 
 [InstallDelete]
 ; Clean up old TrackPro executables from all possible installation locations
@@ -323,7 +326,8 @@ begin
   if RegKeyExists(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\HidHide') then
   begin
     // Also check for the driver file.
-    if FileExists(ExpandConstant('{win}\System32\drivers\HidHide.sys')) then
+    // Use {sys} for 64-bit system drivers path regardless of redirection
+    if FileExists(ExpandConstant('{sys}\drivers\HidHide.sys')) then
     begin
         LogCustom('HidHide detection: FOUND (service and driver file exist)');
         Result := True;
@@ -532,7 +536,7 @@ begin
     LogCustom('- Visual C++: Not found (will install)');
   
   LogCustom('Prerequisite detection completed.');
-  LogCustom('=== Prerequisites will be installed silently during setup ===');
+  LogCustom('=== Prerequisites will be installed with their standard installers (UI) ===');
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -620,8 +624,8 @@ end;
 
 [Run]
 ; vJoy installation is now handled in CurStepChanged for better control
-Filename: "{tmp}\HidHide_1.5.230_x64.exe"; StatusMsg: "Installing HidHide..."; Flags: waituntilterminated; Check: not IsHidHideInstalled; BeforeInstall: LogPrereqStart('HidHide'); AfterInstall: LogPrereqEnd('HidHide')
-Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/quiet"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated; Check: not IsVCRedistInstalled; BeforeInstall: LogPrereqStart('Visual C++'); AfterInstall: LogPrereqEnd('Visual C++')
+Filename: "{tmp}\HidHide_1.5.230_x64.exe"; StatusMsg: "Installing HidHide..."; Flags: waituntilterminated skipifdoesntexist; Check: not IsHidHideInstalled; BeforeInstall: LogPrereqStart('HidHide'); AfterInstall: LogPrereqEnd('HidHide')
+Filename: "{tmp}\vc_redist.x64.exe"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated; Check: not IsVCRedistInstalled; BeforeInstall: LogPrereqStart('Visual C++'); AfterInstall: LogPrereqEnd('Visual C++')
 
 [Icons]
 Name: "{group}\TrackPro"; Filename: "{app}\TrackPro_v1.5.6.exe"; WorkingDir: "{app}"; Comment: "TrackPro Racing Coach Application"

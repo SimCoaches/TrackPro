@@ -1008,17 +1008,21 @@ class AccountPage(QWidget):
         """)
         iracing_layout.addWidget(self.iracing_status_label)
         
-        # iRacing username
+        # Legacy username field (hidden) – linking is automatic after web login
         iracing_user_layout = QHBoxLayout()
-        iracing_user_layout.addWidget(QLabel("iRacing Username:"))
+        self._iracing_username_label = QLabel("iRacing Username:")
+        self._iracing_username_label.setVisible(False)
+        iracing_user_layout.addWidget(self._iracing_username_label)
         self.iracing_username_input = ModernInput("Enter your iRacing username")
+        self.iracing_username_input.setVisible(False)
         iracing_user_layout.addWidget(self.iracing_username_input)
         iracing_layout.addLayout(iracing_user_layout)
         
         # Connect/Disconnect buttons
         iracing_btn_layout = QHBoxLayout()
-        self.connect_iracing_btn = ModernButton("Connect iRacing", "primary")
-        self.connect_iracing_btn.clicked.connect(self.connect_iracing)
+        self.connect_iracing_btn = ModernButton("Link iRacing", "primary")
+        self.connect_iracing_btn.setToolTip("Securely link your iRacing account (no password stored)")
+        self.connect_iracing_btn.clicked.connect(self.link_iracing_account)
         iracing_btn_layout.addWidget(self.connect_iracing_btn)
         
         self.disconnect_iracing_btn = ModernButton("Disconnect", "danger")
@@ -1036,7 +1040,432 @@ class AccountPage(QWidget):
         layout.addWidget(save_connections_btn)
         
         layout.addStretch()
+        # Initialize status based on saved cookies and auto-refresh
+        try:
+            saved_cookies = self._load_iracing_cookies()
+            if saved_cookies:
+                self.iracing_status_label.setText("Status: Connected")
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(200, self._refresh_iracing_snapshot)
+        except Exception:
+            pass
+
         return widget
+
+    def _get_saved_iracing_cookie(self) -> str | None:
+        try:
+            from ....auth.secure_session import SecureSessionManager
+            ssm = SecureSessionManager("TrackPro")
+            data = ssm.load_session() or {}
+            return (data.get("iracing") or {}).get("session_cookie")
+        except Exception:
+            return None
+
+    def link_iracing_account(self):
+        """Open a secure web view to link iRacing and capture the session cookies only (no password stored).
+        This version also forces persistent cookies and verifies the link via the Data API automatically.
+        """
+        try:
+            from PyQt6.QtWebEngineWidgets import QWebEngineView
+            try:
+                # Optional: profile API for forcing persistent cookies
+                from PyQt6.QtWebEngineCore import QWebEngineProfile
+            except Exception:
+                QWebEngineProfile = None
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QMessageBox
+            from PyQt6.QtCore import QUrl, QTimer
+            import os, requests
+
+            import logging
+            logger = logging.getLogger(__name__)
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Link iRacing Account")
+            layout = QVBoxLayout(dialog)
+            web = QWebEngineView(dialog)
+            layout.addWidget(web)
+            logger.info("[IRacingLink] Opened link dialog and created web view")
+
+            # Accumulate cookies; some endpoints require multiple cookies
+            self._iracing_cookies = getattr(self, "_iracing_cookies", {})
+            self._iracing_link_success = False
+            try:
+                self.iracing_status_label.setText("Status: Connecting…")
+            except Exception:
+                pass
+
+            def handle_cookie_added(cookie):
+                try:
+                    name = bytes(cookie.name()).decode("utf-8", errors="ignore")
+                    value = bytes(cookie.value()).decode("utf-8", errors="ignore")
+                    domain = cookie.domain()
+                    if domain and ("iracing.com" in domain):
+                        logger.info(f"[IRacingLink] Cookie added: {name} (domain={domain})")
+                        self._iracing_cookies[name] = value
+                        # Save to main window for global reuse
+                        try:
+                            main_window = self.window()
+                            setattr(main_window, "_iracing_session_cookie", self._iracing_cookies.get("authtoken") or self._iracing_cookies.get("irsso_membersv2") or value)
+                            setattr(main_window, "_iracing_cookies", dict(self._iracing_cookies))
+                        except Exception:
+                            pass
+                        # Persist securely
+                        try:
+                            self._save_iracing_cookies(self._iracing_cookies)
+                        except Exception:
+                            pass
+                        # Try verification shortly after receiving likely auth-bearing cookies
+                        if name.lower() in ("authtoken", "irsso_membersv2", "irsso", "iracing_ui"):
+                            QTimer.singleShot(300, attempt_verify)
+                except Exception:
+                    pass
+
+            profile = web.page().profile()
+            try:
+                cookie_store = profile.cookieStore()
+                cookie_store.cookieAdded.connect(handle_cookie_added)
+                # Proactively load any existing cookies and seed our map
+                try:
+                    cookie_store.loadAllCookies(lambda cookies: [handle_cookie_added(c) for c in cookies])
+                except Exception as e:
+                    logger.debug(f"[IRacingLink] loadAllCookies not available: {e}")
+                # Seed previously saved cookies into the WebEngine profile to enable auto-login
+                try:
+                    saved = self._load_iracing_cookies() or {}
+                    if not saved:
+                        token = self._get_saved_iracing_cookie()
+                        if token:
+                            saved = {"irsso_membersv2": token}
+                    if saved:
+                        try:
+                            from PyQt6.QtNetwork import QNetworkCookie  # type: ignore
+                        except Exception:
+                            QNetworkCookie = None  # type: ignore
+                        from PyQt6.QtCore import QUrl
+
+                        def set_cookies_for_host(host: str):
+                            if not QNetworkCookie:
+                                return
+                            for k, v in saved.items():
+                                try:
+                                    cookie = QNetworkCookie(bytes(str(k), "utf-8"), bytes(str(v), "utf-8"))
+                                    cookie.setDomain(host)
+                                    cookie.setPath("/")
+                                    try:
+                                        cookie.setSecure(True)
+                                        cookie.setHttpOnly(True)
+                                    except Exception:
+                                        pass
+                                    cookie_store.setCookie(cookie, QUrl(f"https://{host}/"))
+                                except Exception:
+                                    pass
+
+                        # Common domains used by iRacing auth
+                        set_cookies_for_host("members-ng.iracing.com")
+                        set_cookies_for_host("iracing.com")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # Scrape JS cookies periodically as a secondary source (some cookies may be httpOnly=False)
+            def scrape_js_cookies():
+                try:
+                    def _cb(result):
+                        try:
+                            if not isinstance(result, str):
+                                return
+                            for part in result.split(';'):
+                                kv = part.strip().split('=', 1)
+                                if len(kv) != 2:
+                                    continue
+                                k, v = kv[0], kv[1]
+                                if k and v:
+                                    if k not in self._iracing_cookies:
+                                        logger.info(f"[IRacingLink] JS cookie discovered: {k}")
+                                    self._iracing_cookies[k] = v
+                        except Exception:
+                            pass
+                    web.page().runJavaScript("document.cookie", _cb)
+                except Exception:
+                    pass
+
+            # Force persistent cookies and storage (helps some systems retain cross-domain cookies)
+            try:
+                if QWebEngineProfile and hasattr(profile, "setPersistentCookiesPolicy"):
+                    profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+                if QWebEngineProfile and hasattr(profile, "setHttpAcceptCookiePolicy"):
+                    profile.setHttpAcceptCookiePolicy(QWebEngineProfile.HttpAcceptCookiePolicy.AcceptAllCookies)
+                cache_dir = os.path.join(os.path.expanduser("~"), ".trackpro", "webcache")
+                os.makedirs(cache_dir, exist_ok=True)
+                if hasattr(profile, "setPersistentStoragePath"):
+                    profile.setPersistentStoragePath(cache_dir)
+            except Exception:
+                pass
+
+            # Attempt verification using currently collected cookies
+            def attempt_verify():
+                try:
+                    logger.info(f"[IRacingLink] Attempting verify with {len(self._iracing_cookies)} cookies: {list(self._iracing_cookies.keys())}")
+                    if not self._iracing_cookies:
+                        return
+                    s = requests.Session()
+                    s.headers.update({"User-Agent": "TrackPro/IRacingLink"})
+                    for k, v in self._iracing_cookies.items():
+                        try:
+                            s.cookies.set(k, v, domain="members-ng.iracing.com")
+                            s.cookies.set(k, v, domain=".iracing.com")
+                        except Exception:
+                            pass
+                    r = s.get("https://members-ng.iracing.com/data/member/summary", timeout=10)
+                    logger.info(f"[IRacingLink] summary status={getattr(r,'status_code',None)}")
+                    if not r.ok:
+                        # Fallback: verify inside the WebEngine session (includes httpOnly cookies)
+                        try:
+                            def _handle_js_summary(res):
+                                try:
+                                    ok = bool(isinstance(res, dict) and res.get('ok'))
+                                    status = (res or {}).get('status')
+                                    data = (res or {}).get('json') if isinstance(res, dict) else None
+                                    logger.info(f"[IRacingLink][JS] summary ok={ok} status={status}")
+                                    if not ok or not isinstance(data, dict):
+                                        return
+                                    def _finalize_with_json(jdata: dict):
+                                        try:
+                                            # Success: mark connected and sync
+                                            self.iracing_status_label.setText("Status: Connected")
+                                            try:
+                                                self.disconnect_iracing_btn.setVisible(True)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                self._iracing_link_success = True
+                                                if hasattr(self, "_ir_verify_timer") and self._ir_verify_timer:
+                                                    try:
+                                                        self._ir_verify_timer.stop()
+                                                    except Exception:
+                                                        pass
+                                                dialog.accept()
+                                                logger.info("[IRacingLink] Verification (JS) succeeded; dialog closed.")
+                                            except Exception:
+                                                pass
+                                            try:
+                                                QMessageBox.information(self, "iRacing", "iRacing linked. Syncing your data now...")
+                                            except Exception:
+                                                pass
+                                            try:
+                                                self._refresh_iracing_snapshot()
+                                            except Exception:
+                                                pass
+                                        except Exception:
+                                            pass
+                                    # Follow indirection if present
+                                    link = data.get('link')
+                                    if isinstance(link, str) and link:
+                                        js_follow = (
+                                            "fetch('" + link + "', {credentials:'include'})"
+                                            ".then(r=>r.json().then(j=>({ok:r.ok,status:r.status,json:j}))))"
+                                        )
+                                        web.page().runJavaScript(js_follow, lambda rr: _finalize_with_json((rr or {}).get('json') if isinstance(rr, dict) else {}))
+                                    else:
+                                        _finalize_with_json(data)
+                                except Exception:
+                                    pass
+                            js = (
+                                "fetch('https://members-ng.iracing.com/data/member/summary', {credentials:'include'})"
+                                ".then(r=>r.json().then(j=>({ok:r.ok,status:r.status,json:j,ct:r.headers.get('content-type')})))"
+                                ".catch(()=>({ok:false,status:0}))"
+                            )
+                            web.page().runJavaScript(js, _handle_js_summary)
+                        except Exception:
+                            pass
+                        return
+                    j = r.json() if r.headers.get("Content-Type", "").startswith("application/json") else None
+                    if isinstance(j, dict) and j.get("link"):
+                        rr = s.get(j["link"], timeout=10)
+                        logger.info(f"[IRacingLink] link status={getattr(rr,'status_code',None)}")
+                        if not rr.ok:
+                            return
+                        j = rr.json() if rr.headers.get("Content-Type", "").startswith("application/json") else None
+                    if not isinstance(j, dict):
+                        return
+                    # Mark connected and sync now
+                    self.iracing_status_label.setText("Status: Connected")
+                    try:
+                        self.disconnect_iracing_btn.setVisible(True)
+                    except Exception:
+                        pass
+                    try:
+                        self._iracing_link_success = True
+                        if hasattr(self, "_ir_verify_timer") and self._ir_verify_timer:
+                            try:
+                                self._ir_verify_timer.stop()
+                            except Exception:
+                                pass
+                        dialog.accept()
+                        logger.info("[IRacingLink] Verification succeeded; dialog closed.")
+                    except Exception:
+                        pass
+                    try:
+                        QMessageBox.information(self, "iRacing", "iRacing linked. Syncing your data now...")
+                    except Exception:
+                        pass
+                    try:
+                        self._refresh_iracing_snapshot()
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.exception("[IRacingLink] Verify attempt failed")
+                    pass
+
+            # Load root of members site; the SPA handles login internally
+            web.load(QUrl("https://members-ng.iracing.com/"))
+            dialog.resize(900, 700)
+            # Also try verification shortly after load
+            try:
+                web.loadFinished.connect(lambda ok: (logger.info(f"[IRacingLink] loadFinished ok={ok}, url={web.url().toString()}"), QTimer.singleShot(1200, attempt_verify)))
+                web.urlChanged.connect(lambda u: logger.info(f"[IRacingLink] urlChanged -> {u.toString()}"))
+            except Exception:
+                pass
+            # Periodic verification attempts until success or dialog closes
+            try:
+                self._ir_verify_timer = QTimer(dialog)
+                self._ir_verify_timer.setInterval(1500)
+                self._ir_verify_timer.timeout.connect(lambda: (scrape_js_cookies(), attempt_verify()))
+                self._ir_verify_timer.start()
+            except Exception:
+                pass
+            dialog.exec()
+            # Ensure timer is stopped when dialog closes
+            try:
+                if hasattr(self, "_ir_verify_timer") and self._ir_verify_timer:
+                    self._ir_verify_timer.stop()
+                logger.info(f"[IRacingLink] Dialog closed. success={self._iracing_link_success}")
+            except Exception:
+                pass
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error linking iRacing: {e}")
+            try:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "iRacing", "Could not open iRacing login.")
+            except Exception:
+                pass
+
+    def _save_iracing_cookies(self, cookies: dict) -> None:
+        try:
+            from ....auth.secure_session import SecureSessionManager
+            ssm = SecureSessionManager("TrackPro")
+            data = ssm.load_session() or {}
+            ir = data.get("iracing", {})
+            ir.update({"cookies": cookies})
+            data["iracing"] = ir
+            ssm.save_session(data)
+        except Exception:
+            pass
+
+    def _load_iracing_cookies(self) -> dict | None:
+        try:
+            from ....auth.secure_session import SecureSessionManager
+            ssm = SecureSessionManager("TrackPro")
+            data = ssm.load_session() or {}
+            return (data.get("iracing") or {}).get("cookies") or None
+        except Exception:
+            return None
+
+    def _refresh_iracing_snapshot(self) -> None:
+        """Fetch member summary/career and upsert snapshot + connections. Runs non-blocking-safe."""
+        try:
+            import requests
+            from datetime import datetime
+            cookies = self._load_iracing_cookies()
+            if not cookies:
+                # Try main window cache
+                try:
+                    main_window = self.window()
+                    cookies = getattr(main_window, "_iracing_cookies", None)
+                    if not cookies and hasattr(main_window, "_iracing_session_cookie"):
+                        cookies = {"irsso_membersv2": getattr(main_window, "_iracing_session_cookie")}
+                except Exception:
+                    pass
+            if not cookies:
+                return
+
+            s = requests.Session()
+            s.headers.update({"User-Agent": "TrackPro/IRacingLink"})
+            for k, v in cookies.items():
+                s.cookies.set(k, v, domain="members-ng.iracing.com")
+
+            def fetch(url):
+                r = s.get(url, timeout=12)
+                if not r.ok:
+                    return None
+                j = r.json() if r.headers.get("Content-Type", "").startswith("application/json") else None
+                if isinstance(j, dict) and j.get("link"):
+                    rr = s.get(j["link"], timeout=12)
+                    if rr.ok and rr.headers.get("Content-Type", "").startswith("application/json"):
+                        return rr.json()
+                    return None
+                return j
+
+            summary = fetch("https://members-ng.iracing.com/data/member/summary") or {}
+            career = fetch("https://members-ng.iracing.com/data/stats/member/career") or {}
+            cust_id = summary.get("cust_id") or summary.get("customer_id") or None
+            username = summary.get("display_name") or summary.get("member_name") or None
+
+            # Build snapshot payload
+            def get_lic(licenses, key):
+                if isinstance(licenses, list):
+                    m = { (x.get("category") or x.get("category_name") or "").lower(): x for x in licenses }
+                else:
+                    m = licenses or {}
+                return (m.get(key) or {})
+
+            licenses = summary.get("licenses") or summary.get("licenses_info") or {}
+            snap = {}
+            for cat_key, prefix in (("road", "road"),("oval","oval"),("dirt_road","dirt_road"),("dirt_oval","dirt_oval")):
+                lic = get_lic(licenses, cat_key)
+                snap[f"{prefix}_irating"] = lic.get("irating") or lic.get("iRating") or lic.get("i_rating")
+                snap[f"{prefix}_sr"] = lic.get("safety_rating") or lic.get("safetyRating") or lic.get("sr")
+                snap[f"{prefix}_license"] = lic.get("license_level") or lic.get("license") or lic.get("class")
+
+            totals = career.get("career") or career.get("overall") or career
+            if isinstance(totals, list):
+                totals = next((x for x in totals if (x.get("category") or "").lower()=="overall"), totals[0] if totals else {})
+            snap["wins"] = (totals or {}).get("wins")
+            snap["starts"] = (totals or {}).get("starts") or (totals or {}).get("races")
+
+            # Upsert DB (best-effort)
+            from ....database.supabase_client import get_supabase_client
+            supa = get_supabase_client()
+            if supa:
+                # user_connections
+                if cust_id:
+                    try:
+                        supa.from_("user_connections").upsert({
+                            "user_id": self.user_data.get("user_id") if hasattr(self, 'user_data') else None,
+                            "provider": "iracing",
+                            "external_id": str(cust_id),
+                            "username": username,
+                            "linked_at": datetime.utcnow().isoformat()+"Z"
+                        }, on_conflict="user_id,provider").execute()
+                    except Exception:
+                        pass
+                # user_iracing_snapshot
+                payload = dict(snap)
+                payload["user_id"] = self.user_data.get("user_id") if hasattr(self, 'user_data') else None
+                payload["last_updated"] = datetime.utcnow().isoformat()+"Z"
+                try:
+                    supa.from_("user_iracing_snapshot").upsert(payload, on_conflict="user_id").execute()
+                except Exception:
+                    pass
+
+            # Update UI status
+            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            self.iracing_status_label.setText(f"Status: Connected • Synced {ts}")
+        except Exception:
+            pass
     
     def create_privacy_section(self):
         """Create a compact and well-organized privacy and data section."""

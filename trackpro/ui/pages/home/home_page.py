@@ -65,6 +65,10 @@ class HomePage(BasePage):
 
         # Readiness/metrics refresh (Phase 2 minimal wiring)
         self.status_timer = QTimer()
+        try:
+            self.status_timer.setTimerType(QTimer.TimerType.CoarseTimer)
+        except Exception:
+            pass
         self.status_timer.timeout.connect(self.update_readiness)
         self.status_timer.start(2500)
         
@@ -298,7 +302,10 @@ class HomePage(BasePage):
                     font-weight: bold;
                     font-size: 13px;
                 }}
-                QPushButton:hover {{ filter: brightness(1.1); }}
+                /* Qt does not support CSS filter; emulate hover with a darker shade */
+                QPushButton:hover {{
+                    background-color: rgba(255, 255, 255, 0.08);
+                }}
             """)
             return btn
 
@@ -405,7 +412,9 @@ class HomePage(BasePage):
                 border-radius: 6px;
                 font-weight: bold;
             }
-            QPushButton:hover { filter: brightness(1.1); }
+            QPushButton:hover {
+                background-color: #8d7800;
+            }
         """)
         open_btn.setEnabled(False)
         card.layout().addWidget(label)
@@ -426,7 +435,9 @@ class HomePage(BasePage):
                 border-radius: 6px;
                 font-weight: bold;
             }
-            QPushButton:hover { filter: brightness(1.1); }
+            QPushButton:hover {
+                background-color: #2f8fe6;
+            }
         """)
         open_btn.clicked.connect(lambda: self.navigate_to_page("community"))
         card.layout().addWidget(self.community_label)

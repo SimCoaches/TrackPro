@@ -7,9 +7,9 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                            QLabel, QGroupBox, QSlider, QCheckBox, QSpinBox,
                            QColorDialog, QLineEdit, QTabWidget, QWidget,
                            QMessageBox, QFrame, QGridLayout, QProgressBar,
-                           QTextEdit, QFileDialog, QApplication)
+                           QTextEdit, QFileDialog, QApplication, QScrollArea, QSizePolicy)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QMetaObject
-from PyQt6.QtGui import QColor, QPalette, QFont
+from PyQt6.QtGui import QColor, QPalette, QFont, QPainter, QPen, QBrush
 
 from ..track_map_overlay import TrackMapOverlayManager
 from ...utils.resource_utils import get_track_map_file_path
@@ -18,6 +18,187 @@ import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class TrackMapPreviewWidget(QWidget):
+    """Lightweight embedded preview for the Ultimate Track Builder.
+
+    Renders collected points, completed laps, the current lap, and the generated centerline
+    inside a standard QWidget so it can be embedded in a page without special window flags.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(260)
+        self.setAutoFillBackground(False)
+
+        self.all_points = []              # [(x, y), ...]
+        self.completed_laps = []          # [[(x, y), ...], ...]
+        self.current_lap_points = []      # [(x, y), ...]
+        self.centerline_points = []       # [(x, y), ...]
+        self.placeholder_message = None   # Optional message to display when no data
+
+        self._bounds = None               # {'min_x':..,'max_x':..,'min_y':..,'max_y':..}
+        self._padding_fraction = 0.08     # 8% padding within widget
+
+    def clear(self):
+        self.all_points = []
+        self.completed_laps = []
+        self.current_lap_points = []
+        self.centerline_points = []
+        self._bounds = None
+        self.placeholder_message = None
+        self.update()
+
+    def set_centerline(self, centerline_points):
+        self.centerline_points = list(centerline_points) if centerline_points else []
+        self._recompute_bounds()
+        # Clear placeholder if we have data
+        if self.centerline_points:
+            self.placeholder_message = None
+        self.update()
+
+    def set_placeholder_message(self, message: str | None):
+        self.placeholder_message = message
+        self.update()
+
+    def update_from_builder(self, track_builder):
+        try:
+            # Attributes vary depending on source; guard each access
+            if hasattr(track_builder, 'track_points') and track_builder.track_points:
+                self.all_points = list(track_builder.track_points)
+            if hasattr(track_builder, 'laps') and track_builder.laps:
+                self.completed_laps = [list(l) for l in track_builder.laps]
+            if hasattr(track_builder, 'current_lap') and track_builder.current_lap:
+                self.current_lap_points = list(track_builder.current_lap)
+            # Centerline if available
+            if hasattr(track_builder, 'centerline_track') and track_builder.centerline_track:
+                self.centerline_points = list(track_builder.centerline_track)
+            self._recompute_bounds()
+            self.update()
+        except Exception:
+            pass
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # Background frame
+            painter.fillRect(self.rect(), QColor(34, 34, 34))
+
+            if not self._bounds:
+                # Draw placeholder if provided
+                if self.placeholder_message:
+                    painter.setPen(QPen(QColor(200, 200, 200)))
+                    font = QFont()
+                    font.setPointSize(12)
+                    font.setBold(True)
+                    painter.setFont(font)
+                    painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.placeholder_message)
+                return
+
+            # Draw all collected points (very light)
+            if self.all_points:
+                pen = QPen(QColor(200, 200, 200, 70))
+                pen.setWidth(1)
+                painter.setPen(pen)
+                self._draw_polyline(painter, self.all_points)
+
+            # Draw completed laps in distinct colors
+            colors = [QColor(66, 133, 244), QColor(52, 168, 83), QColor(156, 39, 176), QColor(255, 152, 0)]
+            for i, lap in enumerate(self.completed_laps):
+                if not lap:
+                    continue
+                pen = QPen(colors[i % len(colors)])
+                pen.setWidth(3)
+                painter.setPen(pen)
+                self._draw_polyline(painter, lap)
+
+            # Draw current lap in red
+            if self.current_lap_points:
+                pen = QPen(QColor(244, 67, 54))
+                pen.setWidth(4)
+                painter.setPen(pen)
+                self._draw_polyline(painter, self.current_lap_points)
+
+                # Current position marker
+                cx, cy = self._world_to_screen(self.current_lap_points[-1])
+                painter.setBrush(QBrush(QColor(255, 235, 59)))
+                painter.setPen(QPen(QColor(0, 0, 0, 180), 1))
+                painter.drawEllipse(int(cx) - 5, int(cy) - 5, 10, 10)
+
+            # Draw centerline in yellow dashed
+            if self.centerline_points:
+                pen = QPen(QColor(255, 215, 0))
+                pen.setWidth(3)
+                pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                self._draw_polyline(painter, self.centerline_points)
+        finally:
+            painter.end()
+
+    def _draw_polyline(self, painter: QPainter, world_points):
+        if len(world_points) < 2:
+            return
+        prev = self._world_to_screen(world_points[0])
+        for pt in world_points[1:]:
+            curr = self._world_to_screen(pt)
+            painter.drawLine(int(prev[0]), int(prev[1]), int(curr[0]), int(curr[1]))
+            prev = curr
+
+    def _recompute_bounds(self):
+        all_pts = []
+        if self.centerline_points:
+            all_pts.extend(self.centerline_points)
+        if self.all_points:
+            all_pts.extend(self.all_points)
+        for lap in self.completed_laps:
+            all_pts.extend(lap)
+        if self.current_lap_points:
+            all_pts.extend(self.current_lap_points)
+        if not all_pts:
+            self._bounds = None
+            return
+        xs = [p[0] for p in all_pts]
+        ys = [p[1] for p in all_pts]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        # Prevent zero-size bounds
+        if max_x == min_x:
+            max_x += 1.0
+        if max_y == min_y:
+            max_y += 1.0
+        self._bounds = {'min_x': min_x, 'max_x': max_x, 'min_y': min_y, 'max_y': max_y}
+
+    def _world_to_screen(self, pt):
+        if not self._bounds:
+            return self.width() / 2, self.height() / 2
+        wx, wy = pt
+        b = self._bounds
+        nx = (wx - b['min_x']) / (b['max_x'] - b['min_x'])
+        ny = (wy - b['min_y']) / (b['max_y'] - b['min_y'])
+        pad = self._padding_fraction
+        nx = pad + (1 - 2 * pad) * nx
+        ny = pad + (1 - 2 * pad) * ny
+
+        # Fit to widget rect preserving aspect
+        w, h = self.width(), self.height()
+        track_aspect = (b['max_x'] - b['min_x']) / (b['max_y'] - b['min_y'])
+        widget_aspect = w / h if h else 1.0
+        if track_aspect > widget_aspect:
+            sx = nx * w
+            # letterbox vertical
+            used_h = w / track_aspect
+            offset_y = (h - used_h) / 2
+            sy = offset_y + (1 - ny) * used_h
+        else:
+            sy = (1 - ny) * h
+            # pillarbox horizontal
+            used_w = h * track_aspect
+            offset_x = (w - used_w) / 2
+            sx = offset_x + nx * used_w
+        return sx, sy
 
 
 class TrackBuilderThread(QThread):
@@ -233,7 +414,9 @@ class TrackMapOverlaySettingsDialog(QDialog):
         
         self.setWindowTitle("Track Map Overlay Settings")
         self.setModal(True)
-        self.resize(600, 700)
+        # Make the dialog wide enough so the track previews don't require horizontal scrolling
+        self.resize(1100, 800)
+        self.setMinimumWidth(1100)
         
         # Current settings
         self.settings = self.get_default_settings()
@@ -521,9 +704,102 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.status_label.setStyleSheet("QLabel { color: #bbbbbb; font-style: italic; padding: 5px; }")
         layout.addWidget(self.status_label)
 
+    def _populate_track_gallery(self):
+        """Fetch a list of track maps from Supabase and render small previews in a scrollable list.
+
+        Each item is clickable: clicking will load its centerline into the main preview.
+        """
+        try:
+            from ...database.supabase_client import get_supabase_client
+            supabase = get_supabase_client()
+            if not supabase:
+                # If DB unavailable, leave a placeholder
+                info = QLabel("Cloud unavailable – cannot list track maps")
+                info.setStyleSheet("color:#888;padding:6px;")
+                self.preview_container_layout.addWidget(info)
+                return
+
+            # Fetch lightweight fields for gallery
+            # We avoid pulling entire arrays for performance; but if track_map is needed for thumbnail,
+            # fetch a capped number of points via RPC or take the first N points of existing data.
+            result = supabase.table('tracks').select('id,name,config,track_map,last_analysis_date').order('name').limit(50).execute()
+            rows = (getattr(result, 'data', None) or [])
+            if not rows:
+                info = QLabel("No tracks found in cloud")
+                info.setStyleSheet("color:#888;padding:6px;")
+                self.preview_container_layout.addWidget(info)
+                return
+
+            # Clear existing
+            while self.preview_container_layout.count():
+                item = self.preview_container_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+
+            # Build gallery entries
+            for row in rows:
+                name = row.get('name')
+                config = row.get('config')
+                display = name if not config or config == name else f"{name} - {config}"
+                points = row.get('track_map') or []
+
+                item_box = QGroupBox(display)
+                item_layout = QVBoxLayout(item_box)
+
+                # Small preview widget
+                preview = TrackMapPreviewWidget(item_box)
+                preview.setMinimumHeight(150)
+                preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                # Reduce to small subset for thumbnail for speed
+                try:
+                    if points:
+                        # Downsample for thumbnail
+                        sampled = points[::max(1, len(points)//300)] if isinstance(points, list) else []
+                        preview.set_centerline([(p['x'], p['y']) for p in sampled])
+                    else:
+                        preview.set_placeholder_message("No data")
+                except Exception:
+                    preview.set_placeholder_message("No data")
+
+                # Select button
+                btn = QPushButton("Load in Preview")
+                btn.setStyleSheet("padding:6px;")
+
+                def on_load(row=row):
+                    try:
+                        pts = row.get('track_map') or []
+                        if pts:
+                            self.track_preview.set_centerline([(p['x'], p['y']) for p in pts])
+                            self.track_preview.set_placeholder_message(None)
+                        else:
+                            self.track_preview.set_placeholder_message("No Track Available – build one now!")
+                    except Exception:
+                        self.track_preview.set_placeholder_message("No Track Available – build one now!")
+
+                btn.clicked.connect(on_load)
+
+                item_layout.addWidget(preview)
+                item_layout.addWidget(btn)
+                self.preview_container_layout.addWidget(item_box)
+
+            self.preview_container_layout.addStretch()
+
+        except Exception as e:
+            err = QLabel(f"Error loading track gallery: {e}")
+            err.setStyleSheet("color:#f66;padding:6px;")
+            self.preview_container_layout.addWidget(err)
+
     def setup_track_builder_tab(self, parent):
         """Set up the track builder tab."""
         layout = QVBoxLayout(parent)
+        # Two-column content area: left for controls, right for live preview
+        content_layout = QHBoxLayout()
+        left_col = QVBoxLayout()
+        right_col = QVBoxLayout()
+        # Give more space to the right column so track previews fit without horizontal scroll
+        content_layout.addLayout(left_col, 1)
+        content_layout.addLayout(right_col, 2)
         
         # Title and description
         title_label = QLabel("🎯 Ultimate Track Builder")
@@ -532,7 +808,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         title_font.setBold(True)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title_label)
+        left_col.addWidget(title_label)
         
         desc_label = QLabel(
             "Build perfect track maps by driving 3 clean laps. The system will automatically "
@@ -541,7 +817,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         )
         desc_label.setWordWrap(True)
         desc_label.setStyleSheet("color: #cccccc; margin: 10px 0px; font-size: 11px;")
-        layout.addWidget(desc_label)
+        left_col.addWidget(desc_label)
         
         # Instructions group
         instructions_group = QGroupBox("📋 How It Works")
@@ -566,7 +842,7 @@ class TrackMapOverlaySettingsDialog(QDialog):
         instructions_text.setStyleSheet("font-family: 'Segoe UI'; color: #ffffff; background: #4a4a4a; padding: 12px; border-radius: 5px; border: 1px solid #666666; font-size: 11px; line-height: 16px;")
         instructions_layout.addWidget(instructions_text)
         
-        layout.addWidget(instructions_group)
+        left_col.addWidget(instructions_group)
         
         # Status label and progress bar
         status_layout = QHBoxLayout()
@@ -575,12 +851,12 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.progress_bar.setVisible(False)
         status_layout.addWidget(self.builder_status_label)
         status_layout.addWidget(self.progress_bar)
-        layout.addLayout(status_layout)
+        left_col.addLayout(status_layout)
         
         # ADDED: Track map availability status
         self.track_availability_label = QLabel("🔍 Checking for existing track maps...")
         self.track_availability_label.setStyleSheet("color: #666; font-style: italic; padding: 5px;")
-        layout.addWidget(self.track_availability_label)
+        left_col.addWidget(self.track_availability_label)
         
         # Check for existing track maps on startup
         QTimer.singleShot(1000, self.check_track_availability_status)
@@ -658,8 +934,51 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.show_viz_button.clicked.connect(self.show_track_visualization)
         button_layout.addWidget(self.show_viz_button)
         
-        layout.addLayout(button_layout)
+        left_col.addLayout(button_layout)
         
+        # Embedded mini preview
+        preview_group = QGroupBox("🗺️ Track Map Preview")
+        preview_v = QVBoxLayout(preview_group)
+        # Scrollable area for browsing multiple maps
+        self.preview_scroll = QScrollArea(preview_group)
+        self.preview_scroll.setWidgetResizable(True)
+        # Prevent horizontal scrollbar – content will be laid out to fit the wider dialog
+        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Make the scroll viewport greedier vertically
+        self.preview_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.preview_scroll.setMinimumHeight(420)
+        self.preview_container = QWidget()
+        self.preview_container_layout = QVBoxLayout(self.preview_container)
+        self.preview_scroll.setWidget(self.preview_container)
+        # Primary preview widget (current track)
+        self.track_preview = TrackMapPreviewWidget(self.preview_container)
+        self.preview_container_layout.addWidget(self.track_preview)
+        helper = QLabel("Live preview of collected laps and generated centerline")
+        helper.setStyleSheet("color:#9aa0a6;font-size:11px;margin:0 0 6px 0;")
+        preview_v.addWidget(helper)
+        preview_v.addWidget(self.preview_scroll)
+        # Let the right column stretch to show more of the gallery
+        preview_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        right_col.addWidget(preview_group, stretch=1)
+        # No extra stretch at the bottom so the scroll area keeps maximum height
+
+        # Attempt to show existing track map in preview immediately
+        try:
+            existing = self.check_existing_track_map()
+            if existing and existing.get('track_map'):
+                centerline = [(p['x'], p['y']) for p in existing['track_map']]
+                if centerline:
+                    self.track_preview.set_centerline(centerline)
+                else:
+                    self.track_preview.set_placeholder_message("No Track Available – build one now!")
+            else:
+                self.track_preview.set_placeholder_message("No Track Available – build one now!")
+        except Exception:
+            self.track_preview.set_placeholder_message("No Track Available – build one now!")
+
+        # Populate a scrollable gallery of available maps from Supabase (thumbnails)
+        QTimer.singleShot(500, self._populate_track_gallery)
+
         # Load existing track maps group
         existing_group = QGroupBox("📁 Existing Track Maps")
         existing_layout = QVBoxLayout(existing_group)
@@ -690,7 +1009,10 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.cloud_track_info.setStyleSheet("color: #888; font-style: italic; padding: 5px;")
         existing_layout.addWidget(self.cloud_track_info)
         
-        layout.addWidget(existing_group)
+        left_col.addWidget(existing_group)
+
+        # Add the two-column content to the main layout
+        layout.addLayout(content_layout)
         
         layout.addStretch()
 
@@ -735,6 +1057,13 @@ class TrackMapOverlaySettingsDialog(QDialog):
         self.track_builder_thread.status_updated.connect(self.on_builder_status_updated)
         self.track_builder_thread.progress_updated.connect(self.on_builder_progress_updated)
         self.track_builder_thread.track_update.connect(self._on_track_update)
+        # Also feed preview directly for minimal latency
+        try:
+            self.track_builder_thread.track_update.connect(
+                self.track_preview.update_from_builder, Qt.ConnectionType.QueuedConnection
+            )
+        except Exception:
+            pass
         self.track_builder_thread.centerline_generated.connect(self.on_centerline_generated)
         self.track_builder_thread.error_occurred.connect(self.on_builder_error)
         self.track_builder_thread.finished.connect(self.on_builder_finished)
@@ -775,6 +1104,12 @@ class TrackMapOverlaySettingsDialog(QDialog):
                 worker.track_update.connect(self._on_track_update_direct, Qt.ConnectionType.QueuedConnection)
                 worker.progress_update.connect(self._on_progress_update_direct, Qt.ConnectionType.QueuedConnection)
                 worker.completion_ready.connect(self._on_track_completion, Qt.ConnectionType.QueuedConnection)
+
+                # Update embedded preview from live track updates
+                try:
+                    worker.track_update.connect(self.track_preview.update_from_builder, Qt.ConnectionType.QueuedConnection)
+                except Exception:
+                    pass
                 
                 # CRITICAL FIX: Connect visualization window to worker signals when worker is ready
                 if self.visualization_window:
@@ -788,6 +1123,12 @@ class TrackMapOverlaySettingsDialog(QDialog):
                     if hasattr(worker, 'track_builder') and worker.track_builder:
                         print("🔄 FIXED: Sending current track state to visualization window")
                         self.visualization_window.update_track_data(worker.track_builder)
+
+                        # Also push immediately to preview
+                        try:
+                            self.track_preview.update_from_builder(worker.track_builder)
+                        except Exception:
+                            pass
                 
         except Exception as e:
             logger.error(f"Error connecting directly to worker: {e}")
@@ -902,6 +1243,12 @@ The track map has been saved and is ready for use in:
             # Show success message box with track details
             QMessageBox.information(self, "Track Map Created!", track_info.strip())
             
+            # Update embedded preview with final centerline
+            try:
+                self.track_preview.set_centerline(centerline)
+            except Exception:
+                pass
+
             # Re-enable the build button for future use
             if hasattr(self, 'build_button'):
                 self.build_button.setText("🏗️ Build Track Map")
@@ -1153,18 +1500,41 @@ The track map has been saved and is ready for use in:
                             f"☁️ Cloud: {full_name} - {points} points ({method}) - Updated: {last_updated[:10] if last_updated != 'unknown' else 'unknown'}"
                         )
                         self.cloud_track_info.setStyleSheet("color: #4CAF50; font-style: italic; padding: 5px;")
+
+                        # Also update the right-hand preview if empty
+                        try:
+                            if points > 0 and not self.track_preview.centerline_points:
+                                self.track_preview.set_centerline([(p['x'], p['y']) for p in track_data['track_map']])
+                        except Exception:
+                            pass
                     else:
                         full_name = track_name
                         if track_config and track_config != track_name:
                             full_name += f" - {track_config}"
                         self.cloud_track_info.setText(f"☁️ No cloud track map for {full_name}. Build one to share with community!")
                         self.cloud_track_info.setStyleSheet("color: #ff9800; font-style: italic; padding: 5px;")
+                        # Set placeholder on preview if no data
+                        try:
+                            if not self.track_preview.centerline_points:
+                                self.track_preview.set_placeholder_message("No Track Available – build one now!")
+                        except Exception:
+                            pass
                 else:
                     self.cloud_track_info.setText("☁️ Cloud connection unavailable")
                     self.cloud_track_info.setStyleSheet("color: #888; font-style: italic; padding: 5px;")
+                    try:
+                        if not self.track_preview.centerline_points:
+                            self.track_preview.set_placeholder_message("No Track Available – build one now!")
+                    except Exception:
+                        pass
             else:
                 self.cloud_track_info.setText("☁️ iRacing not connected - cannot check current track")
                 self.cloud_track_info.setStyleSheet("color: #888; font-style: italic; padding: 5px;")
+                try:
+                    if not self.track_preview.centerline_points:
+                        self.track_preview.set_placeholder_message("No Track Available – build one now!")
+                except Exception:
+                    pass
                 
         except Exception as e:
             self.cloud_track_info.setText(f"☁️ Error checking cloud maps: {str(e)}")
@@ -1659,6 +2029,12 @@ The track map has been saved and is ready for use in:
             self.on_centerline_generated_from_load(centerline_track, corner_objects, track_data)
             
             logger.info(f"✅ Successfully loaded existing track map with {len(centerline_track)} points and {len(corner_objects)} corners")
+
+            # Update preview
+            try:
+                self.track_preview.set_centerline(centerline_track)
+            except Exception:
+                pass
             
         except Exception as e:
             error_msg = f"Error loading existing track map: {str(e)}"

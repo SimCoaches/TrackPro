@@ -5,6 +5,7 @@ import threading
 import traceback
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import uuid
 import time
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -129,7 +130,7 @@ class CommunityManager(QObject):
             
             logger.info(f"🔍 Getting messages for channel {channel_id}")
             query = self.client.table("community_messages").select(
-                "message_id, content, message_type, created_at, sender_id"
+                "message_id, channel_id, content, message_type, created_at, sender_id"
             ).eq("channel_id", channel_id)
 
             if before:
@@ -145,60 +146,68 @@ class CommunityManager(QObject):
             messages.reverse()
             logger.info(f"📨 Retrieved {len(messages)} messages")
             
-            # Try to get user display info from the public table first (no RLS restrictions)
+            # Fetch user metadata from all sources; some users may exist in one table but not others
             user_display_info = {}
             user_profiles = {}
+            public_profiles = {}
             user_details = {}
             try:
                 if messages:
                     sender_ids = list(set(msg.get('sender_id') for msg in messages if msg.get('sender_id')))
                     if sender_ids:
-                        logger.info(f"🔍 Fetching user display info for {len(sender_ids)} sender IDs")
-                        
-                        # Try to get user display info from public_user_display_info table (no RLS)
                         try:
                             display_response = self.client.table("public_user_display_info").select(
                                 "user_id, display_name, username, avatar_url"
                             ).in_("user_id", sender_ids).execute()
-                            
-                            user_display_info = {user['user_id']: user for user in (display_response.data or [])}
+                            user_display_info = {row['user_id']: row for row in (display_response.data or [])}
                             logger.info(f"✅ Retrieved {len(user_display_info)} user display info records")
-                            
                         except Exception as display_error:
                             logger.warning(f"⚠️ Could not fetch user display info: {display_error}")
-                        
-                        # Fallback: Try to get user profiles from user_profiles table
-                        if not user_display_info:
-                            try:
-                                user_response = self.client.table("user_profiles").select(
-                                    "user_id, username, display_name, avatar_url"
-                                ).in_("user_id", sender_ids).execute()
-                                
-                                user_profiles = {user['user_id']: user for user in (user_response.data or [])}
-                                logger.info(f"✅ Retrieved {len(user_profiles)} user profiles")
-                                
-                            except Exception as profile_error:
-                                logger.warning(f"⚠️ Could not fetch user profiles from user_profiles table: {profile_error}")
-                            
-                            # Try to get user details from user_details table
-                            try:
-                                details_response = self.client.table("user_details").select(
-                                    "user_id, first_name, last_name"
-                                ).in_("user_id", sender_ids).execute()
-                                
-                                user_details = {user['user_id']: user for user in (details_response.data or [])}
-                                logger.info(f"✅ Retrieved {len(user_details)} user details")
-                                
-                            except Exception as details_error:
-                                logger.warning(f"⚠️ Could not fetch user details from user_details table: {details_error}")
-                        
-                        # Log what we found
+
+                        try:
+                            user_response = self.client.table("user_profiles").select(
+                                "user_id, username, display_name, avatar_url"
+                            ).in_("user_id", sender_ids).execute()
+                            user_profiles = {row['user_id']: row for row in (user_response.data or [])}
+                            logger.info(f"✅ Retrieved {len(user_profiles)} user profiles")
+                        except Exception as profile_error:
+                            logger.warning(f"⚠️ Could not fetch user profiles from user_profiles table: {profile_error}")
+
+                        # Public view often contains avatar_url even when RLS blocks user_profiles
+                        try:
+                            public_resp = self.client.table("public_user_profiles").select(
+                                "user_id, username, display_name, avatar_url"
+                            ).in_("user_id", sender_ids).execute()
+                            public_profiles = {row['user_id']: row for row in (public_resp.data or [])}
+                            logger.info(f"✅ Retrieved {len(public_profiles)} public user profiles")
+                        except Exception as public_error:
+                            logger.warning(f"⚠️ Could not fetch public_user_profiles: {public_error}")
+
+                        try:
+                            details_response = self.client.table("user_details").select(
+                                "user_id, first_name, last_name"
+                            ).in_("user_id", sender_ids).execute()
+                            user_details = {row['user_id']: row for row in (details_response.data or [])}
+                            logger.info(f"✅ Retrieved {len(user_details)} user details")
+                        except Exception as details_error:
+                            logger.warning(f"⚠️ Could not fetch user details from user_details table: {details_error}")
+
+                        # Log synthesized display names we will use
                         for user_id in sender_ids:
-                            display_info = user_display_info.get(user_id, {})
-                            profile = user_profiles.get(user_id, {})
+                            display_info = dict(user_display_info.get(user_id, {}) or {})
+                            profile = dict(user_profiles.get(user_id, {}) or {})
+                            pub = public_profiles.get(user_id, {})
+                            # Fill missing fields from public view (helps avatars and display names)
+                            if pub:
+                                if not display_info.get('display_name') and pub.get('display_name'):
+                                    display_info['display_name'] = pub.get('display_name')
+                                if not display_info.get('username') and pub.get('username'):
+                                    display_info['username'] = pub.get('username')
+                                if not display_info.get('avatar_url') and pub.get('avatar_url'):
+                                    display_info['avatar_url'] = pub.get('avatar_url')
+                                if not profile.get('avatar_url') and pub.get('avatar_url'):
+                                    profile['avatar_url'] = pub.get('avatar_url')
                             details = user_details.get(user_id, {})
-                            
-                            # Generate display name from available data
                             display_name = self._generate_display_name(display_info, profile, details)
                             logger.info(f"  👤 {user_id}: {display_name}")
                             
@@ -211,9 +220,15 @@ class CommunityManager(QObject):
                 sender_id = message.get('sender_id')
                 if sender_id:
                     # Get user data from all tables
-                    display_info = user_display_info.get(sender_id, {})
-                    profile = user_profiles.get(sender_id, {})
-                    details = user_details.get(sender_id, {})
+                    display_info = dict(user_display_info.get(sender_id, {}) or {})
+                    profile = dict(user_profiles.get(sender_id, {}) or {})
+                    details = dict(user_details.get(sender_id, {}) or {})
+
+                    # Ensure user_id is available for fallback-name generation
+                    if sender_id and not display_info.get('user_id'):
+                        display_info['user_id'] = sender_id
+                    if sender_id and not profile.get('user_id'):
+                        profile['user_id'] = sender_id
                     
                     # Generate proper display name
                     display_name = self._generate_display_name(display_info, profile, details)
@@ -240,25 +255,25 @@ class CommunityManager(QObject):
             display_name = display_info.get('display_name', '')
             if display_name:
                 return display_name
-            
-            # Priority 2: Use username from public_user_display_info
+
+            # Priority 2: Use display_name from user_profiles (prefer a display name over any username)
+            display_name = profile.get('display_name', '')
+            if display_name:
+                return display_name
+
+            # Priority 3: Use username from public_user_display_info
             username = display_info.get('username', '')
             if username:
                 return username
-            
-            # Priority 3: Try first_name + last_name from user_details
+
+            # Priority 4: Try first_name + last_name from user_details
             first_name = details.get('first_name', '')
             last_name = details.get('last_name', '')
             if first_name or last_name:
                 full_name = f"{first_name} {last_name}".strip()
                 if full_name:
                     return full_name
-            
-            # Priority 4: Try display_name from user_profiles
-            display_name = profile.get('display_name', '')
-            if display_name:
-                return display_name
-            
+
             # Priority 5: Try username from user_profiles
             username = profile.get('username', '')
             if username:
@@ -327,41 +342,70 @@ class CommunityManager(QObject):
             
             logger.info(f"Sending message data: {message_data}")
             response = self.client.table("community_messages").insert(message_data).execute()
-            
+
             if response.data:
                 logger.info(f"Message sent successfully: {response.data[0]}")
                 
                 # Fetch user data for the emitted message
                 complete_message = response.data[0]
                 try:
-                    if complete_message.get('sender_id'):
-                        user_response = self.client.table("user_profiles").select(
-                            "user_id, username, display_name, avatar_url"
-                        ).eq("user_id", complete_message['sender_id']).execute()
+                    sender_id = complete_message.get('sender_id')
+                    if sender_id:
+                        # Prefer public display info (no RLS) for consistent names/avatars
+                        display_resp = self.client.table("public_user_display_info").select(
+                            "user_id, display_name, username, avatar_url"
+                        ).eq("user_id", sender_id).execute()
+                        if display_resp.data:
+                            complete_message['user_display_info'] = display_resp.data[0]
                         
-                        if user_response.data:
-                            complete_message['user_profiles'] = user_response.data[0]
-                            # Also add sender_name for backward compatibility
-                            user_profile = user_response.data[0]
-                            complete_message['sender_name'] = user_profile.get('display_name') or user_profile.get('username') or 'Unknown'
-                            logger.info(f"✅ Fetched user data for sent message: {user_response.data[0]}")
-                        else:
-                            logger.warning(f"No user data found for sender_id: {complete_message['sender_id']}")
-                            # Try to get from current user context
-                            try:
-                                from ..auth.user_manager import get_current_user
-                                user = get_current_user()
-                                if user and user.is_authenticated and complete_message.get('sender_id') == user.id:
-                                    complete_message['sender_name'] = user.name or user.email or 'You'
-                                else:
-                                    complete_message['sender_name'] = 'Unknown'
-                            except Exception as e:
-                                logger.debug(f"Could not get current user for sent message: {e}")
-                                complete_message['sender_name'] = 'Unknown'
+                        # Fallback to user_profiles
+                        profile_resp = self.client.table("user_profiles").select(
+                            "user_id, username, display_name, avatar_url"
+                        ).eq("user_id", sender_id).execute()
+                        if profile_resp.data:
+                            complete_message['user_profiles'] = profile_resp.data[0]
+
+                        # Optionally fetch minimal details for name synthesis
+                        details = {}
+                        try:
+                            det_resp = self.client.table("user_details").select(
+                                "user_id, first_name, last_name"
+                            ).eq("user_id", sender_id).execute()
+                            if det_resp.data:
+                                details = det_resp.data[0]
+                        except Exception:
+                            details = {}
+
+        
+                        # Ensure we can fallback-name even if no profile rows exist
+                        display_info = complete_message.get('user_display_info', {}) or {}
+                        profile = complete_message.get('user_profiles', {}) or {}
+                        if not display_info.get('user_id') and sender_id:
+                            display_info = dict(display_info)
+                            display_info['user_id'] = sender_id
+                            complete_message['user_display_info'] = display_info
+                        if not profile.get('user_id') and sender_id:
+                            profile = dict(profile)
+                            profile['user_id'] = sender_id
+                            complete_message['user_profiles'] = profile
+
+                        # Compute final sender_name using the same logic as history fetch
+                        complete_message['sender_name'] = self._generate_display_name(display_info, profile, details)
+                        logger.info(f"✅ Fetched user data for sent message (sender_name={complete_message['sender_name']})")
+                    else:
+                        complete_message['sender_name'] = 'Unknown'
                 except Exception as user_error:
                     logger.error(f"Error fetching user data for sent message: {user_error}")
-                    complete_message['sender_name'] = 'Unknown'
-                
+                    # Try to use current user as a final fallback
+                    try:
+                        from ..auth.user_manager import get_current_user
+                        user = get_current_user()
+                        if user and user.is_authenticated:
+                            complete_message['sender_name'] = user.name or user.email or 'You'
+                        else:
+                            complete_message['sender_name'] = 'Unknown'
+                    except Exception:
+                        complete_message['sender_name'] = 'Unknown'
                 # Emit signal for real-time updates
                 self.message_received.emit(complete_message)
                 return True
@@ -398,6 +442,10 @@ class CommunityManager(QObject):
         try:
             if not self.client:
                 logger.warning("Cannot setup real-time subscriptions: no database connection")
+                return
+            # Guard older/newer supabase clients that may lack realtime
+            if not hasattr(self.client, 'channel'):
+                logger.warning("Supabase client has no 'channel' attribute; skipping realtime subscriptions")
                 return
             
             # Clean up any existing channels
@@ -481,6 +529,19 @@ class CommunityManager(QObject):
             except Exception:
                 pass
             self.private_message_received.emit(new_msg)
+
+            # If message is from someone else, trigger yellow glow on their bubble
+            try:
+                other_user_id = new_msg.get('sender_id')
+                if other_user_id and self.current_user_id and other_user_id != self.current_user_id:
+                    from PyQt6.QtWidgets import QApplication
+                    for w in QApplication.topLevelWidgets():
+                        if hasattr(w, 'online_users_sidebar') and getattr(w, 'online_users_sidebar') is not None:
+                            sidebar = getattr(w, 'online_users_sidebar')
+                            if hasattr(sidebar, 'set_unread_glow_for_user'):
+                                sidebar.set_unread_glow_for_user(other_user_id, True)
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f"Error handling private DM realtime: {e}")
     
@@ -499,42 +560,55 @@ class CommunityManager(QObject):
                             logger.info(f"🔍 Fetching complete message data for: {new_message.get('message_id')}")
                             # First get the message data
                             response = self.client.table("community_messages").select(
-                                "message_id, content, message_type, created_at, sender_id"
+                                "message_id, channel_id, content, message_type, created_at, sender_id"
                             ).eq("message_id", new_message['message_id']).execute()
                             
                             if response.data:
                                 complete_message = response.data[0]
+                                # Ensure channel_id is present for UI routing
+                                if not complete_message.get('channel_id'):
+                                    complete_message['channel_id'] = new_message.get('channel_id')
                                 logger.info(f"✅ Retrieved complete message: {complete_message}")
                                 # Fetch user data for this message
                                 if complete_message.get('sender_id'):
                                     logger.info(f"👤 Fetching user data for sender_id: {complete_message['sender_id']}")
-                                    user_response = self.client.table("user_profiles").select(
-                                        "user_id, username, display_name, avatar_url"
-                                    ).eq("user_id", complete_message['sender_id']).execute()
-                                    
-                                    if user_response.data:
-                                        complete_message['user_profiles'] = user_response.data[0]
-                                        # Also add sender_name for backward compatibility
-                                        user_profile = user_response.data[0]
-                                        complete_message['sender_name'] = user_profile.get('display_name') or user_profile.get('username') or 'Unknown'
-                                        logger.info(f"✅ Fetched user data for real-time message: {user_response.data[0]}")
-                                        logger.info(f"✅ Real-time message sender_name: {complete_message['sender_name']}")
-                                    else:
-                                        logger.warning(f"❌ No user data found for sender_id: {complete_message['sender_id']}")
-                                        # Try to get from current user context
-                                        try:
-                                            from ..auth.user_manager import get_current_user
-                                            user = get_current_user()
-                                            if user and user.is_authenticated and complete_message.get('sender_id') == user.id:
-                                                complete_message['sender_name'] = user.name or user.email or 'You'
-                                                logger.info(f"✅ Real-time message sender_name: {complete_message['sender_name']} (from current user)")
-                                            else:
-                                                complete_message['sender_name'] = 'Unknown'
-                                                logger.warning(f"❌ Real-time message sender_name: Unknown (no user profile or current user)")
-                                        except Exception as e:
-                                            logger.debug(f"Could not get current user for real-time message: {e}")
-                                            complete_message['sender_name'] = 'Unknown'
-                                            logger.warning(f"❌ Real-time message sender_name: Unknown (exception)")
+                                    sender_id = complete_message['sender_id']
+                                    # Prefer public display info first
+                                    try:
+                                        disp_resp = self.client.table("public_user_display_info").select(
+                                            "user_id, display_name, username, avatar_url"
+                                        ).eq("user_id", sender_id).execute()
+                                        if disp_resp.data:
+                                            complete_message['user_display_info'] = disp_resp.data[0]
+                                    except Exception:
+                                        pass
+
+                                    # Fallback to user_profiles
+                                    try:
+                                        prof_resp = self.client.table("user_profiles").select(
+                                            "user_id, username, display_name, avatar_url"
+                                        ).eq("user_id", sender_id).execute()
+                                        if prof_resp.data:
+                                            complete_message['user_profiles'] = prof_resp.data[0]
+                                    except Exception:
+                                        pass
+
+                                    # Optional details for name synthesis
+                                    details = {}
+                                    try:
+                                        det_resp = self.client.table("user_details").select(
+                                            "user_id, first_name, last_name"
+                                        ).eq("user_id", sender_id).execute()
+                                        if det_resp.data:
+                                            details = det_resp.data[0]
+                                    except Exception:
+                                        details = {}
+
+                                    # Compute final sender_name consistently
+                                    display_info = complete_message.get('user_display_info', {})
+                                    profile = complete_message.get('user_profiles', {})
+                                    complete_message['sender_name'] = self._generate_display_name(display_info, profile, details)
+                                    logger.info(f"✅ Real-time message sender_name: {complete_message['sender_name']}")
                                 logger.info(f"✅ Fetched complete message with sender info: {complete_message}")
                                 self.message_received.emit(complete_message)
                             else:
@@ -992,7 +1066,18 @@ class CommunityManager(QObject):
             if response.data:
                 return response.data[0]['conversation_id']
             
-            # Create new conversation
+            # Enforce friendship for new conversations
+            try:
+                from trackpro.social.friends_manager import FriendsManager, FriendshipStatus
+                fm = FriendsManager()
+                fr = fm.get_friendship_status(self.current_user_id, other_user_id)
+                if not fr or fr.get('status') != FriendshipStatus.ACCEPTED.value:
+                    return None
+            except Exception:
+                # If friends manager fails, deny creation to enforce policy safely
+                return None
+
+            # Create new conversation (friends only)
             conversation_data = {
                 "user1_id": self.current_user_id,
                 "user2_id": other_user_id
@@ -1058,17 +1143,29 @@ class CommunityManager(QObject):
             message_data = {
                 "conversation_id": conversation_id,
                 "sender_id": self.current_user_id,
-                "content": content.strip()
+                "content": content.strip(),
+                # Idempotency key for safe retries
+                "client_message_id": str(uuid.uuid4()),
             }
             
             response = self.client.table("private_messages").insert(message_data).execute()
             
             if response.data:
-                # Update conversation's updated_at timestamp
-                self.client.table("private_conversations").update({"updated_at": datetime.now().isoformat()}).eq("conversation_id", conversation_id).execute()
-                
-                # Emit signal for real-time updates
-                self.message_received.emit(response.data[0])
+                # Enrich with basic user data for downstream UI (sender_name/avatar)
+                complete_msg = dict(response.data[0])
+                try:
+                    sender_id = complete_msg.get('sender_id')
+                    if sender_id:
+                        user_response = self.client.table("user_profiles").select(
+                            "user_id, username, display_name, avatar_url"
+                        ).eq("user_id", sender_id).execute()
+                        if user_response.data:
+                            complete_msg['user_profiles'] = user_response.data[0]
+                except Exception:
+                    pass
+
+                # Emit DM-specific signal; realtime will also deliver but this keeps UI snappy
+                self.private_message_received.emit(complete_msg)
                 return True
             
             return False
@@ -1076,6 +1173,14 @@ class CommunityManager(QObject):
         except Exception as e:
             logger.error(f"Error sending private message: {e}")
             return False
+
+    def refresh_realtime(self):
+        """Rebind realtime subscriptions, e.g., after login/session changes."""
+        try:
+            self._setup_database_connection()
+            self._setup_realtime_subscriptions()
+        except Exception:
+            pass
 
     def delete_private_message(self, message_id: str) -> bool:
         """Delete a private message by id. Requires appropriate RLS permissions.
@@ -1145,7 +1250,6 @@ class CommunityManager(QObject):
             payload = {
                 'conversation_id': conversation_id,
                 'user_id': self.current_user_id,
-                'display_name': display_name or 'User',
                 'is_typing': bool(is_typing),
                 'ts': datetime.now().isoformat()
             }
@@ -1807,6 +1911,9 @@ class SupportManager(QObject):
     def _setup_realtime_subscriptions(self):
         try:
             if not self.client:
+                return
+            if not hasattr(self.client, 'channel'):
+                logger.debug("Supabase client lacks 'channel'; skipping support realtime bind")
                 return
             # Cleanup
             try:

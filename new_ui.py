@@ -57,6 +57,7 @@ import os
 import logging
 import time
 from pathlib import Path
+from typing import Optional
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 import msvcrt
@@ -323,9 +324,9 @@ def global_pedal_polling_loop():
                 # Add latest data non-blocking
                 global_pedal_data_queue.put_nowait(raw_values)
                 
-                # Log every 1000 iterations (about once per second at 1000Hz)
+                # Log every ~1s only at debug level to avoid periodic I/O stalls
                 if loop_count % 1000 == 0:
-                    logger.info(f"🎮 Pedal thread: Put data in queue: {raw_values}")
+                    logger.debug(f"🎮 Pedal thread: Put data in queue: {raw_values}")
                     
             except:
                 pass  # Don't let UI queue issues slow down pedal processing
@@ -742,7 +743,7 @@ def cleanup_all_global_systems():
     cleanup_global_iracing_connection()
     logger.info("✅ All global systems cleaned up")
 
-def main():
+def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashScreen"] = None):
     """Launch the modern TrackPro UI with full authentication system and iRacing telemetry."""
     start_time = time.time()
     logger.info("🚀 Starting Modern TrackPro UI with Authentication and iRacing Telemetry...")
@@ -751,9 +752,10 @@ def main():
     if not _acquire_single_instance_lock():
         logger.info("⚠️ TrackPro is already running. Exiting this instance.")
         return 0
-    
-    # Create QApplication
-    app = QApplication(sys.argv)
+
+    # Create QApplication only if not provided
+    if app is None:
+        app = QApplication(sys.argv)
     app.setApplicationName("TrackPro by Sim Coaches")
     app.setApplicationVersion("1.5.6-modern")
     app.setOrganizationName("Sim Coaches")
@@ -797,27 +799,31 @@ def main():
         import traceback
         logger.warning(f"⚠️ Traceback: {traceback.format_exc()}")
     
-    # PERFORMANCE: Show startup progress to user
+    # PERFORMANCE: Use existing splash if provided, otherwise create
     from PyQt6.QtWidgets import QSplashScreen, QLabel
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QPixmap, QPainter, QFont
-    
-    # Create a simple splash screen
-    splash_pixmap = QPixmap(400, 200)
-    splash_pixmap.fill(Qt.GlobalColor.darkGray)
-    
-    # Draw TrackPro logo/text on splash screen
-    painter = QPainter(splash_pixmap)
-    painter.setPen(Qt.GlobalColor.white)
-    painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-    painter.drawText(splash_pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "TrackPro\nStarting...")
-    painter.end()
-    
-    splash = QSplashScreen(splash_pixmap)
-    splash.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.SplashScreen)
-    splash.show()
-    splash.showMessage("Initializing hardware systems...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
-    app.processEvents()
+
+    if existing_splash is not None:
+        splash = existing_splash
+        try:
+            splash.showMessage("Initializing hardware systems...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+            app.processEvents()
+        except Exception:
+            pass
+    else:
+        splash_pixmap = QPixmap(400, 200)
+        splash_pixmap.fill(Qt.GlobalColor.darkGray)
+        painter = QPainter(splash_pixmap)
+        painter.setPen(Qt.GlobalColor.white)
+        painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        painter.drawText(splash_pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "TrackPro\nStarting...")
+        painter.end()
+        splash = QSplashScreen(splash_pixmap)
+        splash.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.SplashScreen)
+        splash.show()
+        splash.showMessage("Initializing hardware systems...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
+        app.processEvents()
     
     # Register cleanup function to run when app shuts down
     app.aboutToQuit.connect(cleanup_all_global_systems)
@@ -894,6 +900,7 @@ def main():
             pass
 
         # Close splash quickly; window is shown by app.run()
+        from PyQt6.QtCore import QTimer
         QTimer.singleShot(300, splash.close)
 
         total_startup_time = time.time() - start_time
@@ -941,4 +948,20 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exit_code = 0
+    try:
+        exit_code = main()
+    except Exception as _e:
+        import traceback
+        print("\n\n==== TrackPro crashed during startup ====")
+        traceback.print_exc()
+        print("========================================\n")
+        exit_code = 1
+
+    # If running as a frozen executable (built) and an error occurred, keep console open
+    if getattr(sys, 'frozen', False) and exit_code != 0:
+        try:
+            input("Press Enter to exit...")
+        except Exception:
+            pass
+    sys.exit(exit_code)
