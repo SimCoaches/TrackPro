@@ -53,6 +53,10 @@ DEFAULT_CONFIG = {
         'key': '',  # Now loaded from environment variables
         'debug_mode': False  # Set to True for additional diagnostic logging
     },
+    'performance': {
+        'cpu_affinity_enabled': False,  # Opt-in: pin process to subset of CPU cores
+        'prefer_software_opengl': False  # Persisted fallback if hardware GL fails
+    },
     'ui': {
         'minimize_to_tray': False,  # Whether to minimize to system tray instead of closing
         'start_with_windows': False,  # Whether to start TrackPro with Windows
@@ -216,6 +220,21 @@ class Config:
             self.save()
         except Exception as e:
             logger.error(f"Error setting config value: {e}")
+
+    # Performance settings
+    @property
+    def cpu_affinity_enabled(self) -> bool:
+        return bool(os.getenv('TRACKPRO_CPU_AFFINITY', '').lower() == 'true' or self.get('performance.cpu_affinity_enabled', False))
+
+    def set_cpu_affinity_enabled(self, enabled: bool):
+        self.set('performance.cpu_affinity_enabled', bool(enabled))
+
+    @property
+    def prefer_software_opengl(self) -> bool:
+        return self.get('performance.prefer_software_opengl', False)
+
+    def set_prefer_software_opengl(self, enabled: bool):
+        self.set('performance.prefer_software_opengl', bool(enabled))
     
     @property
     def supabase_url(self) -> str:

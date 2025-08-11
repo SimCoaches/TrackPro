@@ -1005,11 +1005,9 @@ class OnlineUsersSidebar(QWidget):
                 # Immediately load all other users as well
                 QTimer.singleShot(100, self.load_users_from_database)
             else:
-                # TEMPORARILY DISABLE AUTH CHECK TIMER TO PREVENT CRASHES
-                # User not authenticated yet - set up timer to check again
-                logger.info("🔍 User not authenticated yet - will check again later")
-                # QTimer.singleShot(2000, self.check_authentication_and_load_user)
-                logger.warning("⚠️ TEMPORARILY SKIPPING AUTH CHECK TIMER TO PREVENT CRASHES")
+                # User not authenticated yet - schedule a re-check soon
+                logger.info("🔍 User not authenticated yet - scheduling auth re-check")
+                QTimer.singleShot(2000, self.check_authentication_and_load_user)
         except Exception as e:
             logger.error(f"Error loading current user instantly: {e}")
     
@@ -1771,10 +1769,10 @@ class OnlineUsersSidebar(QWidget):
         try:
             logger.info("🔄 Loading users from database...")
 
-            # Fetch all known users
+            # Fetch all known users (increase limit to capture more members)
             from trackpro.social.user_manager import EnhancedUserManager
             user_manager = EnhancedUserManager()
-            users = user_manager.get_all_users() or []
+            users = user_manager.get_all_users(limit=500) or []
             logger.info(f"✅ Retrieved {len(users)} users from database")
 
             # Fallback for anonymous users: use public online view if main list is empty
@@ -1813,11 +1811,15 @@ class OnlineUsersSidebar(QWidget):
                 uid = u.get('user_id') or u.get('id')
                 if not uid:
                     continue
+                # Build sensible display values even when some fields are missing
+                uname = (u.get('username') or '').strip()
+                dname = (u.get('display_name') or '').strip()
+                display_name = dname or uname or 'Member'
                 is_online = uid in online_user_ids
                 self.all_users.append({
                     'user_id': uid,
-                    'username': u.get('username') or u.get('email'),
-                    'display_name': u.get('display_name') or u.get('username') or u.get('email', 'User'),
+                    'username': uname,
+                    'display_name': display_name,
                     'avatar_url': u.get('avatar_url'),
                     'is_friend': uid in friends_ids,
                     'is_online': is_online,

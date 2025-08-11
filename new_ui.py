@@ -59,25 +59,34 @@ import time
 from pathlib import Path
 from typing import Optional
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QFontDatabase, QFont
 from PyQt6.QtCore import Qt
 import msvcrt
 import tempfile
 
 # CRITICAL: Set Qt attributes BEFORE any QApplication instance can be created AND before importing QtWebEngineWidgets
-# Additional crash prevention attributes
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
-# Disable hardware acceleration if causing crashes
-# QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
+# Only set attributes if no QApplication exists yet (to avoid runtime warnings when imported after app creation)
+if QApplication.instance() is None:
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    # Respect persisted GL preference; fallback to software if enabled
+    try:
+        from trackpro.config import config as global_config
+        if getattr(global_config, 'prefer_software_opengl', False):
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
+        else:
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
+    except Exception:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Set up basic logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Centralized logging: env-driven + rotating file
+try:
+    from trackpro.logging_config import setup_logging
+    setup_logging()
+except Exception:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Global iRacing API instance for sharing across all screens/components
@@ -98,6 +107,93 @@ global_handbrake_stop_event = None
 global_handbrake_data_queue = None
 
 _single_instance_lock_handle = None
+
+def _build_brand_splash_pixmap(width: int = 600, height: int = 320):
+    """Create a branded splash pixmap with gradient background and logo."""
+    try:
+        from PyQt6.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient
+        from PyQt6.QtCore import QRect, QPointF
+        pix = QPixmap(width, height)
+        pix.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Background gradient
+        grad = QLinearGradient(QPointF(0, 0), QPointF(0, height))
+        grad.setColorAt(0.0, QColor(16, 16, 22))
+        grad.setColorAt(1.0, QColor(44, 25, 69))
+        painter.fillRect(QRect(0, 0, width, height), grad)
+
+        # Try to draw logo centered
+        logo_path_candidates = []
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            logo_path_candidates.append(os.path.join(base_dir, "trackpro", "resources", "icons", "trackpro_tray.png"))
+            logo_path_candidates.append(os.path.join(base_dir, "trackpro", "resources", "images", "login_image.png"))
+        except Exception:
+            pass
+
+        logo_drawn = False
+        for candidate in logo_path_candidates:
+            if os.path.exists(candidate):
+                logo = QPixmap(candidate)
+                if not logo.isNull():
+                    # Scale logo to fit nicely
+                    target_w = min(260, int(width * 0.42))
+                    target_h = int(target_w * (logo.height() / max(1, logo.width())))
+                    logo_scaled = logo.scaled(target_w, target_h)
+                    x = (width - logo_scaled.width()) // 2
+                    y = int(height * 0.18)
+                    painter.drawPixmap(x, y, logo_scaled)
+                    logo_drawn = True
+                    break
+
+        # Title text
+        painter.setPen(QColor(235, 235, 245))
+        painter.setFont(QFont("Arial", 22, QFont.Weight.Bold))
+        title = "TrackPro"
+        painter.drawText(QRect(0, int(height * 0.58), width, 40),
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, title)
+
+        # Subtitle
+        painter.setPen(QColor(180, 180, 200))
+        painter.setFont(QFont("Arial", 10))
+        subtitle = "by Sim Coaches"
+        painter.drawText(QRect(0, int(height * 0.58) + 28, width, 24),
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, subtitle)
+
+        # Bottom message bar placeholder (message text will be set via showMessage)
+        painter.setPen(QColor(255, 255, 255, 140))
+        painter.setFont(QFont("Arial", 11))
+        painter.drawText(QRect(12, height - 30, width - 24, 20),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Starting...")
+
+        painter.end()
+        return pix
+    except Exception:
+        # Fallback to simple dark pixmap if anything goes wrong
+        from PyQt6.QtGui import QPixmap, QPainter, QFont
+        pix = QPixmap(400, 200)
+        pix.fill(Qt.GlobalColor.darkGray)
+        p = QPainter(pix)
+        p.setPen(Qt.GlobalColor.white)
+        p.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "TrackPro\nStarting...")
+        p.end()
+        return pix
+
+def _show_instant_splash(app: QApplication):
+    """Show a fast splash immediately, reusing it later in main()."""
+    from PyQt6.QtWidgets import QSplashScreen
+    from PyQt6.QtCore import Qt
+    pix = _build_brand_splash_pixmap()
+    splash = QSplashScreen(pix)
+    splash.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.SplashScreen)
+    splash.show()
+    splash.showMessage("Loading...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, Qt.GlobalColor.white)
+    app.processEvents()
+    return splash
 
 def _acquire_single_instance_lock() -> bool:
     """Prevent multiple app instances by locking a file for the process lifetime."""
@@ -767,17 +863,57 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
         logger.info("⚠️ TrackPro is already running. Exiting this instance.")
         return 0
 
-    # Create QApplication only if not provided
+    # Create QApplication only if not provided; auto OpenGL fallback on failure
+    created_app = False
     if app is None:
-        app = QApplication(sys.argv)
+        try:
+            app = QApplication(sys.argv)
+            created_app = True
+        except Exception as gl_err:
+            logger.warning(f"OpenGL init failed with desktop GL: {gl_err}. Falling back to software OpenGL.")
+            try:
+                from trackpro.config import config as global_config
+                # Persist fallback and re-run
+                if hasattr(global_config, 'set_prefer_software_opengl'):
+                    global_config.set_prefer_software_opengl(True)
+            except Exception:
+                pass
+            # Set attribute and retry
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
+            app = QApplication(sys.argv)
+            created_app = True
+    # Centralize app identity here to avoid duplicates elsewhere
+    from trackpro import __version__ as TRACKPRO_VERSION
     app.setApplicationName("TrackPro by Sim Coaches")
-    app.setApplicationVersion("1.5.6-modern")
+    app.setApplicationVersion(TRACKPRO_VERSION)
     app.setOrganizationName("Sim Coaches")
     app.setOrganizationDomain("simcoaches.com")
+
+    # Global font: Product Sans (available in repo)
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        font_dir = os.path.join(base_dir, "ui_resources", "fonts", "google-sans-cufonfonts")
+        loaded = []
+        for fname in [
+            "ProductSans-Regular.ttf",
+            "ProductSans-Bold.ttf",
+            "ProductSans-Italic.ttf",
+            "ProductSans-Medium.ttf",
+        ]:
+            fpath = os.path.join(font_dir, fname)
+            if os.path.exists(fpath):
+                loaded_id = QFontDatabase.addApplicationFont(fpath)
+                loaded.append((fname, loaded_id))
+        if loaded:
+            app.setFont(QFont("Product Sans", 11))
+            logger.info(f"✅ Loaded Product Sans fonts: {[n for n,_ in loaded]}")
+        else:
+            logger.warning("⚠️ Product Sans fonts not found; using system default")
+    except Exception as font_err:
+        logger.warning(f"⚠️ Could not load Product Sans fonts: {font_err}")
     
     # Set application icon to prevent Python icon from showing in taskbar
     try:
-        import os
         # Try ICO first (user preference)
         icon_path = os.path.join(os.path.dirname(__file__), "trackpro", "resources", "icons", "trackpro_tray-1.ico")
         logger.info(f"🔍 Looking for application icon at: {icon_path}")
@@ -816,7 +952,7 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
     # PERFORMANCE: Use existing splash if provided, otherwise create
     from PyQt6.QtWidgets import QSplashScreen, QLabel
     from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QPixmap, QPainter, QFont
+    from PyQt6.QtGui import QPixmap, QPainter
 
     if existing_splash is not None:
         splash = existing_splash
@@ -826,13 +962,7 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
         except Exception:
             pass
     else:
-        splash_pixmap = QPixmap(400, 200)
-        splash_pixmap.fill(Qt.GlobalColor.darkGray)
-        painter = QPainter(splash_pixmap)
-        painter.setPen(Qt.GlobalColor.white)
-        painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        painter.drawText(splash_pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "TrackPro\nStarting...")
-        painter.end()
+        splash_pixmap = _build_brand_splash_pixmap()
         splash = QSplashScreen(splash_pixmap)
         splash.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.SplashScreen)
         splash.show()
@@ -855,6 +985,8 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
         from trackpro.modern_main import ModernTrackProApp
         logger.info("🏗️ Creating modern TrackPro application with non-blocking authentication...")
         trackpro_app = ModernTrackProApp(oauth_handler=oauth_handler_instance, start_time=start_time, app=app)
+
+        # Ensure splash stays until UI is ready (handled by readiness + visibility check below)
 
         # Start background initialization without blocking the UI
         splash.showMessage("Starting background initialization...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.GlobalColor.white)
@@ -913,12 +1045,52 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
         except Exception:
             pass
 
-        # Close splash quickly; window is shown by app.run()
+        # Close splash only when the main window becomes visible AND a minimum time has elapsed (prevents flashing)
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(300, splash.close)
+        splash_shown_t0 = time.perf_counter()
+        min_visible_seconds = 0.8
+        _ui_ready_flag = {'ready': False}
+
+        try:
+            if hasattr(trackpro_app, 'window') and hasattr(trackpro_app.window, 'ui_ready'):
+                trackpro_app.window.ui_ready.connect(lambda: _ui_ready_flag.__setitem__('ready', True))
+        except Exception:
+            pass
+
+        def _close_splash_when_ready():
+            try:
+                elapsed = time.perf_counter() - splash_shown_t0
+                if (getattr(trackpro_app, 'window', None) and trackpro_app.window.isVisible() and _ui_ready_flag['ready'] and elapsed >= min_visible_seconds):
+                    splash.close()
+                else:
+                    QTimer.singleShot(500, _close_splash_when_ready)
+            except Exception:
+                QTimer.singleShot(2000, lambda: splash.close())
+        QTimer.singleShot(500, _close_splash_when_ready)
 
         total_startup_time = time.time() - start_time
         logger.info(f"✅ Modern TrackPro UI initial window ready in {total_startup_time:.2f} seconds (background init continues)")
+
+        # Install a simple crash handler to write a single report
+        try:
+            import sys as _sys
+            import traceback as _traceback
+            from pathlib import Path as _Path
+            def _except_hook(exc_type, exc, tb):
+                try:
+                    local_appdata = os.getenv('LOCALAPPDATA') or os.path.join(Path.home(), 'AppData', 'Local')
+                    crash_dir = _Path(local_appdata) / 'TrackPro' / 'crash'
+                    crash_dir.mkdir(parents=True, exist_ok=True)
+                    crash_file = crash_dir / 'last_crash.txt'
+                    with open(crash_file, 'w', encoding='utf-8') as f:
+                        f.write(''.join(_traceback.format_exception(exc_type, exc, tb)))
+                except Exception:
+                    pass
+                # Also log
+                logger.error('Unhandled exception', exc_info=(exc_type, exc, tb))
+            _sys.excepthook = _except_hook
+        except Exception:
+            pass
 
         return trackpro_app.run()
         
@@ -962,20 +1134,23 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
         return 1
 
 if __name__ == "__main__":
-    exit_code = 0
+    # Developer-friendly bootstrap: show splash immediately, then hand off
+    # Critical Qt attributes were set above at import-time.
+    app = QApplication(sys.argv)
+    splash = _show_instant_splash(app)
+    rc = 0
     try:
-        exit_code = main()
-    except Exception as _e:
+        rc = main(app=app, existing_splash=splash)
+    except Exception:
         import traceback
         print("\n\n==== TrackPro crashed during startup ====")
         traceback.print_exc()
         print("========================================\n")
-        exit_code = 1
+        rc = 1
 
-    # If running as a frozen executable (built) and an error occurred, keep console open
-    if getattr(sys, 'frozen', False) and exit_code != 0:
+    if getattr(sys, 'frozen', False) and rc != 0:
         try:
             input("Press Enter to exit...")
         except Exception:
             pass
-    sys.exit(exit_code)
+    sys.exit(rc)

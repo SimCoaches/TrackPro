@@ -188,7 +188,7 @@ class TelemetryCache:
                 future.result(timeout=timeout)
                 return self.get_telemetry(lap_id)
             except Exception as e:
-                logger.warning(f"⚠️ CACHE: Preload wait failed for lap {lap_id[:8]}: {e}")
+                logger.debug(f"CACHE: Preload wait failed for lap {lap_id[:8]}: {e}")
         
         return None
     

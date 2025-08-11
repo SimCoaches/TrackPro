@@ -96,15 +96,15 @@ class ProfileEditDialog(QDialog):
         self.username_input = QLineEdit()
         self.username_input.setMaxLength(50)
         
-        self.display_name_input = QLineEdit()
-        self.display_name_input.setMaxLength(100)
+        # Removed display name input; display_name mirrors username
+        self.display_name_input = None
         
         self.location_input = QLineEdit()
         self.location_input.setMaxLength(100)
         self.location_input.setPlaceholderText("e.g., United States, Europe")
         
         basic_layout.addRow("Username:", self.username_input)
-        basic_layout.addRow("Display Name:", self.display_name_input)
+        # Display name field removed
         basic_layout.addRow("Location:", self.location_input)
         
         # Bio section
@@ -211,7 +211,7 @@ class ProfileEditDialog(QDialog):
         
         # Basic info
         self.username_input.setText(self.user_data.get('username', ''))
-        self.display_name_input.setText(self.user_data.get('display_name', ''))
+        # No display name field to set
         self.location_input.setText(self.user_data.get('location', ''))
         
         # Bio
@@ -302,7 +302,7 @@ class ProfileEditDialog(QDialog):
             # Prepare update data
             update_data = {
                 'username': username,
-                'display_name': self.display_name_input.text().strip(),
+                'display_name': username,
                 'location': self.location_input.text().strip(),
                 'bio': bio,
                 'preferences': {

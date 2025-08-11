@@ -3,7 +3,8 @@ import uuid
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
     QComboBox, QFrame, QScrollArea, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QSplitter, QProgressBar, QSizePolicy
+    QHeaderView, QAbstractItemView, QSplitter, QProgressBar, QSizePolicy,
+    QToolButton, QMenu, QWidgetAction, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread
 from PyQt6.QtGui import QFont, QPainter, QPen, QBrush, QColor, QPixmap, QIcon
@@ -93,7 +94,10 @@ class TelemetryFetchWorker(QObject):
             if not self.is_cancelled:
                 total_time = time.time() - start_time
                 logger.info(f"Telemetry loading completed in {total_time:.1f}s")
-                self.telemetry_loaded.emit(left_data, right_data, left_error, right_error)
+                # Ensure signal payload types match declared signal (dict, dict, str, str)
+                left_payload = left_data or {}
+                right_payload = right_data or {}
+                self.telemetry_loaded.emit(left_payload, right_payload, left_error, right_error)
             else:
                 logger.info("Telemetry loading was cancelled")
         finally:
@@ -172,6 +176,8 @@ class TelemetryControlsWidget(QFrame):
     ref_session_changed = pyqtSignal(int)
     lap_selection_changed = pyqtSignal()
     refresh_requested = pyqtSignal()
+    track_filter_changed = pyqtSignal()
+    car_filter_changed = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -227,6 +233,54 @@ class TelemetryControlsWidget(QFrame):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(8)
         
+        # Filters: moved into a popup to save horizontal space
+        # Still create the combos so external code can populate/use them
+        self.track_filter_combo = QComboBox()
+        self.track_filter_combo.setMinimumWidth(220)
+        self.track_filter_combo.currentIndexChanged.connect(self.track_filter_changed.emit)
+
+        self.car_filter_combo = QComboBox()
+        self.car_filter_combo.setMinimumWidth(200)
+        self.car_filter_combo.currentIndexChanged.connect(self.car_filter_changed.emit)
+
+        # Build popup widget for filters
+        filter_popup = QWidget()
+        grid = QGridLayout(filter_popup)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        grid.addWidget(QLabel("Track:"), 0, 0)
+        grid.addWidget(self.track_filter_combo, 0, 1)
+        grid.addWidget(QLabel("Car:"), 1, 0)
+        grid.addWidget(self.car_filter_combo, 1, 1)
+        # Clear button inside popup
+        clear_btn = QPushButton("Clear Filters")
+        def _clear_filters():
+            try:
+                if self.track_filter_combo.count() > 0:
+                    self.track_filter_combo.setCurrentIndex(0)
+                if self.car_filter_combo.count() > 0:
+                    self.car_filter_combo.setCurrentIndex(0)
+            except Exception:
+                pass
+        clear_btn.clicked.connect(_clear_filters)
+        grid.addWidget(clear_btn, 2, 0, 1, 2)
+
+        # Attach popup to a tool button
+        self.filter_button = QToolButton()
+        self.filter_button.setText("Filters")
+        self.filter_button.setToolTip("Track and car filters")
+        self.filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.filter_button.setStyleSheet("QToolButton { padding: 3px 8px; font-size: 11px; }")
+        filter_menu = QMenu(self.filter_button)
+        filter_action = QWidgetAction(filter_menu)
+        filter_action.setDefaultWidget(filter_popup)
+        filter_menu.addAction(filter_action)
+        self.filter_button.setMenu(filter_menu)
+
+        layout.addWidget(self.filter_button)
+        layout.addWidget(QLabel("|"))  # Separator
+
         # Session selection (Mine)
         session_label = QLabel("My Session:")
         self.session_combo = QComboBox()
@@ -248,26 +302,19 @@ class TelemetryControlsWidget(QFrame):
         vs_label = QLabel("vs")
         vs_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 11px; margin: 0px 4px;")
         
-        # Reference session (Others)
-        ref_session_label = QLabel("Ref Session:")
+        # Reference lap (Top fastest on same track)
+        ref_session_label = QLabel("Reference Lap:")
         self.ref_session_combo = QComboBox()
-        self.ref_session_combo.setMinimumWidth(300)
-        self.ref_session_combo.setMaximumWidth(400)
+        # Give this more room now that filters are tucked away
+        self.ref_session_combo.setMinimumWidth(380)
+        self.ref_session_combo.setMaximumWidth(700)
         self.ref_session_combo.currentIndexChanged.connect(self.ref_session_changed.emit)
-
-        lap_b_label = QLabel("Lap B:")
-        self.right_lap_combo = QComboBox()
-        self.right_lap_combo.setMinimumWidth(120)
-        self.right_lap_combo.setMaximumWidth(150)
-        self.right_lap_combo.currentIndexChanged.connect(self.lap_selection_changed.emit)
         
         layout.addWidget(lap_a_label)
         layout.addWidget(self.left_lap_combo)
         layout.addWidget(vs_label)
         layout.addWidget(ref_session_label)
         layout.addWidget(self.ref_session_combo)
-        layout.addWidget(lap_b_label)
-        layout.addWidget(self.right_lap_combo)
         layout.addWidget(QLabel("|"))  # Separator
         
         # Refresh button
@@ -292,7 +339,8 @@ class TelemetryPage(BasePage):
         self.current_session_id = None  # legacy current session
 
         # Separate state for A (mine) and B (reference)
-        self.my_sessions = []
+        self.all_my_sessions = []
+        self.my_sessions = []  # filtered view
         self.community_sessions = []
         self.my_laps = []
         self.ref_laps = []
@@ -348,6 +396,22 @@ class TelemetryPage(BasePage):
         """)
         self.loading_label.setVisible(False)
         layout.addWidget(self.loading_label)
+
+        # Live debug line (compact, always visible)
+        self.debug_label = QLabel("Debug: --")
+        self.debug_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.debug_label.setStyleSheet(
+            """
+            QLabel {
+                color: #7dd3fc;
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 11px;
+                padding: 2px 4px;
+                background: transparent;
+            }
+            """
+        )
+        layout.addWidget(self.debug_label)
         
         # Create professional telemetry legend
         self.create_telemetry_legend(layout)
@@ -548,6 +612,52 @@ class TelemetryPage(BasePage):
         # Load data synchronously to avoid thread issues
         try:
             from Supabase.database import get_sessions, get_laps
+            from trackpro.database.supabase_client import supabase as main_supabase
+            from trackpro.config import config as tp_config
+
+            # Auth diagnostics
+            try:
+                is_auth = bool(main_supabase.is_authenticated())
+                user_obj = main_supabase.get_user()
+                email = None
+                if user_obj:
+                    email = getattr(getattr(user_obj, 'user', None), 'email', None) or getattr(user_obj, 'email', None)
+                self.debug_label.setText(f"Debug: auth={is_auth} user={email or 'None'}")
+                logger.info(f"[TELEM DEBUG] auth={is_auth}, user_email={email}")
+                # Add environment/connectivity diagnostics to console
+                try:
+                    enabled = tp_config.supabase_enabled
+                    url = tp_config.supabase_url
+                    logger.info(f"[TELEM DEBUG] supabase_enabled={enabled}, url_set={bool(url)}")
+                except Exception:
+                    pass
+                try:
+                    conn_ok = main_supabase.check_connection()
+                    logger.info(f"[TELEM DEBUG] connection_ok={conn_ok}")
+                except Exception as ce:
+                    logger.info(f"[TELEM DEBUG] connection_check_error={ce}")
+                try:
+                    sec = main_supabase.get_session_security_info()
+                    logger.info(f"[TELEM DEBUG] session_security secure={sec.get('secure_session_active')} encrypted={sec.get('encryption_enabled')} exists={sec.get('session_exists')} migration_completed={sec.get('migration_completed')}")
+                except Exception as se:
+                    logger.info(f"[TELEM DEBUG] session_security_error={se}")
+
+                # If we're offline, try enabling Supabase once and recheck
+                try:
+                    offline = getattr(main_supabase, '_offline_mode', False)
+                    logger.info(f"[TELEM DEBUG] offline_mode={offline}")
+                    if offline and bool(url):
+                        logger.info("[TELEM DEBUG] Attempting to enable Supabase client...")
+                        enabled_now = main_supabase.enable()
+                        logger.info(f"[TELEM DEBUG] enable_result={enabled_now}")
+                        # Re-check auth quickly to surface progress in logs
+                        _ = main_supabase.is_authenticated()
+                        _ = main_supabase.check_connection()
+                except Exception as en_e:
+                    logger.info(f"[TELEM DEBUG] enable_error={en_e}")
+            except Exception as auth_e:
+                self.debug_label.setText(f"Debug: auth=error {auth_e}")
+                logger.warning(f"[TELEM DEBUG] Auth check error: {auth_e}")
             
             # Load my sessions
             try:
@@ -556,13 +666,16 @@ class TelemetryPage(BasePage):
                     sessions = sessions_result[0]
                     self._on_sessions_loaded(sessions, "Sessions loaded successfully")
                     logger.info(f"Loaded {len(sessions)} MY sessions from database")
+                    self.debug_label.setText(self.debug_label.text() + f" | my_sessions={len(sessions)}")
                 else:
                     sessions = []
                     self._on_sessions_loaded(sessions, "No sessions found")
+                    self.debug_label.setText(self.debug_label.text() + " | my_sessions=0")
             except Exception as e:
                 logger.error(f"Error loading sessions: {e}")
                 self._on_initial_load_error(f"Error loading sessions: {str(e)}")
                 sessions = []
+                self.debug_label.setText(self.debug_label.text() + f" | my_sessions_error={str(e)[:60]}")
             
             # Load laps for the most recent session if available
             if sessions:
@@ -575,14 +688,17 @@ class TelemetryPage(BasePage):
                             laps = laps_result[0]
                             self._on_my_laps_loaded(recent_session, laps)
                             logger.info(f"Loaded {len(laps)} laps for MY session {session_id}")
+                            self.debug_label.setText(self.debug_label.text() + f" | laps={len(laps)}")
                             
-                            # Start preloading telemetry for initial session
-                            self._preload_session_telemetry(session_id, laps)
+                            # Avoid heavy preloading during startup to keep UI responsive
+                            # Preloading can be re-enabled in a lighter form if needed
                         else:
                             self._on_my_laps_loaded(recent_session, [])
+                            self.debug_label.setText(self.debug_label.text() + " | laps=0")
                 except Exception as e:
                     logger.error(f"Error loading laps: {e}")
                     self._on_my_laps_loaded(recent_session, [])
+                    self.debug_label.setText(self.debug_label.text() + f" | laps_error={str(e)[:60]}")
 
             # Load community sessions for Lap B selection
             try:
@@ -601,15 +717,13 @@ class TelemetryPage(BasePage):
     
     def _on_sessions_loaded(self, sessions, message):
         """Handle MY sessions loaded from database (Lap A)."""
-        self.my_sessions = sessions or []
+        self.all_my_sessions = sessions or []
+        # Populate filter options from all sessions
+        self._populate_filter_options(self.all_my_sessions)
+        # Apply filters to compute visible sessions
+        self._apply_filters_and_update_sessions()
         logger.info(f"My sessions loaded: {len(self.my_sessions)} sessions")
-
-        # Update 'My Session' combo
-        self.controls.session_combo.clear()
-        for session in self.my_sessions:
-            session_text = f"{session.get('track_name', 'Unknown Track')} - {session.get('session_date', 'Unknown Date')}"
-            self.controls.session_combo.addItem(session_text, session.get('id'))
-
+        # Select first session if available
         if self.my_sessions:
             self.controls.session_combo.setCurrentIndex(0)
     
@@ -627,7 +741,7 @@ class TelemetryPage(BasePage):
         self._update_left_lap_combo()
 
     def _on_ref_sessions_loaded(self, sessions):
-        """Handle reference sessions (Lap B). Now replaced by fastest laps listing based on track/car."""
+        """Handle reference sessions (Lap B). Now replaced by fastest laps listing based on track only."""
         # When my sessions are loaded, use the first session's track/car to load fastest laps
         try:
             target_session = self.my_sessions[0] if self.my_sessions else None
@@ -636,7 +750,8 @@ class TelemetryPage(BasePage):
                 return
             track_id = target_session.get('track_id') or (target_session.get('tracks') or {}).get('id')
             car_id = target_session.get('car_id') or (target_session.get('cars') or {}).get('id')
-            if track_id and car_id:
+            if track_id:
+                # Prefer same car if available to improve relevance
                 self._load_fastest_ref_laps_for_track_car(track_id, car_id)
             else:
                 self._on_ref_fastest_laps_loaded([])
@@ -645,10 +760,9 @@ class TelemetryPage(BasePage):
             self._on_ref_fastest_laps_loaded([])
 
     def _on_ref_laps_loaded(self, laps):
-        """Handle reference laps (Lap B)."""
+        """Handle reference laps (Lap B). Not directly used with fastest list approach."""
         self.ref_laps = laps or []
-        logger.info(f"Reference laps loaded: {len(self.ref_laps)} laps")
-        self._update_right_lap_combo()
+        logger.info(f"Reference laps loaded: {len(self.ref_laps)} laps (not directly used)")
     
     def _on_initial_load_error(self, error_message):
         """Handle initial load error."""
@@ -670,17 +784,8 @@ class TelemetryPage(BasePage):
         self.controls.left_lap_combo.setCurrentIndex(0)
 
     def _update_right_lap_combo(self):
-        """Populate Lap B (reference)."""
-        self.controls.right_lap_combo.clear()
-        if not self.ref_laps:
-            return
-        for lap in self.ref_laps:
-            if lap.get('is_valid', True):
-                lap_time = lap.get('lap_time', 0)
-                formatted_time = self._format_lap_time(lap_time) if lap_time else 'No Time'
-                lap_text = f"Lap {lap.get('lap_number', '?')} - {formatted_time}"
-                self.controls.right_lap_combo.addItem(lap_text, lap.get('id'))
-        self.controls.right_lap_combo.setCurrentIndex(0)
+        """Removed: Reference lap is selected directly from the Reference Lap combo."""
+        return
     
     def on_session_changed(self, index):
         """Handle session selection change."""
@@ -694,10 +799,11 @@ class TelemetryPage(BasePage):
         # Load laps for this session
         self._load_my_laps_for_session(self.current_my_session_id)
         
-        # Load fastest reference laps for this session's track/car
+        # Load fastest reference laps for this session's track only
         track_id = session.get('track_id') or (session.get('tracks') or {}).get('id')
-        car_id = session.get('car_id') or (session.get('cars') or {}).get('id')
-        if track_id and car_id:
+        if track_id:
+            # Also pass car_id to ensure comparable laps
+            car_id = session.get('car_id') or (session.get('cars') or {}).get('id')
             self._load_fastest_ref_laps_for_track_car(track_id, car_id)
     
     def _load_laps_for_session(self, session_id):
@@ -718,8 +824,7 @@ class TelemetryPage(BasePage):
                 self.my_laps = laps_result[0]
                 logger.info(f"Found {len(self.my_laps)} MY laps for session {session_id}")
                 
-                # Start preloading telemetry for all laps in background
-                self._preload_session_telemetry(session_id, self.my_laps)
+                # Avoid heavy preloading on session change to keep UI responsive
             else:
                 logger.warning(f"get_laps returned None for MY session {session_id}: {laps_result[1]}")
                 self.my_laps = []
@@ -730,23 +835,15 @@ class TelemetryPage(BasePage):
             self._update_left_lap_combo()
 
     def on_ref_session_changed(self, index):
-        """When fastest lap selection changes, set Lap B to that lap directly."""
-        lap_id = self.controls.ref_session_combo.currentData()
-        if not lap_id:
-            return
-        # Mirror selection to Lap B combo with the same label
-        label = self.controls.ref_session_combo.currentText()
-        self.controls.right_lap_combo.clear()
-        self.controls.right_lap_combo.addItem(label, lap_id)
-        # Trigger compare
+        """When Reference Lap selection changes, trigger comparison with Lap A."""
         self.on_lap_selection_changed()
 
     def _load_ref_laps_for_session(self, session_id):
         """Deprecated: using fastest lap list instead."""
         return
 
-    def _load_fastest_ref_laps_for_track_car(self, track_id: str, car_id: str):
-        """Load top-10 fastest laps globally for track/car and populate Ref Session combo."""
+    def _load_fastest_ref_laps_for_track_car(self, track_id: str, car_id: str | None):
+        """Load top-10 fastest laps globally for a track (optionally filter by car) and populate Ref Session combo."""
         try:
             from trackpro.database.supabase_client import supabase as main_supabase
             my_user_id = None
@@ -773,17 +870,193 @@ class TelemetryPage(BasePage):
 
     def _on_ref_fastest_laps_loaded(self, fastest_laps):
         """Populate Ref Session combo from fastest laps (username + lap time)."""
+        # Filter out laps from users who do not share telemetry and enrich with names/avatars
+        filtered = []
+        try:
+            from trackpro.database.supabase_client import supabase as main_supabase
+            user_ids = sorted({lap.get('user_id') for lap in fastest_laps if lap.get('user_id')})
+            share_map: dict[str, bool] = {}
+            info_map: dict[str, dict] = {}
+            if user_ids and main_supabase and getattr(main_supabase, 'client', None):
+                try:
+                    res = (
+                        main_supabase.client
+                        .table('user_profiles')
+                        .select('user_id, username, display_name, avatar_url, privacy_settings')
+                        .in_('user_id', user_ids)
+                        .execute()
+                    )
+                    for row in (res.data or []):
+                        ps = row.get('privacy_settings') or {}
+                        uid = row.get('user_id')
+                        share_map[uid] = bool(ps.get('share_telemetry', True))
+                        info_map[uid] = {
+                            'username': row.get('username'),
+                            'display_name': row.get('display_name'),
+                            'avatar_url': row.get('avatar_url'),
+                        }
+                except Exception:
+                    # If lookup fails, default to visible and no extra info
+                    share_map = {uid: True for uid in user_ids}
+            # Apply filtering and enrich items
+            for item in fastest_laps:
+                uid = item.get('user_id')
+                if uid is None or share_map.get(uid, True):
+                    info = info_map.get(uid, {})
+                    # Prefer display_name, then username
+                    name = info.get('display_name') or item.get('display_name') or info.get('username') or item.get('username')
+                    if name:
+                        item['username'] = name
+                    # Fill avatar_url if missing
+                    if not item.get('avatar_url') and info.get('avatar_url'):
+                        item['avatar_url'] = info.get('avatar_url')
+                    filtered.append(item)
+        except Exception:
+            # On any error, fall back to unfiltered list
+            filtered = list(fastest_laps or [])
+
         combo = self.controls.ref_session_combo
         combo.clear()
-        for item in fastest_laps:
-            username = item.get('username', 'Unknown')
+        # Determine current context (track/car) for labeling clarity
+        context_track = None
+        context_car = None
+        try:
+            current_session = None
+            if self.my_sessions:
+                # Use currently selected session if possible
+                idx = self.controls.session_combo.currentIndex()
+                if 0 <= idx < len(self.my_sessions):
+                    current_session = self.my_sessions[idx]
+                else:
+                    current_session = self.my_sessions[0]
+            if current_session:
+                context_track = (current_session.get('tracks') or {}).get('name') or current_session.get('track_name')
+                context_car = (current_session.get('cars') or {}).get('name') or current_session.get('car_name')
+        except Exception:
+            pass
+
+        for item in filtered:
+            # Prefer display_name for readability; fallback to username; finally 'Unknown'
+            name = item.get('display_name') or item.get('username') or 'Unknown'
             lap_time = item.get('lap_time') or 0
-            label = f"{username} – {self._format_lap_time(lap_time)}"
+            # Include context track/car when available
+            if context_track or context_car:
+                parts = []
+                if context_track:
+                    parts.append(context_track)
+                if context_car:
+                    parts.append(context_car)
+                label = f"({name}) - {' / '.join(parts)} - {self._format_lap_time(lap_time)}"
+            else:
+                label = f"({name}) - {self._format_lap_time(lap_time)}"
             icon = self._make_avatar_icon(item.get('avatar_url'))
             if icon is not None:
                 combo.addItem(icon, label, item.get('id'))
             else:
                 combo.addItem(label, item.get('id'))
+
+        # Auto-select the fastest (first item) if available and none selected yet
+        try:
+            if combo.count() > 0 and combo.currentIndex() < 0:
+                combo.setCurrentIndex(0)
+                self.on_ref_session_changed(0)
+        except Exception:
+            pass
+
+    # --- Filtering helpers ---
+    def _populate_filter_options(self, sessions: list[dict]):
+        """Populate track and car filter combos from available sessions."""
+        try:
+            # Collect unique tracks and cars
+            track_items = {}
+            car_items = {}
+            for sess in sessions or []:
+                tid = sess.get('track_id') or (sess.get('tracks') or {}).get('id')
+                tname = (sess.get('tracks') or {}).get('name') or sess.get('track_name') or 'Unknown Track'
+                if tid and tname and tid not in track_items:
+                    track_items[tid] = tname
+                cid = sess.get('car_id') or (sess.get('cars') or {}).get('id')
+                cname = (sess.get('cars') or {}).get('name') or sess.get('car_name') or 'Unknown Car'
+                if cid and cname and cid not in car_items:
+                    car_items[cid] = cname
+
+            # Populate controls
+            self.controls.track_filter_combo.blockSignals(True)
+            self.controls.car_filter_combo.blockSignals(True)
+            self.controls.track_filter_combo.clear()
+            self.controls.car_filter_combo.clear()
+            self.controls.track_filter_combo.addItem("All Tracks", None)
+            for tid, tname in sorted(track_items.items(), key=lambda kv: kv[1].lower()):
+                self.controls.track_filter_combo.addItem(tname, tid)
+            self.controls.car_filter_combo.addItem("All Cars", None)
+            for cid, cname in sorted(car_items.items(), key=lambda kv: kv[1].lower()):
+                self.controls.car_filter_combo.addItem(cname, cid)
+            self.controls.track_filter_combo.blockSignals(False)
+            self.controls.car_filter_combo.blockSignals(False)
+
+            # Connect change handlers once
+            try:
+                self.controls.track_filter_combo.currentIndexChanged.disconnect()
+            except Exception:
+                pass
+            self.controls.track_filter_combo.currentIndexChanged.connect(self._apply_filters_and_update_sessions)
+            try:
+                self.controls.car_filter_combo.currentIndexChanged.disconnect()
+            except Exception:
+                pass
+            self.controls.car_filter_combo.currentIndexChanged.connect(self._apply_filters_and_update_sessions)
+        except Exception as e:
+            logger.debug(f"Error populating filter options: {e}")
+
+    def _apply_filters_and_update_sessions(self):
+        """Apply track/car filters to all_my_sessions and update the session combo."""
+        try:
+            selected_track = self.controls.track_filter_combo.currentData() if hasattr(self.controls, 'track_filter_combo') else None
+            selected_car = self.controls.car_filter_combo.currentData() if hasattr(self.controls, 'car_filter_combo') else None
+
+            def matches(sess: dict) -> bool:
+                tid = sess.get('track_id') or (sess.get('tracks') or {}).get('id')
+                cid = sess.get('car_id') or (sess.get('cars') or {}).get('id')
+                if selected_track and tid != selected_track:
+                    return False
+                if selected_car and cid != selected_car:
+                    return False
+                return True
+
+            self.my_sessions = [s for s in (self.all_my_sessions or []) if matches(s)]
+
+            # Update combo
+            self.controls.session_combo.blockSignals(True)
+            self.controls.session_combo.clear()
+            for session in self.my_sessions:
+                tname = (session.get('tracks') or {}).get('name') or session.get('track_name', 'Unknown Track')
+                cname = (session.get('cars') or {}).get('name') or session.get('car_name', 'Unknown Car')
+                date_text = session.get('session_date', 'Unknown Date')
+                session_text = f"{tname} • {cname} - {date_text}"
+                self.controls.session_combo.addItem(session_text, session.get('id'))
+            self.controls.session_combo.blockSignals(False)
+
+            # If no sessions after filtering, clear laps too
+            if not self.my_sessions:
+                self.my_laps = []
+                self._update_left_lap_combo()
+                return
+
+            # Ensure reference laps refresh to match the new visible/current session
+            try:
+                idx = self.controls.session_combo.currentIndex()
+                if idx < 0:
+                    idx = 0
+                if 0 <= idx < len(self.my_sessions):
+                    sess = self.my_sessions[idx]
+                    track_id = sess.get('track_id') or (sess.get('tracks') or {}).get('id')
+                    car_id = sess.get('car_id') or (sess.get('cars') or {}).get('id')
+                    if track_id:
+                        self._load_fastest_ref_laps_for_track_car(track_id, car_id)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.debug(f"Error applying filters: {e}")
 
     def _make_avatar_icon(self, avatar_url: str):
         """Create a small circular QIcon from an avatar URL if available."""
@@ -833,7 +1106,7 @@ class TelemetryPage(BasePage):
     def on_lap_selection_changed(self):
         """Handle lap selection change for comparison."""
         left_lap_id = self.controls.left_lap_combo.currentData()
-        right_lap_id = self.controls.right_lap_combo.currentData()
+        right_lap_id = self.controls.ref_session_combo.currentData()
         
         if left_lap_id or right_lap_id:
             self._compare_laps(left_lap_id, right_lap_id)
@@ -848,17 +1121,10 @@ class TelemetryPage(BasePage):
         for thread_id, thread, worker in self.active_threads:
             if isinstance(worker, TelemetryFetchWorker):
                 worker.cancel()
-                # Disconnect signals to prevent crashes during shutdown
-                try:
-                    worker.disconnect()
-                    thread.disconnect()
-                except Exception:
-                    pass
-                
                 if thread.isRunning():
                     thread.quit()
                     if not thread.wait(2000):  # Wait up to 2 seconds
-                        logger.warning(f"Thread {thread_id} did not stop gracefully")
+                        logger.debug(f"Thread {thread_id} did not stop gracefully")
                         thread.terminate()
                         thread.wait(1000)
                 threads_to_remove.append((thread_id, thread, worker))
@@ -877,6 +1143,13 @@ class TelemetryPage(BasePage):
         # Connect signals with Qt.QueuedConnection to prevent race conditions
         worker.telemetry_loaded.connect(self._on_telemetry_loaded, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(lambda: self._safe_thread_cleanup(thread_id), Qt.ConnectionType.QueuedConnection)
+        # Ensure graceful shutdown and deletion
+        try:
+            worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+            worker.finished.connect(worker.deleteLater, Qt.ConnectionType.QueuedConnection)
+            thread.finished.connect(thread.deleteLater, Qt.ConnectionType.QueuedConnection)
+        except Exception:
+            pass
         thread.started.connect(worker.run, Qt.ConnectionType.QueuedConnection)
         
         # Track thread
@@ -1044,6 +1317,10 @@ class TelemetryPage(BasePage):
         
         error_text = "Error loading telemetry: " + " | ".join(error_parts)
         logger.error(error_text)
+        try:
+            self.debug_label.setText((self.debug_label.text() or "Debug:") + " | " + error_text)
+        except Exception:
+            pass
         
         # Clear the graphs on error
         self._clear_all_graphs()
@@ -1136,13 +1413,6 @@ class TelemetryPage(BasePage):
             tid, thread, worker = thread_to_cleanup
             logger.info(f"🧹 Safe cleanup for thread {thread_id}")
             
-            # First disconnect all signals to prevent any more events
-            try:
-                worker.disconnect()
-                thread.disconnect()
-            except Exception as e:
-                logger.debug(f"Error disconnecting signals during cleanup: {e}")
-            
             # Then quit the thread gracefully
             if thread.isRunning():
                 thread.quit()
@@ -1178,6 +1448,16 @@ class TelemetryPage(BasePage):
         logger.info("📊 Lazy initializing Telemetry page with full Supabase integration...")
         # Don't start data loading here - wait for explicit page activation
     
+    def on_auth_state_changed(self, authenticated: bool | None = None):
+        """React to global auth changes by refreshing sessions/laps when logged in."""
+        try:
+            logger.info(f"🔄 TelemetryPage auth state changed: {authenticated}")
+            # If authenticated, refresh sessions and laps immediately
+            if authenticated is True:
+                self.refresh_session_and_lap_lists()
+        except Exception as e:
+            logger.error(f"Error handling TelemetryPage auth change: {e}")
+
     def on_page_activated(self):
         """Called when page becomes active."""
         super().on_page_activated()
@@ -1197,18 +1477,11 @@ class TelemetryPage(BasePage):
                 if hasattr(worker, 'cancel'):
                     worker.cancel()
                 
-                # Disconnect all signals to prevent race conditions during shutdown
-                try:
-                    worker.disconnect()
-                    thread.disconnect()
-                except Exception as disconnect_error:
-                    logger.debug(f"Error disconnecting signals for {thread_id}: {disconnect_error}")
-                
                 if thread.isRunning():
                     logger.info(f"Stopping thread: {thread_id}")
                     thread.quit()
                     if not thread.wait(2000):  # Wait up to 2 seconds
-                        logger.warning(f"Thread {thread_id} did not stop gracefully, terminating...")
+                        logger.debug(f"Thread {thread_id} did not stop gracefully, terminating...")
                         thread.terminate()
                         thread.wait(1000)  # Wait for termination
                 else:

@@ -111,8 +111,7 @@ class CommunityAccountMixin:
         # Basic Information Section
         basic_section, basic_section_layout = self.create_settings_section("Basic Information", "ℹ️")
         
-        # Display Name
-        basic_section_layout.addWidget(self.create_setting_field("Display Name", "Your public display name", "text", "RacingPro2024"))
+        # Display Name removed; username is used as public name
         
         # Username
         username_layout = QHBoxLayout()

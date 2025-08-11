@@ -569,9 +569,9 @@ class UserProfilePopup(QDialog):
         self.avatar_label.setPixmap(avatar_pixmap)
         self.avatar_label.setStyleSheet("border-radius: 32px;")
         
-        # Set display name
-        display_name = self.user_data.get('display_name') or self.user_data.get('username', 'Unknown User')
-        self.display_name_label.setText(display_name)
+        # Set header name: prefer first_name + last_name, then username (display_name mirrors username)
+        header_name = self._generate_display_name(self.user_data)
+        self.display_name_label.setText(header_name)
         
         # Set status
         status = self.user_data.get('status', 'Offline')
@@ -579,9 +579,13 @@ class UserProfilePopup(QDialog):
         status_text = f"🟢 {status}" if is_online else f"⚫ {status}"
         self.status_label.setText(status_text)
         
-        # Set username
-        username = self.user_data.get('username', 'Unknown')
-        self.username_value.setText(f"@{username}")
+        # Set username row: show @username if present, else fall back to header_name
+        username = self.user_data.get('username')
+        if isinstance(username, str) and username.strip():
+            self.username_value.setText(f"@{username}")
+        else:
+            # Avoid showing '@None' — use the computed header name
+            self.username_value.setText((header_name or 'Unknown').strip())
         
         # Set member since
         member_since = self.format_join_date()

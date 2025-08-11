@@ -76,15 +76,10 @@ class ProfileCompletionDialog(BaseAuthDialog):
         # Form
         form_layout = QFormLayout()
         
-        # Username (required)
+        # Username (required). We no longer collect a separate display name.
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Choose a username")
         form_layout.addRow("Username *", self.username_input)
-        
-        # Display name
-        self.display_name_input = QLineEdit()
-        self.display_name_input.setPlaceholderText("Your display name")
-        form_layout.addRow("Display Name", self.display_name_input)
         
         # Phone for 2FA (optional)
         self.phone_input = QLineEdit()
@@ -100,8 +95,10 @@ class ProfileCompletionDialog(BaseAuthDialog):
         # Buttons
         button_layout = QHBoxLayout()
         
+        # Skipping is not allowed at this time
         skip_button = QPushButton("Skip for Now")
-        skip_button.clicked.connect(self.skip_profile)
+        skip_button.setEnabled(False)
+        skip_button.setToolTip("Skipping profile setup is disabled. Please complete your profile.")
         
         complete_button = QPushButton("Complete Profile")
         complete_button.clicked.connect(self.complete_profile)
@@ -112,8 +109,9 @@ class ProfileCompletionDialog(BaseAuthDialog):
         layout.addLayout(button_layout)
         
     def skip_profile(self):
-        """Create minimal profile and continue."""
-        self.create_profile(minimal=True)
+        """Skipping profile completion is not allowed."""
+        QMessageBox.information(self, "Profile Required", "Please complete your profile to continue.")
+        return
         
     def complete_profile(self):
         """Create full profile with provided information."""
@@ -122,29 +120,38 @@ class ProfileCompletionDialog(BaseAuthDialog):
     def create_profile(self, minimal=False):
         """Create user profile in database."""
         try:
-            if minimal:
-                username = f"racer_{self.user_id[:8]}"
-                display_name = username
-                phone_number = None
-                twilio_verified = False
-                is_2fa_enabled = False
-            else:
-                username = self.username_input.text().strip()
-                if not username:
-                    QMessageBox.warning(self, "Username Required", "Please enter a username.")
+            # Always require explicit completion
+            username = self.username_input.text().strip()
+            # display_name is now always the same as username
+            display_name = username
+            if not username:
+                QMessageBox.warning(self, "Required Fields", "Please enter a username.")
+                return
+            # Validate username format
+            if not re.match(r"^[A-Za-z0-9_.-]{3,30}$", username):
+                QMessageBox.warning(self, "Invalid Username", "Username must be 3-30 characters and can include letters, numbers, '.', '_' or '-'.")
+                return
+            # Check availability
+            try:
+                from trackpro.social.user_manager import EnhancedUserManager
+                manager = EnhancedUserManager()
+                if not manager.is_username_available(username):
+                    QMessageBox.warning(self, "Username Unavailable", f"The username '{username}' is already taken. Please choose another.")
                     return
-                    
-                display_name = self.display_name_input.text().strip() or username
-                phone_number = self.phone_input.text().strip() or None
-                twilio_verified = False  # Would be verified in full implementation
-                is_2fa_enabled = self.enable_2fa_checkbox.isChecked() and phone_number
+            except Exception:
+                # If availability check fails, be safe and block
+                QMessageBox.warning(self, "Error", "Could not verify username availability. Please try again.")
+                return
+            phone_number = self.phone_input.text().strip() or None
+            twilio_verified = False
+            is_2fa_enabled = self.enable_2fa_checkbox.isChecked() and bool(phone_number)
             
-            # Create profile
+            # Create profile (username and display_name must match)
             profile_data = {
                 'user_id': self.user_id,
                 'email': self.user_email,
                 'username': username,
-                'display_name': display_name,
+                'display_name': username,
                 'phone_number': phone_number,
                 'twilio_verified': twilio_verified,
                 'is_2fa_enabled': is_2fa_enabled,
@@ -162,7 +169,8 @@ class ProfileCompletionDialog(BaseAuthDialog):
                 'settings': {}
             }
             
-            result = supabase.table('user_profiles').insert(profile_data).execute()
+            # Upsert to ensure idempotency if a row was already created by triggers
+            result = supabase.table('user_profiles').upsert(profile_data, on_conflict='user_id').execute()
             
             if result.data:
                 logger.info(f"Profile created for user {self.user_id}")

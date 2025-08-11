@@ -145,6 +145,106 @@ class EmailJSClient:
         except requests.exceptions.Timeout:
             logger.error("❌ [EMAILJS DEBUG] EmailJS request timed out")
             return False
+
+    def send_crash_report(self,
+                          subject: str,
+                          description: str,
+                          crash_file_path: Optional[str] = None,
+                          user_email: Optional[str] = None,
+                          user_name: Optional[str] = None,
+                          extra_params: Optional[Dict[str, Any]] = None) -> bool:
+        """Send a crash report via EmailJS. If a private key is configured, attempts to attach the crash file.
+
+        In public (send-form) mode, EmailJS does not support binary attachments, so the crash text is inlined.
+        """
+        try:
+            logger.info("📨 [EMAILJS DEBUG] Starting send_crash_report()")
+            crash_text = None
+            crash_filename = None
+            if crash_file_path:
+                try:
+                    from pathlib import Path
+                    crash_path = Path(crash_file_path)
+                    crash_filename = crash_path.name
+                    crash_text = crash_path.read_text(encoding='utf-8', errors='replace')
+                except Exception as e:
+                    logger.warning(f"Could not read crash file: {e}")
+                    crash_text = None
+
+            # Prepare template params
+            template_params: Dict[str, Any] = {
+                'ticket_subject': subject,
+                'ticket_priority': 'Critical',
+                'ticket_category': 'Crash Report',
+                'ticket_description': description,
+                'user_email': user_email or 'Anonymous User',
+                'user_name': user_name or 'TrackPro User',
+                'timestamp': self._get_timestamp(),
+            }
+            if crash_text:
+                # Inline crash text (truncate to avoid huge emails)
+                max_chars = 150000
+                template_params['crash_report_text'] = crash_text[:max_chars]
+                if len(crash_text) > max_chars:
+                    template_params['crash_report_truncated'] = True
+                    template_params['crash_report_total_length'] = len(crash_text)
+
+            if extra_params:
+                template_params.update(extra_params)
+
+            logger.info(f"📨 [EMAILJS DEBUG] Crash template params prepared")
+
+            if self.private_key:
+                # Strict mode: try sending as JSON with attachment
+                payload: Dict[str, Any] = {
+                    'service_id': self.service_id,
+                    'template_id': self.template_id,
+                    'user_id': self.public_key,
+                    'template_params': template_params,
+                    'accessToken': self.private_key,
+                }
+
+                # Add attachment if available
+                if crash_text is not None and crash_filename:
+                    import base64
+                    crash_b64 = base64.b64encode(crash_text.encode('utf-8', errors='replace')).decode('ascii')
+                    payload['attachments'] = [
+                        {
+                            'name': crash_filename,
+                            'data': crash_b64,
+                        }
+                    ]
+
+                headers = {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'TrackPro/1.0',
+                }
+                response = requests.post(self.api_url, json=payload, headers=headers, timeout=15)
+            else:
+                # Public mode: inline only
+                import urllib.parse
+                form_data = {
+                    'service_id': self.service_id,
+                    'template_id': self.template_id,
+                    'user_id': self.public_key,
+                    **template_params,
+                }
+                headers = {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'Mozilla/5.0',
+                    'Accept': '*/*',
+                }
+                response = requests.post(self.api_url, data=urllib.parse.urlencode(form_data), headers=headers, timeout=15)
+
+            logger.info(f"📨 [EMAILJS DEBUG] Crash report response: {response.status_code}")
+            if response.status_code == 200:
+                logger.info("✅ Crash report sent successfully")
+                return True
+            logger.error(f"❌ EmailJS error: {response.status_code} - {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error sending crash report: {e}")
+            return False
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ [EMAILJS DEBUG] EmailJS request failed: {e}")
             import traceback

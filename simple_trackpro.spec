@@ -478,3 +478,27 @@ exe = EXE(
     uac_admin=False,
     icon='trackpro/resources/icons/trackpro_tray-1.ico',
 )
+
+# Optional windowed variant for end-users (no console window)
+exe_windowed = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name=f'TrackPro_v{TP_VERSION}_windowed',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=enable_upx,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    uac_admin=False,
+    icon='trackpro/resources/icons/trackpro_tray-1.ico',
+)

@@ -100,19 +100,32 @@ class QuestCardWidget(QWidget):
         self.click_sound = QSoundEffect(self)
         
         # Try to load sound files, but don't fail if they don't exist
-        try:
-            sound_file_path = "trackpro/resources/sounds/quest_claim.wav" 
-            self.claim_sound.setSource(QUrl.fromLocalFile(sound_file_path))
-            self.claim_sound.setVolume(0.8)
-        except Exception as e:
-            logger.warning(f"Could not load claim sound: {e}")
-            
-        try:
-            click_sound_path = "trackpro/resources/sounds/quest_click.wav"
-            self.click_sound.setSource(QUrl.fromLocalFile(click_sound_path))
-            self.click_sound.setVolume(0.25)
-        except Exception as e:
-            logger.warning(f"Could not load click sound: {e}")
+        from pathlib import Path
+        def _safe_load_sound(effect: QSoundEffect, candidates: list[str], volume: float) -> None:
+            for c in candidates:
+                try:
+                    if Path(c).exists():
+                        effect.setSource(QUrl.fromLocalFile(c))
+                        effect.setVolume(volume)
+                        return
+                except Exception:
+                    continue
+            # If nothing exists, leave effect without a source to avoid decode spam
+            try:
+                effect.setVolume(0.0)
+            except Exception:
+                pass
+
+        claim_candidates = [
+            "trackpro/resources/sounds/quest_claim.wav",
+            "trackpro/resources/sounds/quest_click.wav",  # fallback to any existing
+        ]
+        click_candidates = [
+            "trackpro/resources/sounds/quest_click.wav",
+            "trackpro/resources/sounds/quest_claim.wav",
+        ]
+        _safe_load_sound(self.claim_sound, claim_candidates, 0.8)
+        _safe_load_sound(self.click_sound, click_candidates, 0.25)
 
         # Set initial stylesheet
         initial_style_parts = self.style_config["normal"]

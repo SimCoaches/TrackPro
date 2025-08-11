@@ -167,11 +167,17 @@ class ThreadPriorityManager:
     @staticmethod
     def set_ui_thread_priority():
         try:
-            thread_handle = ctypes.windll.kernel32.GetCurrentThread()
-            if ctypes.windll.kernel32.SetThreadPriority(thread_handle, 1):
+            # Define prototypes to avoid implicit conversions
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentThread.restype = ctypes.c_void_p
+            kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            kernel32.SetThreadPriority.restype = ctypes.c_int
+
+            thread_handle = kernel32.GetCurrentThread()
+            if kernel32.SetThreadPriority(thread_handle, 1):
                 logger.info("🎨 UI THREAD: Set to ABOVE_NORMAL priority")
             else:
-                error_code = ctypes.windll.kernel32.GetLastError()
+                error_code = kernel32.GetLastError()
                 logger.warning(f"Failed to set UI thread priority. Error code: {error_code}")
         except Exception as e:
             logger.error(f"Could not set UI thread priority: {e}")
@@ -179,11 +185,16 @@ class ThreadPriorityManager:
     @staticmethod
     def set_chart_thread_priority():
         try:
-            thread_handle = ctypes.windll.kernel32.GetCurrentThread()
-            if ctypes.windll.kernel32.SetThreadPriority(thread_handle, 0):
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentThread.restype = ctypes.c_void_p
+            kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            kernel32.SetThreadPriority.restype = ctypes.c_int
+
+            thread_handle = kernel32.GetCurrentThread()
+            if kernel32.SetThreadPriority(thread_handle, 0):
                 logger.info("📊 CHART THREAD: Set to NORMAL priority")
             else:
-                error_code = ctypes.windll.kernel32.GetLastError()
+                error_code = kernel32.GetLastError()
                 logger.warning(f"Failed to set chart thread priority. Error code: {error_code}")
         except Exception as e:
             logger.error(f"Could not set chart thread priority: {e}")
@@ -191,11 +202,16 @@ class ThreadPriorityManager:
     @staticmethod
     def set_background_thread_priority():
         try:
-            thread_handle = ctypes.windll.kernel32.GetCurrentThread()
-            if ctypes.windll.kernel32.SetThreadPriority(thread_handle, -1):
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentThread.restype = ctypes.c_void_p
+            kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            kernel32.SetThreadPriority.restype = ctypes.c_int
+
+            thread_handle = kernel32.GetCurrentThread()
+            if kernel32.SetThreadPriority(thread_handle, -1):
                 logger.info("🔧 BACKGROUND THREAD: Set to BELOW_NORMAL priority")
             else:
-                error_code = ctypes.windll.kernel32.GetLastError()
+                error_code = kernel32.GetLastError()
                 logger.warning(f"Failed to set background thread priority. Error code: {error_code}")
         except Exception as e:
             logger.error(f"Could not set background thread priority: {e}")

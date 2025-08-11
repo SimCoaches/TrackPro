@@ -15,9 +15,8 @@ import logging
 for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:
     logging.getLogger(library).setLevel(logging.WARNING)
 
-# Configure logging once
-if not logging.getLogger().handlers:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Avoid configuring logging at import time to prevent duplicate setup and slow imports
+# The application entrypoint is responsible for calling setup_logging()
 
 # Expose a lightweight entrypoint getter to avoid heavy imports by default
 def get_main_entrypoint():

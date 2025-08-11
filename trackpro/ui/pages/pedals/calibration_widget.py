@@ -31,6 +31,10 @@ class DraggablePlotWidget:
         self.on_point_moved = None
         self.pg = pg  # Store pg reference
         
+        # Endpoint x-anchors (will be synced to min/max deadzones)
+        self.first_x_anchor = 0.0
+        self.last_x_anchor = 100.0
+        
         # Override mouse events
         self.plot_widget.mousePressEvent = self.mousePressEvent
         self.plot_widget.mouseMoveEvent = self.mouseMoveEvent
@@ -47,6 +51,15 @@ class DraggablePlotWidget:
             # logger.warning("Non-monotonic curve detected, resetting to linear")
             self._reset_to_linear()
         
+        # Force endpoints to respect current anchors
+        if self.curve_x:
+            self.curve_x[0] = self.first_x_anchor
+            # First dot output is fixed at 0% and is only moved by deadzone
+            self.curve_y[0] = 0.0
+        if len(self.curve_x) >= 2:
+            self.curve_x[-1] = self.last_x_anchor
+            self.curve_y[-1] = max(0, min(100, self.curve_y[-1]))
+        
         # Clear existing items
         self.plot_widget.clear()
         
@@ -59,6 +72,40 @@ class DraggablePlotWidget:
                                           symbol='o', symbolBrush='#00ff00', symbolSize=12,
                                           pen=self.pg.mkPen('#00ff00', width=2))
         self.plot_widget.addItem(self.scatter)
+
+    def set_endpoints(self, first_x: float, last_x: float):
+        """Anchor the first and last control points to the given x positions."""
+        # Clamp inputs
+        first_x = max(0.0, min(100.0, float(first_x)))
+        last_x = max(0.0, min(100.0, float(last_x)))
+        if last_x < first_x:
+            last_x = first_x
+        self.first_x_anchor = first_x
+        self.last_x_anchor = last_x
+        
+        if not self.curve_x:
+            return
+        
+        # Apply anchors to endpoints
+        self.curve_x[0] = self.first_x_anchor
+        if len(self.curve_x) >= 2:
+            self.curve_x[-1] = self.last_x_anchor
+        
+        # Keep interior points within anchored bounds
+        buffer = 2.0
+        if len(self.curve_x) >= 3:
+            # Second point cannot be left of first + buffer
+            if self.curve_x[1] < self.first_x_anchor + buffer:
+                self.curve_x[1] = min(self.first_x_anchor + buffer, self.last_x_anchor)
+            # Second-to-last cannot be right of last - buffer
+            if self.curve_x[-2] > self.last_x_anchor - buffer:
+                self.curve_x[-2] = max(self.first_x_anchor, self.last_x_anchor - buffer)
+        
+        # Refresh plot
+        if self.curve_line is not None:
+            self.curve_line.setData(self.curve_x, self.curve_y)
+        if self.scatter is not None:
+            self.scatter.setData(self.curve_x, self.curve_y)
     
     def _reset_to_linear(self):
         """Reset the curve to a safe linear response."""
@@ -98,6 +145,11 @@ class DraggablePlotWidget:
             
             # Find nearest point
             nearest_point = self.find_nearest_point(chart_pos.x(), chart_pos.y())
+            
+            # Prevent dragging of the first control point; it is controlled by deadzone only
+            if nearest_point == 0:
+                event.accept()
+                return
             
             if nearest_point >= 0:
                 self.dragging = True
@@ -178,11 +230,11 @@ class DraggablePlotWidget:
             
         # Special constraints for first and last points
         if point_index == 0:
-            # First point must stay at x=0
-            return 0, max(0, min(100, y))
+            # First point must stay at anchored x and y=0%
+            return self.first_x_anchor, 0.0
         elif point_index == len(self.curve_x) - 1:
-            # Last point must stay at x=100
-            return 100, max(0, min(100, y))
+            # Last point must stay at anchored x
+            return self.last_x_anchor, max(0, min(100, y))
         
         # Get the x-coordinates of all other points
         other_x_coords = [self.curve_x[i] for i in range(len(self.curve_x)) if i != point_index]
@@ -192,8 +244,8 @@ class DraggablePlotWidget:
         right_points = [cx for cx in other_x_coords if cx > x]
         
         # Constrain x position to prevent crossing over
-        min_x = max(left_points) if left_points else 0
-        max_x = min(right_points) if right_points else 100
+        min_x = max(left_points) if left_points else self.first_x_anchor
+        max_x = min(right_points) if right_points else self.last_x_anchor
         
         # Apply constraints with a small buffer
         buffer = 2.0  # 2% buffer to prevent overlap
@@ -602,7 +654,10 @@ class PedalCalibrationWidget(QWidget):
                 self.calibration_chart.removeItem(self.max_deadzone_rect)
                 self.max_deadzone_rect = None
             
-            # Get deadzone values from the deadzone widget
+            # Resolve deadzone values (prefer live widget values)
+            min_deadzone = getattr(self, 'min_deadzone', 0)
+            max_deadzone = getattr(self, 'max_deadzone', 0)
+
             deadzone_widget = None
             try:
                 if hasattr(self.parent(), 'layout') and self.parent() is not None:
@@ -627,45 +682,47 @@ class PedalCalibrationWidget(QWidget):
             except Exception as e:
                 logger.debug(f"Error finding deadzone widget: {e}")
                 deadzone_widget = None
-            
+
             if deadzone_widget:
                 try:
                     deadzone_values = deadzone_widget.get_deadzone_values()
-                    min_deadzone = deadzone_values.get('min_deadzone', 0)
-                    max_deadzone = deadzone_values.get('max_deadzone', 0)
+                    min_deadzone = deadzone_values.get('min_deadzone', min_deadzone)
+                    max_deadzone = deadzone_values.get('max_deadzone', max_deadzone)
                 except Exception as e:
                     logger.debug(f"Error getting deadzone values: {e}")
-                    min_deadzone = 0
-                    max_deadzone = 0
-            else:
-                # Use stored values if widget is not available
-                min_deadzone = getattr(self, 'min_deadzone', 0)
-                max_deadzone = getattr(self, 'max_deadzone', 0)
-                
-                # Add min deadzone rectangle
-                if min_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
-                    self.min_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
-                        values=[0, min_deadzone],
-                        orientation='vertical',
-                        brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
-                        pen=self.draggable_plot.pg.mkPen(200, 50, 50)
-                    )
-                    self.calibration_chart.addItem(self.min_deadzone_rect)
-                
-                # Add max deadzone rectangle
-                if max_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
-                    self.max_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
-                        values=[100 - max_deadzone, 100],
-                        orientation='vertical',
-                        brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
-                        pen=self.draggable_plot.pg.mkPen(200, 50, 50)
-                    )
-                    self.calibration_chart.addItem(self.max_deadzone_rect)
-                
-                # Persist for response dot clamping
-                self.min_deadzone = min_deadzone
-                self.max_deadzone = max_deadzone
-                # logger.debug(f"Updated deadzone visualization for {self.pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
+
+            # Draw min deadzone rectangle
+            if min_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
+                self.min_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
+                    values=[0, float(min_deadzone)],
+                    orientation='vertical',
+                    brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
+                    pen=self.draggable_plot.pg.mkPen(200, 50, 50)
+                )
+                self.calibration_chart.addItem(self.min_deadzone_rect)
+
+            # Draw max deadzone rectangle
+            if max_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
+                self.max_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
+                    values=[100.0 - float(max_deadzone), 100.0],
+                    orientation='vertical',
+                    brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
+                    pen=self.draggable_plot.pg.mkPen(200, 50, 50)
+                )
+                self.calibration_chart.addItem(self.max_deadzone_rect)
+
+            # Persist and anchor endpoints
+            self.min_deadzone = int(min_deadzone)
+            self.max_deadzone = int(max_deadzone)
+            try:
+                if hasattr(self, 'draggable_plot') and self.draggable_plot:
+                    lower_anchor = float(min_deadzone)
+                    upper_anchor = 100.0 - float(max_deadzone)
+                    if upper_anchor < lower_anchor:
+                        upper_anchor = lower_anchor
+                    self.draggable_plot.set_endpoints(lower_anchor, upper_anchor)
+            except Exception:
+                pass
                 
         except ImportError:
             pass
@@ -900,23 +957,38 @@ class PedalCalibrationWidget(QWidget):
                 else:
                     normalized_input = 0.0
                 normalized_input = max(0.0, min(100.0, normalized_input))
-                
+
                 lower = float(getattr(self, 'min_deadzone', 0))
                 upper = 100.0 - float(getattr(self, 'max_deadzone', 0))
                 if upper < lower:
                     upper = lower
-                x_in = max(lower, min(upper, normalized_input))
-                
-                # Linear interpolation on the curve to get y at x
-                y_out = x_in
-                for i in range(len(self.curve_x) - 1):
-                    x1, y1 = self.curve_x[i], self.curve_y[i]
-                    x2, y2 = self.curve_x[i + 1], self.curve_y[i + 1]
-                    if x1 <= x_in <= x2:
-                        t = 0.0 if x2 == x1 else (x_in - x1) / (x2 - x1)
-                        y_out = y1 + t * (y2 - y1)
-                        break
-                # Always update the dot to keep motion perfectly responsive
+
+                # Sort points to guarantee correct interpolation
+                points = sorted(zip(self.curve_x, self.curve_y), key=lambda p: p[0])
+                first_x, first_y = points[0]
+                last_x, last_y = points[-1]
+
+                # Clamp x to deadzone bounds for visualization
+                if normalized_input <= lower:
+                    x_in = lower
+                    # If lower is left of first_x, still use first point's y (0% expected)
+                    y_out = first_y
+                elif normalized_input >= upper:
+                    x_in = upper
+                    y_out = last_y
+                else:
+                    x_in = normalized_input
+                    # Interpolate along the orange line
+                    y_out = last_y  # fallback
+                    for i in range(len(points) - 1):
+                        x1, y1 = points[i]
+                        x2, y2 = points[i + 1]
+                        if x1 <= x_in <= x2:
+                            t = 0.0 if x2 == x1 else (x_in - x1) / (x2 - x1)
+                            y_out = y1 + t * (y2 - y1)
+                            break
+
+                # Keep the dot glued to the orange line
                 self.response_dot.setData([x_in], [y_out])
                 self._last_dot_x, self._last_dot_y = x_in, y_out
         except Exception:
@@ -931,19 +1003,18 @@ class PedalCalibrationWidget(QWidget):
         normalized_input = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
         normalized_input = max(0, min(100, normalized_input))
         
-        # Apply deadzones: ignore below min_deadzone; clamp to 100 above (100 - max_deadzone)
+        # Apply deadzones: delay 0% by min_deadzone, and reach 100% early by max_deadzone
         min_dz = float(getattr(self, 'min_deadzone', 0))
         max_dz = float(getattr(self, 'max_deadzone', 0))
         if normalized_input <= min_dz:
             return 0.0
-        if normalized_input > (100.0 - max_dz):
+        if normalized_input >= (100.0 - max_dz):
             normalized_input = 100.0
-        # Rescale between deadzones to preserve 0..100 output span
-        if (min_dz > 0 or max_dz > 0) and normalized_input > min_dz and normalized_input < (100.0 if max_dz == 0 else 100.0):
-            usable = 100.0 - min_dz - max_dz
-            if usable > 0:
-                normalized_input = ((normalized_input - min_dz) / usable) * 100.0
-                normalized_input = max(0.0, min(100.0, normalized_input))
+        # Rescale mid-range (min_dz..(100-max_dz)) to fill 0..100 output span
+        usable = 100.0 - min_dz - max_dz
+        if usable > 0 and min_dz < normalized_input < (100.0 - max_dz):
+            normalized_input = ((normalized_input - min_dz) / usable) * 100.0
+            normalized_input = max(0.0, min(100.0, normalized_input))
         
         # Sort points by x-coordinate for proper interpolation
         points = list(zip(self.curve_x, self.curve_y))

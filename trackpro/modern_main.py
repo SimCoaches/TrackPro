@@ -30,6 +30,8 @@ class ModernTrackProApp:
         self.window = None
         self.app = app or QApplication.instance()
         self.cleanup_completed = False
+        # Track if the user has already completed profile requirements this session
+        self.profile_completion_done = False
         
         # Initialize OAuth callback server attributes early
         self.oauth_callback_server = None
@@ -44,10 +46,8 @@ class ModernTrackProApp:
         self.global_handbrake_data_queue = None
         
         if not self.app:
-            # Set OpenGL context sharing attribute before creating QApplication
-            from PyQt6.QtCore import Qt
-            QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-            self.app = QApplication(sys.argv)
+            # Create QApplication only if none exists; avoid resetting attributes after creation
+            self.app = QApplication.instance() or QApplication(sys.argv)
         
         # Set up URL scheme handling for OAuth redirects (like original app)
         self.setup_url_scheme_handling()
@@ -161,6 +161,12 @@ class ModernTrackProApp:
             # Connect authentication signals
             if hasattr(self.oauth_handler, 'auth_completed'):
                 self.oauth_handler.auth_completed.connect(self.handle_auth_state_change)
+            # Also react to profile completion requirement signals emitted during OAuth
+            if hasattr(self.oauth_handler, 'profile_completion_required'):
+                try:
+                    self.oauth_handler.profile_completion_required.connect(lambda _res: QTimer.singleShot(0, self.ensure_profile_completion))
+                except Exception:
+                    pass
             
             # Ensure OAuth callback server is ready immediately
             self.ensure_oauth_server_ready()
@@ -201,12 +207,63 @@ class ModernTrackProApp:
             from PyQt6.QtCore import QTimer
             if is_authenticated:
                 QTimer.singleShot(2000, lambda: self._deferred_online_status_update(True))
+                # Enforce profile completion shortly after login
+                QTimer.singleShot(300, self.ensure_profile_completion)
             else:
                 QTimer.singleShot(2000, lambda: self._deferred_online_status_update(False))
                 
         except Exception as e:
             logger.error(f"❌ Error handling auth state change: {e}")
             # Don't let auth errors crash the app
+
+    def ensure_profile_completion(self):
+        """Ensure the authenticated user completes required profile fields."""
+        try:
+            # Skip if already satisfied in this session
+            if getattr(self, 'profile_completion_done', False):
+                return
+            from trackpro.database.supabase_client import get_supabase_client
+            client = get_supabase_client()
+            if not client:
+                return
+            session = client.auth.get_session()
+            if not session or not getattr(session, 'user', None):
+                return
+            user_id = session.user.id
+            user_email = getattr(session.user, 'email', '')
+            from trackpro.social.user_manager import EnhancedUserManager
+            mgr = EnhancedUserManager()
+            profile = mgr.get_complete_user_profile(user_id)
+            username = (profile.get('username') if profile else '') or ''
+            display_name = (profile.get('display_name') if profile else '') or ''
+
+            # Only prompt when BOTH identifiers are missing. If either exists, consider complete.
+            requires_completion = not ((username or '').strip() or (display_name or '').strip())
+
+            if requires_completion:
+                # Prompt mandatory profile completion
+                try:
+                    from trackpro.auth.profile_completion_dialog import ProfileCompletionDialog
+                    dlg = ProfileCompletionDialog(user_id, user_email, parent=self.window)
+                    # Mark as done when the dialog reports completion
+                    try:
+                        dlg.profile_completed.connect(lambda _ok: setattr(self, 'profile_completion_done', True))
+                    except Exception:
+                        pass
+                    dlg.exec()
+                    # If user completed, avoid re-prompting in this session
+                    if not self.profile_completion_done:
+                        # Re-check profile once in case it was created without signal
+                        profile_after = mgr.get_complete_user_profile(user_id)
+                        if profile_after and ((profile_after.get('username') or '').strip() or (profile_after.get('display_name') or '').strip()):
+                            self.profile_completion_done = True
+                except Exception as e:
+                    logger.error(f"Error showing profile completion dialog: {e}")
+            else:
+                # Already complete; don't prompt again this session
+                self.profile_completion_done = True
+        except Exception as e:
+            logger.debug(f"ensure_profile_completion skipped: {e}")
     
     def _deferred_online_status_update(self, is_online):
         """Deferred online status update to prevent immediate crashes."""

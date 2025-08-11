@@ -27,8 +27,9 @@ pywin32-ctypes>=0.2.0          # Windows system calls
 # ================================================================================================
 # DATABASE & CLOUD DEPENDENCIES
 # ================================================================================================
-supabase>=0.7.1,<2.0.0         # Cloud database and authentication
+supabase>=2.4.0,<3.0.0         # Cloud database and authentication (v2 for Realtime channels)
 python-dotenv>=0.19.0,<2.0.0   # Environment variable management
+websocket-client>=1.6.0,<2.0.0 # Required for Supabase Realtime channel support in Python
 
 # ================================================================================================
 # SMS 2FA DEPENDENCIES
@@ -81,8 +82,8 @@ pillow>=9.5.0,<11.0.0          # Image processing
 opencv-python>=4.7.0,<5.0.0    # Computer vision
 cryptography>=40.0.0,<42.0.0   # Encryption and security
 pydantic>=1.10.0,<3.0.0        # Data validation
-httpx>=0.24.0,<1.0.0           # Modern HTTP client
-websockets>=11.0.0,<12.0.0     # WebSocket communication
+ httpx>=0.24.0,<1.0.0           # Modern HTTP client
+ websockets>=12.0.0,<14.0.0     # WebSocket communication
 plyer>=2.1.0,<3.0.0            # Cross-platform notifications
 
 # ================================================================================================
@@ -100,8 +101,8 @@ typing-extensions>=4.0.0,<5.0.0 # Type hints for older Python versions
 # ================================================================================================
 # VOICE CHAT & COMMUNITY DEPENDENCIES
 # ================================================================================================
-PyAudio>=0.2.14,<1.0.0         # Audio capture and playback for voice chat
-websockets>=11.0.0,<12.0.0     # WebSocket communication (already listed above)
+ PyAudio>=0.2.14,<1.0.0         # Audio capture and playback for voice chat
+ websockets>=12.0.0,<14.0.0     # WebSocket communication (already listed above)
 numpy>=1.19.0,<2.0.0           # Scientific computing (already listed above)
 scipy>=1.7.0,<2.0.0            # Scientific computing (already listed above)
 

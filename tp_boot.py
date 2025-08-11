@@ -9,7 +9,7 @@ import os
 import time
 from PyQt6.QtWidgets import QApplication, QSplashScreen
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap, QPainter, QFont
+from PyQt6.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient
 
 BOOT_T0 = time.perf_counter()
 
@@ -19,13 +19,29 @@ def log_boot(msg: str) -> None:
 
 
 def show_instant_splash(app: QApplication) -> QSplashScreen:
-    splash_pixmap = QPixmap(400, 200)
-    splash_pixmap.fill(Qt.GlobalColor.darkGray)
+    width, height = 600, 320
+    splash_pixmap = QPixmap(width, height)
+    splash_pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(splash_pixmap)
-    painter.setPen(Qt.GlobalColor.white)
-    painter.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-    painter.drawText(splash_pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "TrackPro\nStarting...")
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    # Gradient background
+    grad = QLinearGradient(0, 0, 0, height)
+    grad.setColorAt(0.0, QColor(16, 16, 22))
+    grad.setColorAt(1.0, QColor(44, 25, 69))
+    painter.fillRect(0, 0, width, height, grad)
+
+    # Title
+    painter.setPen(QColor(235, 235, 245))
+    painter.setFont(QFont("Arial", 22, QFont.Weight.Bold))
+    painter.drawText(0, int(height * 0.60), width, 40, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, "TrackPro")
+
+    # Subtitle
+    painter.setPen(QColor(180, 180, 200))
+    painter.setFont(QFont("Arial", 10))
+    painter.drawText(0, int(height * 0.60) + 28, width, 24, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, "by Sim Coaches")
+
     painter.end()
 
     splash = QSplashScreen(splash_pixmap)
@@ -41,6 +57,8 @@ def main() -> int:
     log_boot("Bootstrap start")
     # Set critical Qt attributes BEFORE QApplication is created
     try:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
         log_boot("Qt attributes set")
@@ -50,7 +68,6 @@ def main() -> int:
     # Minimal app first
     app = QApplication(sys.argv)
     log_boot("QApplication created")
-    app.setApplicationName("TrackPro by Sim Coaches")
     splash = show_instant_splash(app)
 
     # Defer heavy import until after splash is visible

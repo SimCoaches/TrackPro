@@ -3287,6 +3287,48 @@ class CommunityPage(BasePage):
                     pass
             else:
                 logger.info(f"📝 Message received for different channel (current: {self.current_channel}, message: {channel_id})")
+            
+        # Ensure polling fallback is running if realtime isn't active
+        try:
+            cm = self.community_manager
+            if cm and not getattr(cm, 'is_realtime_active', False):
+                self._ensure_message_polling()
+        except Exception:
+            pass
+
+    def _ensure_message_polling(self):
+        try:
+            if hasattr(self, '_message_poll_timer') and self._message_poll_timer:
+                return
+            from PyQt6.QtCore import QTimer
+            self._message_poll_timer = QTimer(self)
+            self._message_poll_timer.setInterval(3000)
+            self._message_poll_timer.timeout.connect(self._poll_for_new_messages)
+            self._message_poll_timer.start()
+            logger.info("🔄 Started polling fallback for community messages (3s interval)")
+        except Exception as e:
+            logger.debug(f"Polling setup failed: {e}")
+
+    def _poll_for_new_messages(self):
+        try:
+            if not self.community_manager or not self.current_channel:
+                return
+            # Fetch a small recent window
+            messages = self.community_manager.get_messages(self.current_channel, limit=10)
+            if not messages:
+                return
+            # Build set of seen message_ids from cache/history
+            seen = set()
+            try:
+                if hasattr(self, 'chat_history') and self.current_channel in self.chat_history:
+                    seen.update(m.get('message_id') for m in self.chat_history[self.current_channel])
+            except Exception:
+                pass
+            new_messages = [m for m in messages if m.get('message_id') and m.get('message_id') not in seen]
+            for m in new_messages:
+                self.on_message_received(m)
+        except Exception as e:
+            logger.debug(f"Polling error: {e}")
     
     def on_user_joined_channel(self, channel_id, user_data):
         """Handle user joining a voice channel."""

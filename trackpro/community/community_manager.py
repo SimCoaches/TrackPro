@@ -42,8 +42,10 @@ class CommunityManager(QObject):
                     super().__init__()
                     self.current_user_id = None
                     self._realtime_channels = []
+                    self.is_realtime_active = False
                     self._typing_channels: dict[str, Any] = {}
                     self._pm_channels: dict[str, Any] = {}
+                    self._polling_timer = None
                     # Caches
                     self._friends_cache: Optional[List[Dict[str, Any]]] = None
                     self._friends_cache_time: float = 0.0
@@ -73,6 +75,65 @@ class CommunityManager(QObject):
         except Exception as e:
             logger.error(f"Failed to setup database connection: {e}")
             self.client = None
+
+    def _start_polling_fallback(self):
+        """Start a lightweight polling loop to emulate realtime when channels are unavailable."""
+        try:
+            # Avoid multiple timers
+            if getattr(self, '_polling_timer', None):
+                return
+            # Lazy import to avoid Qt coupling issues if not in UI thread
+            from PyQt6.QtCore import QTimer
+            self._polling_timer = QTimer(self)
+            self._polling_timer.setInterval(5000)  # 5s
+            self._last_poll_ts = None
+
+            def _poll():
+                try:
+                    if not self.client:
+                        return
+                    # Use a conservative window if last ts missing
+                    since = self._last_poll_ts or (datetime.utcnow().isoformat())
+                    # Poll latest community messages
+                    try:
+                        resp = self.client.table("community_messages").select(
+                            "message_id, channel_id, content, message_type, created_at, sender_id"
+                        ).gt("created_at", since).order("created_at", desc=False).limit(50).execute()
+                        for row in resp.data or []:
+                            # Emit as if realtime insert
+                            try:
+                                self._on_message_inserted({"new": row})
+                            except Exception:
+                                pass
+                        if resp.data:
+                            self._last_poll_ts = (resp.data[-1].get("created_at") or since)
+                    except Exception:
+                        pass
+
+                    # Poll latest private messages for current user
+                    try:
+                        if self.current_user_id:
+                            resp_pm = self.client.table("private_messages").select(
+                                "message_id, conversation_id, content, created_at, sender_id, receiver_id"
+                            ).or_(f"receiver_id.eq.{self.current_user_id},sender_id.eq.{self.current_user_id}") \
+                             .gt("created_at", since).order("created_at", desc=False).limit(50).execute()
+                            for row in resp_pm.data or []:
+                                try:
+                                    self._on_private_message_inserted({"new": row})
+                                except Exception:
+                                    pass
+                            if resp_pm.data:
+                                self._last_poll_ts = (resp_pm.data[-1].get("created_at") or self._last_poll_ts or since)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            self._polling_timer.timeout.connect(_poll)
+            self._polling_timer.start()
+            logger.info("🔁 Started polling fallback for realtime updates")
+        except Exception as e:
+            logger.debug(f"Polling fallback init failed: {e}")
     
     def set_current_user(self, user_id: str):
         """Set the current authenticated user."""
@@ -443,9 +504,15 @@ class CommunityManager(QObject):
             if not self.client:
                 logger.warning("Cannot setup real-time subscriptions: no database connection")
                 return
-            # Guard older/newer supabase clients that may lack realtime
-            if not hasattr(self.client, 'channel'):
-                logger.warning("Supabase client has no 'channel' attribute; skipping realtime subscriptions")
+            # Guard older/newer supabase clients that may expose realtime as client.channel or client.realtime.channel
+            has_channel = hasattr(self.client, 'channel')
+            has_realtime_channel = hasattr(getattr(self.client, 'realtime', None), 'channel')
+            if not has_channel and not has_realtime_channel:
+                logger.info("Supabase client has no realtime channel API; enabling lightweight polling fallback")
+                try:
+                    self._start_polling_fallback()
+                except Exception as e:
+                    logger.debug(f"Failed to start polling fallback: {e}")
                 return
             
             # Clean up any existing channels
@@ -459,9 +526,24 @@ class CommunityManager(QObject):
             except Exception:
                 self._realtime_channels = []
 
+            subscribed_any = False
+            # Helper to get a channel for both API shapes
+            def _get_channel(name: str):
+                try:
+                    if hasattr(self.client, 'channel'):
+                        return self.client.channel(name)
+                    rt = getattr(self.client, 'realtime', None)
+                    if rt and hasattr(rt, 'channel'):
+                        return rt.channel(name)
+                except Exception:
+                    return None
+                return None
+
             # Subscribe to INSERT on community_messages
             try:
-                channel_messages = self.client.channel("realtime:public:community_messages")
+                channel_messages = _get_channel("realtime:public:community_messages")
+                if channel_messages is None:
+                    raise RuntimeError("No realtime channel API available")
                 channel_messages.on(
                     "postgres_changes",
                     {"event": "INSERT", "schema": "public", "table": "community_messages"},
@@ -470,12 +552,15 @@ class CommunityManager(QObject):
                 channel_messages.subscribe()
                 self._realtime_channels.append(channel_messages)
                 logger.info("✅ Subscribed to realtime INSERT on community_messages")
+                subscribed_any = True
             except Exception as e:
                 logger.warning(f"Failed to subscribe to community_messages realtime: {e}")
 
             # Subscribe to INSERT on private_messages for DMs
             try:
-                ch_pm = self.client.channel("realtime:public:private_messages")
+                ch_pm = _get_channel("realtime:public:private_messages")
+                if ch_pm is None:
+                    raise RuntimeError("No realtime channel API available")
                 ch_pm.on(
                     "postgres_changes",
                     {"event": "INSERT", "schema": "public", "table": "private_messages"},
@@ -484,12 +569,15 @@ class CommunityManager(QObject):
                 ch_pm.subscribe()
                 self._realtime_channels.append(ch_pm)
                 logger.info("✅ Subscribed to realtime INSERT on private_messages")
+                subscribed_any = True
             except Exception as e:
                 logger.warning(f"Failed to subscribe to private_messages realtime: {e}")
 
             # Subscribe to INSERT/UPDATE on community_participants for voice presence
             try:
-                channel_participants = self.client.channel("realtime:public:community_participants")
+                channel_participants = _get_channel("realtime:public:community_participants")
+                if channel_participants is None:
+                    raise RuntimeError("No realtime channel API available")
                 channel_participants.on(
                     "postgres_changes",
                     {"event": "INSERT", "schema": "public", "table": "community_participants"},
@@ -503,8 +591,14 @@ class CommunityManager(QObject):
                 channel_participants.subscribe()
                 self._realtime_channels.append(channel_participants)
                 logger.info("✅ Subscribed to realtime INSERT/UPDATE on community_participants")
+                subscribed_any = True
             except Exception as e:
                 logger.warning(f"Failed to subscribe to community_participants realtime: {e}")
+
+            # Mark active if any subscription succeeded
+            self.is_realtime_active = bool(subscribed_any)
+            if not self.is_realtime_active:
+                logger.info("Realtime subscriptions not active; UI may fall back to polling")
             
         except Exception as e:
             logger.error(f"Failed to setup real-time subscriptions: {e}")
@@ -1321,7 +1415,7 @@ class CommunityManager(QObject):
         """Get the current user's friends list."""
         try:
             if not self.client or not self.current_user_id:
-                logger.warning(f"Cannot get friends: no database connection or user not authenticated. Client: {bool(self.client)}, User ID: {self.current_user_id}")
+                logger.debug("Friends fetch skipped: no DB connection or not authenticated")
                 return []
             
             # Use cached value if still fresh

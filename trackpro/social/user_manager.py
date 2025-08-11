@@ -105,6 +105,22 @@ class EnhancedUserManager(DatabaseManager):
             }
             
             profile_update = {k: v for k, v in profile_data.items() if k in profile_fields}
+
+            # Enforce: display_name and username must be identical
+            try:
+                canonical_name = None
+                username_value = (profile_update.get('username') or '').strip()
+                display_value = (profile_update.get('display_name') or '').strip()
+                if username_value:
+                    canonical_name = username_value
+                elif display_value:
+                    canonical_name = display_value
+                if canonical_name is not None:
+                    profile_update['username'] = canonical_name
+                    profile_update['display_name'] = canonical_name
+            except Exception:
+                # Non-fatal; continue with whatever fields are present
+                pass
             details_update = {k: v for k, v in profile_data.items() if k in details_fields}
             
             if profile_update:

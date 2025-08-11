@@ -18,6 +18,7 @@ class ModernMainWindow(QMainWindow):
     auth_state_changed = pyqtSignal(bool)
     calibration_updated = pyqtSignal(str)
     window_state_changed = pyqtSignal(str)
+    ui_ready = pyqtSignal()
     
     def __init__(self, parent=None, oauth_handler=None):
         super().__init__(parent)
@@ -315,7 +316,13 @@ class ModernMainWindow(QMainWindow):
     def init_performance_optimization(self):
         try:
             if CPUCoreManager:
-                CPUCoreManager.set_process_affinity()
+                # Opt-in affinity: read from central config
+                try:
+                    from trackpro.config import config as global_config
+                    if getattr(global_config, 'cpu_affinity_enabled', False):
+                        CPUCoreManager.set_process_affinity()
+                except Exception:
+                    pass
                 recommendations = CPUCoreManager.get_performance_recommendations()
                 for rec in recommendations:
                     logger.info(rec)
@@ -587,7 +594,7 @@ class ModernMainWindow(QMainWindow):
         return sidebar
     
     def create_pages(self):
-        """PERFORMANCE OPTIMIZATION: Pre-load commonly used pages, lazy-load others."""
+        """PERFORMANCE: Pre-load all major pages at startup for smoother navigation."""
         # Create the actual Home page immediately (it's always the first one shown)
         self.pages["home"] = HomePage(self.global_managers)
         self.content_stack.addWidget(self.pages["home"])
@@ -598,10 +605,10 @@ class ModernMainWindow(QMainWindow):
         
         logger.info("✅ Home page integrated into modern UI")
         
-        # LAZY LOADING: Do not pre-load heavy pages on startup. Create on demand.
+        # Define pages and eagerly create them for first-use smoothness
         self._lazy_pages = {
             "community": {"class": None, "created": False},  # Dynamic import
-            "race_coach": {"class": None, "created": False},  # Dynamic import
+            "race_coach": {"class": None, "created": False},  # Dynamic import (Telemetry)
             "pedals": {"class": None, "created": False},      # Dynamic import
             "overlays": {"class": None, "created": False},
             "race_pass": {"class": None, "created": False},
@@ -609,8 +616,16 @@ class ModernMainWindow(QMainWindow):
             "support": {"class": None, "created": False},
             "account": {"class": None, "created": False},
         }
-        
-        logger.info("🚀 PERFORMANCE: Startup minimized. Pages will be created on first use (lazy-loaded)")
+
+        # Defer creation of all other pages until the user opens them.
+        # This avoids heavy startup work (Supabase queries, voice server init, telemetry, etc.).
+        logger.info("🚀 PERFORMANCE: Startup defers page creation; other pages load on first access")
+
+        # Notify that UI is initialized and pages are ready
+        try:
+            self.ui_ready.emit()
+        except Exception:
+            pass
     
     def create_placeholder_page(self, page_name: str):
         from PyQt6.QtWidgets import QLabel
@@ -671,16 +686,28 @@ class ModernMainWindow(QMainWindow):
                 if not is_authenticated:
                     # Show login dialog immediately when user clicks account
                     logger.info("🔐 User clicked account but not authenticated - showing login dialog")
+                    prior_page = getattr(self, 'current_page', None)
                     login_success = self.show_login_dialog()
-                    
-                    # Only proceed to account page if login was successful
+
                     if not login_success:
-                        # Don't switch to account page if login failed/cancelled
                         logger.info("🔐 Login cancelled or failed - staying on current page")
                         return
                     else:
-                        # Update authentication state after successful login
                         self.update_auth_state(True)
+                        try:
+                            if prior_page and prior_page in self.pages:
+                                current_widget = self.pages[prior_page]
+                                if hasattr(current_widget, 'on_auth_state_changed'):
+                                    current_widget.on_auth_state_changed()
+                                if hasattr(current_widget, 'on_page_activated'):
+                                    current_widget.on_page_activated()
+                                if hasattr(self.navigation, 'set_active_page'):
+                                    self.navigation.set_active_page(prior_page)
+                                logger.info(f"🔄 Refreshed current page after login: {prior_page}")
+                                return
+                        except Exception as refresh_error:
+                            logger.warning(f"⚠️ Failed to refresh prior page after login: {refresh_error}")
+                            return
                 else:
                     # User is authenticated, update the auth state UI
                     logger.info("🔐 User is authenticated, proceeding to account page")
@@ -733,6 +760,11 @@ class ModernMainWindow(QMainWindow):
             elif page_name == "race_coach":
                 from ..pages.race_coach.telemetry_page import TelemetryPage
                 page_widget = TelemetryPage(self.global_managers)
+                # Keep telemetry in sync with authentication changes
+                try:
+                    self.auth_state_changed.connect(page_widget.on_auth_state_changed)
+                except Exception:
+                    pass
             elif page_name == "overlays":
                 from ..pages.overlays import OverlaysPage
                 page_widget = OverlaysPage(self.global_managers)
@@ -936,32 +968,7 @@ class ModernMainWindow(QMainWindow):
         last_name_layout.addWidget(self.last_name_input)
         form_layout.addLayout(last_name_layout)
         
-        # Display Name (optional)
-        display_name_layout = QHBoxLayout()
-        display_name_label = QLabel("Display Name:")
-        display_name_label.setFixedWidth(100)
-        display_name_label.setStyleSheet("color: #fefefe; font-weight: bold; font-size: 14px;")
-        self.display_name_input = QLineEdit()
-        self.display_name_input.setPlaceholderText("Optional: How you want to appear to others")
-        self.display_name_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #2c2c2c;
-                border: 2px solid #444;
-                border-radius: 8px;
-                padding: 8px 12px;
-                color: #fefefe;
-                font-size: 14px;
-            }
-            QLineEdit:focus {
-                border-color: #0066cc;
-            }
-            QLineEdit::placeholder {
-                color: #888;
-            }
-        """)
-        display_name_layout.addWidget(display_name_label)
-        display_name_layout.addWidget(self.display_name_input)
-        form_layout.addLayout(display_name_layout)
+        # Removed "Display Name" field. display_name mirrors username globally.
         
         # Bio (optional)
         bio_label = QLabel("Bio:")
@@ -1125,7 +1132,6 @@ class ModernMainWindow(QMainWindow):
             # Get form data
             first_name = self.first_name_input.text().strip()
             last_name = self.last_name_input.text().strip()
-            display_name = self.display_name_input.text().strip()
             bio = self.bio_input.toPlainText().strip()
             
             # Validate required fields
@@ -1214,7 +1220,7 @@ class ModernMainWindow(QMainWindow):
                 self.first_name_input.setText(profile.get('first_name', ''))
                 self.last_name_input.setText(profile.get('last_name', ''))
                 # Note: display_name and bio are not in user_details table
-                self.display_name_input.setText('')  # Clear since not stored in user_details
+                # No display name field to clear
                 self.bio_input.setPlainText('')  # Clear since not stored in user_details
                 
                 logger.info(f"✅ Profile loaded for user: {profile.get('first_name', '')} {profile.get('last_name', '')}")
@@ -1223,7 +1229,7 @@ class ModernMainWindow(QMainWindow):
                 # No profile found - clear form fields
                 self.first_name_input.clear()
                 self.last_name_input.clear()
-                self.display_name_input.clear()
+                # No display name field to clear
                 self.bio_input.clear()
                 
                 logger.info("📝 No existing profile found - ready for user to enter information")

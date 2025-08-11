@@ -466,27 +466,41 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
         return None, "Not logged in. Please log in to view sessions"
 
     try:
-        # DEBUGGING: First, let's see what laps exist in the database at all
-        all_laps_result = main_supabase.client.table("laps").select("session_id, lap_number, lap_time, is_valid, created_at").limit(100).execute()
+        # Determine current user_id up-front when needed for user_only filtering
+        user_id_for_filter = None
+        if user_only:
+            try:
+                user = main_supabase.get_user()
+                if user:
+                    if hasattr(user, 'id'):
+                        user_id_for_filter = user.id
+                    elif hasattr(user, 'user') and hasattr(user.user, 'id'):
+                        user_id_for_filter = user.user.id
+                    elif isinstance(user, dict):
+                        user_id_for_filter = user.get('id') or (user.get('user') or {}).get('id')
+            except Exception:
+                user_id_for_filter = None
+
+        # Build a robust list of sessions-that-have-laps. Previously this sampled 100 laps across ALL users,
+        # which could miss the current user's sessions. Filter by user when user_only=True and raise the limit.
+        try:
+            laps_query = main_supabase.client.table("laps").select("session_id").eq("is_valid", True)
+            if user_only and user_id_for_filter:
+                laps_query = laps_query.eq("user_id", user_id_for_filter)
+            # Use a higher limit to avoid missing sessions due to sampling
+            all_laps_result = laps_query.limit(5000).execute()
+        except Exception:
+            all_laps_result = type('R', (), {'data': []})()
+        
+        # Summarize for diagnostics without spamming logs
         if all_laps_result.data:
-            logger.info(f"DATABASE DEBUG: Found {len(all_laps_result.data)} total laps in database")
-            # Group by session_id to see which sessions have laps
-            session_lap_counts = {}
-            for lap in all_laps_result.data:
-                session_id = lap.get('session_id')
-                if session_id not in session_lap_counts:
-                    session_lap_counts[session_id] = 0
-                session_lap_counts[session_id] += 1
-            
-            logger.info(f"DATABASE DEBUG: Sessions with laps: {session_lap_counts}")
-            for session_id, count in session_lap_counts.items():
-                logger.info(f"DATABASE DEBUG: Session {session_id} has {count} laps")
+            logger.info(f"DATABASE DEBUG: Collected {len(all_laps_result.data)} laps for session-with-laps filtering")
         else:
-            logger.warning("DATABASE DEBUG: No laps found in entire database!")
+            logger.warning("DATABASE DEBUG: No laps found for filtering (check auth/user scope)")
 
         # Use the main client for the query
         if only_with_laps:
-            # Query sessions that have at least one lap using EXISTS
+            # Query sessions that have at least one lap using pre-fetched lap session_ids
             # CRITICAL FIX: Include track length_meters in the query
             query = main_supabase.client.table("sessions").select("*, tracks(name, length_meters), cars(name)")
             
@@ -496,10 +510,8 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
             all_sessions_result = query.limit(limit * 3).order("created_at", desc=True).execute()  # Get more to allow for filtering
             
             if all_sessions_result.data:
-                # Get session IDs that have laps
-                sessions_with_laps = set()
-                if all_laps_result.data:
-                    sessions_with_laps = {lap.get('session_id') for lap in all_laps_result.data if lap.get('session_id')}
+                # Get session IDs that have laps (already user-filtered if user_only)
+                sessions_with_laps = set(lap.get('session_id') for lap in (all_laps_result.data or []) if lap.get('session_id'))
                 
                 # Filter sessions to only include those with laps
                 filtered_sessions = []
@@ -627,10 +639,10 @@ def get_sessions(limit: int = 50, user_only: bool = False, only_with_laps: bool 
         return None, f"Failed to retrieve sessions: {e}"
 # --- End get_sessions function ---
 
-def get_fastest_laps(track_id: str, car_id: str, limit: int = 50, exclude_user_id: Optional[str] = None) -> Tuple[Optional[List[Dict[str, Any]]], str]:
-    """Fetch fastest laps across all users for a given track/car, including username.
+def get_fastest_laps(track_id: str, car_id: Optional[str] = None, limit: int = 50, exclude_user_id: Optional[str] = None) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    """Fetch fastest laps across all users for a given track (optionally filtered by car), including username.
 
-    Returns list of dicts with keys: id (lap_id), lap_time, user_id, username, session_id.
+    Returns list of dicts with keys: id (lap_id), lap_time, user_id, username, avatar_url, session_id.
     """
     try:
         from trackpro.database.supabase_client import supabase as main_supabase
@@ -642,16 +654,16 @@ def get_fastest_laps(track_id: str, car_id: str, limit: int = 50, exclude_user_i
         return None, "Not logged in. Please log in to view community laps"
 
     try:
-        # Find sessions for the requested track/car
-        sessions_result = (
+        # Find sessions for the requested track (and car if provided)
+        sessions_query = (
             main_supabase.client
             .table("sessions")
             .select("id")
             .eq("track_id", track_id)
-            .eq("car_id", car_id)
-            .limit(2000)
-            .execute()
         )
+        if car_id:
+            sessions_query = sessions_query.eq("car_id", car_id)
+        sessions_result = sessions_query.limit(2000).execute()
         if not sessions_result.data:
             return [], "No sessions found for this track/car"
         session_ids = [s["id"] for s in sessions_result.data]
@@ -705,24 +717,31 @@ def get_fastest_laps(track_id: str, car_id: str, limit: int = 50, exclude_user_i
             profiles_result = (
                 main_supabase.client
                 .table("user_profiles")
-                .select("id, avatar_url")
+                .select("id, avatar_url, username, display_name")
                 .in_("id", user_ids)
                 .execute()
             )
             for row in profiles_result.data or []:
                 avatar_map[row.get("id")] = row.get("avatar_url") or ""
+                # Fill missing usernames from profiles if not present in details
+                if row.get("id") not in username_map or not username_map.get(row.get("id")) or username_map.get(row.get("id")) == "Unknown":
+                    profile_username = row.get("username") or row.get("display_name")
+                    if profile_username:
+                        username_map[row.get("id")] = profile_username
         except Exception as _:
             pass
 
         # Build final list with username
         enriched: List[Dict[str, Any]] = []
         for lap in filtered_laps:
+            user_id = lap.get("user_id")
+            username = username_map.get(user_id) or "Unknown"
             enriched.append({
                 "id": lap.get("id"),
                 "lap_time": lap.get("lap_time"),
-                "user_id": lap.get("user_id"),
-                "username": username_map.get(lap.get("user_id"), "Unknown"),
-                "avatar_url": avatar_map.get(lap.get("user_id"), ""),
+                "user_id": user_id,
+                "username": username,
+                "avatar_url": avatar_map.get(user_id, ""),
                 "session_id": lap.get("session_id"),
             })
 

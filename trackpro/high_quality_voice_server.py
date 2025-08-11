@@ -598,10 +598,11 @@ async def main():
 
 if __name__ == "__main__":
     # Set up logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    try:
+        from .logging_config import setup_logging
+        setup_logging()
+    except Exception:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     # Run server
-    asyncio.run(main()) 
+    asyncio.run(main())

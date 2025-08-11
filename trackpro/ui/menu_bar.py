@@ -84,7 +84,57 @@ def create_menu_bar(main_window):
     track_map_overlay_action.triggered.connect(main_window.show_track_map_overlay_settings)
     settings_menu.addAction(track_map_overlay_action)
     
-    # Add Check for Updates option
+    # Performance & Logging Settings
+    perf_settings_action = QAction("Performance & Logging...", main_window)
+    def _open_perf_settings():
+        try:
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QComboBox, QLabel, QPushButton, QHBoxLayout
+            from trackpro.config import config as global_config
+
+            dlg = QDialog(main_window)
+            dlg.setWindowTitle("Performance & Logging")
+            layout = QVBoxLayout(dlg)
+
+            # CPU Affinity
+            cb_affinity = QCheckBox("Enable CPU affinity (pin TrackPro to subset of cores)")
+            cb_affinity.setChecked(global_config.cpu_affinity_enabled)
+            layout.addWidget(cb_affinity)
+
+            # OpenGL Mode
+            layout.addWidget(QLabel("OpenGL mode:"))
+            gl_combo = QComboBox()
+            gl_combo.addItems(["Auto (Hardware)", "Force Software OpenGL"]) 
+            gl_combo.setCurrentIndex(1 if global_config.prefer_software_opengl else 0)
+            layout.addWidget(gl_combo)
+
+            # Logging
+            layout.addWidget(QLabel("Log verbosity (requires restart):"))
+            log_combo = QComboBox()
+            log_combo.addItems(["ERROR", "WARNING", "INFO", "DEBUG"])
+            # No direct getter; default to INFO if unknown
+            log_combo.setCurrentIndex(2)
+            layout.addWidget(log_combo)
+
+            btn_row = QHBoxLayout()
+            btn_save = QPushButton("Save")
+            btn_cancel = QPushButton("Cancel")
+            btn_row.addWidget(btn_save)
+            btn_row.addWidget(btn_cancel)
+            layout.addLayout(btn_row)
+
+            def _save():
+                global_config.set_cpu_affinity_enabled(cb_affinity.isChecked())
+                global_config.set_prefer_software_opengl(gl_combo.currentIndex() == 1)
+                # Persist desired log level to env via config.ini or config.json? For now, instruct to set env
+                dlg.accept()
+
+            btn_save.clicked.connect(_save)
+            btn_cancel.clicked.connect(dlg.reject)
+            dlg.exec()
+        except Exception as _e:
+            pass
+    perf_settings_action.triggered.connect(_open_perf_settings)
+    settings_menu.addAction(perf_settings_action)
     update_action = QAction("Check for Updates", main_window)
     update_action.triggered.connect(main_window.check_for_updates)
     file_menu.addAction(update_action)

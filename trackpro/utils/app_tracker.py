@@ -205,16 +205,41 @@ class AppTracker:
                 "device_info": self.app_info
             }
             
-            # Upsert online status
-            result = self.supabase.table("online_status").upsert(status_data).execute()
+            # Retry a few times on transient disconnects
+            last_exception = None
+            for attempt in range(3):
+                try:
+                    # Ensure we always use the latest global client
+                    refreshed = get_supabase_client()
+                    if refreshed is not None:
+                        self.supabase = refreshed
+                    
+                    result = self.supabase.table("online_status").upsert(status_data).execute()
+                    if result.data:
+                        logger.debug(f"Updated online status: {is_online} for user {self.user_id}")
+                        return True
+                    else:
+                        logger.warning(f"Failed to update online status for user {self.user_id}")
+                        return False
+                except Exception as e:
+                    last_exception = e
+                    message = str(e)
+                    if any(tok in message for tok in [
+                        "Server disconnected",
+                        "Connection aborted",
+                        "Max retries",
+                        "Timeout",
+                        "Broken pipe",
+                        "Connection reset"
+                    ]):
+                        time.sleep(0.5)
+                        continue
+                    else:
+                        raise
+            if last_exception:
+                raise last_exception
+            return False
             
-            if result.data:
-                logger.debug(f"Updated online status: {is_online} for user {self.user_id}")
-                return True
-            else:
-                logger.warning(f"Failed to update online status for user {self.user_id}")
-                return False
-                
         except Exception as e:
             logger.error(f"Error updating online status: {e}")
             return False
@@ -239,15 +264,40 @@ class AppTracker:
                 "session_id": self.session_id
             }
             
-            result = self.supabase.table("app_heartbeats").insert(heartbeat_data).execute()
+            # Retry a few times on transient disconnects
+            last_exception = None
+            for attempt in range(3):
+                try:
+                    refreshed = get_supabase_client()
+                    if refreshed is not None:
+                        self.supabase = refreshed
+                    
+                    result = self.supabase.table("app_heartbeats").insert(heartbeat_data).execute()
+                    if result.data:
+                        logger.debug(f"Sent heartbeat for user {self.user_id}")
+                        return True
+                    else:
+                        logger.error("Failed to send heartbeat")
+                        return False
+                except Exception as e:
+                    last_exception = e
+                    message = str(e)
+                    if any(tok in message for tok in [
+                        "Server disconnected",
+                        "Connection aborted",
+                        "Max retries",
+                        "Timeout",
+                        "Broken pipe",
+                        "Connection reset"
+                    ]):
+                        time.sleep(0.5)
+                        continue
+                    else:
+                        raise
+            if last_exception:
+                raise last_exception
+            return False
             
-            if result.data:
-                logger.debug(f"Sent heartbeat for user {self.user_id}")
-                return True
-            else:
-                logger.error("Failed to send heartbeat")
-                return False
-                
         except Exception as e:
             logger.error(f"Error sending heartbeat: {e}")
             return False

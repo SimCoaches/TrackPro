@@ -3,8 +3,8 @@
 import logging
 from datetime import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QScrollArea, QFrame, QGridLayout, QPushButton, QSizePolicy)
-from PyQt6.QtCore import Qt, QTimer
+                             QScrollArea, QFrame, QGridLayout, QPushButton, QSizePolicy, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor, QPen
 from ...avatar_manager import AvatarManager
@@ -28,11 +28,23 @@ class HomePage(BasePage):
         
     def setup_ui(self):
         """Set up the home page UI."""
+        # Root background styling
+        try:
+            self.setObjectName("home")
+            self.setStyleSheet(
+                """
+                QWidget#home {
+                    background: qlineargradient(y1:0, y2:1, stop:0 #141414, stop:1 #1a1a1a);
+                }
+                """
+            )
+        except Exception:
+            pass
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
         
-        # Main content area with two columns
+        # Main content area with two columns (wrapped in widget for animation)
         main_content = QHBoxLayout()
         main_content.setSpacing(30)
         
@@ -44,7 +56,11 @@ class HomePage(BasePage):
         right_column = self.create_right_column()
         main_content.addWidget(right_column)
         
-        layout.addLayout(main_content)
+        self.main_content_widget = QWidget()
+        self.main_content_widget.setLayout(main_content)
+        # Disable fade-in effect to avoid QPainter re-entrancy with nested effects
+        self._entry_opacity_effect = None
+        layout.addWidget(self.main_content_widget)
         
         # Add stretch to push content to top
         layout.addStretch()
@@ -71,6 +87,19 @@ class HomePage(BasePage):
             pass
         self.status_timer.timeout.connect(self.update_readiness)
         self.status_timer.start(2500)
+
+        # No fade-in; content is visible immediately
+
+    def on_page_activated(self):
+        try:
+            super().on_page_activated()
+        except Exception:
+            pass
+        self.start_entry_animation()
+
+    def start_entry_animation(self):
+        # Animation disabled to eliminate QPainter warnings
+        return
         
     def create_welcome_section(self):
         """Create the left column welcome section."""
@@ -80,7 +109,7 @@ class HomePage(BasePage):
             QFrame {
                 background-color: #2a2a2a;
                 border-radius: 15px;
-                border: 1px solid #3a3a3a;
+                border: none;
             }
         """)
         welcome_frame.setFixedWidth(400)
@@ -100,7 +129,7 @@ class HomePage(BasePage):
         
         # Welcome message
         self.welcome_label = QLabel("Welcome to TrackPro!")
-        self.welcome_label.setFont(QFont("Arial", 22, QFont.Weight.Bold))  # Slightly smaller
+        self.welcome_label.setFont(QFont("Product Sans", 22, QFont.Weight.Bold))
         self.welcome_label.setStyleSheet("color: #ffffff; margin: 10px;")
         self.welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.welcome_label.setWordWrap(True)
@@ -108,10 +137,76 @@ class HomePage(BasePage):
         
         # Date and time
         self.date_label = QLabel()
-        self.date_label.setFont(QFont("Arial", 13))  # Slightly smaller
+        self.date_label.setFont(QFont("Product Sans", 13))
         self.date_label.setStyleSheet("color: #cccccc; margin: 5px;")
         self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(self.date_label)
+
+        # Primary actions
+        cta_row = QHBoxLayout()
+        cta_row.setSpacing(10)
+        primary_btn = QPushButton("Start Coaching")
+        primary_btn.setFixedHeight(40)
+        primary_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                padding: 8px 14px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover { background-color: #229954; }
+            QPushButton:pressed { background-color: #1e8449; }
+            """
+        )
+        primary_btn.clicked.connect(lambda: self.navigate_to_page("race_coach"))
+        secondary_btn = QPushButton("Calibrate Pedals")
+        secondary_btn.setFixedHeight(40)
+        secondary_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #2a82da;
+                color: white;
+                border: none;
+                padding: 8px 14px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover { background-color: #2373c0; }
+            QPushButton:pressed { background-color: #1e66ac; }
+            """
+        )
+        secondary_btn.clicked.connect(lambda: self.navigate_to_page("pedals"))
+        cta_row.addWidget(primary_btn)
+        cta_row.addWidget(secondary_btn)
+        welcome_layout.addLayout(cta_row)
+
+        # Quick-start checklist
+        self.quickstart_container = QWidget()
+        self.quickstart_container.setStyleSheet("background: transparent;")
+        qs_layout = QVBoxLayout(self.quickstart_container)
+        qs_layout.setContentsMargins(0, 10, 0, 0)
+        qs_layout.setSpacing(8)
+        self.qs_items = {
+            'auth': QLabel("1. Sign in"),
+            'calibrate': QLabel("2. Calibrate pedals"),
+            'voice': QLabel("3. Try voice chat"),
+            'community': QLabel("4. Explore community"),
+        }
+        for key, lbl in self.qs_items.items():
+            row = QHBoxLayout()
+            lbl.setStyleSheet("color: #dddddd; background: transparent;")
+            chip = self.create_status_chip("—", "unknown")
+            setattr(self, f"qs_chip_{key}", chip)
+            row.addWidget(lbl)
+            row.addStretch()
+            row.addWidget(chip)
+            qs_layout.addLayout(row)
+        welcome_layout.addWidget(self.quickstart_container)
         
         # Authentication buttons container (initially hidden)
         self.auth_buttons_container = QWidget()
@@ -204,9 +299,8 @@ class HomePage(BasePage):
         frame.setFrameStyle(QFrame.Shape.StyledPanel)
         frame.setStyleSheet("""
             QFrame {
-                background-color: #1f1f1f;
-                border-radius: 12px;
-                border: 1px solid #2e2e2e;
+                background-color: transparent;
+                border: none;
             }
         """)
         grid = QGridLayout(frame)
@@ -214,10 +308,10 @@ class HomePage(BasePage):
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(16)
 
-        # Create cards
-        quick_actions = self.create_quick_actions_card()
-        readiness = self.create_readiness_card()
-        performance = self.create_performance_card()
+        # Create cards (consolidated to avoid duplication)
+        # - Quick actions live in the hero (welcome) section only
+        # - Readiness and UI perf merged into a compact status strip card
+        status_strip = self.create_status_strip_card()
         ai_coach = self.create_ai_coach_card()
         race_pass = self.create_race_pass_card()
         community = self.create_community_card()
@@ -225,18 +319,27 @@ class HomePage(BasePage):
         # Store for reflow
         self._dashboard_frame = frame
         self._dashboard_grid = grid
-        self._dashboard_cards = [quick_actions, readiness, performance, ai_coach, race_pass, community]
+        # Four cards: status strip, AI coach, community, race pass
+        self._dashboard_cards = [status_strip, ai_coach, community, race_pass]
         self._dashboard_columns = self._compute_dashboard_columns()
         self._layout_dashboard_cards()
 
         return frame
 
     def _compute_dashboard_columns(self) -> int:
-        screen = QGuiApplication.primaryScreen()
-        width = screen.size().width() if screen else 1280
-        if width >= 1700:
-            return 3
-        return 2
+        try:
+            container_width = 0
+            if hasattr(self, '_dashboard_frame') and self._dashboard_frame is not None:
+                container_width = max(container_width, int(self._dashboard_frame.width()))
+            container_width = max(container_width, int(self.width()))
+            # Simple breakpoints tuned for our card min widths
+            if container_width >= 1500:
+                return 3
+            if container_width <= 980:
+                return 1
+            return 2
+        except Exception:
+            return 2
 
     def _layout_dashboard_cards(self):
         # Clear existing items from grid
@@ -255,13 +358,12 @@ class HomePage(BasePage):
         card.setFrameStyle(QFrame.Shape.StyledPanel)
         card.setStyleSheet("""
             QFrame {
-                background-color: #2a2a2a;
-                border-radius: 10px;
-                border: 1px solid #3a3a3a;
+                background-color: rgba(42,42,42,0.92);
+                border-radius: 12px;
+                border: none;
             }
             QFrame:hover {
-                background-color: #313131;
-                border: 1px solid #4a4a4a;
+                background-color: rgba(52,52,52,0.96);
             }
             QLabel[role="title"] {
                 color: #ffffff;
@@ -272,15 +374,27 @@ class HomePage(BasePage):
                 border-radius: 10px;
                 padding: 4px 8px;
                 font-size: 11px;
-                font-weight: 600;
+                font-weight: bold;
             }
         """)
+        # Subtle elevation
+        try:
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(24)
+            shadow.setXOffset(0)
+            shadow.setYOffset(12)
+            shadow.setColor(QColor(0, 0, 0, 120))
+            card.setGraphicsEffect(shadow)
+        except Exception:
+            pass
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
         title_label = QLabel(title)
         title_label.setProperty("role", "title")
+        # Remove any frames/outline around headers; rely on typography
+        title_label.setStyleSheet("background: transparent; border: none;")
         layout.addWidget(title_label)
 
         return card
@@ -289,6 +403,18 @@ class HomePage(BasePage):
         card = self.create_card("Quick Actions")
 
         def make_btn(text: str, color: str):
+            def darken(hex_color: str, factor: float = 0.85) -> str:
+                try:
+                    hex_color = hex_color.lstrip('#')
+                    r = int(hex_color[0:2], 16)
+                    g = int(hex_color[2:4], 16)
+                    b = int(hex_color[4:6], 16)
+                    r = max(0, min(255, int(r * factor)))
+                    g = max(0, min(255, int(g * factor)))
+                    b = max(0, min(255, int(b * factor)))
+                    return f"#{r:02x}{g:02x}{b:02x}"
+                except Exception:
+                    return color
             btn = QPushButton(text)
             btn.setMinimumWidth(120)
             btn.setFixedHeight(34)
@@ -302,9 +428,11 @@ class HomePage(BasePage):
                     font-weight: bold;
                     font-size: 13px;
                 }}
-                /* Qt does not support CSS filter; emulate hover with a darker shade */
                 QPushButton:hover {{
-                    background-color: rgba(255, 255, 255, 0.08);
+                    background-color: {darken(color, 0.90)};
+                }}
+                QPushButton:pressed {{
+                    background-color: {darken(color, 0.80)};
                 }}
             """)
             return btn
@@ -319,6 +447,13 @@ class HomePage(BasePage):
         coach_btn.clicked.connect(lambda: self.navigate_to_page("race_coach"))
         voice_btn.clicked.connect(self.on_launch_voice_chat)
         race_pass_btn.clicked.connect(lambda: self.navigate_to_page("race_pass"))
+        try:
+            calibrate_btn.setShortcut("Ctrl+Shift+C")
+            coach_btn.setShortcut("Ctrl+Shift+K")
+            voice_btn.setShortcut("Ctrl+Shift+V")
+            race_pass_btn.setShortcut("Ctrl+Shift+R")
+        except Exception:
+            pass
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -330,12 +465,41 @@ class HomePage(BasePage):
         card.layout().addLayout(grid)
         return card
 
+    def create_status_strip_card(self) -> QFrame:
+        """Compact system status strip with colored chips.
+
+        Replaces the previous separate readiness card and removes duplication
+        with performance by surfacing UI timing as a chip alongside others.
+        """
+        card = self.create_card("System Status")
+        # Make the card visually slimmer
+        try:
+            card.layout().setContentsMargins(16, 12, 16, 12)
+        except Exception:
+            pass
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        # Chips created as attributes so update_readiness can drive them
+        self.pedals_chip = self.create_status_chip("Pedals", "unknown")
+        self.voice_chip = self.create_status_chip("Voice", "unknown")
+        self.auth_chip = self.create_status_chip("Auth", "unknown")
+        self.perf_chip = self.create_status_chip("UI", "unknown")
+
+        for chip in (self.pedals_chip, self.voice_chip, self.auth_chip, self.perf_chip):
+            row.addWidget(chip)
+
+        row.addStretch()
+        card.layout().addLayout(row)
+        return card
+
     def create_status_chip(self, text: str, status: str = "unknown") -> QLabel:
         color_map = {
-            "ok": ("#1e824c", "#2ecc71"),
-            "warn": ("#7f6a00", "#f1c40f"),
-            "error": ("#7e1d1d", "#e74c3c"),
-            "unknown": ("#3a3a3a", "#7f8c8d"),
+            "ok": ("rgba(46, 204, 113, 0.18)", "#2ecc71"),
+            "warn": ("rgba(241, 196, 15, 0.18)", "#f1c40f"),
+            "error": ("rgba(231, 76, 60, 0.18)", "#e74c3c"),
+            "unknown": ("rgba(127, 140, 141, 0.18)", "#7f8c8d"),
         }
         bg, fg = color_map.get(status, color_map["unknown"])
         chip = QLabel(text)
@@ -344,6 +508,10 @@ class HomePage(BasePage):
             QLabel[role="chip"] {{
                 background-color: {bg};
                 color: {fg};
+                border-radius: 12px;
+                padding: 4px 10px;
+                font-weight: bold;
+                font-size: 11px;
             }}
         """)
         return chip
@@ -368,10 +536,20 @@ class HomePage(BasePage):
         return card
 
     def create_performance_card(self) -> QFrame:
-        card = self.create_card("Last Session Snapshot")
+        """Deprecated: last session snapshot removed from dashboard.
+
+        Kept as a no-op to preserve any indirect calls; returns a small
+        transparent container but is no longer added to the dashboard.
+        """
+        card = QFrame()
+        card.setStyleSheet("QFrame { background: transparent; border: none; }")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 0, 0, 0)
+        # Maintain perf_label for status chip updates
         self.perf_label = QLabel("Avg UI: — ms | Dropped: —")
-        self.perf_label.setStyleSheet("color: #cccccc;")
-        card.layout().addWidget(self.perf_label)
+        self.perf_label.setVisible(False)
+        layout.addWidget(self.perf_label)
+        self._last_avg_ui_ms = None
         return card
 
     def create_ai_coach_card(self) -> QFrame:
@@ -452,31 +630,79 @@ class HomePage(BasePage):
                 current_user = get_current_user()
                 if current_user and current_user.is_authenticated:
                     self.set_chip(self.auth_chip, "Auth: OK", "ok")
+                    try:
+                        if hasattr(self, 'qs_chip_auth'):
+                            self.set_chip(self.qs_chip_auth, "Done", "ok")
+                    except Exception:
+                        pass
                 else:
                     self.set_chip(self.auth_chip, "Auth: Sign-in", "warn")
+                    try:
+                        if hasattr(self, 'qs_chip_auth'):
+                            self.set_chip(self.qs_chip_auth, "Sign in", "warn")
+                        # Show auth buttons when not signed in
+                        if hasattr(self, 'auth_buttons_container'):
+                            self.auth_buttons_container.setVisible(True)
+                    except Exception:
+                        pass
             except Exception:
                 self.set_chip(self.auth_chip, "Auth: Unknown", "unknown")
+                try:
+                    if hasattr(self, 'qs_chip_auth'):
+                        self.set_chip(self.qs_chip_auth, "—", "unknown")
+                except Exception:
+                    pass
 
             # Voice server
             try:
                 from trackpro.voice_server_manager import is_voice_server_running
                 is_running = is_voice_server_running()
                 self.set_chip(self.voice_chip, "Voice: On" if is_running else "Voice: Off", "ok" if is_running else "error")
+                try:
+                    if hasattr(self, 'qs_chip_voice'):
+                        self.set_chip(self.qs_chip_voice, "On" if is_running else "Off", "ok" if is_running else "warn")
+                except Exception:
+                    pass
             except Exception:
                 self.set_chip(self.voice_chip, "Voice: Unknown", "unknown")
+                try:
+                    if hasattr(self, 'qs_chip_voice'):
+                        self.set_chip(self.qs_chip_voice, "—", "unknown")
+                except Exception:
+                    pass
 
             # Pedals (actual connection status when available)
             try:
                 hw = getattr(self.global_managers, 'hardware', None)
                 if hw is None:
                     self.set_chip(self.pedals_chip, "Pedals: —", "warn")
+                    try:
+                        if hasattr(self, 'qs_chip_calibrate'):
+                            self.set_chip(self.qs_chip_calibrate, "Calibrate", "warn")
+                    except Exception:
+                        pass
                 else:
                     if getattr(hw, 'pedals_connected', False):
                         self.set_chip(self.pedals_chip, "Pedals: OK", "ok")
+                        try:
+                            if hasattr(self, 'qs_chip_calibrate'):
+                                self.set_chip(self.qs_chip_calibrate, "Done", "ok")
+                        except Exception:
+                            pass
                     else:
                         self.set_chip(self.pedals_chip, "Pedals: Off", "error")
+                        try:
+                            if hasattr(self, 'qs_chip_calibrate'):
+                                self.set_chip(self.qs_chip_calibrate, "Calibrate", "warn")
+                        except Exception:
+                            pass
             except Exception:
                 self.set_chip(self.pedals_chip, "Pedals: Unknown", "unknown")
+                try:
+                    if hasattr(self, 'qs_chip_calibrate'):
+                        self.set_chip(self.qs_chip_calibrate, "—", "unknown")
+                except Exception:
+                    pass
 
             # Performance (avg UI time)
             try:
@@ -489,7 +715,14 @@ class HomePage(BasePage):
                         self.perf_label.setText("Avg UI: — ms | Dropped: —")
                         self.set_chip(self.perf_chip, "UI: —", "unknown")
                     else:
-                        self.perf_label.setText(f"Avg UI: {avg_ms:.1f} ms | Dropped: {dropped}")
+                        arrow = ""
+                        if self._last_avg_ui_ms is not None:
+                            if avg_ms > self._last_avg_ui_ms + 0.2:
+                                arrow = " ▲"
+                            elif avg_ms < self._last_avg_ui_ms - 0.2:
+                                arrow = " ▼"
+                        self.perf_label.setText(f"Avg UI: {avg_ms:.1f} ms{arrow} | Dropped: {dropped}")
+                        self._last_avg_ui_ms = avg_ms
                         status = "ok" if avg_ms <= 8.0 else ("warn" if avg_ms <= 16.0 else "error")
                         self.set_chip(self.perf_chip, f"UI: {avg_ms:.1f}ms", status)
                 else:
@@ -513,6 +746,14 @@ class HomePage(BasePage):
                 unread = sum(int(c.get('unread_count') or 0) for c in (convs or []))
                 friends = CommunityManager().get_friends() or []
                 self.community_label.setText(f"Friends: {len(friends)} | Unread DMs: {unread}")
+                try:
+                    if hasattr(self, 'qs_chip_community'):
+                        if len(friends) > 0 or unread > 0:
+                            self.set_chip(self.qs_chip_community, "Ready", "ok")
+                        else:
+                            self.set_chip(self.qs_chip_community, "Explore", "warn")
+                except Exception:
+                    pass
             except Exception:
                 # Keep prior text if fetch fails
                 pass
@@ -572,9 +813,9 @@ class HomePage(BasePage):
         events_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         events_frame.setStyleSheet("""
             QFrame {
-                background-color: #2a2a2a;
-                border-radius: 15px;
-                border: 1px solid #3a3a3a;
+                background-color: rgba(42,42,42,0.92);
+                border-radius: 12px;
+                border: none;
             }
         """)
         
@@ -601,15 +842,23 @@ class HomePage(BasePage):
         event_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         event_frame.setStyleSheet("""
             QFrame {
-                background-color: #333333;
+                background-color: rgba(51,51,51,0.95);
                 border-radius: 10px;
-                border: 1px solid #444444;
+                border: none;
             }
             QFrame:hover {
-                background-color: #3a3a3a;
-                border: 1px solid #555555;
+                background-color: rgba(58,58,58,0.98);
             }
         """)
+        try:
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(20)
+            shadow.setXOffset(0)
+            shadow.setYOffset(10)
+            shadow.setColor(QColor(0, 0, 0, 100))
+            event_frame.setGraphicsEffect(shadow)
+        except Exception:
+            pass
         
         event_layout = QHBoxLayout(event_frame)
         event_layout.setContentsMargins(15, 15, 15, 15)

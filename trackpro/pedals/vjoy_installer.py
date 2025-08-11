@@ -310,12 +310,12 @@ class VJoyInstaller:
         
         info = self.get_vjoy_info()
         if not info["installed"]:
-            logger.error("vJoy is not installed")
+            logger.warning("vJoy is not installed")
             return False
         
         config_tool = info.get("configuration_tool")
         if not config_tool:
-            logger.error("vJoy configuration tool not found")
+            logger.warning("vJoy configuration tool not found")
             return False
         
         try:

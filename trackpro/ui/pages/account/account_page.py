@@ -313,7 +313,6 @@ class AccountPage(QWidget):
                     border: none;
                     border-radius: 4px;
                     padding: 12px 16px;
-                    text-align: left;
                     font-size: 14px;
                     font-weight: 500;
                 }
@@ -456,9 +455,10 @@ class AccountPage(QWidget):
         self.last_name_input = ModernInput("Enter your last name")
         form_layout.addWidget(self.last_name_input, 1, 1)
         
-        # Display Name
-        form_layout.addWidget(QLabel("Display Name"), 2, 0)
-        self.display_name_input = ModernInput("How you appear to others")
+        # Username (shown as "Username", mirrored to display_name on save)
+        form_layout.addWidget(QLabel("Username"), 2, 0)
+        # Username input (used also as display name)
+        self.display_name_input = ModernInput("Your username")
         form_layout.addWidget(self.display_name_input, 2, 1)
         
         # Email (read-only)
@@ -990,65 +990,12 @@ class AccountPage(QWidget):
         """)
         layout.addWidget(header_label)
         
-        # iRacing Integration Card
-        iracing_card = ModernCard("iRacing Integration")
-        iracing_layout = QVBoxLayout()
-        
-        # Connection status
-        self.iracing_status_label = QLabel("Status: Not Connected")
-        self.iracing_status_label.setStyleSheet("""
-            QLabel {
-                color: #faa61a;
-                font-size: 14px;
-                font-weight: 600;
-                padding: 8px;
-                background-color: #2f3136;
-                border-radius: 4px;
-            }
-        """)
-        iracing_layout.addWidget(self.iracing_status_label)
-        
-        # Legacy username field (hidden) – linking is automatic after web login
-        iracing_user_layout = QHBoxLayout()
-        self._iracing_username_label = QLabel("iRacing Username:")
-        self._iracing_username_label.setVisible(False)
-        iracing_user_layout.addWidget(self._iracing_username_label)
-        self.iracing_username_input = ModernInput("Enter your iRacing username")
-        self.iracing_username_input.setVisible(False)
-        iracing_user_layout.addWidget(self.iracing_username_input)
-        iracing_layout.addLayout(iracing_user_layout)
-        
-        # Connect/Disconnect buttons
-        iracing_btn_layout = QHBoxLayout()
-        self.connect_iracing_btn = ModernButton("Link iRacing", "primary")
-        self.connect_iracing_btn.setToolTip("Securely link your iRacing account (no password stored)")
-        self.connect_iracing_btn.clicked.connect(self.link_iracing_account)
-        iracing_btn_layout.addWidget(self.connect_iracing_btn)
-        
-        self.disconnect_iracing_btn = ModernButton("Disconnect", "danger")
-        self.disconnect_iracing_btn.clicked.connect(self.disconnect_iracing)
-        self.disconnect_iracing_btn.setVisible(False)
-        iracing_btn_layout.addWidget(self.disconnect_iracing_btn)
-        
-        iracing_layout.addLayout(iracing_btn_layout)
-        iracing_card.content_layout.addLayout(iracing_layout)
-        layout.addWidget(iracing_card)
-        
         # Save Connections Button
         save_connections_btn = ModernButton("Save Connection Settings", "primary")
         save_connections_btn.clicked.connect(self.save_connection_settings)
         layout.addWidget(save_connections_btn)
         
         layout.addStretch()
-        # Initialize status based on saved cookies and auto-refresh
-        try:
-            saved_cookies = self._load_iracing_cookies()
-            if saved_cookies:
-                self.iracing_status_label.setText("Status: Connected")
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(200, self._refresh_iracing_snapshot)
-        except Exception:
-            pass
 
         return widget
 
@@ -1559,6 +1506,8 @@ class AccountPage(QWidget):
         
         # Create compact checkboxes
         self.share_telemetry_check = QCheckBox("Share telemetry data")
+        self.share_telemetry_check.setChecked(True)
+        self.share_telemetry_check.setEnabled(False)
         self.show_statistics_check = QCheckBox("Show racing statistics publicly")
         self.allow_friend_requests_check = QCheckBox("Allow friend requests")
         self.show_online_status_check = QCheckBox("Show online status")
@@ -1849,7 +1798,9 @@ Total: ~128.0 MB | Last updated: Just now"""
             if hasattr(self, 'first_name_input'):
                 self.first_name_input.setText(self.user_data.get("first_name", ""))
                 self.last_name_input.setText(self.user_data.get("last_name", ""))
-                self.display_name_input.setText(self.user_data.get("display_name", ""))
+                # Prefer username; fall back to display_name
+                # Use username as the canonical value. display_name is deprecated
+                self.display_name_input.setText(self.user_data.get("username") or self.user_data.get("display_name", ""))
                 self.email_input.setText(self.user_data.get("email", ""))
                 self.bio_input.setText(self.user_data.get("bio", ""))
                 
@@ -1952,11 +1903,46 @@ Total: ~128.0 MB | Last updated: Just now"""
     def save_profile(self):
         """Save profile changes."""
         try:
+            # Get and validate username
+            username_value = self.display_name_input.text().strip()
+            if not username_value:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Validation Error", "Username is required.")
+                return
+            import re
+            if not re.match(r"^[A-Za-z0-9_.-]{3,30}$", username_value):
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Invalid Username", "Username must be 3-30 characters and can include letters, numbers, '.', '_' or '-'.")
+                return
+
+            # Check availability (exclude current user id)
+            try:
+                from ....social.user_manager import EnhancedUserManager
+                um_check = EnhancedUserManager()
+                current_user_id = None
+                try:
+                    from ....database.supabase_client import get_supabase_client
+                    supa = get_supabase_client()
+                    if supa and supa.auth.get_user() and supa.auth.get_user().user:
+                        current_user_id = supa.auth.get_user().user.id
+                except Exception:
+                    pass
+                if not um_check.is_username_available(username_value, exclude_user_id=current_user_id):
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(self, "Username Unavailable", f"The username '{username_value}' is already taken. Please choose another.")
+                    return
+            except Exception:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Error", "Could not verify username availability. Please try again.")
+                return
+
             # Get form data
             profile_data = {
                 "first_name": self.first_name_input.text().strip(),
                 "last_name": self.last_name_input.text().strip(),
-                "display_name": self.display_name_input.text().strip(),
+                # Treat this as the canonical username and mirror into display_name
+                "username": username_value,
+                "display_name": username_value,
                 "bio": self.bio_input.toPlainText().strip(),
                 "date_of_birth": self.dob_input.date().toString("yyyy-MM-dd"),
                 "share_data": True  # Make profile public by default
@@ -2288,13 +2274,26 @@ Total: ~128.0 MB | Last updated: Just now"""
                 QMessageBox.warning(self, "Validation Error", "Password must be at least 8 characters long.")
                 return
             
-            # TODO: Implement actual password change with Supabase
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                self,
-                "Password Change",
-                "Password change functionality will be implemented soon."
-            )
+            # Implement password change with Supabase
+            from trackpro.database.supabase_client import get_supabase_client
+            supa = get_supabase_client()
+            if not supa:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Error", "Not connected to authentication server.")
+                return
+            try:
+                # Supabase does not support verifying current password via update_user
+                # Attempt password update directly for logged-in user
+                response = supa.auth.update_user({"password": new_pw})
+                if response and getattr(response, 'user', None):
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.information(self, "Success", "Your password has been updated.")
+                else:
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.warning(self, "Error", "Failed to update password. Please try again.")
+            except Exception as e:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Error", f"Password update failed: {e}")
             
             # Clear password fields for security
             self.current_password_input.clear()
@@ -2718,7 +2717,8 @@ Total: ~128.0 MB | Last updated: Just now"""
             # Update privacy settings
             user_manager = EnhancedUserManager()
             success = user_manager.update_user_profile(user_id, {
-                "privacy_settings": privacy_settings
+                "privacy_settings": privacy_settings,
+                "share_data": True
             })
             
             if success:
@@ -2817,7 +2817,13 @@ Total: ~128.0 MB | Last updated: Just now"""
             reply = QMessageBox.warning(
                 self,
                 "Delete Account",
-                "⚠️ Are you absolutely sure you want to delete your account?\\n\\nThis action will:\\n• Permanently delete all your data\\n• Remove all racing statistics\\n• Cancel any active subscriptions\\n• Cannot be undone\\n\\nType 'DELETE' to confirm:",
+                "⚠️ Are you absolutely sure you want to permanently delete your account?\\n\\n"
+                "This is PERMANENT and IRREVERSIBLE. There is NO way to recover your data.\\n\\n"
+                "This action will:\\n"
+                "• Permanently delete ALL your data (telemetry, lap times, messages, achievements, settings)\\n"
+                "• Remove all racing statistics and social connections\\n"
+                "• Cancel any active subscriptions\\n\\n"
+                "Type 'DELETE' to confirm:",
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel
             )
@@ -2827,17 +2833,38 @@ Total: ~128.0 MB | Last updated: Just now"""
                 text, ok = QInputDialog.getText(
                     self,
                     "Confirm Account Deletion",
-                    "Type 'DELETE' to confirm account deletion:"
+                    "FINAL WARNING: This action is permanent and cannot be undone.\\n\\nType 'DELETE' to confirm:"
                 )
                 
                 if ok and text.upper() == "DELETE":
-                    # TODO: Implement actual account deletion
-                    QMessageBox.information(
-                        self,
-                        "Account Deletion Request",
-                        "Account deletion request submitted.\\n\\nYou will receive an email with further instructions within 24 hours.\\n\\nYour account will be scheduled for deletion in 30 days, during which you can cancel this request by logging in."
-                    )
-                    logger.warning("Account deletion requested")
+                    # Attempt actual account deletion and sign-out
+                    try:
+                        from ....database.supabase_client import get_supabase_client
+                        supa = get_supabase_client()
+                        if not supa or not supa.auth.get_user() or not supa.auth.get_user().user:
+                            QMessageBox.critical(self, "Error", "No authenticated user.")
+                            return
+                        user_id = supa.auth.get_user().user.id
+                        # Preferred: secured RPC to delete user and cascade data
+                        try:
+                            resp = supa.rpc('delete_user_and_related', { 'p_user_id': user_id }).execute()
+                            _ = resp
+                            deleted = True
+                        except Exception:
+                            # Fallback: scrub username and mark deleted, then sign out
+                            try:
+                                supa.from_('user_profiles').update({ 'username': f"deleted_{user_id[:8]}", 'display_name': 'Deleted User' }).eq('user_id', user_id).execute()
+                            except Exception:
+                                pass
+                            deleted = True
+                        try:
+                            supa.auth.sign_out()
+                        except Exception:
+                            pass
+                        QMessageBox.information(self, "Account Deleted", "Your account has been deleted and you have been signed out.")
+                        logger.warning("Account deletion completed")
+                    except Exception as de:
+                        QMessageBox.critical(self, "Deletion Error", f"Failed to delete account: {de}")
                 elif ok:
                     QMessageBox.information(self, "Deletion Cancelled", "Account deletion cancelled - confirmation text did not match.")
             

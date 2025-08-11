@@ -67,7 +67,6 @@ class PedalsPage(BasePage):
             btn.setStyleSheet(
                 """
                 QPushButton {
-                    text-align: left;
                     padding: 8px 10px;
                     border-radius: 6px;
                     background-color: #1f2937;

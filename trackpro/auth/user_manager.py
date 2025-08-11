@@ -5,6 +5,7 @@ Provides functions to get and manage the current user.
 """
 
 import logging
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Optional
@@ -73,10 +74,13 @@ def get_current_user():
                     except Exception:
                         pass
                     logger.info(f"Found authenticated user from Supabase: {_current_user.email} (using default hierarchy during startup)")
-                    
-                    # TEMPORARILY DISABLE HIERARCHY UPDATE TO PREVENT CRASHES
-                    logger.warning("⚠️ TEMPORARILY SKIPPING HIERARCHY UPDATE TO PREVENT CRASHES")
-                    
+
+                    # Schedule a background hierarchy refresh to avoid UI thread hangs
+                    try:
+                        threading.Thread(target=_update_user_hierarchy_async, daemon=True).start()
+                    except Exception as e:
+                        logger.warning(f"Failed to schedule hierarchy update: {e}")
+
                     return _current_user
         except Exception as e:
             logger.warning(f"Error getting user from Supabase: {e}")

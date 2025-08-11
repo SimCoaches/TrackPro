@@ -96,8 +96,8 @@ class PedalProfileManager:
             if not supabase.is_authenticated():
                 return []
             
-            # Get the current user's profiles
-            response = supabase.client.rpc('get_user_pedal_profiles').execute()
+            # Get the current user's profiles (pass empty params dict)
+            response = supabase.client.rpc('get_user_pedal_profiles', {}).execute()
             
             if hasattr(response, 'data'):
                 profiles = response.data or []

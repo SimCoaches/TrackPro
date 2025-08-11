@@ -34,13 +34,21 @@ def apply_config_logging_levels(config):
     logging_config = config['logging']
     
     for logger_name, level_str in logging_config.items():
+        # Skip obviously non-level values (e.g., app name or version accidentally placed here)
+        if not isinstance(level_str, str):
+            continue
+        upper = level_str.upper()
+        if upper not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}:
+            # Avoid noisy prints for invalid entries
+            continue
         try:
-            level = getattr(logging, level_str.upper())
+            level = getattr(logging, upper)
             logger = logging.getLogger(logger_name)
             logger.setLevel(level)
-            print(f"Set {logger_name} log level to {level_str.upper()}")
-        except AttributeError:
-            print(f"Invalid log level '{level_str}' for logger '{logger_name}'")
+            print(f"Set {logger_name} log level to {upper}")
+        except Exception:
+            # Ignore any edge case errors silently
+            pass
 
 def silence_noisy_libraries():
     """Silence excessively verbose third-party libraries."""
@@ -64,66 +72,79 @@ def silence_noisy_libraries():
     print("Silenced noisy third-party libraries")
 
 def setup_logging():
-    """Configure logging for the application."""
-    # First, silence noisy libraries BEFORE any other configuration
+    """Configure logging with env-driven levels and rotating file logs.
+    Always reconfigure the root logger to ensure consistent behavior even if
+    basicConfig was called earlier during package import.
+    """
     silence_noisy_libraries()
-    
-    # Get root logger
+
     root_logger = logging.getLogger()
-    
-    # Check if handlers are already configured (prevents duplicate logging)
-    if root_logger.handlers:
-        print("Logging already configured, skipping duplicate setup")
-        return root_logger
-    
-    root_logger.setLevel(logging.INFO)
-    
-    # Create trackpro logger (this will be the parent for all our module loggers)
-    trackpro_logger = logging.getLogger('trackpro')
-    trackpro_logger.setLevel(logging.INFO)  # Changed from DEBUG to INFO to reduce spam
-    
-    # Create specific module loggers with appropriate levels
-    ui_logger = logging.getLogger('trackpro.race_coach.ui')
-    ui_logger.setLevel(logging.ERROR)  # Only errors for UI
-    
-    # Set race coach modules to INFO instead of DEBUG
-    race_coach_logger = logging.getLogger('trackpro.race_coach')
-    race_coach_logger.setLevel(logging.INFO)  # Changed from DEBUG
-    
-    # Specific problematic modules that generate too much output
-    logging.getLogger('trackpro.race_coach.simple_iracing').setLevel(logging.WARNING)
-    logging.getLogger('trackpro.race_coach.lap_indexer').setLevel(logging.WARNING)
-    logging.getLogger('trackpro.race_coach.telemetry_saver').setLevel(logging.WARNING)
-    logging.getLogger('trackpro.race_coach.iracing_lap_saver').setLevel(logging.WARNING)
-    
-    # Add telemetry logger with even higher level to reduce noise
-    telemetry_logger = logging.getLogger('trackpro.race_coach.telemetry')
-    telemetry_logger.setLevel(logging.ERROR)  # Only log errors and above
-    
-    # Create console handler
+    # Remove any pre-existing handlers to avoid duplicate or inconsistent output
+    for handler in list(root_logger.handlers):
+        try:
+            root_logger.removeHandler(handler)
+        except Exception:
+            pass
+
+    # Determine log levels
+    env_level = os.getenv('TRACKPRO_LOG_LEVEL', 'INFO').upper()
+    # Default console to INFO so we can see what's happening by default
+    console_level = os.getenv('TRACKPRO_CONSOLE_LOG_LEVEL', 'INFO').upper()
+    try:
+        root_level = getattr(logging, env_level)
+    except AttributeError:
+        root_level = logging.INFO
+    try:
+        console_level_val = getattr(logging, console_level)
+    except AttributeError:
+        console_level_val = logging.WARNING
+
+    root_logger.setLevel(root_level)
+    logging.getLogger('trackpro').setLevel(root_level)
+
+    # Target log directory
+    try:
+        local_appdata = os.getenv('LOCALAPPDATA') or os.path.join(Path.home(), 'AppData', 'Local')
+        logs_dir = Path(local_appdata) / 'TrackPro' / 'logs'
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / 'trackpro.log'
+    except Exception:
+        log_path = Path.cwd() / 'trackpro.log'
+
+    # Handlers
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    
-    # Create formatters
-    detailed_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # Add formatters to handlers
-    console_handler.setFormatter(detailed_formatter)
-    
-    # Add handlers to loggers
+    console_handler.setLevel(console_level_val)
+
+    file_handler = RotatingFileHandler(str(log_path), maxBytes=2 * 1024 * 1024, backupCount=3, encoding='utf-8')
+    file_handler.setLevel(root_level)
+
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
     root_logger.addHandler(console_handler)
-    
-    # Load configuration and apply logging levels
+    root_logger.addHandler(file_handler)
+
+    # Ensure TrackPro and Supabase-related modules are INFO for better diagnostics
+    for name in [
+        'trackpro',
+        'trackpro.race_coach.ui',
+        'trackpro.race_coach.simple_iracing',
+        'trackpro.race_coach.lap_indexer',
+        'trackpro.race_coach.telemetry_saver',
+        'trackpro.race_coach.iracing_lap_saver',
+        'trackpro.race_coach.telemetry',
+        'Supabase',
+        'supabase',
+        'gotrue',
+        'postgrest',
+    ]:
+        logging.getLogger(name).setLevel(logging.INFO)
+
     config = load_config()
     if config:
         apply_config_logging_levels(config)
-        print("Applied logging configuration from config.ini")
-    else:
-        print("No config.ini found, using default logging levels")
-        print("To enable debug logging, create config.ini and set:")
-        print("  [logging]")
-        print("  trackpro = DEBUG")
-    
+
     return root_logger
 
 def configure_logging():
@@ -139,7 +160,7 @@ def configure_logging():
     
     # Create logger
     logger = logging.getLogger('trackpro')
-    logger.setLevel(logging.INFO)  # Changed from DEBUG
+    logger.setLevel(logging.INFO)
     
     # Create formatters
     detailed_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -153,9 +174,18 @@ def configure_logging():
     # Add console handler to logger
     logger.addHandler(console_handler)
     
-    # Set specific module loggers to higher levels to reduce console spam
-    logging.getLogger('trackpro.race_coach.ui').setLevel(logging.ERROR)
-    logging.getLogger('trackpro.race_coach.simple_iracing').setLevel(logging.WARNING)
-    logging.getLogger('trackpro.race_coach.lap_indexer').setLevel(logging.WARNING)
+    # Ensure TrackPro and Supabase-related modules are INFO for better diagnostics
+    for name in [
+        'trackpro',
+        'trackpro.race_coach.ui',
+        'trackpro.race_coach.simple_iracing',
+        'trackpro.race_coach.lap_indexer',
+        'trackpro.race_coach.telemetry',
+        'Supabase',
+        'supabase',
+        'gotrue',
+        'postgrest',
+    ]:
+        logging.getLogger(name).setLevel(logging.INFO)
     
     return logger 

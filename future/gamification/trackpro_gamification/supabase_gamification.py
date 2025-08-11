@@ -140,7 +140,8 @@ def get_user_quests() -> Tuple[Optional[List[Dict[str, Any]]], str]:
         else:
             return [], "No active quests found"
     except Exception as e:
-        logger.error(f"Failed to retrieve user quests: {e}")
+        level = logging.INFO if "Not logged in" in str(e) else logging.ERROR
+        logger.log(level, f"Failed to retrieve user quests: {e}")
         return None, f"Failed to retrieve quests: {e}"
 
 def update_quest_progress(user_quest_id: str, progress: Dict[str, Any]) -> Tuple[bool, str]:
@@ -401,7 +402,8 @@ def _assign_quests(quest_type: str, count: int, expires_delta: timedelta) -> Tup
         else:
             return False, "No quests to assign"
     except Exception as e:
-        logger.error(f"Failed to assign {quest_type} quests: {e}")
+        level = logging.INFO if "Not logged in" in str(e) else logging.ERROR
+        logger.log(level, f"Failed to assign {quest_type} quests: {e}")
         return False, f"Failed to assign quests: {e}"
 
 # ----- Race Pass Functions -----
@@ -414,8 +416,8 @@ def get_current_season() -> Tuple[Optional[Dict[str, Any]], str]:
         Tuple[Optional[Dict[str, Any]], str]: A tuple containing season data (or None) and a message
     """
     try:
-        # Call Supabase function to get current season ID
-        season_id_result = supabase.client.rpc('get_current_season').execute()
+        # Call Supabase function to get current season ID (pass empty params dict per client API)
+        season_id_result = supabase.client.rpc('get_current_season', {}).execute()
         
         if not season_id_result.data:
             return None, "No active season found"
@@ -433,7 +435,9 @@ def get_current_season() -> Tuple[Optional[Dict[str, Any]], str]:
         else:
             return None, "Season details not found"
     except Exception as e:
-        logger.error(f"Failed to retrieve current season: {e}")
+        # Downgrade to info when unauthenticated to reduce noise during startup
+        level = logging.INFO if "Not logged in" in str(e) else logging.ERROR
+        logger.log(level, f"Failed to retrieve current season: {e}")
         return None, f"Failed to retrieve current season: {e}"
 
 def get_race_pass_rewards(season_id: str = None) -> Tuple[Optional[List[Dict[str, Any]]], str]:
@@ -539,7 +543,8 @@ def get_user_race_pass_progress() -> Tuple[Optional[Dict[str, Any]], str]:
         
         return race_pass_data, "Race pass progress retrieved successfully"
     except Exception as e:
-        logger.error(f"Failed to retrieve race pass progress: {e}")
+        level = logging.INFO if "Not logged in" in str(e) else logging.ERROR
+        logger.log(level, f"Failed to retrieve race pass progress: {e}")
         return None, f"Failed to retrieve race pass progress: {e}"
 
 def claim_race_pass_reward(reward_id: str) -> Tuple[bool, str]:

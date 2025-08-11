@@ -185,12 +185,23 @@ class SupabaseManager:
     def __init__(self):
         """Initialize the Supabase manager."""
         self._client = None
-        self._offline_mode = True  # Start in offline mode
+        # Start online when Supabase is enabled and credentials are present
+        try:
+            credentials_present = bool(config.supabase_url) and bool(config.supabase_key)
+            self._offline_mode = not (config.supabase_enabled and credentials_present)
+            if self._offline_mode:
+                logger.info("Supabase starting in offline mode (disabled or missing credentials)")
+            else:
+                logger.info("Supabase starting in online mode (credentials found and enabled)")
+        except Exception as init_flag_err:
+            logger.warning(f"Could not determine startup online state, defaulting offline: {init_flag_err}")
+            self._offline_mode = True
         self._retry_strategy = RetryStrategy()
         self._hostname = None
         self._cached_ip = None
         self._auth_file = os.path.join(os.path.expanduser("~"), ".trackpro", "auth.json")
         self._saved_auth = None  # Initialize to None to prevent AttributeError
+        self._realtime_channels_supported = False
         
         # Initialize secure session manager
         self._secure_session = None
@@ -453,8 +464,24 @@ class SupabaseManager:
         Returns:
             bool: True if session was restored successfully, False otherwise
         """
-        if not self._saved_auth or not self._client:
+        # Ensure a client exists
+        if not self._client:
             return False
+
+        # If we have a secure/plaintext session on disk but _saved_auth is empty,
+        # load it now so we can restore the session for auth checks.
+        if not self._saved_auth:
+            try:
+                loaded = self._load_session()
+                if loaded and loaded.get('access_token'):
+                    self._saved_auth = loaded
+                    logger.info("Loaded saved session into memory for restoration")
+                else:
+                    # No saved auth available
+                    return False
+            except Exception as e:
+                logger.warning(f"Failed to load saved session: {e}")
+                return False
         
         access_token = self._saved_auth.get('access_token')
         refresh_token = self._saved_auth.get('refresh_token')
@@ -760,6 +787,18 @@ class SupabaseManager:
             if self._client:
                 self._offline_mode = False
                 logger.info("✅ Supabase client created successfully, disabled offline mode")
+
+                # Detect realtime channel support for Discord-like messaging
+                try:
+                    has_channel = hasattr(self._client, 'channel')
+                    has_realtime_channel = hasattr(getattr(self._client, 'realtime', None), 'channel')
+                    self._realtime_channels_supported = bool(has_channel or has_realtime_channel)
+                    if self._realtime_channels_supported:
+                        logger.info("✅ Realtime channels supported by client (channel API available)")
+                    else:
+                        logger.info("ℹ️ Realtime channels not exposed by client (channel API missing) - polling fallback will be used")
+                except Exception:
+                    self._realtime_channels_supported = False
             
             # REMOVED: Don't attempt session restoration during initialization
             # This can cause hanging if there are network issues
@@ -863,6 +902,19 @@ class SupabaseManager:
             bool: True if authenticated, False otherwise
         """
         try:
+            # If we're in offline mode but configuration says Supabase is enabled and
+            # credentials are present, attempt a quick initialization to recover.
+            if self._offline_mode:
+                try:
+                    if config.supabase_enabled and config.supabase_url and config.supabase_key:
+                        logger.info("Auth check: offline mode detected with credentials present; attempting initialization")
+                        self.initialize()
+                except Exception as init_err:
+                    logger.warning(f"Auth check: initialization attempt while offline failed: {init_err}")
+                # If still offline after attempt, bail out early
+                if self._offline_mode:
+                    return False
+
             # Fast path: check secure session first, then plaintext session
             has_secure_session = False
             if self._secure_session:
@@ -877,17 +929,14 @@ class SupabaseManager:
                 logger.info("🔐 Fast path: No saved session (secure or plaintext) - not authenticated")
                 return False
             
-            # Force initialization if needed for auth checks
-            if hasattr(self, '_initialization_deferred') and self._initialization_deferred:
-                logger.info("🔐 AUTH CHECK: Triggering deferred Supabase initialization")
-                self._initialization_deferred = False
-                self.initialize()
-            
-            if self._offline_mode or not self._client:
+            # Ensure client initialization AND trigger safe session restoration by
+            # accessing the `client` property (it performs deferred init + restore).
+            client = self.client
+            if self._offline_mode or not client:
                 return False
             
             def check_auth():
-                user_response = self._client.auth.get_user()
+                user_response = client.auth.get_user()
                 return user_response is not None and hasattr(user_response, 'user') and user_response.user is not None
             
             return self._execute_with_retry(check_auth) or False
@@ -1469,7 +1518,12 @@ class SupabaseManager:
                     
                     # Basic health check - only wait 3 seconds maximum for faster startup
                     base_url = self._client.rest_url
-                    response = session.get(f"{base_url}/health", timeout=3)
+                    # Include API key headers to avoid 401s on some PostgREST configs
+                    headers = {
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                    }
+                    response = session.get(f"{base_url}/health", timeout=3, headers=headers)
                     if response.status_code == 200:
                         logger.info("Verified Supabase connection via health check")
                         return True

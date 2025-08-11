@@ -720,17 +720,20 @@ class OAuthHandler(QObject):
                     # Emit auth completed signal
                     self.parent.auth_completed.emit(True, mock_response)
                     
-                    # Show success message - ensure we're on the GUI thread
-                    from PyQt6.QtCore import QThread
-                    from PyQt6.QtWidgets import QApplication
-                    if QThread.currentThread() == QApplication.instance().thread():
-                        QTimer.singleShot(1000, lambda: QMessageBox.information(
-                            None, 
-                            "Authentication Successful", 
-                            f"You are now logged in as {mock_response.user.email}!"
-                        ))
-                    else:
-                        logger.warning("Cannot show success message - not on GUI thread")
+                    # Avoid QMessageBox from non-GUI threads; log instead
+                    try:
+                        from PyQt6.QtCore import QThread
+                        from PyQt6.QtWidgets import QApplication
+                        if QThread.currentThread() == QApplication.instance().thread():
+                            QTimer.singleShot(1000, lambda: QMessageBox.information(
+                                None,
+                                "Authentication Successful",
+                                f"You are now logged in as {mock_response.user.email}!"
+                            ))
+                        else:
+                            logger.info("Authentication successful (notification suppressed off GUI thread)")
+                    except Exception:
+                        logger.info("Authentication successful (notification suppressed)")
                     
                 except Exception as e:
                     logger.error(f"Error processing tokens: {e}", exc_info=True)
@@ -855,14 +858,17 @@ class OAuthHandler(QObject):
                             else:
                                 logger.warning("Supabase manager not available for session verification")
                             
-                            # Show success message in separate thread to avoid blocking
-                            from PyQt6.QtCore import QThread
-                            from PyQt6.QtWidgets import QApplication
-                            if QThread.currentThread() == QApplication.instance().thread():
-                                QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful", 
-                                                               "You have been successfully signed in!"))
-                            else:
-                                logger.warning("Not on GUI thread - skipping success message")
+                            # Avoid message box spam from non-GUI thread
+                            try:
+                                from PyQt6.QtCore import QThread
+                                from PyQt6.QtWidgets import QApplication
+                                if QThread.currentThread() == QApplication.instance().thread():
+                                    QTimer.singleShot(500, lambda: QMessageBox.information(None, "Authentication Successful",
+                                                                   "You have been successfully signed in!"))
+                                else:
+                                    logger.info("Authentication successful (notification suppressed off GUI thread)")
+                            except Exception:
+                                logger.info("Authentication successful (notification suppressed)")
                             
                             # Emit signal to parent
                             self.parent.auth_completed.emit(True, result)

@@ -176,7 +176,7 @@ class SignupDialog(BaseAuthDialog):
         step2_header.setStyleSheet("font-weight: bold; color: #2980b9;")
         self.step2_form.addRow("", step2_header)
         
-        # Display name field (username)
+        # Username field
         self.display_name_input = QLineEdit()
         self.display_name_input.setPlaceholderText("Choose a username")
         self.display_name_input.setStyleSheet(input_style)
@@ -609,7 +609,7 @@ class SignupDialog(BaseAuthDialog):
         Returns:
             bool: True if valid, False otherwise
         """
-        # Display name validation
+        # Username validation
         if not self.display_name_input.text():
             self.show_error("Username is required")
             return False
@@ -665,6 +665,7 @@ class SignupDialog(BaseAuthDialog):
         # Prepare user metadata
         metadata = {
             "username": username,
+            "display_name": username,
             "first_name": first_name,
             "last_name": last_name,
             "date_of_birth": date_of_birth
