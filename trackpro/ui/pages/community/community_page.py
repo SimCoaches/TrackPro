@@ -3298,13 +3298,6 @@ class CommunityPage(BasePage):
 
     def _ensure_message_polling(self):
         try:
-            # If manager has a polling fallback running, avoid starting a duplicate UI poller
-            try:
-                cm = self.community_manager
-                if cm and (getattr(cm, 'is_realtime_active', False) or getattr(cm, '_polling_timer', None)):
-                    return
-            except Exception:
-                pass
             if hasattr(self, '_message_poll_timer') and self._message_poll_timer:
                 return
             from PyQt6.QtCore import QTimer
@@ -3312,7 +3305,7 @@ class CommunityPage(BasePage):
             self._message_poll_timer.setInterval(3000)
             self._message_poll_timer.timeout.connect(self._poll_for_new_messages)
             self._message_poll_timer.start()
-            logger.info("🔄 Started polling fallback for community messages (3s interval)")
+            logger.info("🔄 Started UI polling safety net for community messages (3s interval)")
         except Exception as e:
             logger.debug(f"Polling setup failed: {e}")
 

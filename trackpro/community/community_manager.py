@@ -196,7 +196,9 @@ class CommunityManager(QObject):
                             {"event": "INSERT", "schema": "public", "table": "community_participants"},
                             {"event": "UPDATE", "schema": "public", "table": "community_participants"},
                         ]
-                    }
+                    },
+                    # Provide access token in payload as well for servers requiring payload auth
+                    **({"access_token": access_token} if access_token else {})
                 },
                 "ref": _next_ref()
             }
@@ -216,6 +218,11 @@ class CommunityManager(QObject):
             def _recv_loop():
                 try:
                     last_hb = time.time()
+                    # Track whether we received a successful join ack
+                    try:
+                        self._direct_rt_joined = False
+                    except Exception:
+                        pass
                     while not getattr(self, '_direct_rt_stop', False):
                         # heartbeat
                         now = time.time()
@@ -237,6 +244,19 @@ class CommunityManager(QObject):
                             msg = _json.loads(raw)
                         except Exception:
                             continue
+                        # Handle join ack
+                        if msg.get('event') == 'phx_reply' and msg.get('topic') == 'realtime:public':
+                            status = (msg.get('payload') or {}).get('status')
+                            if status == 'ok':
+                                try:
+                                    self._direct_rt_joined = True
+                                except Exception:
+                                    pass
+                                logger.info("✅ Direct realtime websocket joined 'realtime:public'")
+                            else:
+                                logger.error(f"❌ Direct realtime join reply not ok: {msg}")
+                            continue
+
                         if msg.get('event') == 'postgres_changes':
                             payload = msg.get('payload') or {}
                             table = (payload.get('table') or '').lower()
@@ -727,18 +747,15 @@ class CommunityManager(QObject):
                     logger.debug(f"Failed to start polling fallback: {e}")
                 return
 
-            # Detect sync client where realtime channel() is not implemented and use direct fallback
+            # Some SyncClient builds expose realtime.channel but raise NotImplementedError.
+            # Do not bail out early here; we'll try the official client.channel path first.
             try:
                 rt_obj = getattr(self.client, 'realtime', None)
                 if rt_obj and hasattr(rt_obj, 'channel'):
                     try:
-                        # This will raise NotImplementedError on SyncClient
                         rt_obj.channel("trackpro-probe")
                     except NotImplementedError:
-                        logger.info("Realtime channel() is not implemented on SyncClient; starting direct websocket fallback")
-                        if self._start_direct_realtime_fallback():
-                            self.is_realtime_active = True
-                            return
+                        logger.info("Realtime realtime.channel is not available on this client; will try client.channel() next")
             except Exception:
                 pass
 
@@ -762,10 +779,21 @@ class CommunityManager(QObject):
             except Exception:
                 self._realtime_channels = []
 
-            # Prefer a single multiplexed channel approach for reliability
-            if self._bind_realtime_single_channel():
+            # Prefer a single multiplexed channel approach for reliability via official API
+            bind_ok = self._bind_realtime_single_channel()
+            if bind_ok:
                 self.is_realtime_active = True
+                logger.info("✅ Subscribed to realtime via single multiplexed channel (official API)")
                 return
+
+            # Attempt async official realtime subscriber if available
+            try:
+                if self._start_async_channel_realtime():
+                    self.is_realtime_active = True
+                    logger.info("✅ Subscribed to realtime via async official API")
+                    return
+            except Exception as e:
+                logger.debug(f"Async official realtime start failed: {e}")
 
             subscribed_any = False
             # Helper to get a channel for both API shapes with robust fallbacks
@@ -896,6 +924,115 @@ class CommunityManager(QObject):
         except Exception as e:
             logger.error(f"Failed to setup real-time subscriptions: {e}")
 
+    def _start_async_channel_realtime(self) -> bool:
+        """Start an asyncio-based official Supabase Realtime subscriber in a background thread.
+
+        Returns True if started successfully.
+        """
+        try:
+            # Avoid multiple starters
+            if getattr(self, "_async_rt_thread", None):
+                return True
+
+            from ..database.supabase_client import SUPABASE_URL, SUPABASE_KEY, supabase as _sb
+            try:
+                # Access current access token if present
+                token = None
+                client = getattr(_sb, 'client', None)
+                if client and hasattr(client, 'auth'):
+                    sess = client.auth.get_session()
+                    token = getattr(sess, 'access_token', None) or (sess.get('access_token') if isinstance(sess, dict) else None)
+            except Exception:
+                token = None
+
+            # Build the async runtime
+            import threading as _threading
+            import asyncio as _asyncio
+
+            def _runner():
+                try:
+                    loop = _asyncio.new_event_loop()
+                    _asyncio.set_event_loop(loop)
+
+                    async def _main():
+                        try:
+                            # Import AsyncClient dynamically to avoid hard dependency
+                            try:
+                                from supabase._async.client import AsyncClient as _AsyncClient  # type: ignore
+                            except Exception as e:
+                                logger.debug(f"AsyncClient import failed: {e}")
+                                return
+
+                            ac = _AsyncClient(SUPABASE_URL, SUPABASE_KEY)
+                            # Propagate auth token to realtime if available
+                            try:
+                                rt = getattr(ac, 'realtime', None)
+                                if rt and hasattr(rt, 'set_auth') and token:
+                                    _res = rt.set_auth(token)
+                                    if _asyncio.iscoroutine(_res):
+                                        await _res
+                            except Exception:
+                                pass
+
+                            # Try to create a channel and bind postgres_changes
+                            channel = None
+                            try:
+                                if hasattr(ac, 'channel'):
+                                    channel = ac.channel("realtime:public")
+                            except Exception as ce:
+                                logger.debug(f"Async channel create failed: {ce}")
+                                return
+
+                            if channel is None:
+                                return
+
+                            try:
+                                channel.on(
+                                    "postgres_changes",
+                                    {"event": "INSERT", "schema": "public", "table": "community_messages"},
+                                    lambda payload: self._on_message_inserted(payload),
+                                )
+                                channel.on(
+                                    "postgres_changes",
+                                    {"event": "INSERT", "schema": "public", "table": "private_messages"},
+                                    lambda payload: self._on_private_message_inserted(payload),
+                                )
+                                channel.on(
+                                    "postgres_changes",
+                                    {"event": "INSERT", "schema": "public", "table": "community_participants"},
+                                    lambda payload: self._on_participant_changed(payload),
+                                )
+                                channel.on(
+                                    "postgres_changes",
+                                    {"event": "UPDATE", "schema": "public", "table": "community_participants"},
+                                    lambda payload: self._on_participant_changed(payload),
+                                )
+                                # Subscribe (await if coroutine)
+                                sub_ret = channel.subscribe()
+                                if _asyncio.iscoroutine(sub_ret):
+                                    await sub_ret
+                                # Keep the loop alive until stop flag is set
+                                self._async_rt_stop = False
+                                while not getattr(self, '_async_rt_stop', False):
+                                    await _asyncio.sleep(0.5)
+                            except Exception as bind_err:
+                                logger.debug(f"Async channel bind failed: {bind_err}")
+                        except Exception as e:
+                            logger.debug(f"Async realtime main error: {e}")
+
+                    loop.run_until_complete(_main())
+                except Exception:
+                    pass
+
+            t = _threading.Thread(target=_runner, name="TrackProAsyncRealtime", daemon=True)
+            t.start()
+            self._async_rt_thread = t
+            logger.info("🧵 Started async realtime subscriber thread")
+            return True
+        except Exception as e:
+            logger.debug(f"Async realtime start failed: {e}")
+            return False
+
     def _on_private_message_inserted(self, payload):
         """Handle new private message via realtime."""
         try:
@@ -933,87 +1070,110 @@ class CommunityManager(QObject):
             logger.debug(f"Error handling private DM realtime: {e}")
     
     def _on_message_inserted(self, payload):
-        """Handle new message inserted via real-time subscription."""
+        """Handle new message inserted via real-time subscription or polling fallback.
+
+        Accepts both Supabase realtime payloads (with eventType) and
+        polling/legacy payloads that provide only a 'new' row.
+        """
         try:
             logger.info(f"🔄 Real-time message received: {payload}")
-            
-            if payload.get('eventType') == 'INSERT':
-                new_message = payload.get('new', {})
-                if new_message:
-                    # Real-time subscriptions don't include joined data by default
-                    # We need to fetch the complete message with sender info
-                    try:
-                        if self.client and new_message.get('message_id'):
-                            logger.info(f"🔍 Fetching complete message data for: {new_message.get('message_id')}")
-                            # First get the message data
-                            response = self.client.table("community_messages").select(
-                                "message_id, channel_id, content, message_type, created_at, sender_id"
-                            ).eq("message_id", new_message['message_id']).execute()
-                            
-                            if response.data:
-                                complete_message = response.data[0]
-                                # Ensure channel_id is present for UI routing
-                                if not complete_message.get('channel_id'):
-                                    complete_message['channel_id'] = new_message.get('channel_id')
-                                logger.info(f"✅ Retrieved complete message: {complete_message}")
-                                # Fetch user data for this message
-                                if complete_message.get('sender_id'):
-                                    logger.info(f"👤 Fetching user data for sender_id: {complete_message['sender_id']}")
-                                    sender_id = complete_message['sender_id']
-                                    # Prefer public display info first
-                                    try:
-                                        disp_resp = self.client.table("public_user_display_info").select(
-                                            "user_id, display_name, username, avatar_url"
-                                        ).eq("user_id", sender_id).execute()
-                                        if disp_resp.data:
-                                            complete_message['user_display_info'] = disp_resp.data[0]
-                                    except Exception:
-                                        pass
 
-                                    # Fallback to user_profiles
-                                    try:
-                                        prof_resp = self.client.table("user_profiles").select(
-                                            "user_id, username, display_name, avatar_url"
-                                        ).eq("user_id", sender_id).execute()
-                                        if prof_resp.data:
-                                            complete_message['user_profiles'] = prof_resp.data[0]
-                                    except Exception:
-                                        pass
+            # Treat missing eventType as INSERT when a 'new' record is present
+            event_type = payload.get('eventType') if isinstance(payload, dict) else None
+            is_insert = (event_type == 'INSERT') or (event_type is None and isinstance(payload, dict) and 'new' in payload)
+            if not is_insert:
+                return
 
-                                    # Optional details for name synthesis
-                                    details = {}
-                                    try:
-                                        det_resp = self.client.table("user_details").select(
-                                            "user_id, first_name, last_name"
-                                        ).eq("user_id", sender_id).execute()
-                                        if det_resp.data:
-                                            details = det_resp.data[0]
-                                    except Exception:
-                                        details = {}
+            new_message = payload.get('new', {}) if isinstance(payload, dict) else {}
+            if not new_message:
+                return
 
-                                    # Compute final sender_name consistently
-                                    display_info = complete_message.get('user_display_info', {})
-                                    profile = complete_message.get('user_profiles', {})
-                                    complete_message['sender_name'] = self._generate_display_name(display_info, profile, details)
-                                    logger.info(f"✅ Real-time message sender_name: {complete_message['sender_name']}")
-                                logger.info(f"✅ Fetched complete message with sender info: {complete_message}")
-                                self.message_received.emit(complete_message)
-                            else:
-                                logger.warning("❌ Could not fetch complete message data")
-                                self.message_received.emit(new_message)
-                        else:
-                            logger.warning("❌ No client or message_id available for real-time message")
-                            self.message_received.emit(new_message)
-                    except Exception as fetch_error:
-                        logger.error(f"❌ Error fetching complete message data: {fetch_error}")
-                        import traceback
-                        logger.debug(f"Traceback: {traceback.format_exc()}")
-                        self.message_received.emit(new_message)
-            
+            # Real-time subscriptions don't include joined data by default
+            # We need to fetch the complete message with sender info
+            try:
+                if self.client and new_message.get('message_id'):
+                    logger.info(f"🔍 Fetching complete message data for: {new_message.get('message_id')}")
+                    # First get the message data
+                    response = self.client.table("community_messages").select(
+                        "message_id, channel_id, content, message_type, created_at, sender_id"
+                    ).eq("message_id", new_message['message_id']).execute()
+
+                    if response.data:
+                        complete_message = response.data[0]
+                        # Ensure channel_id is present for UI routing
+                        if not complete_message.get('channel_id'):
+                            complete_message['channel_id'] = new_message.get('channel_id')
+                        logger.info(f"✅ Retrieved complete message: {complete_message}")
+                        # Fetch user data for this message
+                        if complete_message.get('sender_id'):
+                            logger.info(f"👤 Fetching user data for sender_id: {complete_message['sender_id']}")
+                            sender_id = complete_message['sender_id']
+                            # Prefer public display info first
+                            try:
+                                disp_resp = self.client.table("public_user_display_info").select(
+                                    "user_id, display_name, username, avatar_url"
+                                ).eq("user_id", sender_id).execute()
+                                if disp_resp.data:
+                                    complete_message['user_display_info'] = disp_resp.data[0]
+                            except Exception:
+                                pass
+
+                            # Fallback to user_profiles
+                            try:
+                                prof_resp = self.client.table("user_profiles").select(
+                                    "user_id, username, display_name, avatar_url"
+                                ).eq("user_id", sender_id).execute()
+                                if prof_resp.data:
+                                    complete_message['user_profiles'] = prof_resp.data[0]
+                            except Exception:
+                                pass
+
+                            # Optional details for name synthesis
+                            details = {}
+                            try:
+                                det_resp = self.client.table("user_details").select(
+                                    "user_id, first_name, last_name"
+                                ).eq("user_id", sender_id).execute()
+                                if det_resp.data:
+                                    details = det_resp.data[0]
+                            except Exception:
+                                details = {}
+
+                            # Compute final sender_name consistently
+                            display_info = complete_message.get('user_display_info', {})
+                            profile = complete_message.get('user_profiles', {})
+                            complete_message['sender_name'] = self._generate_display_name(display_info, profile, details)
+                            logger.info(f"✅ Real-time message sender_name: {complete_message['sender_name']}")
+                        logger.info(f"✅ Fetched complete message with sender info: {complete_message}")
+                        self._emit_message_on_ui_thread(complete_message)
+                    else:
+                        logger.warning("❌ Could not fetch complete message data")
+                        self._emit_message_on_ui_thread(new_message)
+                else:
+                    logger.warning("❌ No client or message_id available for real-time message")
+                    self._emit_message_on_ui_thread(new_message)
+            except Exception as fetch_error:
+                logger.error(f"❌ Error fetching complete message data: {fetch_error}")
+                import traceback
+                logger.debug(f"Traceback: {traceback.format_exc()}")
+                self._emit_message_on_ui_thread(new_message)
+
         except Exception as e:
             logger.error(f"❌ Error handling real-time message: {e}")
             import traceback
             logger.debug(f"Traceback: {traceback.format_exc()}")
+
+    def _emit_message_on_ui_thread(self, message: dict) -> None:
+        try:
+            # Schedule emit on the Qt main thread to avoid cross-thread UI issues
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda m=message: self.message_received.emit(m))
+        except Exception:
+            # Fallback to direct emit if Qt singleShot unavailable
+            try:
+                self.message_received.emit(message)
+            except Exception:
+                pass
 
     def _on_participant_changed(self, payload):
         """Handle realtime participant INSERT/UPDATE events."""

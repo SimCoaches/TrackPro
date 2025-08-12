@@ -771,13 +771,28 @@ class TelemetryPage(BasePage):
         self.controls.left_lap_combo.clear()
         if not self.my_laps:
             return
+        added = 0
         for lap in self.my_laps:
-            if lap.get('is_valid', True):
-                lap_time = lap.get('lap_time', 0)
-                formatted_time = self._format_lap_time(lap_time) if lap_time else 'No Time'
-                lap_text = f"Lap {lap.get('lap_number', '?')} - {formatted_time}"
-                self.controls.left_lap_combo.addItem(lap_text, lap.get('id'))
-        self.controls.left_lap_combo.setCurrentIndex(0)
+            lap_number = lap.get('lap_number', 0)
+            if lap_number <= 0:
+                continue
+            if lap.get('started_on_pit_road', False):
+                continue
+            if not lap.get('is_valid', False):
+                continue
+            if 'is_valid_for_leaderboard' in lap and not lap.get('is_valid_for_leaderboard', False):
+                continue
+            lap_time = lap.get('lap_time', 0)
+            if not lap_time or lap_time <= 0:
+                continue
+            formatted_time = self._format_lap_time(lap_time)
+            lap_text = f"Lap {lap_number} - {formatted_time}"
+            self.controls.left_lap_combo.addItem(lap_text, lap.get('id'))
+            added += 1
+        if self.controls.left_lap_combo.count() > 0:
+            self.controls.left_lap_combo.setCurrentIndex(0)
+        else:
+            self.controls.left_lap_combo.addItem("No valid laps", None)
 
     def _update_right_lap_combo(self):
         """Removed: Reference lap is selected directly from the Reference Lap combo."""
@@ -896,6 +911,11 @@ class TelemetryPage(BasePage):
                     share_map = {uid: True for uid in user_ids}
             # Apply filtering and enrich items
             for item in fastest_laps:
+                if item.get('is_valid_for_leaderboard') is False:
+                    continue
+                t = item.get('lap_time') or 0
+                if t <= 0:
+                    continue
                 uid = item.get('user_id')
                 if uid is None or share_map.get(uid, True):
                     info = info_map.get(uid, {})
