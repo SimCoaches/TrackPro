@@ -221,6 +221,9 @@ class SupabaseManager:
         
         # Defer initialization to speed up startup - client will be created on first use
         self._initialization_deferred = True
+        # Token monitor state
+        self._token_monitor_thread = None
+        self._token_monitor_stop = False
     
     def _migrate_plaintext_sessions(self):
         """Migrate existing plaintext sessions to encrypted storage."""
@@ -237,6 +240,18 @@ class SupabaseManager:
                     logger.info("Successfully migrated session to encrypted storage")
                 else:
                     logger.warning("Failed to migrate session to encrypted storage")
+                    # Auto-heal: back up corrupted plaintext and remove to prevent repeated errors
+                    try:
+                        backup_path = plaintext_file.with_suffix(plaintext_file.suffix + ".bak")
+                        try:
+                            if backup_path.exists():
+                                backup_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        plaintext_file.rename(backup_path)
+                        logger.info(f"Backed up corrupted plaintext session to {backup_path}")
+                    except Exception as backup_err:
+                        logger.warning(f"Could not back up corrupted plaintext session: {backup_err}")
         except Exception as e:
             logger.error(f"Error during session migration: {e}")
     
@@ -284,8 +299,26 @@ class SupabaseManager:
             # Fallback to plaintext session
             if os.path.exists(self._auth_file):
                 logger.info(f"📁 Found auth file at: {self._auth_file}")
-                with open(self._auth_file, 'r') as f:
-                    auth_data = json.load(f)
+                try:
+                    with open(self._auth_file, 'r') as f:
+                        auth_data = json.load(f)
+                except Exception as json_err:
+                    logger.error(f"❌ Error loading authentication session: {json_err}")
+                    # Auto-heal corrupted plaintext: back up and ignore
+                    try:
+                        from pathlib import Path as _Path
+                        p = _Path(self._auth_file)
+                        backup = p.with_suffix(p.suffix + ".bak")
+                        try:
+                            if backup.exists():
+                                backup.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        p.rename(backup)
+                        logger.info(f"Backed up corrupted auth.json to {backup}")
+                    except Exception as _bke:
+                        logger.warning(f"Could not back up corrupted auth.json: {_bke}")
+                    return None
                 
                 # Debug logging
                 logger.info(f"📄 Loaded auth data: access_token={'present' if auth_data.get('access_token') else 'missing'}, refresh_token={'present' if auth_data.get('refresh_token') else 'missing'}, remember_me={auth_data.get('remember_me', 'not set')}")
@@ -624,6 +657,16 @@ class SupabaseManager:
                 logger.info("remember_me=False: Clearing session due to restoration error")
                 self._clear_session_conditionally()
                 return False
+        finally:
+            # After any restoration attempt, (re)propagate auth and start token monitor
+            try:
+                self._set_realtime_auth_token_if_available()
+            except Exception:
+                pass
+            try:
+                self._start_token_monitor()
+            except Exception as monitor_err:
+                logger.debug(f"Token monitor start failed: {monitor_err}")
     
     def _attempt_manual_refresh(self, access_token, refresh_token):
         """Attempt manual session refresh using tokens.
@@ -817,6 +860,12 @@ class SupabaseManager:
             
             logger.info("Supabase client initialized successfully")
             
+            # Attempt to propagate auth token to realtime (safe if no session yet)
+            try:
+                self._set_realtime_auth_token_if_available()
+            except Exception:
+                pass
+            
         except Exception as e:
             logger.error(f"Error initializing Supabase client: {e}")
             # Don't set _client to None on error - keep the client even if some operations fail
@@ -845,6 +894,32 @@ class SupabaseManager:
             if isinstance(e, (socket.gaierror, ConnectionError, TimeoutError)):
                 logger.info("Connection error detected, attempting to reinitialize client")
                 self.initialize()
+            else:
+                # Handle JWT expired reactively and retry once
+                try:
+                    from postgrest.exceptions import APIError
+                    if isinstance(e, APIError):
+                        code = None
+                        try:
+                            code = e.code
+                        except Exception:
+                            msg = str(e)
+                            code = 'PGRST301' if ('PGRST301' in msg or 'JWT expired' in msg) else None
+                        if code == 'PGRST301':
+                            logger.info("🔐 Detected JWT expired (PGRST301) – refreshing session and retrying")
+                            try:
+                                self._restore_session_safely()
+                                self._set_realtime_auth_token_if_available()
+                                try:
+                                    from trackpro.community.community_manager import CommunityManager
+                                    CommunityManager().refresh_realtime()
+                                except Exception:
+                                    pass
+                                return self._retry_strategy.execute(func, *args, **kwargs)
+                            except Exception as refresh_err:
+                                logger.warning(f"JWT refresh retry failed: {refresh_err}")
+                except Exception:
+                    pass
             return None
     
     @property
@@ -890,10 +965,113 @@ class SupabaseManager:
                 restored = self._restore_session_safely()
                 if not restored:
                     logger.info("Safe session restoration did not complete; will rely on on-demand auth checks.")
+                # After restoration attempt, propagate auth token to realtime if available
+                try:
+                    self._set_realtime_auth_token_if_available()
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Session restoration failed on first access: {e}")
         
         return self._client
+
+    def _set_realtime_auth_token_if_available(self) -> None:
+        """Propagate current auth access token to the realtime client if supported.
+
+        This is required for Postgres Changes with RLS-protected tables to stream.
+        Safe to call even if no session exists or the API is missing.
+        """
+        try:
+            client = self._client
+            if not client:
+                return
+            rt = getattr(client, 'realtime', None)
+            if not rt or not hasattr(rt, 'set_auth'):
+                return
+            token = None
+            auth = getattr(client, 'auth', None)
+            if auth:
+                # Try multiple shapes across versions
+                try:
+                    sess = auth.get_session()
+                    token = getattr(sess, 'access_token', None) or (sess.get('access_token') if isinstance(sess, dict) else None)
+                except Exception:
+                    token = None
+                if not token:
+                    try:
+                        current = getattr(auth, 'current_session', None)
+                        if current:
+                            token = getattr(current, 'access_token', None)
+                    except Exception:
+                        pass
+            if token:
+                try:
+                    rt.set_auth(token)
+                    logger.info("✅ Realtime auth token propagated to client")
+                except Exception as e:
+                    logger.debug(f"Realtime set_auth failed: {e}")
+        except Exception:
+            pass
+
+    def _start_token_monitor(self) -> None:
+        """Start a lightweight background thread to refresh tokens before expiry."""
+        if self._token_monitor_thread and self._token_monitor_thread.is_alive():
+            return
+
+        def _monitor():
+            try:
+                while not self._token_monitor_stop:
+                    try:
+                        if not self._client:
+                            time.sleep(5)
+                            continue
+                        sess = None
+                        try:
+                            sess = self._client.auth.get_session()
+                        except Exception:
+                            sess = None
+                        if not sess:
+                            time.sleep(15)
+                            continue
+                        expires_at = getattr(sess, 'expires_at', None)
+                        if not expires_at:
+                            time.sleep(30)
+                            continue
+                        from datetime import datetime
+                        now_ts = time.time()
+                        try:
+                            exp_ts = float(expires_at)
+                        except Exception:
+                            try:
+                                exp_ts = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00')).timestamp()
+                            except Exception:
+                                exp_ts = now_ts + 3600
+                        seconds_left = exp_ts - now_ts
+                        # Refresh if < 120s remaining
+                        if seconds_left < 120:
+                            logger.info(f"🔐 Token near expiry ({int(seconds_left)}s left) – refreshing session")
+                            try:
+                                self._restore_session_safely()
+                                self._set_realtime_auth_token_if_available()
+                                try:
+                                    from trackpro.community.community_manager import CommunityManager
+                                    CommunityManager().refresh_realtime()
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                logger.warning(f"Background token refresh failed: {e}")
+                            time.sleep(30)
+                            continue
+                        time.sleep(max(5, min(30, int(seconds_left - 60))))
+                    except Exception:
+                        time.sleep(15)
+            except Exception:
+                pass
+
+        self._token_monitor_stop = False
+        import threading as _threading
+        self._token_monitor_thread = _threading.Thread(target=_monitor, name="SupabaseTokenMonitor", daemon=True)
+        self._token_monitor_thread.start()
     
     def is_authenticated(self) -> bool:
         """Check if a user is authenticated.
@@ -1271,12 +1449,21 @@ class SupabaseManager:
                         "code_verifier": code_verifier
                     })
                 else:
-                    # It's already an object with auth_code and code_verifier
+                    # It's already an object with auth_code and optional code_verifier
                     response = client.auth.exchange_code_for_session(params)
                 
                 return response
             
-            return self._execute_with_retry(exchange_func)
+            response = self._execute_with_retry(exchange_func)
+            # Persist session so other modules relying on saved session (e.g., is_authenticated fast path)
+            try:
+                if response:
+                    # Default to remember_me=True for OAuth logins
+                    self._save_session(response, remember_me=True)
+                    self._sync_auth_state_with_modules()
+            except Exception as save_err:
+                logger.warning(f"Failed to persist session after code exchange: {save_err}")
+            return response
         except Exception as e:
             logger.error(f"Code exchange error: {e}")
             raise
@@ -1670,5 +1857,12 @@ class SupabaseManager:
             results['recommendations'].append(f"Error during testing: {str(e)}")
             return results
 
-# Create singleton instance
-supabase = SupabaseManager() 
+# Create singleton instance that shares the same manager as get_supabase_client
+try:
+    with _supabase_manager_lock:
+        if _supabase_manager is None or not isinstance(_supabase_manager, SupabaseManager):
+            _supabase_manager = SupabaseManager()
+    supabase = _supabase_manager
+except Exception:
+    # Fallback to direct construction if lock/init fails
+    supabase = SupabaseManager()

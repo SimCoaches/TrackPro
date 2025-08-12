@@ -77,6 +77,13 @@ if QApplication.instance() is None:
             QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
     except Exception:
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
+    # Ensure Qt Quick uses OpenGL RHI when available to satisfy WebEngine plugin
+    try:
+        from PyQt6.QtGui import QSGRendererInterface
+        from PyQt6.QtQuick import QQuickWindow
+        QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
+    except Exception:
+        pass
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

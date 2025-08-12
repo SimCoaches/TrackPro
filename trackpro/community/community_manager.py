@@ -7,6 +7,9 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import uuid
 import time
+import json as _json
+import threading as _threading
+from urllib.parse import urlparse
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
@@ -135,6 +138,207 @@ class CommunityManager(QObject):
         except Exception as e:
             logger.debug(f"Polling fallback init failed: {e}")
     
+    def _start_direct_realtime_fallback(self) -> bool:
+        """Connect directly to Supabase Realtime websocket and bind postgres_changes.
+
+        Returns True if the fallback starts successfully.
+        """
+        try:
+            try:
+                from websocket import create_connection
+            except Exception as e:
+                logger.debug(f"websocket-client not available: {e}")
+                return False
+
+            # Build websocket URL and headers
+            try:
+                from ..database.supabase_client import SUPABASE_URL, SUPABASE_KEY, supabase as _sb
+                parsed = urlparse(SUPABASE_URL)
+                ws_url = f"wss://{parsed.netloc}/realtime/v1/websocket?apikey={SUPABASE_KEY}&vsn=1.0.0"
+            except Exception as e:
+                logger.debug(f"Failed to construct realtime URL: {e}")
+                return False
+
+            access_token = None
+            try:
+                client = getattr(_sb, 'client', None)
+                if client and hasattr(client, 'auth'):
+                    sess = client.auth.get_session()
+                    access_token = getattr(sess, 'access_token', None) or (sess.get('access_token') if isinstance(sess, dict) else None)
+            except Exception:
+                access_token = None
+
+            headers = [f"apikey: {SUPABASE_KEY}"]
+            if access_token:
+                headers.append(f"Authorization: Bearer {access_token}")
+
+            try:
+                ws = create_connection(ws_url, header=headers)
+            except Exception as e:
+                logger.debug(f"Realtime websocket connect failed: {e}")
+                return False
+
+            # Join public topic with all needed postgres_changes filters
+            ref = {"n": 1}
+            def _next_ref():
+                ref["n"] += 1
+                return str(ref["n"])
+
+            join = {
+                "topic": "realtime:public",
+                "event": "phx_join",
+                "payload": {
+                    "config": {
+                        "broadcast": {"self": False},
+                        "postgres_changes": [
+                            {"event": "INSERT", "schema": "public", "table": "community_messages"},
+                            {"event": "INSERT", "schema": "public", "table": "private_messages"},
+                            {"event": "INSERT", "schema": "public", "table": "community_participants"},
+                            {"event": "UPDATE", "schema": "public", "table": "community_participants"},
+                        ]
+                    }
+                },
+                "ref": _next_ref()
+            }
+
+            try:
+                ws.send(_json.dumps(join))
+            except Exception as e:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+                logger.debug(f"Realtime join send failed: {e}")
+                return False
+
+            self._direct_rt_stop = False
+
+            def _recv_loop():
+                try:
+                    last_hb = time.time()
+                    while not getattr(self, '_direct_rt_stop', False):
+                        # heartbeat
+                        now = time.time()
+                        if now - last_hb > 25:
+                            try:
+                                hb = {"topic": "phoenix", "event": "heartbeat", "payload": {}, "ref": _next_ref()}
+                                ws.send(_json.dumps(hb))
+                                last_hb = now
+                            except Exception:
+                                pass
+                        try:
+                            ws.settimeout(1.0)
+                            raw = ws.recv()
+                        except Exception:
+                            continue
+                        if not raw:
+                            continue
+                        try:
+                            msg = _json.loads(raw)
+                        except Exception:
+                            continue
+                        if msg.get('event') == 'postgres_changes':
+                            payload = msg.get('payload') or {}
+                            table = (payload.get('table') or '').lower()
+                            et = (payload.get('type') or payload.get('eventType') or '').upper()
+                            if table == 'community_messages' and et == 'INSERT':
+                                try:
+                                    self._on_message_inserted(payload)
+                                except Exception:
+                                    pass
+                            elif table == 'private_messages' and et == 'INSERT':
+                                try:
+                                    self._on_private_message_inserted(payload)
+                                except Exception:
+                                    pass
+                            elif table == 'community_participants' and et in ('INSERT', 'UPDATE'):
+                                try:
+                                    self._on_participant_changed(payload)
+                                except Exception:
+                                    pass
+                finally:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+
+            t = _threading.Thread(target=_recv_loop, name="TrackProRealtimeWS", daemon=True)
+            t.start()
+            self._direct_rt_thread = t
+            logger.info("✅ Direct realtime websocket fallback started on 'realtime:public'")
+            return True
+        except Exception as e:
+            logger.debug(f"Direct realtime fallback failed: {e}")
+            return False
+
+    def _bind_realtime_single_channel(self) -> bool:
+        """Bind all postgres_changes listeners on a single multiplexed channel.
+
+        Returns True if subscription succeeds.
+        """
+        try:
+            if not self.client:
+                return False
+            # Try to create a channel using various common names
+            channel = None
+            try:
+                if hasattr(self.client, 'channel'):
+                    for name in ("trackpro-community", "realtime:public", "public"):
+                        try:
+                            channel = self.client.channel(name)
+                            if channel:
+                                logger.info(f"Realtime channel created via client.channel('{name}')")
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                channel = None
+            if channel is None:
+                try:
+                    rt = getattr(self.client, 'realtime', None)
+                    if rt and hasattr(rt, 'channel'):
+                        for name in ("trackpro-community", "realtime:public", "public"):
+                            try:
+                                channel = rt.channel(name)
+                                if channel:
+                                    logger.info(f"Realtime channel created via client.realtime.channel('{name}')")
+                                    break
+                            except Exception:
+                                continue
+                except Exception:
+                    channel = None
+            if channel is None:
+                return False
+
+            # Bind listeners
+            channel.on(
+                "postgres_changes",
+                {"event": "INSERT", "schema": "public", "table": "community_messages"},
+                self._on_message_inserted,
+            )
+            channel.on(
+                "postgres_changes",
+                {"event": "INSERT", "schema": "public", "table": "private_messages"},
+                self._on_private_message_inserted,
+            )
+            channel.on(
+                "postgres_changes",
+                {"event": "INSERT", "schema": "public", "table": "community_participants"},
+                self._on_participant_changed,
+            )
+            channel.on(
+                "postgres_changes",
+                {"event": "UPDATE", "schema": "public", "table": "community_participants"},
+                self._on_participant_changed,
+            )
+            channel.subscribe()
+            self._realtime_channels.append(channel)
+            logger.info("✅ Subscribed to realtime via single multiplexed channel")
+            return True
+        except Exception as e:
+            logger.warning(f"Single-channel realtime bind failed: {e}")
+            return False
+
     def set_current_user(self, user_id: str):
         """Set the current authenticated user."""
         # No-op if unchanged to avoid redundant work/log noise
@@ -507,13 +711,45 @@ class CommunityManager(QObject):
             # Guard older/newer supabase clients that may expose realtime as client.channel or client.realtime.channel
             has_channel = hasattr(self.client, 'channel')
             has_realtime_channel = hasattr(getattr(self.client, 'realtime', None), 'channel')
+            logger.info(f"Realtime capability: client.channel={has_channel}, client.realtime.channel={has_realtime_channel}, client_type={type(self.client)}")
             if not has_channel and not has_realtime_channel:
-                logger.info("Supabase client has no realtime channel API; enabling lightweight polling fallback")
+                logger.info("Supabase client has no realtime channel API; trying single-channel bind then polling")
+                if self._bind_realtime_single_channel():
+                    self.is_realtime_active = True
+                    return
+                # Try direct websocket fallback for sync client limitations
+                if self._start_direct_realtime_fallback():
+                    self.is_realtime_active = True
+                    return
                 try:
                     self._start_polling_fallback()
                 except Exception as e:
                     logger.debug(f"Failed to start polling fallback: {e}")
                 return
+
+            # Detect sync client where realtime channel() is not implemented and use direct fallback
+            try:
+                rt_obj = getattr(self.client, 'realtime', None)
+                if rt_obj and hasattr(rt_obj, 'channel'):
+                    try:
+                        # This will raise NotImplementedError on SyncClient
+                        rt_obj.channel("trackpro-probe")
+                    except NotImplementedError:
+                        logger.info("Realtime channel() is not implemented on SyncClient; starting direct websocket fallback")
+                        if self._start_direct_realtime_fallback():
+                            self.is_realtime_active = True
+                            return
+            except Exception:
+                pass
+
+            # Try to proactively connect realtime websocket if supported
+            try:
+                rt = getattr(self.client, 'realtime', None)
+                if rt and hasattr(rt, 'connect'):
+                    rt.connect()
+                    logger.info("✅ Realtime websocket connected via client.realtime.connect()")
+            except Exception as e:
+                logger.debug(f"Realtime connect() not available or failed: {e}")
             
             # Clean up any existing channels
             try:
@@ -526,24 +762,67 @@ class CommunityManager(QObject):
             except Exception:
                 self._realtime_channels = []
 
+            # Prefer a single multiplexed channel approach for reliability
+            if self._bind_realtime_single_channel():
+                self.is_realtime_active = True
+                return
+
             subscribed_any = False
-            # Helper to get a channel for both API shapes
+            # Helper to get a channel for both API shapes with robust fallbacks
             def _get_channel(name: str):
-                try:
-                    if hasattr(self.client, 'channel'):
-                        return self.client.channel(name)
-                    rt = getattr(self.client, 'realtime', None)
-                    if rt and hasattr(rt, 'channel'):
-                        return rt.channel(name)
-                except Exception:
-                    return None
+                candidate_names = [
+                    name,
+                    # Common alternatives observed across client versions
+                    "realtime:public",
+                    "public",
+                    "trackpro:community",
+                    # Additional generic names used in some supabase-py versions
+                    "db-changes",
+                    "realtime:db-changes",
+                ]
+                last_error = None
+                for cand in candidate_names:
+                    # Try modern client.channel API first
+                    try:
+                        if hasattr(self.client, 'channel'):
+                            ch = self.client.channel(cand)
+                            if ch is not None:
+                                logger.info(f"Realtime channel created via client.channel with name '{cand}'")
+                                return ch
+                    except Exception as e:
+                        last_error = e
+                        logger.debug(f"Realtime channel() creation failed via client API for name '{cand}': {e}")
+                    # Try legacy client.realtime.channel API next
+                    try:
+                        rt = getattr(self.client, 'realtime', None)
+                        if rt and hasattr(rt, 'channel'):
+                            ch = rt.channel(cand)
+                            if ch is not None:
+                                logger.info(f"Realtime channel created via client.realtime.channel with name '{cand}'")
+                                return ch
+                    except Exception as e:
+                        last_error = e
+                        logger.debug(f"Realtime channel() creation failed via client.realtime API for name '{cand}': {e}")
+                if last_error:
+                    logger.debug(f"All realtime channel creation attempts failed. Last error: {last_error}")
                 return None
+
+            # Attempt a shared base channel as a fallback if table-specific names fail
+            base_channel = _get_channel("realtime:public") or _get_channel("public")
 
             # Subscribe to INSERT on community_messages
             try:
                 channel_messages = _get_channel("realtime:public:community_messages")
                 if channel_messages is None:
-                    raise RuntimeError("No realtime channel API available")
+                    if base_channel is not None:
+                        channel_messages = base_channel
+                        logger.info("Using shared 'realtime:public' channel for community_messages")
+                    else:
+                        # Try single multiplexed channel and direct websocket fallback before failing
+                        if self._bind_realtime_single_channel() or self._start_direct_realtime_fallback():
+                            self.is_realtime_active = True
+                            return
+                        raise RuntimeError("No realtime channel API available for community_messages")
                 channel_messages.on(
                     "postgres_changes",
                     {"event": "INSERT", "schema": "public", "table": "community_messages"},
@@ -560,7 +839,14 @@ class CommunityManager(QObject):
             try:
                 ch_pm = _get_channel("realtime:public:private_messages")
                 if ch_pm is None:
-                    raise RuntimeError("No realtime channel API available")
+                    if base_channel is not None:
+                        ch_pm = base_channel
+                        logger.info("Using shared 'realtime:public' channel for private_messages")
+                    else:
+                        if self._bind_realtime_single_channel() or self._start_direct_realtime_fallback():
+                            self.is_realtime_active = True
+                            return
+                        raise RuntimeError("No realtime channel API available for private_messages")
                 ch_pm.on(
                     "postgres_changes",
                     {"event": "INSERT", "schema": "public", "table": "private_messages"},
@@ -577,7 +863,14 @@ class CommunityManager(QObject):
             try:
                 channel_participants = _get_channel("realtime:public:community_participants")
                 if channel_participants is None:
-                    raise RuntimeError("No realtime channel API available")
+                    if base_channel is not None:
+                        channel_participants = base_channel
+                        logger.info("Using shared 'realtime:public' channel for community_participants")
+                    else:
+                        if self._bind_realtime_single_channel() or self._start_direct_realtime_fallback():
+                            self.is_realtime_active = True
+                            return
+                        raise RuntimeError("No realtime channel API available for community_participants")
                 channel_participants.on(
                     "postgres_changes",
                     {"event": "INSERT", "schema": "public", "table": "community_participants"},

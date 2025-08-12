@@ -210,7 +210,7 @@ def create_optimized_installer():
         print(f"❌ PyInstaller failed: {e}")
         return False
     
-    # Copy exe to installer temp with verification
+    # Copy executable to installer temp with verification (single EXE to reduce size)
     exe_name = f"TrackPro_v{__version__}.exe"
     src_exe = os.path.join("dist", exe_name)
     dest_exe = os.path.join("installer_temp", "dist", exe_name)
@@ -241,6 +241,8 @@ def create_optimized_installer():
     except Exception as e:
         print(f"❌ Failed to copy executable: {e}")
         return False
+
+    # Do not build or package a windowed variant to keep size down
     
     # Verify all required files exist
     required_files = [
@@ -260,7 +262,6 @@ def create_optimized_installer():
 
     # Create optimized Inno Setup script with debugging and fixed HidHide
     actual_exe_name = os.path.basename(dest_exe)
-    windowed_exe_name = actual_exe_name.replace('.exe', '_windowed.exe')
     # Use string format to avoid Unicode escape issues with backslashes
     script_content = """[Setup]
 AppName=TrackPro
@@ -276,7 +277,7 @@ Compression=lzma2/max
 SolidCompression=yes
 CreateAppDir=yes
 UninstallDisplayName=TrackPro v{version}
-UninstallDisplayIcon={{app}}\\{windowed_exe_name}
+UninstallDisplayIcon={{app}}\\{exe_name}
 ; Ensure 64-bit registry view so detection checks are accurate on x64 Windows
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
@@ -311,7 +312,6 @@ Type: files; Name: "{{userappdata}}\\TrackPro\\*.tmp"
 
 [Files]
 Source: "installer_temp\\dist\\{exe_name}"; DestDir: "{{app}}"; Flags: ignoreversion
-Source: "installer_temp\\dist\\{windowed_exe_name}"; DestDir: "{{app}}"; Flags: ignoreversion
 Source: "installer_temp\\prerequisites\\vJoySetup.exe"; DestDir: "{{tmp}}"; Flags: deleteafterinstall
 Source: "installer_temp\\prerequisites\\HidHide_1.5.230_x64.exe"; DestDir: "{{tmp}}"; Flags: deleteafterinstall
 Source: "installer_temp\\prerequisites\\vc_redist.x64.exe"; DestDir: "{{tmp}}"; Flags: deleteafterinstall
@@ -893,13 +893,12 @@ Filename: "{{tmp}}\\HidHide_1.5.230_x64.exe"; StatusMsg: "Installing HidHide..."
 Filename: "{{tmp}}\\vc_redist.x64.exe"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated; Check: not IsVCRedistInstalled; BeforeInstall: LogPrereqStart('Visual C++'); AfterInstall: LogPrereqEnd('Visual C++')
 
 [Icons]
-Name: "{{group}}\\TrackPro"; Filename: "{{app}}\\{windowed_exe_name}"; WorkingDir: "{{app}}"; Comment: "TrackPro Racing Coach Application"
-Name: "{{group}}\\TrackPro (Debug Console)"; Filename: "{{app}}\\{exe_name}"; WorkingDir: "{{app}}"
-Name: "{{commondesktop}}\\TrackPro"; Filename: "{{app}}\\{windowed_exe_name}"; WorkingDir: "{{app}}"; Comment: "TrackPro Racing Coach Application"; Tasks: desktopicon; Flags: createonlyiffileexists
+Name: "{{group}}\\TrackPro"; Filename: "{{app}}\\{exe_name}"; WorkingDir: "{{app}}"; Comment: "TrackPro Racing Coach Application"
+Name: "{{commondesktop}}\\TrackPro"; Filename: "{{app}}\\{exe_name}"; WorkingDir: "{{app}}"; Comment: "TrackPro Racing Coach Application"; Tasks: desktopicon; Flags: createonlyiffileexists
 
 [Tasks]
 Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce
-""".format(version=__version__, exe_name=actual_exe_name, windowed_exe_name=windowed_exe_name)
+""".format(version=__version__, exe_name=actual_exe_name)
     
     iss_script = "simple_installer.iss"
     with open(iss_script, "w", encoding="utf-8") as f:

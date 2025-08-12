@@ -373,6 +373,13 @@ class ModernMainWindow(QMainWindow):
         self.global_managers.hardware = hardware
         logger.info("✅ Global pedal system set for modern window")
         
+        # Ensure local calibration is loaded and cloud sync runs once on first attach
+        try:
+            if hasattr(hardware, 'ensure_cloud_synced'):
+                hardware.ensure_cloud_synced()
+        except Exception as e:
+            logger.debug(f"Calibration cloud sync skipped: {e}")
+
         # Start UI update timer for real-time pedal visualization
         self.start_ui_update_timer()
         

@@ -56,14 +56,44 @@ def show_instant_splash(app: QApplication) -> QSplashScreen:
 def main() -> int:
     log_boot("Bootstrap start")
     # Set critical Qt attributes BEFORE QApplication is created
+    # Perform each operation defensively so one failure doesn't skip the rest
+    def _safe_set_attr(attr_name: str):
+        try:
+            QApplication.setAttribute(getattr(Qt.ApplicationAttribute, attr_name), True)
+            log_boot(f"Set {attr_name}")
+        except Exception as _e:
+            log_boot(f"Skip {attr_name}: {_e}")
+
+    _safe_set_attr('AA_EnableHighDpiScaling')  # Qt6 may ignore/raise; safe to skip
+    _safe_set_attr('AA_UseHighDpiPixmaps')
+    _safe_set_attr('AA_ShareOpenGLContexts')
+    _safe_set_attr('AA_UseDesktopOpenGL')
+
+    # Also set the scene graph graphics API for Qt Quick/Qt WebEngine plugins
     try:
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseDesktopOpenGL, True)
-        log_boot("Qt attributes set")
-    except Exception as e:
-        log_boot(f"Qt attribute setup skipped: {e}")
+        from PyQt6.QtGui import QSGRendererInterface
+        from PyQt6.QtQuick import QQuickWindow
+        QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGLRhi)
+        log_boot("Qt Quick graphics API set to OpenGLRhi")
+    except Exception as _qe:
+        log_boot(f"Qt Quick graphics API setup skipped: {_qe}")
+
+    # Pre-import QtWebEngine to ensure proper initialization order in frozen builds
+    _we_ok = False
+    try:
+        import PyQt6.QtWebEngineWidgets  # noqa: F401
+        _we_ok = True
+        log_boot("QtWebEngineWidgets pre-imported")
+    except Exception as _we1:
+        log_boot(f"QtWebEngineWidgets pre-import skipped: {_we1}")
+        try:
+            import PyQt6.QtWebEngineCore  # noqa: F401
+            _we_ok = True
+            log_boot("QtWebEngineCore pre-imported")
+        except Exception as _we2:
+            log_boot(f"QtWebEngineCore pre-import skipped: {_we2}")
+
+    log_boot("Qt pre-app setup complete")
 
     # Minimal app first
     app = QApplication(sys.argv)

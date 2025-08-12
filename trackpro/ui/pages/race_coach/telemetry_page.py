@@ -397,21 +397,9 @@ class TelemetryPage(BasePage):
         self.loading_label.setVisible(False)
         layout.addWidget(self.loading_label)
 
-        # Live debug line (compact, always visible)
-        self.debug_label = QLabel("Debug: --")
-        self.debug_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.debug_label.setStyleSheet(
-            """
-            QLabel {
-                color: #7dd3fc;
-                font-family: Consolas, 'Courier New', monospace;
-                font-size: 11px;
-                padding: 2px 4px;
-                background: transparent;
-            }
-            """
-        )
-        layout.addWidget(self.debug_label)
+        # Hide debug line from UI
+        self.debug_label = QLabel("")
+        self.debug_label.setVisible(False)
         
         # Create professional telemetry legend
         self.create_telemetry_legend(layout)
@@ -522,10 +510,15 @@ class TelemetryPage(BasePage):
             from trackpro.race_coach.widgets.gear_graph import GearGraphWidget
             
             # Create graph widgets with fixed height - compact for all graphs on screen
-            GRAPH_HEIGHT = 100
+            # Use slightly larger heights for throttle, brake, and steering to utilize
+            # the available bottom space without introducing scroll.
+            GRAPH_HEIGHT_DEFAULT = 100
+            GRAPH_HEIGHT_THROTTLE = 130
+            GRAPH_HEIGHT_BRAKE = 130
+            GRAPH_HEIGHT_STEERING = 140
             graph_size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             
-            def create_graph_container(graph_widget):
+            def create_graph_container(graph_widget, height=GRAPH_HEIGHT_DEFAULT):
                 container = QFrame()
                 container.setStyleSheet("""
                     QFrame {
@@ -540,14 +533,14 @@ class TelemetryPage(BasePage):
                 container_layout.setSpacing(0)
                 
                 graph_widget.setSizePolicy(graph_size_policy)
-                graph_widget.setFixedHeight(GRAPH_HEIGHT)
+                graph_widget.setFixedHeight(height)
                 container_layout.addWidget(graph_widget)
                 
                 return container
             
             # Create all telemetry graphs
             self.throttle_graph = ThrottleGraphWidget()
-            throttle_container = create_graph_container(self.throttle_graph)
+            throttle_container = create_graph_container(self.throttle_graph, GRAPH_HEIGHT_THROTTLE)
             graphs_layout.addWidget(throttle_container)
             
             # Connect hover signal to centralized hover info widget
@@ -555,7 +548,7 @@ class TelemetryPage(BasePage):
                 self.throttle_graph.hover_data_changed.connect(self._update_hover_info)
             
             self.brake_graph = BrakeGraphWidget()
-            brake_container = create_graph_container(self.brake_graph)
+            brake_container = create_graph_container(self.brake_graph, GRAPH_HEIGHT_BRAKE)
             graphs_layout.addWidget(brake_container)
             
             # Connect hover signal to centralized hover info widget
@@ -563,7 +556,7 @@ class TelemetryPage(BasePage):
                 self.brake_graph.hover_data_changed.connect(self._update_hover_info)
             
             self.steering_graph = SteeringGraphWidget()
-            steering_container = create_graph_container(self.steering_graph)
+            steering_container = create_graph_container(self.steering_graph, GRAPH_HEIGHT_STEERING)
             graphs_layout.addWidget(steering_container)
             
             # Connect hover signal to centralized hover info widget
@@ -571,7 +564,7 @@ class TelemetryPage(BasePage):
                 self.steering_graph.hover_data_changed.connect(self._update_hover_info)
             
             self.speed_graph = SpeedGraphWidget()
-            speed_container = create_graph_container(self.speed_graph)
+            speed_container = create_graph_container(self.speed_graph, GRAPH_HEIGHT_DEFAULT)
             graphs_layout.addWidget(speed_container)
             
             # Connect hover signal to centralized hover info widget
@@ -579,7 +572,7 @@ class TelemetryPage(BasePage):
                 self.speed_graph.hover_data_changed.connect(self._update_hover_info)
             
             self.gear_graph = GearGraphWidget()
-            gear_container = create_graph_container(self.gear_graph)
+            gear_container = create_graph_container(self.gear_graph, GRAPH_HEIGHT_DEFAULT)
             graphs_layout.addWidget(gear_container)
             
             # Connect hover signal to centralized hover info widget
@@ -596,7 +589,9 @@ class TelemetryPage(BasePage):
             placeholder.setStyleSheet("color: #ff5555; font-size: 16px; padding: 50px;")
             graphs_layout.addWidget(placeholder)
         
-        graphs_layout.addStretch()
+        # Avoid adding flexible stretch that wastes vertical space inside the scroll area
+        # so the graphs use available space more effectively without adding scrollbars.
+        # graphs_layout.addStretch()
         scroll_area.setWidget(graphs_container)
         layout.addWidget(scroll_area)
     
@@ -622,7 +617,8 @@ class TelemetryPage(BasePage):
                 email = None
                 if user_obj:
                     email = getattr(getattr(user_obj, 'user', None), 'email', None) or getattr(user_obj, 'email', None)
-                self.debug_label.setText(f"Debug: auth={is_auth} user={email or 'None'}")
+                # Keep debug string updates internal (label hidden)
+                self.debug_label.setText("")
                 logger.info(f"[TELEM DEBUG] auth={is_auth}, user_email={email}")
                 # Add environment/connectivity diagnostics to console
                 try:
@@ -656,7 +652,7 @@ class TelemetryPage(BasePage):
                 except Exception as en_e:
                     logger.info(f"[TELEM DEBUG] enable_error={en_e}")
             except Exception as auth_e:
-                self.debug_label.setText(f"Debug: auth=error {auth_e}")
+                self.debug_label.setText("")
                 logger.warning(f"[TELEM DEBUG] Auth check error: {auth_e}")
             
             # Load my sessions
@@ -666,16 +662,16 @@ class TelemetryPage(BasePage):
                     sessions = sessions_result[0]
                     self._on_sessions_loaded(sessions, "Sessions loaded successfully")
                     logger.info(f"Loaded {len(sessions)} MY sessions from database")
-                    self.debug_label.setText(self.debug_label.text() + f" | my_sessions={len(sessions)}")
+                    pass
                 else:
                     sessions = []
                     self._on_sessions_loaded(sessions, "No sessions found")
-                    self.debug_label.setText(self.debug_label.text() + " | my_sessions=0")
+                    pass
             except Exception as e:
                 logger.error(f"Error loading sessions: {e}")
                 self._on_initial_load_error(f"Error loading sessions: {str(e)}")
                 sessions = []
-                self.debug_label.setText(self.debug_label.text() + f" | my_sessions_error={str(e)[:60]}")
+                pass
             
             # Load laps for the most recent session if available
             if sessions:
@@ -688,17 +684,17 @@ class TelemetryPage(BasePage):
                             laps = laps_result[0]
                             self._on_my_laps_loaded(recent_session, laps)
                             logger.info(f"Loaded {len(laps)} laps for MY session {session_id}")
-                            self.debug_label.setText(self.debug_label.text() + f" | laps={len(laps)}")
+                            pass
                             
                             # Avoid heavy preloading during startup to keep UI responsive
                             # Preloading can be re-enabled in a lighter form if needed
                         else:
                             self._on_my_laps_loaded(recent_session, [])
-                            self.debug_label.setText(self.debug_label.text() + " | laps=0")
+                            pass
                 except Exception as e:
                     logger.error(f"Error loading laps: {e}")
                     self._on_my_laps_loaded(recent_session, [])
-                    self.debug_label.setText(self.debug_label.text() + f" | laps_error={str(e)[:60]}")
+                    pass
 
             # Load community sessions for Lap B selection
             try:
@@ -1318,7 +1314,8 @@ class TelemetryPage(BasePage):
         error_text = "Error loading telemetry: " + " | ".join(error_parts)
         logger.error(error_text)
         try:
-            self.debug_label.setText((self.debug_label.text() or "Debug:") + " | " + error_text)
+            # Keep errors in logs only; label is hidden
+            pass
         except Exception:
             pass
         

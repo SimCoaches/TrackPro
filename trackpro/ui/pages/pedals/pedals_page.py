@@ -177,6 +177,11 @@ class PedalsPage(BasePage):
         
         if self.performance_manager:
             self.performance_manager.ui_update_ready.connect(self.handle_hardware_update)
+        # Persist calibration changes from UI to local file (and schedule cloud sync)
+        try:
+            self.pedal_calibrated.connect(self.on_pedal_calibrated)
+        except Exception:
+            pass
 
     def switch_section(self, index: int):
         try:
@@ -286,6 +291,46 @@ class PedalsPage(BasePage):
         
         scroll_area.setWidget(main_widget)
         return scroll_area
+
+    def on_pedal_calibrated(self, pedal: str, data: dict):
+        try:
+            if not getattr(self, 'hardware_input', None) and getattr(self, 'global_managers', None):
+                self.hardware_input = getattr(self.global_managers, 'hardware', None)
+            hardware = getattr(self, 'hardware_input', None)
+            if not hardware:
+                return
+            # Translate UI data to hardware calibration format
+            ui_points = data.get('curve_points') or []
+            points = []
+            for pt in ui_points:
+                try:
+                    x, y = pt
+                    points.append([int(x), int(y)])
+                except Exception:
+                    continue
+            curve_type = data.get('curve_type') or 'Linear'
+            if pedal not in hardware.calibration:
+                hardware.calibration[pedal] = {}
+            hardware.calibration[pedal]['points'] = points
+            hardware.calibration[pedal]['curve'] = curve_type
+            # Optionally reflect min/max to axis ranges when provided
+            try:
+                min_val = data.get('min_value')
+                max_val = data.get('max_value')
+                if isinstance(min_val, int) and isinstance(max_val, int) and pedal in hardware.axis_ranges:
+                    axis_entry = hardware.axis_ranges.get(pedal, {})
+                    axis_entry['min'] = min_val
+                    axis_entry['max'] = max_val
+                    hardware.axis_ranges[pedal] = axis_entry
+                    if hasattr(hardware, 'save_axis_ranges'):
+                        hardware.save_axis_ranges()
+            except Exception:
+                pass
+            # Persist calibration locally and schedule cloud save
+            if hasattr(hardware, 'save_calibration'):
+                hardware.save_calibration(hardware.calibration)
+        except Exception as e:
+            logger.debug(f"Failed to persist calibration for {pedal}: {e}")
     
     def open_calibration_wizard(self):
         try:

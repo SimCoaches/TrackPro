@@ -3298,6 +3298,13 @@ class CommunityPage(BasePage):
 
     def _ensure_message_polling(self):
         try:
+            # If manager has a polling fallback running, avoid starting a duplicate UI poller
+            try:
+                cm = self.community_manager
+                if cm and (getattr(cm, 'is_realtime_active', False) or getattr(cm, '_polling_timer', None)):
+                    return
+            except Exception:
+                pass
             if hasattr(self, '_message_poll_timer') and self._message_poll_timer:
                 return
             from PyQt6.QtCore import QTimer
