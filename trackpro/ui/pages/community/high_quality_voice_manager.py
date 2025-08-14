@@ -305,9 +305,19 @@ class HighQualityVoiceManager(QObject):
     def _ensure_current_settings(self):
         """Ensure audio streams are using current settings."""
         try:
-            # Reload settings from config to ensure we have the latest
+            # Reload core settings from config but preserve explicitly-set devices
+            current_input = getattr(self, 'input_device', None)
+            current_output = getattr(self, 'output_device', None)
+
             self.load_settings_from_config()
-            logger.info("🎤 Reloaded settings from config")
+
+            # Preserve runtime device selections if already chosen
+            if current_input is not None:
+                self.input_device = current_input
+            if current_output is not None:
+                self.output_device = current_output
+
+            logger.info("🎤 Reloaded settings from config (preserving selected devices)")
         except Exception as e:
             logger.error(f"🎤 Failed to reload settings: {e}")
     
@@ -447,24 +457,175 @@ class HighQualityVoiceManager(QObject):
             return
             
         try:
-            # Use selected input device or default
+            # Use selected input device or choose a concrete default with input channels
             input_device_index = self.input_device if self.input_device is not None else None
             logger.info(f"🎤 Starting recording with device: {input_device_index}")
-            
-            # Auto-detect channel count for the selected device
+
+            if input_device_index is None:
+                try:
+                    device_count = self.audio.get_device_count()
+                    chosen = None
+                    # First pass: prefer real microphones (skip mapper/primary)
+                    for i in range(device_count):
+                        info = self.audio.get_device_info_by_index(i)
+                        name = str(info.get('name', '')).lower()
+                        if info.get('maxInputChannels', 0) > 0 and 'mapper' not in name and 'primary sound' not in name:
+                            chosen = i
+                            break
+                    # Second pass: any device with input (if none matched)
+                    if chosen is None:
+                        for i in range(device_count):
+                            info = self.audio.get_device_info_by_index(i)
+                            if info.get('maxInputChannels', 0) > 0:
+                                chosen = i
+                                break
+                    input_device_index = chosen
+                    if input_device_index is not None:
+                        info = self.audio.get_device_info_by_index(input_device_index)
+                        logger.info(f"🎤 Selected default input device index {input_device_index}: {info.get('name')}")
+                except Exception as e:
+                    logger.warning(f"🎤 Could not auto-select input device: {e}")
+
+            # Detect device channel capability and avoid increasing channel count
             actual_channels = self._get_device_channel_count(input_device_index)
-            if actual_channels != self.channels:
-                logger.info(f"🎤 Adjusting channels from {self.channels} to {actual_channels} for device compatibility")
+            if self.channels > actual_channels:
+                logger.info(f"🎤 Reducing channels from {self.channels} to {actual_channels} for device compatibility")
                 self.channels = actual_channels
-            
-            self.input_stream = self.audio.open(
-                format=self.format_type,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=input_device_index,
-                frames_per_buffer=self.buffer_size
-            )
+
+            # Prepare fallback candidates and probe support
+            def _fmt_for_bits(bits: int):
+                if bits == 16:
+                    return pyaudio.paInt16
+                if bits == 24:
+                    return pyaudio.paInt24
+                return pyaudio.paInt32
+
+            # Build candidate sample rates: last working (if any), current, device default, common fallbacks
+            candidate_rates = []
+            def _push_rate(val):
+                try:
+                    r = int(val)
+                    if r > 0 and r not in candidate_rates:
+                        candidate_rates.append(r)
+                except Exception:
+                    pass
+            # Prefer last working format saved by mic test
+            try:
+                from trackpro.config import config
+                _push_rate(config.get('voice_chat.last_working_sample_rate', None))
+            except Exception:
+                pass
+            _push_rate(self.sample_rate)
+            try:
+                if input_device_index is not None:
+                    dinfo = self.audio.get_device_info_by_index(input_device_index)
+                    _push_rate(dinfo.get('defaultSampleRate'))
+            except Exception:
+                pass
+            _push_rate(48000)
+            _push_rate(44100)
+            _push_rate(32000)
+            _push_rate(16000)
+            # Build candidate channels: prefer current, then 2ch if supported, then mono
+            candidate_channels = []
+            if self.channels > 0:
+                candidate_channels.append(self.channels)
+            if actual_channels >= 2 and 2 not in candidate_channels:
+                candidate_channels.append(2)
+            if 1 not in candidate_channels:
+                candidate_channels.append(1)
+            # Ensure we do not exceed device capability
+            candidate_channels = [ch for ch in candidate_channels if ch <= max(1, actual_channels)]
+            # Prefer last working bit depth if available
+            candidate_bits = []
+            try:
+                from trackpro.config import config
+                lw_bits = config.get('voice_chat.last_working_bit_depth', None)
+                if lw_bits is not None:
+                    candidate_bits.append(int(lw_bits))
+            except Exception:
+                pass
+            candidate_bits.append(self.bit_depth)
+            if 16 not in candidate_bits:
+                candidate_bits.append(16)
+
+            opened = False
+            last_error = None
+
+            # Build a list of candidate input devices (last working, current, then others)
+            candidate_devices = []
+            try:
+                from trackpro.config import config
+                lw_dev = config.get('voice_chat.last_working_input_device', None)
+                if lw_dev is not None and lw_dev not in candidate_devices:
+                    candidate_devices.append(int(lw_dev))
+            except Exception:
+                pass
+            if input_device_index is not None:
+                candidate_devices.append(input_device_index)
+            try:
+                device_count = self.audio.get_device_count()
+                for i in range(device_count):
+                    if i == input_device_index:
+                        continue
+                    info = self.audio.get_device_info_by_index(i)
+                    name = str(info.get('name', '')).lower()
+                    if info.get('maxInputChannels', 0) > 0 and 'mapper' not in name and 'primary sound' not in name:
+                        candidate_devices.append(i)
+            except Exception as e:
+                logger.warning(f"🎤 Unable to enumerate additional input devices: {e}")
+
+            for dev in candidate_devices:
+                for rate in candidate_rates:
+                    for ch in candidate_channels:
+                        for bits in candidate_bits:
+                            fmt = _fmt_for_bits(bits)
+                            try:
+                                # Probe support where available
+                                if hasattr(self.audio, 'is_format_supported'):
+                                    try:
+                                        self.audio.is_format_supported(
+                                            rate,
+                                            input_device=dev,
+                                            input_channels=ch,
+                                            input_format=fmt
+                                        )
+                                    except Exception as probe_err:
+                                        last_error = probe_err
+                                        logger.debug(f"🎤 Unsupported input (probe) dev {dev}: {rate}Hz, {ch}ch, {bits}bit -> {probe_err}")
+                                        continue
+
+                                # Attempt to open stream
+                                self.input_stream = self.audio.open(
+                                    format=fmt,
+                                    channels=ch,
+                                    rate=rate,
+                                    input=True,
+                                    input_device_index=dev,
+                                    frames_per_buffer=self.buffer_size
+                                )
+                                # Persist chosen settings
+                                self.sample_rate = rate
+                                self.channels = ch
+                                self.bit_depth = bits
+                                self.format_type = fmt
+                                self.input_device = dev
+                                opened = True
+                                logger.info(f"🎤 Opened input: {rate}Hz, {ch}ch, {bits}bit on device {dev}")
+                                break
+                            except Exception as e:
+                                last_error = e
+                                logger.debug(f"🎤 Failed input open dev {dev}: {rate}Hz, {ch}ch, {bits}bit: {e}")
+                        if opened:
+                            break
+                    if opened:
+                        break
+                if opened:
+                    break
+
+            if not opened:
+                raise RuntimeError(f"No supported input format across devices: {last_error}")
+
             self.is_recording = True
             logger.info("🎤 Audio recording started successfully")
             
@@ -614,22 +775,153 @@ class HighQualityVoiceManager(QObject):
             output_device_index = self.output_device if self.output_device is not None else None
             logger.info(f"🎤 Starting playback with device: {output_device_index}")
             
-            # Check device capabilities
+            # Choose a concrete default output device when none selected
+            if output_device_index is None:
+                try:
+                    device_count = self.audio.get_device_count()
+                    chosen = None
+                    # First pass: prefer real speakers/headphones (skip mapper/primary)
+                    for i in range(device_count):
+                        info = self.audio.get_device_info_by_index(i)
+                        name = str(info.get('name', '')).lower()
+                        if info.get('maxOutputChannels', 0) > 0 and 'mapper' not in name and 'primary sound' not in name:
+                            chosen = i
+                            break
+                    # Second pass: any device with output (if none matched)
+                    if chosen is None:
+                        for i in range(device_count):
+                            info = self.audio.get_device_info_by_index(i)
+                            if info.get('maxOutputChannels', 0) > 0:
+                                chosen = i
+                                break
+                    output_device_index = chosen
+                    if output_device_index is not None:
+                        info = self.audio.get_device_info_by_index(output_device_index)
+                        logger.info(f"🎤 Selected default output device index {output_device_index}: {info.get('name')}")
+                except Exception as e:
+                    logger.warning(f"🎤 Could not auto-select output device: {e}")
+
+            # Respect device output channel limit, avoid increasing channel count
             if output_device_index is not None:
-                device_info = self.audio.get_device_info_by_index(output_device_index)
-                max_channels = device_info['maxOutputChannels']
-                if self.channels > max_channels:
-                    logger.warning(f"🎤 Output device only supports {max_channels} channels, using {max_channels}")
-                    self.channels = max_channels
-            
-            self.output_stream = self.audio.open(
-                format=self.format_type,
-                channels=self.channels,
-                rate=self.sample_rate,
-                output=True,
-                output_device_index=output_device_index,
-                frames_per_buffer=self.buffer_size
-            )
+                try:
+                    device_info = self.audio.get_device_info_by_index(output_device_index)
+                    max_channels = device_info.get('maxOutputChannels', 2)
+                    if self.channels > max_channels:
+                        logger.warning(f"🎤 Output device only supports {max_channels} channels, reducing to {max_channels}")
+                        self.channels = max_channels
+                except Exception as e:
+                    logger.warning(f"🎤 Could not read output device info: {e}")
+
+            # Prepare fallback candidates and probe support
+            def _fmt_for_bits(bits: int):
+                if bits == 16:
+                    return pyaudio.paInt16
+                if bits == 24:
+                    return pyaudio.paInt24
+                return pyaudio.paInt32
+
+            # Build candidate sample rates: current, device default, common fallbacks
+            candidate_rates = []
+            def _push_rate(val):
+                try:
+                    r = int(val)
+                    if r > 0 and r not in candidate_rates:
+                        candidate_rates.append(r)
+                except Exception:
+                    pass
+            _push_rate(self.sample_rate)
+            try:
+                if output_device_index is not None:
+                    dinfo = self.audio.get_device_info_by_index(output_device_index)
+                    _push_rate(dinfo.get('defaultSampleRate'))
+            except Exception:
+                pass
+            _push_rate(48000)
+            _push_rate(44100)
+            # Prefer current, then 2ch if available, then mono
+            candidate_channels = []
+            if self.channels > 0:
+                candidate_channels.append(self.channels)
+            try:
+                dev_info = self.audio.get_device_info_by_index(output_device_index) if output_device_index is not None else None
+                max_out = dev_info.get('maxOutputChannels', 2) if dev_info else 2
+            except Exception:
+                max_out = 2
+            if max_out >= 2 and 2 not in candidate_channels:
+                candidate_channels.append(2)
+            if 1 not in candidate_channels:
+                candidate_channels.append(1)
+            candidate_channels = [ch for ch in candidate_channels if ch <= max_out]
+            candidate_bits = [self.bit_depth]
+            if 16 not in candidate_bits:
+                candidate_bits.append(16)
+
+            opened = False
+            last_error = None
+
+            # Build candidate output devices list (current first, then others)
+            candidate_devices = []
+            if output_device_index is not None:
+                candidate_devices.append(output_device_index)
+            try:
+                device_count = self.audio.get_device_count()
+                for i in range(device_count):
+                    if i == output_device_index:
+                        continue
+                    info = self.audio.get_device_info_by_index(i)
+                    name = str(info.get('name', '')).lower()
+                    if info.get('maxOutputChannels', 0) > 0 and 'mapper' not in name and 'primary sound' not in name:
+                        candidate_devices.append(i)
+            except Exception as e:
+                logger.warning(f"🎤 Unable to enumerate additional output devices: {e}")
+
+            for dev in candidate_devices:
+                for rate in candidate_rates:
+                    for ch in candidate_channels:
+                        for bits in candidate_bits:
+                            fmt = _fmt_for_bits(bits)
+                            try:
+                                if hasattr(self.audio, 'is_format_supported'):
+                                    try:
+                                        self.audio.is_format_supported(
+                                            rate,
+                                            output_device=dev,
+                                            output_channels=ch,
+                                            output_format=fmt
+                                        )
+                                    except Exception as probe_err:
+                                        last_error = probe_err
+                                        logger.debug(f"🎤 Unsupported output (probe) dev {dev}: {rate}Hz, {ch}ch, {bits}bit -> {probe_err}")
+                                        continue
+
+                                self.output_stream = self.audio.open(
+                                    format=fmt,
+                                    channels=ch,
+                                    rate=rate,
+                                    output=True,
+                                    output_device_index=dev,
+                                    frames_per_buffer=self.buffer_size
+                                )
+                                self.sample_rate = rate
+                                self.channels = ch
+                                self.bit_depth = bits
+                                self.format_type = fmt
+                                self.output_device = dev
+                                opened = True
+                                logger.info(f"🎤 Opened output: {rate}Hz, {ch}ch, {bits}bit on device {dev}")
+                                break
+                            except Exception as e:
+                                last_error = e
+                                logger.debug(f"🎤 Failed output open dev {dev}: {rate}Hz, {ch}ch, {bits}bit: {e}")
+                        if opened:
+                            break
+                    if opened:
+                        break
+                if opened:
+                    break
+
+            if not opened:
+                raise RuntimeError(f"No supported output format across devices: {last_error}")
             self.is_playing = True
             logger.info("🎤 Audio playback started successfully")
             

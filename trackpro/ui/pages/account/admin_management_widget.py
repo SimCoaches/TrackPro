@@ -33,16 +33,21 @@ class AdminManagementWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
+
+        # Ensure labels don't draw opaque bars over the page background
+        self.setStyleSheet("""
+            QLabel { background: transparent; }
+        """)
         
         # Title
         title = QLabel("Admin Management")
         title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        title.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        title.setStyleSheet("color: #ffffff; margin-bottom: 10px; background: transparent;")
         layout.addWidget(title)
         
         # Description
         desc = QLabel("Manage dynamic admin users. Only hardcoded admins can add/remove other admins.")
-        desc.setStyleSheet("color: #b9bbbe; font-size: 14px; margin-bottom: 20px;")
+        desc.setStyleSheet("color: #b9bbbe; font-size: 14px; margin-bottom: 20px; background: transparent;")
         desc.setWordWrap(True)
         layout.addWidget(desc)
         
@@ -50,7 +55,7 @@ class AdminManagementWidget(QWidget):
         current_user = get_current_user()
         if current_user:
             user_info = QLabel(f"Current User: {current_user.email}")
-            user_info.setStyleSheet("color: #5865f2; font-size: 12px; margin-bottom: 10px;")
+            user_info.setStyleSheet("color: #5865f2; font-size: 12px; margin-bottom: 10px; background: transparent;")
             layout.addWidget(user_info)
         
         # Add admin section
@@ -61,12 +66,13 @@ class AdminManagementWidget(QWidget):
                 border-radius: 8px;
                 padding: 15px;
             }
+            QLabel { background: transparent; }
         """)
         add_layout = QVBoxLayout(add_frame)
         
         add_title = QLabel("Add New Admin")
         add_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        add_title.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        add_title.setStyleSheet("color: #ffffff; margin-bottom: 10px; background: transparent;")
         add_layout.addWidget(add_title)
         
         # Email input
@@ -125,12 +131,13 @@ class AdminManagementWidget(QWidget):
                 border-radius: 8px;
                 padding: 15px;
             }
+            QLabel { background: transparent; }
         """)
         list_layout = QVBoxLayout(list_frame)
         
         list_title = QLabel("Current Admins")
         list_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        list_title.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        list_title.setStyleSheet("color: #ffffff; margin-bottom: 10px; background: transparent;")
         list_layout.addWidget(list_title)
         
         # Admin list
@@ -205,6 +212,10 @@ class AdminManagementWidget(QWidget):
         """)
         self.refresh_button.clicked.connect(self.load_admin_list)
         layout.addWidget(self.refresh_button)
+
+        # Make the outer widget background transparent so it blends with page background
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(self.styleSheet() + "\nQWidget { background: transparent; }\n")
         
         # Set up connections
         self.email_input.returnPressed.connect(self.add_admin)

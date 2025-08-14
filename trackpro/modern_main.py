@@ -295,22 +295,28 @@ class ModernTrackProApp:
                 self.handle_auth_state_change(False)
                 return
             
-            # Try a quick local session check first
+            # Try a fast authenticated check that supports secure sessions (no plaintext file needed)
             try:
-                # Check if we have a local session file (fast check)
-                import os
-                auth_file = os.path.join(os.path.expanduser("~"), ".trackpro", "auth.json")
-                if os.path.exists(auth_file):
-                    logger.info("Found local auth file - attempting quick session restore")
-                    # This will be fast if session is valid
-                    is_authenticated = supabase.is_authenticated()
-                    self.handle_auth_state_change(is_authenticated)
-                else:
-                    logger.info("No local auth file found - user not authenticated")
-                    self.handle_auth_state_change(False)
+                is_authenticated = supabase.is_authenticated()
+                # Avoid flipping to False if we already marked the app authenticated moments ago
+                try:
+                    from trackpro.ui.modern.main_window import ModernMainWindow  # type: ignore
+                    if hasattr(self, 'window') and hasattr(self.window, '_last_auth_state'):
+                        if self.window._last_auth_state and not is_authenticated:
+                            logger.info("Auth check returned False but UI is already authenticated; skipping downgrade")
+                            return
+                except Exception:
+                    pass
+                self.handle_auth_state_change(is_authenticated)
             except Exception as e:
                 logger.warning(f"Background auth check failed: {e}")
-                # Don't block UI - assume not authenticated
+                # Be conservative: don't emit False on transient errors during startup
+                try:
+                    if hasattr(self, 'window') and getattr(self.window, '_last_auth_state', False):
+                        logger.info("Keeping previous authenticated state due to transient auth check error")
+                        return
+                except Exception:
+                    pass
                 self.handle_auth_state_change(False)
                 
         except Exception as e:

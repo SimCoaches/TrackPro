@@ -497,18 +497,18 @@ class ChatMessageWidget(QWidget):
         from ...avatar_manager import AvatarManager
         size = 32
         avatar_url = None
-        # Prefer public_user_display_info avatar if present
-        udi = self.message_data.get('user_display_info') or {}
-        if udi.get('avatar_url'):
-            avatar_url = udi.get('avatar_url')
-        # Fallback to user_profiles avatar if public info had none
-        if not avatar_url:
+        # Single source of truth: prefer sender_avatar_url if provided by the data layer
+        if self.message_data.get('sender_avatar_url'):
+            avatar_url = self.message_data.get('sender_avatar_url')
+        else:
+            # Back-compat fallback: try profile, then public display info
             up = self.message_data.get('user_profiles') or {}
             if up.get('avatar_url'):
                 avatar_url = up.get('avatar_url')
-        # Final fallback to any direct sender avatar field
-        if not avatar_url and self.message_data.get('sender_avatar_url'):
-            avatar_url = self.message_data['sender_avatar_url']
+            if not avatar_url:
+                udi = self.message_data.get('user_display_info') or {}
+                if udi.get('avatar_url'):
+                    avatar_url = udi.get('avatar_url')
 
         name = self.message_data.get('sender_name')
         if not name and self.message_data.get('user_profiles'):
@@ -516,6 +516,17 @@ class ChatMessageWidget(QWidget):
             name = user_profile.get('display_name') or user_profile.get('username') or 'U'
         if not name:
             name = 'U'
+
+        # If this is the current user's message, append a cache-busting param
+        try:
+            from trackpro.auth.user_manager import get_current_user
+            user = get_current_user()
+            if user and user.is_authenticated and self.message_data.get('sender_id') == user.id and avatar_url:
+                import time as _t
+                cb = f"{'&' if '?' in avatar_url else '?'}v={int(_t.time())}"
+                avatar_url = avatar_url + cb
+        except Exception:
+            pass
 
         return AvatarManager.instance().get_cached_pixmap(avatar_url or "", name, size=size)
     
@@ -526,27 +537,52 @@ class ChatMessageWidget(QWidget):
         layout.setSpacing(8)
         
         # User avatar
-        avatar_label = QLabel()
-        avatar_label.setFixedSize(32, 32)
-        avatar_label.setPixmap(self.create_avatar())
-        layout.addWidget(avatar_label)
+        self.avatar_label = QLabel()
+        self.avatar_label.setFixedSize(32, 32)
+        self.avatar_label.setPixmap(self.create_avatar())
+        layout.addWidget(self.avatar_label)
 
         # Kick off async avatar fetch so new users' avatars appear even if not cached
         try:
             from ...avatar_manager import AvatarManager
             size = 32
             avatar_url = None
-            udi = self.message_data.get('user_display_info') or {}
-            if udi.get('avatar_url'):
-                avatar_url = udi.get('avatar_url')
-            if not avatar_url:
+            # Single source of truth while rendering
+            if self.message_data.get('sender_avatar_url'):
+                avatar_url = self.message_data.get('sender_avatar_url')
+            else:
                 up = self.message_data.get('user_profiles') or {}
                 if up.get('avatar_url'):
                     avatar_url = up.get('avatar_url')
-            if not avatar_url:
-                avatar_url = self.message_data.get('sender_avatar_url')
+                if not avatar_url:
+                    udi = self.message_data.get('user_display_info') or {}
+                    if udi.get('avatar_url'):
+                        avatar_url = udi.get('avatar_url')
             name = self.message_data.get('sender_name') or 'U'
-            AvatarManager.instance().set_label_avatar(avatar_label, avatar_url, name, size=size)
+            # If this is the current user's message, append a cache-busting param
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated and self.message_data.get('sender_id') == user.id and avatar_url:
+                    import time as _t
+                    cb = f"{'&' if '?' in avatar_url else '?'}v={int(_t.time())}"
+                    avatar_url = avatar_url + cb
+            except Exception:
+                pass
+            # If this is the current user's message, proactively invalidate the cache
+            # so we don't reuse stale bytes for unchanged URLs
+            try:
+                from trackpro.auth.user_manager import get_current_user
+                user = get_current_user()
+                if user and user.is_authenticated and self.message_data.get('sender_id') == user.id and avatar_url:
+                    # Invalidate both canonical and non-versioned forms
+                    AvatarManager.instance().invalidate_cache(avatar_url)
+                    base_url = avatar_url.split('?')[0]
+                    AvatarManager.instance().invalidate_cache(base_url)
+            except Exception:
+                pass
+            AvatarManager.instance().set_label_avatar(self.avatar_label, avatar_url, name, size=size)
+            # No post-render repair; avatar URLs are authoritative now.
         except Exception:
             pass
         
@@ -587,13 +623,12 @@ class ChatMessageWidget(QWidget):
             except Exception as e:
                 logger.debug(f"Could not get current user for username: {e}")
                 sender_name = 'Unknown'
-                logger.info(f"🔍 Username display - using fallback: {sender_name}")
-            
+
+        # Build username/timestamp row
         username_label = QLabel(sender_name)
         role_color = ROLE_COLORS.get(self.user_role, ROLE_COLORS['newbie'])
         username_label.setStyleSheet(f"color: {role_color}; font-weight: bold; font-size: 14px;")
         
-        # Timestamp
         timestamp = self.message_data.get('created_at', '')
         if timestamp:
             time_str = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%H:%M')
@@ -1830,6 +1865,9 @@ class CommunityPage(BasePage):
     _heavy_components_initialized = False  # Add flag to prevent duplicate heavy initialization
     _channels_loaded = False  # Class-level flag to prevent duplicate channel loading
     _private_messages_loaded = False  # Class-level flag to prevent duplicate private message loading
+    # Performance controls
+    AUTO_SELECT_FIRST_CHANNEL = False  # Avoid auto-loading messages on first paint
+    START_VOICE_SERVER_ON_DEMAND = True  # Defer voice server start until a voice channel is opened
     
     def __init__(self, global_managers=None):
         super().__init__("community", global_managers)
@@ -1856,6 +1894,8 @@ class CommunityPage(BasePage):
         self.private_messages = []
         self.current_private_conversation = None
         self.voice_channels = {}  # Track voice channels for cleanup
+        self._channels_by_id = {}  # Fast lookup map for channel_id -> channel
+        self.channel_widgets = {}  # Cache per-channel widgets for reuse
         
         # Initialize state flags
         self._initialization_complete = False
@@ -1920,6 +1960,67 @@ class CommunityPage(BasePage):
         self.create_main_content(layout)
         
         self.setLayout(layout)
+
+    def on_avatar_updated(self, avatar_url: str = ""):
+        """Refresh visible message avatars when the current user's avatar changes.
+
+        Uses the provided avatar_url for the current user's messages so they
+        update immediately without waiting for data reloads.
+        """
+        try:
+            # Best-effort refresh: iterate visible items and re-apply avatar via manager
+            lst = getattr(self, 'messages_list', None)
+            # Also update our cached messages so future paints use the new URL
+            try:
+                current_channel = getattr(self, 'current_channel', None)
+                if current_channel and hasattr(self, '_message_cache') and self._message_cache.get(current_channel):
+                    updated_cache = []
+                    for m in self._message_cache.get(current_channel, []):
+                        if m and m.get('sender_id') and avatar_url:
+                            try:
+                                from trackpro.auth.user_manager import get_current_user
+                                me = get_current_user()
+                                if me and me.is_authenticated and m.get('sender_id') == me.id:
+                                    m['sender_avatar_url'] = avatar_url
+                                    # keep back-compat fields aligned
+                                    up = (m.get('user_profiles') or {})
+                                    udi = (m.get('user_display_info') or {})
+                                    up['avatar_url'] = avatar_url
+                                    udi['avatar_url'] = avatar_url
+                                    m['user_profiles'] = up
+                                    m['user_display_info'] = udi
+                            except Exception:
+                                pass
+                        updated_cache.append(m)
+                    self._message_cache[current_channel] = updated_cache
+            except Exception:
+                pass
+            if not lst:
+                return
+            from ...avatar_manager import AvatarManager
+            current_user_id = None
+            try:
+                if self.community_manager:
+                    current_user_id = self.community_manager.get_current_user_id()
+            except Exception:
+                current_user_id = None
+            for i in range(lst.count()):
+                item = lst.item(i)
+                w = lst.itemWidget(item)
+                if not w or not hasattr(w, 'message_data'):
+                    continue
+                udi = (w.message_data or {}).get('user_display_info') or {}
+                up = (w.message_data or {}).get('user_profiles') or {}
+                # If this is the current user's message and we were given a fresh URL, use it
+                msg_sender = (w.message_data or {}).get('sender_id')
+                url = avatar_url if (current_user_id and msg_sender == current_user_id and avatar_url) else (
+                    (w.message_data or {}).get('sender_avatar_url') or udi.get('avatar_url') or up.get('avatar_url')
+                )
+                name = (w.message_data or {}).get('sender_name') or up.get('display_name') or up.get('username') or 'U'
+                if hasattr(w, 'avatar_label') and w.avatar_label:
+                    AvatarManager.instance().set_label_avatar(w.avatar_label, url, name, size=32)
+        except Exception:
+            pass
     
     def create_server_list(self, parent_layout):
         """Create the server/channel list sidebar."""
@@ -2201,7 +2302,7 @@ class CommunityPage(BasePage):
     def create_main_content(self, parent_layout):
         """Create the main content area."""
         # Create a tab widget to host Chat (existing), Events, and Setup
-        from PyQt6.QtWidgets import QTabWidget, QVBoxLayout, QWidget, QLabel
+        from PyQt6.QtWidgets import QTabWidget, QVBoxLayout, QWidget, QLabel, QStackedWidget
 
         self.content_tabs = QTabWidget()
         self.content_tabs.setStyleSheet("""
@@ -2217,18 +2318,23 @@ class CommunityPage(BasePage):
         chat_tab_layout.setContentsMargins(0, 0, 0, 0)
         chat_tab_layout.setSpacing(0)
 
-        self.content_stack = QWidget()
+        # Use a QStackedWidget so switching channels is instant and does not rebuild widgets
+        self.content_stack = QStackedWidget()
         self.content_stack.setStyleSheet("""
-            QWidget { background-color: #1e1e1e; }
+            QStackedWidget { background-color: #1e1e1e; }
         """)
-        # Ensure the content area always has a layout so children expand properly
-        try:
-            from PyQt6.QtWidgets import QVBoxLayout
-            self.content_stack_layout = QVBoxLayout(self.content_stack)
-            self.content_stack_layout.setContentsMargins(0, 0, 0, 0)
-            self.content_stack_layout.setSpacing(0)
-        except Exception:
-            self.content_stack_layout = None
+        # Add an initial empty state to avoid loading messages until a channel is selected
+        self._empty_chat_state = QWidget()
+        _empty_layout = QVBoxLayout(self._empty_chat_state)
+        _empty_layout.setContentsMargins(0, 0, 0, 0)
+        _empty_layout.setSpacing(0)
+        _placeholder = QLabel("Select a text channel to load messages")
+        _placeholder.setStyleSheet("color: #aaaaaa; padding: 16px;")
+        _placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _empty_layout.addStretch()
+        _empty_layout.addWidget(_placeholder)
+        _empty_layout.addStretch()
+        self.content_stack.addWidget(self._empty_chat_state)
         chat_tab_layout.addWidget(self.content_stack)
 
         self.content_tabs.addTab(chat_tab, "💬 Chat")
@@ -2267,12 +2373,11 @@ class CommunityPage(BasePage):
                 if self.current_channel:
                     # Check if current channel is a voice channel
                     current_channel_type = None
-                    if self.community_manager:
-                        channels = self.community_manager.get_channels()
-                        for channel in channels:
-                            if channel['channel_id'] == self.current_channel:
-                                current_channel_type = channel['channel_type']
-                                break
+                    try:
+                        if self._channels_by_id:
+                            current_channel_type = (self._channels_by_id.get(self.current_channel) or {}).get('channel_type')
+                    except Exception:
+                        current_channel_type = None
                     
                     if current_channel_type == 'voice':
                         logger.info(f"🔊 Cleaning up previous voice channel: {self.current_channel}")
@@ -2299,14 +2404,13 @@ class CommunityPage(BasePage):
     def get_channel_name(self, channel_id):
         """Get the friendly name for a channel ID."""
         try:
-            if not self.community_manager:
-                return channel_id
-            
-            # Get all channels and find the matching one
-            channels = self.community_manager.get_channels()
-            for channel in channels:
-                if channel['channel_id'] == channel_id:
-                    return channel['name']
+            # Prefer fast cache
+            if self._channels_by_id and channel_id in self._channels_by_id:
+                return self._channels_by_id[channel_id].get('name', channel_id)
+            # Fallback to previously loaded list
+            for channel in self.channels or []:
+                if channel.get('channel_id') == channel_id:
+                    return channel.get('name', channel_id)
             
             # Fallback to channel_id if not found
             return channel_id
@@ -2321,157 +2425,95 @@ class CommunityPage(BasePage):
         logger.info(f"🔄 Switching to channel: {channel_name} ({channel_id})")
         
         try:
-            # Create a completely new content widget each time
-            logger.info("🔄 Creating new content widget")
-            new_content = QWidget()
-            new_content.setStyleSheet("""
-                QWidget {
-                    background-color: #1e1e1e;
-                }
-            """)
-            
-            # Create new layout
-            logger.info("🏗️ Creating new QVBoxLayout")
-            layout = QVBoxLayout(new_content)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(0)
-            logger.info("✅ New layout created successfully")
-            
-            # Replace the old content_stack with the new one inside its actual parent layout (Chat tab)
-            if hasattr(self, 'content_stack') and self.content_stack:
-                logger.info("🔄 Replacing old content_stack")
-                parent_widget = self.content_stack.parentWidget()
-                parent_layout = parent_widget.layout() if parent_widget else self.layout()
-                if parent_layout:
-                    try:
-                        parent_layout.replaceWidget(self.content_stack, new_content)
-                        self.content_stack.setParent(None)
-                        self.content_stack.deleteLater()
-                        logger.info("✅ Replaced content_stack in parent layout")
-                    except Exception as _repl_err:
-                        # Fallback manual replace
-                        for i in range(parent_layout.count()):
-                            item = parent_layout.itemAt(i)
-                            if item and item.widget() == self.content_stack:
-                                logger.info("🗑️ Removing old content_stack from parent layout (fallback)")
-                                parent_layout.removeWidget(self.content_stack)
-                                self.content_stack.setParent(None)
-                                self.content_stack.deleteLater()
-                                parent_layout.insertWidget(i, new_content)
-                                logger.info("✅ Inserted new content widget into parent layout (fallback)")
-                                break
-                else:
-                    logger.warning("⚠️ No parent layout found for content_stack")
-            
-            # Update the content_stack reference
-            self.content_stack = new_content
-            
-        except Exception as e:
-            logger.error(f"❌ Error creating new content widget: {e}")
-            import traceback
-            logger.error(f"📋 Traceback: {traceback.format_exc()}")
-            # Fallback: create a simple widget
-            logger.info("🔄 Creating fallback content widget")
-            self.content_stack = QWidget()
-            self.content_stack.setStyleSheet("""
-                QWidget {
-                    background-color: #1e1e1e;
-                }
-            """)
-            layout = QVBoxLayout(self.content_stack)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(0)
-        
-        try:
-            # Get channel type from database or fallback channels
+            # Ensure we know the channel type without extra DB calls
             channel_type = None
-            
-            # First try to get from community manager database
-            if self.community_manager:
-                channels = self.community_manager.get_channels()
-                for channel in channels:
-                    if channel['channel_id'] == channel_id:
-                        channel_type = channel['channel_type']
-                        break
-            
-            # If not found in database, check fallback channels
+            if self._channels_by_id and channel_id in self._channels_by_id:
+                channel_type = self._channels_by_id[channel_id].get('channel_type')
             if channel_type is None:
-                # Check voice channels list
-                for i in range(self.voice_channels_list.count()):
-                    item = self.voice_channels_list.item(i)
-                    item_data = item.data(Qt.ItemDataRole.UserRole)
-                    if item_data and item_data['id'] == channel_id:
-                        channel_type = item_data['type']
-                        logger.info(f"🔍 Found channel type from voice channels list: {channel_type}")
-                        break
-                
-                # Check text channels list if not found in voice channels
-                if channel_type is None:
-                    for i in range(self.channel_list.count()):
-                        item = self.channel_list.item(i)
-                        item_data = item.data(Qt.ItemDataRole.UserRole)
-                        if item_data and item_data['id'] == channel_id:
-                            channel_type = item_data['type']
-                            logger.info(f"🔍 Found channel type from text channels list: {channel_type}")
-                            break
-            
-            logger.info(f"🎯 Channel type detection result: {channel_type} for channel {channel_id}")
-            
-            if channel_type == 'voice':
-                # Voice channel
-                channel_name = self.get_channel_name(channel_id)
-                logger.info(f"🔊 Creating voice channel widget for: {channel_name} ({channel_id})")
-                
-                # Get or create central voice manager
-                central_voice_manager = self.get_central_voice_manager()
-                
-                voice_widget = VoiceChannelWidget({
-                    'id': channel_id,
-                    'name': channel_name,
-                    'participant_count': 0
-                }, voice_manager=central_voice_manager, parent_page=self)
-                
-                logger.info(f"✅ Voice channel widget created, adding to layout")
-                layout.addWidget(voice_widget)
-                
-                # Track voice channels for cleanup
-                if not hasattr(self, 'voice_channels'):
-                    self.voice_channels = {}
-                self.voice_channels[channel_id] = voice_widget
-                logger.info(f"✅ Voice channel widget created and tracked successfully")
-                
-                # Connect voice error signals
-                if hasattr(voice_widget, 'voice_manager'):
-                    voice_widget.voice_manager.voice_error.connect(self.on_voice_error)
-            else:
-                # Text channel (default if type is None or 'text')
-                channel_name = self.get_channel_name(channel_id)
-                logger.info(f"💬 Creating chat channel widget for: {channel_name} ({channel_id})")
-                chat_widget = ChatChannelWidget({
-                    'id': channel_id,
-                    'name': channel_name
-                })
-                chat_widget.message_sent.connect(self.on_message_sent)
-                # Enable infinite scroll upwards (load older on top reach)
+                # Fallback to lists (no DB call)
                 try:
-                    chat_widget.on_request_older = lambda cid=channel_id, cw=chat_widget: self.load_more_messages_for_channel(cid, cw)
+                    for i in range(self.voice_channels_list.count()):
+                        item = self.voice_channels_list.item(i)
+                        item_data = item.data(Qt.ItemDataRole.UserRole)
+                        if item_data and item_data.get('id') == channel_id:
+                            channel_type = item_data.get('type')
+                            break
+                    if channel_type is None:
+                        for i in range(self.channel_list.count()):
+                            item = self.channel_list.item(i)
+                            item_data = item.data(Qt.ItemDataRole.UserRole)
+                            if item_data and item_data.get('id') == channel_id:
+                                channel_type = item_data.get('type')
+                                break
                 except Exception:
                     pass
-                logger.info(f"✅ Chat channel widget created, adding to layout")
-                layout.addWidget(chat_widget)
+            
+            widget = self.channel_widgets.get(channel_id)
+            if widget is None:
+                # Create widget on first access
+                if channel_type == 'voice':
+                    # Voice channel
+                    # Lazy-start voice server only when needed
+                    try:
+                        if VOICE_COMPONENTS_AVAILABLE and self.START_VOICE_SERVER_ON_DEMAND:
+                            if not is_voice_server_running():
+                                logger.info("🎤 Starting voice server on demand for voice channel...")
+                                start_voice_server()
+                    except Exception as e:
+                        logger.warning(f"Voice server start deferred failed: {e}")
+                    
+                    channel_name = self.get_channel_name(channel_id)
+                    voice_widget = VoiceChannelWidget({
+                        'id': channel_id,
+                        'name': channel_name,
+                        'participant_count': 0
+                    }, voice_manager=self.get_central_voice_manager(), parent_page=self)
+                    self.voice_channels[channel_id] = voice_widget
+                    widget = voice_widget
+                    # Connect voice error signals
+                    try:
+                        if hasattr(voice_widget, 'voice_manager'):
+                            voice_widget.voice_manager.voice_error.connect(self.on_voice_error)
+                    except Exception:
+                        pass
+                else:
+                    # Text channel (default)
+                    channel_name = self.get_channel_name(channel_id)
+                    chat_widget = ChatChannelWidget({
+                        'id': channel_id,
+                        'name': channel_name
+                    })
+                    chat_widget.message_sent.connect(self.on_message_sent)
+                    try:
+                        chat_widget.on_request_older = lambda cid=channel_id, cw=chat_widget: self.load_more_messages_for_channel(cid, cw)
+                    except Exception:
+                        pass
+                    widget = chat_widget
+                    self.current_chat_widget = chat_widget
+                    # Update input state and lazily load the newest window of messages
+                    try:
+                        self.update_input_field_state()
+                    except Exception:
+                        pass
+                    try:
+                        self.load_messages_for_channel(channel_id, chat_widget)
+                    except Exception:
+                        pass
                 
-                # Store reference to current chat widget for real-time updates
-                self.current_chat_widget = chat_widget
-                
-                # Update input field state based on authentication
-                self.update_input_field_state()
-                
-                # Load messages for this channel using lazy loading (latest window)
-                self.load_messages_for_channel(channel_id, chat_widget)
+                # Add the newly created widget to the stack and cache
+                try:
+                    self.content_stack.addWidget(widget)
+                except Exception:
+                    pass
+                self.channel_widgets[channel_id] = widget
+            
+            # Switch to the widget for this channel
+            try:
+                self.content_stack.setCurrentWidget(widget)
+            except Exception:
+                pass
         except Exception as e:
-            logger.error(f"❌ Error creating channel widget: {e}")
-            import traceback
-            logger.error(f"📋 Traceback: {traceback.format_exc()}")
+            logger.error(f"❌ Error switching channel: {e}")
 
     def create_events_tab(self):
         """Create the Events tab content."""
@@ -3004,8 +3046,8 @@ class CommunityPage(BasePage):
             self.load_friends_list()
             self.load_friend_requests()
             
-            # Check voice server status (already started during pre-loading)
-            if VOICE_COMPONENTS_AVAILABLE:
+            # Check voice server status (already started during pre-loading) — now on-demand
+            if VOICE_COMPONENTS_AVAILABLE and not self.START_VOICE_SERVER_ON_DEMAND:
                 try:
                     if is_voice_server_running():
                         logger.info("✅ Voice server is running (started during pre-loading)")
@@ -3063,8 +3105,8 @@ class CommunityPage(BasePage):
             except Exception as e:
                 logger.debug(f"User verification step failed: {e}")
 
-            # Start voice server early if components available
-            if VOICE_COMPONENTS_AVAILABLE:
+            # Start voice server early if components available (optional)
+            if VOICE_COMPONENTS_AVAILABLE and not self.START_VOICE_SERVER_ON_DEMAND:
                 try:
                     if not is_voice_server_running():
                         logger.info("🎤 Starting voice server during initialization...")
@@ -3078,9 +3120,11 @@ class CommunityPage(BasePage):
             try:
                 logger.info("📋 Loading channels, friends, and requests (private messages disabled in community UI)...")
                 self.load_channels_from_database()
-                self.load_friends_list()
-                self.load_friend_requests()
-                logger.info("✅ Community data loaded")
+                # Defer friends/requests until after first paint for snappier load
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self.load_friends_list)
+                QTimer.singleShot(0, self.load_friend_requests)
+                logger.info("✅ Community channels queued; friends and requests deferred")
             except Exception as e:
                 logger.error(f"❌ Failed to load community data: {e}")
 
@@ -3426,7 +3470,7 @@ class CommunityPage(BasePage):
             logger.info(f"📊 Final state - Text channels: {self.channel_list.count()}, Voice channels: {self.voice_channels_list.count()}")
             
             # Auto-select the first text channel if no channel is currently selected
-            if self.channel_list.count() > 0 and not self.current_channel:
+            if self.AUTO_SELECT_FIRST_CHANNEL and self.channel_list.count() > 0 and not self.current_channel:
                 first_item = self.channel_list.item(0)
                 if first_item:
                     channel_data = first_item.data(Qt.ItemDataRole.UserRole)
@@ -3485,7 +3529,7 @@ class CommunityPage(BasePage):
         logger.info(f"Loaded {len(text_channels)} text channels and {len(voice_channels)} voice channels as fallback")
         
         # Auto-select the first text channel if no channel is currently selected
-        if self.channel_list.count() > 0 and not self.current_channel:
+        if self.AUTO_SELECT_FIRST_CHANNEL and self.channel_list.count() > 0 and not self.current_channel:
             first_item = self.channel_list.item(0)
             if first_item:
                 channel_data = first_item.data(Qt.ItemDataRole.UserRole)

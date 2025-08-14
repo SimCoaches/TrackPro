@@ -46,6 +46,11 @@ class CommunityManager(QObject):
                     self.current_user_id = None
                     self._realtime_channels = []
                     self.is_realtime_active = False
+                    self._last_realtime_event_ts = 0.0
+                    self._reconnect_backoff_s = 5.0
+                    self._max_reconnect_backoff_s = 60.0
+                    self._reconnect_in_progress = False
+                    self._reconnect_timer = None
                     self._typing_channels: dict[str, Any] = {}
                     self._pm_channels: dict[str, Any] = {}
                     self._polling_timer = None
@@ -55,6 +60,10 @@ class CommunityManager(QObject):
                     self._friends_cache_ttl_seconds: float = 60.0
                     self._setup_database_connection()
                     self._setup_realtime_subscriptions()
+                    try:
+                        self._start_realtime_health_monitor()
+                    except Exception:
+                        pass
                     self._initialized = True
                     logger.info("✅ CommunityManager singleton initialized")
                 else:
@@ -105,7 +114,7 @@ class CommunityManager(QObject):
                         for row in resp.data or []:
                             # Emit as if realtime insert
                             try:
-                                self._on_message_inserted({"new": row})
+                                self._on_message_inserted({"new": row, "_source": "poll"})
                             except Exception:
                                 pass
                         if resp.data:
@@ -122,7 +131,7 @@ class CommunityManager(QObject):
                              .gt("created_at", since).order("created_at", desc=False).limit(50).execute()
                             for row in resp_pm.data or []:
                                 try:
-                                    self._on_private_message_inserted({"new": row})
+                                    self._on_private_message_inserted({"new": row, "_source": "poll"})
                                 except Exception:
                                     pass
                             if resp_pm.data:
@@ -299,6 +308,24 @@ class CommunityManager(QObject):
         try:
             if not self.client:
                 return False
+            # Ensure realtime auth token is propagated before binding
+            try:
+                rt = getattr(self.client, 'realtime', None)
+                if rt and hasattr(rt, 'set_auth') and hasattr(self.client, 'auth'):
+                    token = None
+                    try:
+                        sess = self.client.auth.get_session()
+                        token = getattr(sess, 'access_token', None) or (sess.get('access_token') if isinstance(sess, dict) else None)
+                    except Exception:
+                        token = None
+                    if token:
+                        try:
+                            rt.set_auth(token)
+                            logger.info("✅ Realtime auth token propagated before binding (sync)")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             # Try to create a channel using various common names
             channel = None
             try:
@@ -354,6 +381,10 @@ class CommunityManager(QObject):
             channel.subscribe()
             self._realtime_channels.append(channel)
             logger.info("✅ Subscribed to realtime via single multiplexed channel")
+            try:
+                self._last_realtime_event_ts = time.time()
+            except Exception:
+                pass
             return True
         except Exception as e:
             logger.warning(f"Single-channel realtime bind failed: {e}")
@@ -500,7 +531,7 @@ class CommunityManager(QObject):
                 logger.warning(f"⚠️ Could not fetch user data: {e}")
                 # Continue without user data - we'll use fallback names
             
-            # Add user data to messages
+            # Add user data to messages and unify avatar URL to a single canonical source
             for message in messages:
                 sender_id = message.get('sender_id')
                 if sender_id:
@@ -518,6 +549,35 @@ class CommunityManager(QObject):
                     # Generate proper display name
                     display_name = self._generate_display_name(display_info, profile, details)
                     message['sender_name'] = display_name
+                    # Choose a canonical avatar URL (single source of truth)
+                    # Prefer public display info first so we always show the most current
+                    # avatar visible to all users; then fallback to user_profiles and public view.
+                    public_profile = public_profiles.get(sender_id, {}) if 'public_profiles' in locals() else {}
+                    canonical_avatar = (
+                        display_info.get('avatar_url')
+                        or profile.get('avatar_url')
+                        or public_profile.get('avatar_url')
+                    )
+
+                    # Normalize/sanitize common formatting issues so clients don't miss-cache
+                    try:
+                        if canonical_avatar:
+                            if "?&" in canonical_avatar:
+                                canonical_avatar = canonical_avatar.replace("?&", "?")
+                            # Encode spaces in path only
+                            from urllib.parse import urlsplit, urlunsplit, quote
+                            parts = urlsplit(canonical_avatar)
+                            safe_path = quote(parts.path, safe="/_-.~%")
+                            canonical_avatar = urlunsplit((parts.scheme, parts.netloc, safe_path, parts.query, parts.fragment))
+                    except Exception:
+                        pass
+
+                    # Persist canonical into the message for all consumers
+                    message['sender_avatar_url'] = canonical_avatar
+                    if canonical_avatar:
+                        display_info['avatar_url'] = canonical_avatar
+                        profile['avatar_url'] = canonical_avatar
+
                     message['user_display_info'] = display_info
                     message['user_profiles'] = profile
                     message['user_details'] = details
@@ -1036,11 +1096,16 @@ class CommunityManager(QObject):
     def _on_private_message_inserted(self, payload):
         """Handle new private message via realtime."""
         try:
-            if payload.get('eventType') != 'INSERT':
+            if payload.get('eventType') != 'INSERT' and payload.get('_source') != 'poll':
                 return
             new_msg = payload.get('new', {}) or {}
             if not new_msg:
                 return
+            try:
+                if payload.get('_source') != 'poll':
+                    self._last_realtime_event_ts = time.time()
+            except Exception:
+                pass
             # Enrich with basic user data for UI convenience
             try:
                 sender_id = new_msg.get('sender_id')
@@ -1087,7 +1152,11 @@ class CommunityManager(QObject):
             new_message = payload.get('new', {}) if isinstance(payload, dict) else {}
             if not new_message:
                 return
-
+            try:
+                if payload.get('_source') != 'poll':
+                    self._last_realtime_event_ts = time.time()
+            except Exception:
+                pass
             # Real-time subscriptions don't include joined data by default
             # We need to fetch the complete message with sender info
             try:
@@ -1174,6 +1243,76 @@ class CommunityManager(QObject):
                 self.message_received.emit(message)
             except Exception:
                 pass
+
+    def _start_realtime_health_monitor(self) -> None:
+        """Start periodic health checks with reconnect/backoff and polling safety net."""
+        try:
+            from PyQt6.QtCore import QTimer
+            if getattr(self, '_reconnect_timer', None):
+                return
+            self._reconnect_timer = QTimer(self)
+            self._reconnect_timer.setInterval(10000)
+            self._reconnect_timer.timeout.connect(self._realtime_health_tick)
+            self._reconnect_timer.start()
+            logger.info("🩺 Started realtime health monitor (10s interval)")
+        except Exception as e:
+            logger.debug(f"Health monitor init failed: {e}")
+
+    def _realtime_health_tick(self) -> None:
+        try:
+            now = time.time()
+            last = getattr(self, '_last_realtime_event_ts', 0.0) or 0.0
+            unhealthy = self.is_realtime_active and (now - last > 60.0) and (not getattr(self, '_direct_rt_joined', False))
+            if unhealthy:
+                logger.warning("⚠️ Realtime appears unhealthy (stale >60s); switching to polling and scheduling reconnect")
+                self.is_realtime_active = False
+                try:
+                    self._start_polling_fallback()
+                except Exception:
+                    pass
+            if (not self.is_realtime_active) and (not self._reconnect_in_progress):
+                self._reconnect_in_progress = True
+                backoff = max(0.0, min(self._reconnect_backoff_s, self._max_reconnect_backoff_s))
+                logger.info(f"🔁 Attempting realtime rebind in {int(backoff)}s (backoff)")
+                def _do_rebind():
+                    try:
+                        ok = self._rebind_realtime()
+                        if ok:
+                            logger.info("✅ Realtime rebind successful; resetting backoff")
+                            self._reconnect_backoff_s = 5.0
+                        else:
+                            self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._max_reconnect_backoff_s)
+                    finally:
+                        self._reconnect_in_progress = False
+                try:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(int(backoff * 1000), _do_rebind)
+                except Exception:
+                    _do_rebind()
+        except Exception:
+            pass
+
+    def _rebind_realtime(self) -> bool:
+        """Tear down existing realtime resources and attempt a clean re-subscribe."""
+        try:
+            try:
+                self._direct_rt_stop = True
+            except Exception:
+                pass
+            try:
+                for ch in getattr(self, "_realtime_channels", []):
+                    try:
+                        ch.unsubscribe()
+                    except Exception:
+                        pass
+                self._realtime_channels = []
+            except Exception:
+                self._realtime_channels = []
+            self._setup_realtime_subscriptions()
+            return bool(self.is_realtime_active)
+        except Exception as e:
+            logger.debug(f"Realtime rebind error: {e}")
+            return False
 
     def _on_participant_changed(self, payload):
         """Handle realtime participant INSERT/UPDATE events."""

@@ -15,7 +15,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QTimer, QParallelAnimationGroup, QSize, QPointF
 from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont, QIcon
-from PyQt6.QtGui import QPainterPath
+from PyQt6.QtGui import QPainterPath, QRegion
+from PyQt6.QtCore import QRect
 from .avatar_manager import AvatarManager
 
 logger = logging.getLogger(__name__)
@@ -67,12 +68,20 @@ class OnlineUserItem(QWidget):
         # User avatar (circle with initials)
         logger.debug(f"Creating avatar for user: {self.user_data.get('display_name', 'Unknown')}")
         self.avatar_label = self.create_avatar()
+        try:
+            # Hard-clip the label to a circle to avoid any square corners from images
+            self.avatar_label.setMask(QRegion(QRect(0, 0, 32, 32), QRegion.RegionType.Ellipse))
+        except Exception:
+            pass
         avatar_container_layout.addWidget(self.avatar_label)
         logger.debug(f"Avatar created and added to container for user: {self.user_data.get('display_name', 'Unknown')}")
 
-        # Ensure the avatar has no background/border that could cover the pixmap
+        # Style avatar label and add a friend ring if applicable
         try:
-            self.avatar_label.setStyleSheet("QLabel { background: transparent; border: none; }")
+            is_friend = bool(self.user_data.get('is_friend', False))
+            friend_border = "3px solid #66ccff" if is_friend else "none"
+            # Radius 16px for 32x32 to keep the ring circular
+            self.avatar_label.setStyleSheet(f"QLabel {{ background: transparent; border: {friend_border}; border-radius: 16px; }}")
         except Exception:
             pass
         
@@ -80,7 +89,8 @@ class OnlineUserItem(QWidget):
         self.avatar_status_dot = QLabel(self.avatar_container)
         self.avatar_status_dot.setFixedSize(10, 10)
         is_online = self.user_data.get('is_online', False)
-        dot_color = "#3ba55c" if is_online else "#747f8d"
+        # Brighter green for better contrast on dark background
+        dot_color = "#44ff77" if is_online else "#747f8d"
         logger.debug(f"🎯 Setting online status dot for {self.user_data.get('display_name', 'Unknown')}: is_online={is_online}, color={dot_color}")
         self.avatar_status_dot.setStyleSheet(f"""
             QLabel {{
@@ -190,7 +200,8 @@ class OnlineUserItem(QWidget):
     def refresh_online_status(self):
         """Refresh the online status dot based on current user data."""
         is_online = self.user_data.get('is_online', False)
-        dot_color = "#3ba55c" if is_online else "#747f8d"
+        # Brighter green for better contrast on dark background
+        dot_color = "#44ff77" if is_online else "#747f8d"
         logger.debug(f"🔄 Refreshing online status dot for {self.user_data.get('display_name', 'Unknown')}: is_online={is_online}, color={dot_color}")
         self.avatar_status_dot.setStyleSheet(f"""
             QLabel {{
@@ -204,21 +215,15 @@ class OnlineUserItem(QWidget):
         """Refresh the avatar display with current user data."""
         try:
             logger.debug(f"🔄 Refreshing avatar for user: {self.user_data.get('display_name', 'Unknown')}")
-            
-            # Get fresh avatar URL
+            # Get fresh avatar URL and name
             avatar_url = self.user_data.get('avatar_url')
             name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
-            
-            if avatar_url:
-                # Load avatar from URL
-                self.load_avatar_from_url(avatar_url, 32, self.avatar_label)
-                logger.debug(f"✅ Started loading avatar from URL: {avatar_url}")
-            else:
-                # Create fallback avatar with initials
-                fallback_avatar = self.create_fallback_avatar(name)
-                self.avatar_label.setPixmap(fallback_avatar.pixmap())
-                logger.debug(f"✅ Updated fallback avatar for user: {name}")
-                
+            # Use a smaller inner size when drawing a friend ring so the ring remains visible
+            is_friend = bool(self.user_data.get('is_friend', False))
+            ring_width = 3 if is_friend else 0
+            inner_size = max(18, 32 - (2 * ring_width) - 2)
+            AvatarManager.instance().set_label_avatar(self.avatar_label, avatar_url, name, size=inner_size)
+            logger.debug(f"✅ Avatar refreshed (size {inner_size}) for user: {name}")
         except Exception as e:
             logger.error(f"❌ Error refreshing avatar: {e}")
     
@@ -237,7 +242,15 @@ class OnlineUserItem(QWidget):
             avatar_label.setStyleSheet("QLabel { background: transparent; border: none; }")
         except Exception:
             pass
-        AvatarManager.instance().set_label_avatar(avatar_label, self.user_data.get('avatar_url'), name, size=32)
+        is_friend = bool(self.user_data.get('is_friend', False))
+        ring_width = 3 if is_friend else 0
+        inner_size = max(18, 32 - (2 * ring_width) - 2)
+        # Center the smaller pixmap so the larger ring is clearly visible
+        try:
+            avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        except Exception:
+            pass
+        AvatarManager.instance().set_label_avatar(avatar_label, self.user_data.get('avatar_url'), name, size=inner_size)
         return avatar_label
     
     def load_avatar_from_url(self, url: str, size: int = 32, avatar_label: QLabel = None) -> QPixmap:
@@ -1893,6 +1906,12 @@ class OnlineUsersSidebar(QWidget):
         """Handle avatar updates from other components."""
         try:
             logger.info(f"🔄 Avatar updated in sidebar: {avatar_url}")
+            # Invalidate any cached avatar for the current user so re-render uses fresh image
+            try:
+                from .avatar_manager import AvatarManager
+                AvatarManager.instance().invalidate_cache(avatar_url)
+            except Exception:
+                pass
             # Refresh the current user's avatar in the sidebar
             self.refresh_existing_avatars()
             logger.info("✅ Avatar refresh completed")

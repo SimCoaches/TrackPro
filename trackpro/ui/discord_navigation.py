@@ -138,6 +138,54 @@ class DiscordNavigation(QWidget):
         # Start with collapsed state
         self.set_collapsed_state()
         
+        # Immediately attempt to render the authenticated user's avatar so we don't show initials first
+        try:
+            from trackpro.auth.user_manager import get_current_user
+            user = get_current_user()
+            if user and getattr(user, 'is_authenticated', False):
+                username = getattr(user, 'name', None) or getattr(user, 'email', 'User')
+                avatar_url = None
+                try:
+                    # Prefer a quick direct DB hit to avoid heavy managers on startup
+                    from trackpro.database.supabase_client import get_supabase_client
+                    supa = get_supabase_client()
+                    if supa:
+                        up = supa.from_("user_profiles").select("avatar_url").eq("user_id", user.id).single().execute()
+                        if up and up.data and up.data.get('avatar_url'):
+                            avatar_url = up.data.get('avatar_url')
+                        if not avatar_url:
+                            pub = supa.from_("public_user_profiles").select("avatar_url").eq("user_id", user.id).single().execute()
+                            if pub and pub.data and pub.data.get('avatar_url'):
+                                avatar_url = pub.data.get('avatar_url')
+                except Exception:
+                    avatar_url = None
+                try:
+                    from trackpro.social.user_manager import EnhancedUserManager
+                    mgr = EnhancedUserManager()
+                    profile = mgr.get_complete_user_profile(user.id)
+                    if profile and profile.get('avatar_url'):
+                        avatar_url = profile.get('avatar_url')
+                except Exception:
+                    pass
+                # Last fallback to metadata common keys
+                if not avatar_url:
+                    try:
+                        md = getattr(user, 'user_metadata', {}) or {}
+                        for k in ['avatar_url','picture','avatar','image_url','photoURL']:
+                            val = md.get(k)
+                            if isinstance(val, str) and len(val.strip()) > 0:
+                                avatar_url = val.strip()
+                                break
+                    except Exception:
+                        pass
+                # Render now (AvatarManager will use initials if URL is None, and update once fetched)
+                self.set_user_info(username, self._generate_avatar_initials(username), avatar_url)
+            else:
+                # Not authenticated yet: keep initials and let auth refresh update the avatar
+                pass
+        except Exception:
+            pass
+        
     def setup_ui(self):
         """Setup the main UI structure."""
         self.setFixedWidth(self.collapsed_width)
@@ -597,6 +645,14 @@ class DiscordNavigation(QWidget):
         
         logger.info("🔄 Avatar updated - refreshing navigation user info")
         
+        # Invalidate cached avatar icon to ensure the next set uses fresh bytes
+        try:
+            if hasattr(self, '_cached_user_info') and self._cached_user_info:
+                from .avatar_manager import AvatarManager
+                AvatarManager.instance().invalidate_cache(self._cached_user_info.get('avatar_url'))
+        except Exception:
+            pass
+
         # Clear cached user info to force refresh
         self._cached_user_info = None
         

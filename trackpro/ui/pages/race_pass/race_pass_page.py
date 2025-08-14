@@ -27,7 +27,7 @@ class RacePassPage(BasePage):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        if GAMIFICATION_AVAILABLE and RacePassViewWidget is not None:
+        if False and GAMIFICATION_AVAILABLE and RacePassViewWidget is not None:
             try:
                 self.view = RacePassViewWidget()
                 layout.addWidget(self.view)

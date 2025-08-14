@@ -6,6 +6,7 @@ Manages user hierarchy levels, roles, and permissions.
 
 import logging
 from typing import Optional, Dict, Any, List
+import re
 from enum import Enum
 from dataclasses import dataclass
 from ..database.supabase_client import get_supabase_client
@@ -37,81 +38,39 @@ class HierarchyManager:
     def __init__(self):
         """Initialize the hierarchy manager."""
         self.supabase = get_supabase_client()
-        # Hardcoded admin email - this user always has full admin access
-        self.hardcoded_admin_email = "lawrence@simcoaches.com"
-        # Dynamic admin emails - these can be modified without updates
-        self.dynamic_admin_emails = set()
-        # Defer loading dynamic admins to prevent startup hanging
-        self._admins_loaded = False
-        # Schedule dynamic admin loading shortly after init to avoid blocking startup
+
+    # ---------- Helpers ----------
+    def _looks_like_uuid(self, value: str) -> bool:
         try:
-            import threading
-            threading.Timer(3.0, self._load_dynamic_admins_async).start()
-        except Exception as e:
-            logger.warning(f"Failed to schedule dynamic admin loading: {e}")
-    
-    def _load_dynamic_admins_async(self):
-        """Load dynamic admin emails asynchronously after startup."""
-        if not self._admins_loaded:
-            self._load_dynamic_admins()
-            self._admins_loaded = True
-    
-    def _load_dynamic_admins(self):
-        """Load dynamic admin emails from database."""
-        try:
-            # Check if admin_emails table exists
-            if not self._ensure_admin_emails_table():
-                # Table doesn't exist, use empty set
-                self.dynamic_admin_emails = set()
-                return
-            
-            # Load dynamic admin emails
-            response = self.supabase.table("admin_emails").select("email").execute()
-            if response.data:
-                self.dynamic_admin_emails = {row['email'] for row in response.data}
-            else:
-                self.dynamic_admin_emails = set()
-                
-        except Exception as e:
-            logger.error(f"Error loading dynamic admin emails: {e}")
-            self.dynamic_admin_emails = set()
-    
-    def _ensure_admin_emails_table(self):
-        """Ensure the admin_emails table exists."""
-        try:
-            # Try to create the table if it doesn't exist
-            # We'll use a simple approach - just try to query the table
-            # If it doesn't exist, we'll handle it gracefully
-            response = self.supabase.table("admin_emails").select("id").limit(1).execute()
-            # If we get here, the table exists
+            import uuid
+            uuid.UUID(str(value))
             return True
-        except Exception as e:
-            logger.warning(f"Admin emails table may not exist: {e}")
-            # The table will be created by the migration we already applied
+        except Exception:
             return False
-    
-    def is_hardcoded_admin(self, email: str) -> bool:
-        """Check if email is the hardcoded admin.
-        
-        Args:
-            email: Email to check
-            
-        Returns:
-            True if hardcoded admin, False otherwise
+
+    def _resolve_user_id(self, identifier: str) -> Optional[str]:
+        """Resolve a user identifier which may be a UUID or an email to a UUID.
+
+        This makes callers tolerant to mistakenly passing an email address where a UUID is expected.
         """
-        return email.lower() == self.hardcoded_admin_email.lower()
-    
-    def is_dynamic_admin(self, email: str) -> bool:
-        """Check if email is a dynamic admin.
-        
-        Args:
-            email: Email to check
-            
-        Returns:
-            True if dynamic admin, False otherwise
-        """
-        return email.lower() in {admin.lower() for admin in self.dynamic_admin_emails}
-    
+        try:
+            if not identifier:
+                return None
+            # If it's already a UUID, return as-is
+            if self._looks_like_uuid(identifier):
+                return identifier
+            # If it looks like an email, try to map via user_profiles
+            if "@" in identifier:
+                try:
+                    resp = self.supabase.from_("user_profiles").select("user_id").eq("email", identifier).single().execute()
+                    if resp and getattr(resp, 'data', None) and resp.data.get("user_id"):
+                        return resp.data["user_id"]
+                except Exception:
+                    pass
+            return None
+        except Exception:
+            return None
+
     def is_simcoaches_email(self, email: str) -> bool:
         """Check if email belongs to the simcoaches.com domain."""
         try:
@@ -119,117 +78,17 @@ class HierarchyManager:
         except Exception:
             return False
     
-    def is_admin(self, email: str) -> bool:
-        """Check if email has admin access (hardcoded or dynamic).
+    def is_admin(self, user_id: str) -> bool:
+        """Check if user has dev permissions, making them an admin.
         
         Args:
-            email: Email to check
+            user_id: User ID to check
             
         Returns:
-            True if admin, False otherwise
+            True if user is a dev, False otherwise
         """
-        # Treat any @simcoaches.com email as admin-level (TEAM) for permissions
-        return (
-            self.is_hardcoded_admin(email)
-            or self.is_dynamic_admin(email)
-            or self.is_simcoaches_email(email)
-        )
-    
-    def add_dynamic_admin(self, email: str, added_by: str = None) -> Dict[str, Any]:
-        """Add a dynamic admin email.
-        
-        Args:
-            email: Email to add as admin
-            added_by: Email of user adding the admin
-            
-        Returns:
-            Dictionary with success status and message
-        """
-        try:
-            # Only hardcoded admin can add dynamic admins
-            if not self.is_admin(added_by):
-                return {"success": False, "message": "Only admins can add other admins"}
-            
-            # Check if table exists
-            if not self._ensure_admin_emails_table():
-                return {"success": False, "message": "Admin management table not available"}
-            
-            # Add to database
-            response = self.supabase.table("admin_emails").insert({
-                "email": email.lower(),
-                "added_by": added_by
-            }).execute()
-            
-            if response.data:
-                # Reload dynamic admins
-                self._load_dynamic_admins()
-                logger.info(f"Added dynamic admin: {email}")
-                return {"success": True, "message": f"Added {email} as admin"}
-            
-            return {"success": False, "message": "Failed to add admin"}
-            
-        except Exception as e:
-            logger.error(f"Error adding dynamic admin: {e}")
-            return {"success": False, "message": f"Failed to add admin: {e}"}
-    
-    def remove_dynamic_admin(self, email: str, removed_by: str = None) -> Dict[str, Any]:
-        """Remove a dynamic admin email.
-        
-        Args:
-            email: Email to remove from admin
-            removed_by: Email of user removing the admin
-            
-        Returns:
-            Dictionary with success status and message
-        """
-        try:
-            # Only hardcoded admin can remove dynamic admins
-            if not self.is_admin(removed_by):
-                return {"success": False, "message": "Only admins can remove other admins"}
-            
-            # Cannot remove hardcoded admin
-            if self.is_hardcoded_admin(email):
-                return {"success": False, "message": "Cannot remove hardcoded admin"}
-            
-            # Check if table exists
-            if not self._ensure_admin_emails_table():
-                return {"success": False, "message": "Admin management table not available"}
-            
-            # Remove from database
-            response = self.supabase.table("admin_emails").delete().eq("email", email.lower()).execute()
-            
-            if response.data:
-                # Reload dynamic admins
-                self._load_dynamic_admins()
-                logger.info(f"Removed dynamic admin: {email}")
-                return {"success": True, "message": f"Removed {email} from admins"}
-            
-            return {"success": False, "message": "Failed to remove admin"}
-            
-        except Exception as e:
-            logger.error(f"Error removing dynamic admin: {e}")
-            return {"success": False, "message": f"Failed to remove admin: {e}"}
-    
-    def get_all_admin_emails(self) -> List[str]:
-        """Get all admin emails (hardcoded + dynamic).
-        
-        Returns:
-            List of admin emails
-        """
-        admins = [self.hardcoded_admin_email]
-        # Only add dynamic admins if the table exists
-        if self._ensure_admin_emails_table():
-            admins.extend(list(self.dynamic_admin_emails))
-        return admins
-    
-    def get_dynamic_admin_emails(self) -> List[str]:
-        """Get only dynamic admin emails.
-        
-        Returns:
-            List of dynamic admin emails
-        """
-        return list(self.dynamic_admin_emails)
-    
+        return self.is_user_dev(user_id)
+
     def get_user_hierarchy(self, user_id: str) -> Optional[UserHierarchy]:
         """Get user hierarchy information.
         
@@ -246,7 +105,10 @@ class HierarchyManager:
             
             def fetch_hierarchy():
                 try:
-                    response = self.supabase.table("user_hierarchy").select("*").eq("user_id", user_id).single().execute()
+                    # Gracefully accept an email by resolving it to a UUID
+                    resolved_id = self._resolve_user_id(user_id)
+                    lookup_id = resolved_id or user_id
+                    response = self.supabase.table("user_hierarchy").select("*").eq("user_id", lookup_id).single().execute()
                     return response.data if response.data else None
                 except Exception as e:
                     logger.error(f"Error fetching user hierarchy: {e}")
@@ -281,43 +143,38 @@ class HierarchyManager:
             logger.error(f"Error getting user hierarchy: {e}")
             return None
     
-    def is_user_dev(self, user_id: str, user_email: str = None) -> bool:
+    def is_user_dev(self, user_id: str, email: Optional[str] = None) -> bool:
         """Check if user has dev permissions.
         
         Args:
             user_id: User ID
-            user_email: User email (for admin checks)
             
         Returns:
             True if user is a dev, False otherwise
         """
-        # Check if user is admin (hardcoded or dynamic)
-        if user_email and self.is_admin(user_email):
-            return True
-        
-        # Check database hierarchy
+        # Accept email for backward compatibility
+        if email and not self._looks_like_uuid(user_id):
+            resolved = self._resolve_user_id(email)
+            user_id = resolved or user_id
         hierarchy = self.get_user_hierarchy(user_id)
         return hierarchy.is_dev if hierarchy else False
     
-    def is_user_moderator(self, user_id: str, user_email: str = None) -> bool:
+    def is_user_moderator(self, user_id: str, email: Optional[str] = None) -> bool:
         """Check if user has moderator permissions.
         
         Args:
             user_id: User ID
-            user_email: User email (for admin checks)
             
         Returns:
             True if user is a moderator, False otherwise
         """
-        # Check if user is admin (hardcoded or dynamic)
-        if user_email and self.is_admin(user_email):
-            return True
-        
-        # Check database hierarchy
+        if email and not self._looks_like_uuid(user_id):
+            resolved = self._resolve_user_id(email)
+            user_id = resolved or user_id
         hierarchy = self.get_user_hierarchy(user_id)
         return hierarchy.is_moderator if hierarchy else False
     
-    def get_user_level(self, user_id: str) -> HierarchyLevel:
+    def get_user_level(self, user_id: str, email: Optional[str] = None) -> HierarchyLevel:
         """Get user's hierarchy level.
         
         Args:
@@ -326,16 +183,9 @@ class HierarchyManager:
         Returns:
             User's hierarchy level (defaults to PADDOCK)
         """
-        # Prefer hardcoded admin fast-path when available (UI context)
-        try:
-            from .user_manager import get_current_user
-            current_user = get_current_user()
-            if current_user and current_user.id == user_id:
-                if (current_user.email or "") and self.is_admin(current_user.email):
-                    return HierarchyLevel.TEAM
-        except Exception:
-            pass
-
+        if email and not self._looks_like_uuid(user_id):
+            resolved = self._resolve_user_id(email)
+            user_id = resolved or user_id
         hierarchy = self.get_user_hierarchy(user_id)
         return hierarchy.hierarchy_level if hierarchy else HierarchyLevel.PADDOCK
     
@@ -349,22 +199,16 @@ class HierarchyManager:
         Returns:
             True if modification is allowed, False otherwise
         """
-        # Dev users can modify anyone. Include hardcoded admin fast-path.
-        try:
-            from .user_manager import get_current_user
-            current_user = get_current_user()
-            if current_user and current_user.id == modifier_id:
-                if (current_user.email or "") and self.is_admin(current_user.email):
-                    return True
-        except Exception:
-            pass
+        modifier_hierarchy = self.get_user_hierarchy(modifier_id)
+        if not modifier_hierarchy:
+            return False
 
-        if self.is_user_dev(modifier_id):
+        if modifier_hierarchy.is_dev:
             return True
         
         # Moderators can modify users below them in hierarchy
-        if self.is_user_moderator(modifier_id):
-            modifier_level = self.get_user_level(modifier_id)
+        if modifier_hierarchy.is_moderator:
+            modifier_level = modifier_hierarchy.hierarchy_level
             target_level = self.get_user_level(target_id)
             
             # Define hierarchy order (higher index = higher level)
@@ -518,21 +362,19 @@ class HierarchyManager:
             logger.error(f"Error getting moderator users: {e}")
             return []
     
-    def check_permission(self, user_id: str, permission: str, user_email: str = None) -> bool:
+    def check_permission(self, user_id: str, permission: str, email: Optional[str] = None) -> bool:
         """Check if user has a specific permission.
         
         Args:
             user_id: User ID
             permission: Permission to check
-            user_email: User email (for admin checks)
             
         Returns:
             True if user has permission, False otherwise
         """
-        # Check if user is admin (hardcoded or dynamic)
-        if user_email and self.is_admin(user_email):
-            return True
-        
+        if email and not self._looks_like_uuid(user_id):
+            resolved = self._resolve_user_id(email)
+            user_id = resolved or user_id
         hierarchy = self.get_user_hierarchy(user_id)
         if not hierarchy:
             return False
@@ -550,6 +392,98 @@ class HierarchyManager:
             return True
         
         return False
+
+    # ---------- Admin emails (dynamic) ----------
+    def get_dynamic_admin_emails(self) -> List[str]:
+        """Return emails of users with dynamic admin (is_dev=True) permissions."""
+        try:
+            resp = self.supabase.table("user_hierarchy").select("user_id").eq("is_dev", True).execute()
+            user_ids = [row.get("user_id") for row in (getattr(resp, 'data', None) or []) if row.get("user_id")]
+            emails: List[str] = []
+            for uid in user_ids:
+                try:
+                    p = self.supabase.from_("user_profiles").select("email").eq("user_id", uid).single().execute()
+                    if p and getattr(p, 'data', None) and p.data.get("email"):
+                        emails.append(p.data["email"].lower())
+                except Exception:
+                    continue
+            # Deduplicate
+            return sorted(list({e for e in emails if e}))
+        except Exception as e:
+            logger.error(f"Error getting dynamic admin emails: {e}")
+            return []
+
+    def get_all_admin_emails(self) -> List[str]:
+        """Return the union of hardcoded and dynamic admin emails."""
+        try:
+            hardcoded = ["lawrence@simcoaches.com"]
+            dynamic_list = self.get_dynamic_admin_emails()
+            combined = {e.lower() for e in (hardcoded + dynamic_list) if e}
+            return sorted(list(combined))
+        except Exception as e:
+            logger.error(f"Error getting all admin emails: {e}")
+            return ["lawrence@simcoaches.com"]
+
+    def add_dynamic_admin(self, email: str, added_by_email: Optional[str] = None) -> Dict[str, Any]:
+        """Grant dynamic admin (dev) permissions to a user by email."""
+        try:
+            if not email or "@" not in email:
+                return {"success": False, "message": "Invalid email"}
+            # Only hardcoded admins can modify admin list
+            if not (added_by_email and self.is_simcoaches_email(added_by_email)):
+                return {"success": False, "message": "Only Sim Coaches team members can modify admins"}
+            uid = self._resolve_user_id(email)
+            if not uid:
+                return {"success": False, "message": "User not found for the provided email"}
+            # Try update first
+            try:
+                upd = self.supabase.table("user_hierarchy").update({
+                    "is_dev": True,
+                    "assigned_by": added_by_email,
+                    "updated_at": "now()"
+                }).eq("user_id", uid).execute()
+                if getattr(upd, 'data', None):
+                    return {"success": True, "message": f"Granted admin to {email}"}
+            except Exception:
+                pass
+            # Insert if no existing row
+            try:
+                ins = self.supabase.table("user_hierarchy").insert({
+                    "user_id": uid,
+                    "hierarchy_level": HierarchyLevel.TEAM.value,
+                    "is_dev": True,
+                    "is_moderator": True,
+                    "assigned_by": added_by_email
+                }).execute()
+                if getattr(ins, 'data', None):
+                    return {"success": True, "message": f"Granted admin to {email}"}
+            except Exception as e:
+                logger.error(f"Error inserting dynamic admin: {e}")
+            return {"success": False, "message": "Failed to grant admin"}
+        except Exception as e:
+            logger.error(f"Error adding dynamic admin: {e}")
+            return {"success": False, "message": str(e)}
+
+    def remove_dynamic_admin(self, email: str, removed_by_email: Optional[str] = None) -> Dict[str, Any]:
+        """Revoke dynamic admin (dev) permissions from a user by email."""
+        try:
+            if not email or "@" not in email:
+                return {"success": False, "message": "Invalid email"}
+            if not (removed_by_email and self.is_simcoaches_email(removed_by_email)):
+                return {"success": False, "message": "Only Sim Coaches team members can modify admins"}
+            uid = self._resolve_user_id(email)
+            if not uid:
+                return {"success": False, "message": "User not found for the provided email"}
+            upd = self.supabase.table("user_hierarchy").update({
+                "is_dev": False,
+                "updated_at": "now()"
+            }).eq("user_id", uid).execute()
+            if getattr(upd, 'data', None):
+                return {"success": True, "message": f"Removed admin from {email}"}
+            return {"success": False, "message": "Failed to remove admin"}
+        except Exception as e:
+            logger.error(f"Error removing dynamic admin: {e}")
+            return {"success": False, "message": str(e)}
 
 # Create global instance
 hierarchy_manager = HierarchyManager() 

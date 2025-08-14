@@ -159,13 +159,46 @@ from ..config import config
 from ..pedals.calibration import CalibrationWizard
 from ..pedals.profile_dialog import PedalProfileDialog
 from ..race_coach.ui import RaceCoachWidget
-# Gamification imports - robust loader to avoid conflict with pip package named 'future'
-try:
-    from future.gamification.trackpro_gamification.ui.race_pass_view import RacePassViewWidget
-    from future.gamification.trackpro_gamification.ui.enhanced_quest_view import EnhancedQuestViewWidget
-    GAMIFICATION_AVAILABLE = True
-except Exception:
-    # Second attempt: add the gamification folder to sys.path and import as 'trackpro_gamification'
+# Gamification imports - robust loader with runtime capability probe
+GAMIFICATION_AVAILABLE = False
+RacePassViewWidget = None
+EnhancedQuestViewWidget = None
+
+def _probe_gamification_backend() -> bool:
+    try:
+        # Require authentication and presence of core tables
+        from ..database.supabase_client import get_supabase_client
+        client = get_supabase_client()
+        if not client:
+            return False
+        user_resp = client.auth.get_user()
+        if not user_resp or not getattr(user_resp, 'user', None):
+            return False
+        # Check that expected tables exist (lightweight probe)
+        try:
+            _ = client.table('user_quests').select('id').limit(1).execute()
+        except Exception as e:
+            # Missing table or permission error: treat as unavailable
+            return False
+        return True
+    except Exception:
+        return False
+
+def _load_gamification_widgets():
+    global RacePassViewWidget, EnhancedQuestViewWidget, GAMIFICATION_AVAILABLE
+    # Skip if backend not available
+    if not _probe_gamification_backend():
+        GAMIFICATION_AVAILABLE = False
+        return
+    try:
+        from future.gamification.trackpro_gamification.ui.race_pass_view import RacePassViewWidget as RPW
+        from future.gamification.trackpro_gamification.ui.enhanced_quest_view import EnhancedQuestViewWidget as EQW
+        RacePassViewWidget, EnhancedQuestViewWidget = RPW, EQW
+        GAMIFICATION_AVAILABLE = True
+        return
+    except Exception:
+        pass
+    # Second attempt: import through sys.path alias
     try:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         repo_root = os.path.abspath(os.path.join(project_root, '..'))
@@ -178,45 +211,52 @@ except Exception:
         RacePassViewWidget = getattr(rp_mod, 'RacePassViewWidget')
         EnhancedQuestViewWidget = getattr(eq_mod, 'EnhancedQuestViewWidget')
         GAMIFICATION_AVAILABLE = True
+        return
     except Exception:
-        # Third attempt: load modules by absolute file path
-        try:
-            import importlib.util
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            repo_root = os.path.abspath(os.path.join(project_root, '..'))
-            rp_path = os.path.join(repo_root, 'future', 'gamification', 'trackpro_gamification', 'ui', 'race_pass_view.py')
-            eq_path = os.path.join(repo_root, 'future', 'gamification', 'trackpro_gamification', 'ui', 'enhanced_quest_view.py')
+        pass
+    # Third attempt: load by absolute path
+    try:
+        import importlib.util
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        repo_root = os.path.abspath(os.path.join(project_root, '..'))
+        rp_path = os.path.join(repo_root, 'future', 'gamification', 'trackpro_gamification', 'ui', 'race_pass_view.py')
+        eq_path = os.path.join(repo_root, 'future', 'gamification', 'trackpro_gamification', 'ui', 'enhanced_quest_view.py')
 
-            spec_rp = importlib.util.spec_from_file_location('trackpro_local_race_pass_view', rp_path)
-            mod_rp = importlib.util.module_from_spec(spec_rp)
-            assert spec_rp and spec_rp.loader
-            spec_rp.loader.exec_module(mod_rp)
-            RacePassViewWidget = getattr(mod_rp, 'RacePassViewWidget')
+        spec_rp = importlib.util.spec_from_file_location('trackpro_local_race_pass_view', rp_path)
+        mod_rp = importlib.util.module_from_spec(spec_rp)
+        assert spec_rp and spec_rp.loader
+        spec_rp.loader.exec_module(mod_rp)
+        RacePassViewWidget = getattr(mod_rp, 'RacePassViewWidget')
 
-            spec_eq = importlib.util.spec_from_file_location('trackpro_local_enhanced_quest_view', eq_path)
-            mod_eq = importlib.util.module_from_spec(spec_eq)
-            assert spec_eq and spec_eq.loader
-            spec_eq.loader.exec_module(mod_eq)
-            EnhancedQuestViewWidget = getattr(mod_eq, 'EnhancedQuestViewWidget')
+        spec_eq = importlib.util.spec_from_file_location('trackpro_local_enhanced_quest_view', eq_path)
+        mod_eq = importlib.util.module_from_spec(spec_eq)
+        assert spec_eq and spec_eq.loader
+        spec_eq.loader.exec_module(mod_eq)
+        EnhancedQuestViewWidget = getattr(mod_eq, 'EnhancedQuestViewWidget')
 
-            GAMIFICATION_AVAILABLE = True
-        except Exception:
-            # Fallback implementations if gamification is not available
-            class RacePassViewWidget:
-                def __init__(self, *args, **kwargs):
-                    from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
-                    super().__init__()
-                    layout = QVBoxLayout(self)
-                    layout.addWidget(QLabel("Race Pass features not available"))
-            
-            class EnhancedQuestViewWidget:
-                def __init__(self, *args, **kwargs):
-                    from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
-                    super().__init__()
-                    layout = QVBoxLayout(self)
-                    layout.addWidget(QLabel("Quest features not available"))
-            
-            GAMIFICATION_AVAILABLE = False
+        GAMIFICATION_AVAILABLE = True
+        return
+    except Exception:
+        pass
+    # Fallback: safe placeholder widgets (inherit QWidget to avoid runtime errors)
+    try:
+        from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout
+        class RacePassViewWidget(QWidget):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                layout = QVBoxLayout(self)
+                layout.addWidget(QLabel("Race Pass features not available"))
+        class EnhancedQuestViewWidget(QWidget):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                layout = QVBoxLayout(self)
+                layout.addWidget(QLabel("Quest features not available"))
+        GAMIFICATION_AVAILABLE = False
+    except Exception:
+        GAMIFICATION_AVAILABLE = False
+
+# Attempt to load gamification widgets at import time (safe no-op if unavailable)
+_load_gamification_widgets()
 
 # Set up logging
 logger = logging.getLogger(__name__)

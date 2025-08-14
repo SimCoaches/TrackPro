@@ -569,16 +569,39 @@ class ModernMainWindow(QMainWindow):
         self.create_pages()
         self.switch_to_page("home")
         
-        # Refresh authentication state after UI is fully initialized
-        # This ensures navigation shows correct user info
+        # Force an immediate auth refresh so nav/avatar renders the real icon ASAP
+        try:
+            self.refresh_auth_state()
+        except Exception:
+            pass
+        # Follow up with a short delayed refresh to catch late session restoration
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(500, self.refresh_auth_state)
+        QTimer.singleShot(300, self.refresh_auth_state)
         
         # Set up keyboard shortcuts
         self.setup_keyboard_shortcuts()
         
-        # Set up system tray
+        # Set up system tray and ensure circular icon masks
         self.setup_system_tray()
+        try:
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                # Prefer a circular mask on supported platforms by using a rounded pixmap
+                from PyQt6.QtGui import QPixmap, QPainterPath, QPainter
+                icon = self.tray_icon.icon()
+                if not icon.isNull():
+                    pm = icon.pixmap(64, 64)
+                    masked = QPixmap(pm.size())
+                    masked.fill(Qt.GlobalColor.transparent)
+                    p = QPainter(masked)
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                    path = QPainterPath()
+                    path.addEllipse(0, 0, pm.width(), pm.height())
+                    p.setClipPath(path)
+                    p.drawPixmap(0, 0, pm)
+                    p.end()
+                    self.tray_icon.setIcon(QIcon(masked))
+        except Exception:
+            pass
     
     def create_navigation(self):
         nav_widget = DiscordNavigation()
@@ -803,6 +826,9 @@ class ModernMainWindow(QMainWindow):
                 # Connect avatar upload signal to home page refresh
                 if hasattr(self, 'pages') and 'home' in self.pages:
                     page_widget.avatar_uploaded.connect(lambda: self.pages['home'].on_auth_state_changed())
+                # Connect avatar upload signal to community page refresh if available
+                if hasattr(self, 'pages') and 'community' in self.pages and hasattr(self.pages['community'], 'on_avatar_updated'):
+                    page_widget.avatar_uploaded.connect(self.pages['community'].on_avatar_updated)
             elif page_config["class"]:
                 # Standard page creation
                 page_widget = page_config["class"](self.global_managers)
@@ -884,6 +910,9 @@ class ModernMainWindow(QMainWindow):
         # Connect avatar upload signal to home page refresh
         if hasattr(self, 'pages') and 'home' in self.pages:
             account_page.avatar_uploaded.connect(lambda: self.pages['home'].on_auth_state_changed())
+        # Connect avatar upload signal to community page refresh if available
+        if hasattr(self, 'pages') and 'community' in self.pages and hasattr(self.pages['community'], 'on_avatar_updated'):
+            account_page.avatar_uploaded.connect(self.pages['community'].on_avatar_updated)
         
         logger.info("✅ Modern Account page created with sidebar navigation")
         return account_page
@@ -1217,18 +1246,25 @@ class ModernMainWindow(QMainWindow):
             
             user_id = user.user.id
             
-            # Fetch profile from database
-            result = supabase.client.table('user_details').select('*').eq('user_id', user_id).execute()
+            # Fetch profile from database (combine user_details + user_profiles)
+            details_result = supabase.client.table('user_details').select('*').eq('user_id', user_id).execute()
+            profiles_result = supabase.client.table('user_profiles').select('first_name, last_name, bio, username, display_name').eq('user_id', user_id).execute()
             
-            if result.data and len(result.data) > 0:
-                profile = result.data[0]
+            if (details_result.data and len(details_result.data) > 0) or (profiles_result.data and len(profiles_result.data) > 0):
+                profile = {}
+                if details_result.data and len(details_result.data) > 0:
+                    profile.update(details_result.data[0])
+                if profiles_result.data and len(profiles_result.data) > 0:
+                    # Prefer non-empty values from user_profiles for social fields
+                    up_row = profiles_result.data[0]
+                    for k in ['first_name', 'last_name', 'bio']:
+                        if up_row.get(k) not in (None, ''):
+                            profile[k] = up_row.get(k)
                 
-                # Populate form fields from user_details table
+                # Populate form fields
                 self.first_name_input.setText(profile.get('first_name', ''))
                 self.last_name_input.setText(profile.get('last_name', ''))
-                # Note: display_name and bio are not in user_details table
-                # No display name field to clear
-                self.bio_input.setPlainText('')  # Clear since not stored in user_details
+                self.bio_input.setPlainText((profile.get('bio') if profile.get('bio') is not None else ''))
                 
                 logger.info(f"✅ Profile loaded for user: {profile.get('first_name', '')} {profile.get('last_name', '')}")
                 
@@ -1888,11 +1924,33 @@ class ModernMainWindow(QMainWindow):
                     
                     if complete_profile:
                         logger.info(f"✅ Got complete profile for user: {complete_profile.get('display_name', 'Unknown')}")
+                        # If avatar_url missing, pull from public view or auth metadata immediately
+                        avatar_url = complete_profile.get('avatar_url')
+                        if not avatar_url:
+                            try:
+                                from trackpro.database.supabase_client import get_supabase_client
+                                supa = get_supabase_client()
+                                if supa:
+                                    pub = supa.from_("public_user_profiles").select("avatar_url").eq("user_id", current_user.id).single().execute()
+                                    if pub and pub.data and pub.data.get('avatar_url'):
+                                        avatar_url = pub.data.get('avatar_url')
+                            except Exception:
+                                pass
+                        if not avatar_url:
+                            try:
+                                md = getattr(current_user, 'user_metadata', {}) or {}
+                                for k in ['avatar_url','picture','avatar','image_url','photoURL']:
+                                    v = md.get(k)
+                                    if isinstance(v, str) and len(v.strip()) > 0:
+                                        avatar_url = v.strip()
+                                        break
+                            except Exception:
+                                pass
                         user_info = {
                             'id': current_user.id,
                             'email': current_user.email,
                             'name': complete_profile.get('display_name') or complete_profile.get('username') or current_user.name,
-                            'avatar_url': complete_profile.get('avatar_url'),
+                            'avatar_url': avatar_url,
                             'username': complete_profile.get('username'),
                             'display_name': complete_profile.get('display_name')
                         }
@@ -1908,7 +1966,8 @@ class ModernMainWindow(QMainWindow):
                     'id': current_user.id,
                     'email': current_user.email,
                     'name': current_user.name or current_user.email,
-                    'avatar_url': None,
+                    # Try to include avatar_url quickly even in basic fallback
+                    'avatar_url': (getattr(current_user, 'user_metadata', {}) or {}).get('avatar_url'),
                     'username': None,
                     'display_name': current_user.name or current_user.email
                 }
@@ -1930,6 +1989,13 @@ class ModernMainWindow(QMainWindow):
             # Clear cached user info to force refresh
             self._cached_user_info = None
             
+            # Also invalidate the avatar cache to force an immediate re-fetch
+            try:
+                from ..avatar_manager import AvatarManager
+                AvatarManager.instance().invalidate_cache(avatar_url)
+            except Exception:
+                pass
+
             # Refresh authentication state to update navigation with new avatar
             self.refresh_auth_state()
             

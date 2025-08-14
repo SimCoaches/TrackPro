@@ -216,7 +216,7 @@ class PrivateConversationWidget(QWidget):
         
         # Conversation header
         header_widget = QWidget()
-        header_widget.setFixedHeight(44)
+        header_widget.setFixedHeight(56)
         header_widget.setStyleSheet("""
             QWidget {
                 background-color: #252525;
@@ -225,7 +225,8 @@ class PrivateConversationWidget(QWidget):
         """)
         
         header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(16, 16, 16, 16)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        header_layout.setSpacing(10)
         
         # Other user info
         other_user = self.conversation_data.get('other_user', {})
@@ -240,6 +241,7 @@ class PrivateConversationWidget(QWidget):
         # User name
         name_label = QLabel(user_name)
         name_label.setStyleSheet("color: #ffffff; font-size: 16px; font-weight: bold;")
+        name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header_layout.addWidget(name_label)
         
         header_layout.addStretch()

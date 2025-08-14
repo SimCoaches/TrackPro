@@ -731,31 +731,45 @@ class HomePage(BasePage):
             except Exception:
                 self.set_chip(self.perf_chip, "UI: —", "unknown")
 
-            # Community metrics (friends online, unread DMs)
+            # Community metrics (non-blocking)
             try:
-                from trackpro.community.community_manager import CommunityManager
-                # Ensure current user set for queries requiring it
-                try:
-                    from trackpro.auth.user_manager import get_current_user
-                    user = get_current_user()
-                    if user and user.is_authenticated:
-                        CommunityManager().set_current_user(user.id)
-                except Exception:
-                    pass
-                convs = CommunityManager().get_private_conversations()
-                unread = sum(int(c.get('unread_count') or 0) for c in (convs or []))
-                friends = CommunityManager().get_friends() or []
-                self.community_label.setText(f"Friends: {len(friends)} | Unread DMs: {unread}")
-                try:
-                    if hasattr(self, 'qs_chip_community'):
-                        if len(friends) > 0 or unread > 0:
-                            self.set_chip(self.qs_chip_community, "Ready", "ok")
-                        else:
-                            self.set_chip(self.qs_chip_community, "Explore", "warn")
-                except Exception:
-                    pass
+                from PyQt6.QtCore import QTimer
+                import time
+                now = time.monotonic()
+                if not hasattr(self, "_last_community_update"):
+                    self._last_community_update = 0.0
+                if not hasattr(self, "_community_fetch_thread"):
+                    self._community_fetch_thread = None
+                throttled = (now - self._last_community_update) < 30.0
+                inflight = self._community_fetch_thread is not None and self._community_fetch_thread.is_alive()
+                if not throttled and not inflight:
+                    def _worker():
+                        unread_local = 0
+                        friends_count = 0
+                        try:
+                            from trackpro.community.community_manager import CommunityManager
+                            try:
+                                from trackpro.auth.user_manager import get_current_user
+                                user = get_current_user()
+                                if user and user.is_authenticated:
+                                    CommunityManager().set_current_user(user.id)
+                            except Exception:
+                                pass
+                            convs = CommunityManager().get_private_conversations() or []
+                            try:
+                                unread_local = sum(int(c.get('unread_count') or 0) for c in convs)
+                            except Exception:
+                                unread_local = 0
+                            friends = CommunityManager().get_friends() or []
+                            friends_count = len(friends)
+                        except Exception:
+                            pass
+                        QTimer.singleShot(0, lambda: self._apply_community_metrics(friends_count, unread_local))
+                    import threading
+                    self._community_fetch_thread = threading.Thread(target=_worker, name="CommunityMetricsFetch", daemon=True)
+                    self._community_fetch_thread.start()
+                    self._last_community_update = now
             except Exception:
-                # Keep prior text if fetch fails
                 pass
         except Exception:
             pass
@@ -788,6 +802,20 @@ class HomePage(BasePage):
             start_voice_server()
         except Exception as e:
             logger.error(f"Could not launch voice server: {e}")
+
+    def _apply_community_metrics(self, friends_count: int, unread: int):
+        try:
+            self.community_label.setText(f"Friends: {friends_count} | Unread DMs: {unread}")
+            try:
+                if hasattr(self, 'qs_chip_community'):
+                    if friends_count > 0 or unread > 0:
+                        self.set_chip(self.qs_chip_community, "Ready", "ok")
+                    else:
+                        self.set_chip(self.qs_chip_community, "Explore", "warn")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def navigate_to_page(self, page_name: str):
         try:
@@ -981,37 +1009,76 @@ class HomePage(BasePage):
             child = self.events_container.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        
-        # Sample events with title, subtitle, description, and image
-        events = [
-            {
-                'title': 'Weekly Racing League',
-                'subtitle': 'Every Saturday at 2 PM',
-                'description': 'Join our weekly racing league featuring competitive races across various tracks and car classes.',
-                'image': None  # Will use default icon
-            },
-            {
-                'title': 'Spa-Francorchamps Open Practice',
-                'subtitle': 'This Sunday',
-                'description': 'Open practice session on the legendary Spa-Francorchamps circuit. Perfect for improving your lap times.',
-                'image': None
-            },
-            {
-                'title': 'TrackPro Community Challenge',
-                'subtitle': 'Next Week',
-                'description': 'Special community event with unique challenges and rewards for all participants.',
-                'image': None
-            }
-        ]
-        
-        for event in events:
-            event_card = self.create_event_card(
-                event['title'],
-                event['subtitle'],
-                event['description'],
-                event['image']
-            )
-            self.events_container.addWidget(event_card)
+        try:
+            # Fetch real events from the community manager
+            from ....community.community_manager import CommunityManager
+            result = CommunityManager().get_events()
+            events = []
+            if result and result.get('success'):
+                raw_events = result.get('events', [])
+                # Filter to upcoming/active only
+                for ev in raw_events:
+                    status = (ev.get('status') or '').lower()
+                    if status in ('upcoming', 'active'):
+                        events.append(ev)
+                # Sort by start_time ascending when present
+                def _parse_start(e):
+                    st = e.get('start_time')
+                    if isinstance(st, str):
+                        try:
+                            return datetime.fromisoformat(st.replace('Z', '+00:00'))
+                        except Exception:
+                            return datetime.max
+                    return st or datetime.max
+                events.sort(key=_parse_start)
+            
+            # Render top few events
+            shown = 0
+            for ev in events:
+                title = ev.get('title') or 'Event'
+                description = ev.get('description') or ''
+                # Build a subtitle from time and optional timezone metadata
+                subtitle = ''
+                try:
+                    st = ev.get('start_time')
+                    if isinstance(st, str):
+                        try:
+                            st_dt = datetime.fromisoformat(st.replace('Z', '+00:00'))
+                        except Exception:
+                            st_dt = None
+                    else:
+                        st_dt = st
+                    tz_label = None
+                    entry = ev.get('entry_requirements') or {}
+                    tz_name = entry.get('timezone')
+                    if st_dt:
+                        # If a timezone name is provided, prefer displaying that label
+                        if tz_name:
+                            tz_label = tz_name
+                        subtitle = f"{st_dt.strftime('%b %d, %Y at %I:%M %p')}{(' ' + tz_label) if tz_label else ''}"
+                except Exception:
+                    subtitle = ''
+
+                card = self.create_event_card(
+                    title,
+                    subtitle or (ev.get('event_type', '') or '').replace('_', ' ').title(),
+                    description,
+                    None
+                )
+                self.events_container.addWidget(card)
+                shown += 1
+                if shown >= 3:
+                    break
+
+            # Empty state
+            if shown == 0:
+                from PyQt6.QtWidgets import QLabel
+                empty = QLabel("No upcoming events yet. Check the Community page.")
+                empty.setStyleSheet("color: #cccccc;")
+                self.events_container.addWidget(empty)
+        except Exception:
+            # Silent failure to avoid blocking the home page
+            pass
         
     def update_user_avatar(self, user_data):
         """Update the user avatar with user data."""

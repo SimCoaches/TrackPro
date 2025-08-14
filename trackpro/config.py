@@ -553,12 +553,12 @@ class Config:
     @property
     def voice_chat_bit_depth(self) -> int:
         """Get voice chat bit depth."""
-        return self.get('voice_chat.bit_depth', 24)
+        return self.get('voice_chat.bit_depth', 16)
     
     @property
     def voice_chat_buffer_size(self) -> int:
         """Get voice chat buffer size."""
-        return self.get('voice_chat.buffer_size', 512)
+        return self.get('voice_chat.buffer_size', 128)
     
     @property
     def voice_chat_input_device(self) -> Optional[int]:

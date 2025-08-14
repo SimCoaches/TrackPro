@@ -60,7 +60,19 @@ class EnhancedUserManager(DatabaseManager):
             try:
                 details_response = self.supabase.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
                 if details_response.data:
-                    profile_data.update(details_response.data[0])
+                    # SAFETY: do not overwrite canonical social fields from user_profiles with
+                    # empty/None values that might exist in legacy schemas. Prefer non-null values.
+                    details_row = details_response.data[0]
+                    for field_name, field_value in details_row.items():
+                        # Never let details override these if they already exist from profiles
+                        if field_name in {"username", "display_name", "bio"}:
+                            if field_name not in profile_data or not profile_data.get(field_name):
+                                if field_value is not None and field_value != "":
+                                    profile_data[field_name] = field_value
+                            continue
+                        # For all other fields, prefer non-null values from details
+                        if field_value is not None:
+                            profile_data[field_name] = field_value
                     logger.info(f"Found user {user_id} in user_details table")
                 else:
                     logger.info(f"User {user_id} not found in user_details table")
@@ -142,6 +154,21 @@ class EnhancedUserManager(DatabaseManager):
                     logger.error(f"Failed to upsert user_profiles for user {user_id}: {response.error}")
                     return False
                 logger.info(f"Successfully upserted user_profiles for user {user_id}")
+
+                # Keep the public display info table in sync for fields we manage here
+                try:
+                    public_update = {}
+                    if 'avatar_url' in profile_update and profile_update['avatar_url']:
+                        public_update['avatar_url'] = profile_update['avatar_url']
+                    if 'display_name' in profile_update and profile_update['display_name']:
+                        public_update['display_name'] = profile_update['display_name']
+                    if 'username' in profile_update and profile_update['username']:
+                        public_update['username'] = profile_update['username']
+                    if public_update:
+                        self.supabase.from_("public_user_display_info").update(public_update).eq("user_id", user_id).execute()
+                except Exception:
+                    # Best-effort: public table may not exist in some environments
+                    pass
                     
             if details_update:
                 # Use upsert for user_details to handle cases where the record doesn't exist yet

@@ -332,7 +332,24 @@ class VoiceSettingsDialog(QDialog):
         try:
             device_index = self.input_device_combo.currentData()
             if device_index is None:
-                device_index = 0
+                # Pick a concrete mic: skip Windows mapper/primary aliases
+                try:
+                    chosen = None
+                    for i in range(self.audio.get_device_count()):
+                        info = self.audio.get_device_info_by_index(i)
+                        name = str(info.get('name', '')).lower()
+                        if info.get('maxInputChannels', 0) > 0 and 'mapper' not in name and 'primary sound' not in name:
+                            chosen = i
+                            break
+                    if chosen is None:
+                        for i in range(self.audio.get_device_count()):
+                            info = self.audio.get_device_info_by_index(i)
+                            if info.get('maxInputChannels', 0) > 0:
+                                chosen = i
+                                break
+                    device_index = chosen if chosen is not None else 0
+                except Exception:
+                    device_index = 0
                 
             # Get device info to check capabilities
             device_info = self.audio.get_device_info_by_index(device_index)
@@ -356,16 +373,93 @@ class VoiceSettingsDialog(QDialog):
             else:
                 format_type = pyaudio.paInt32
                 
-            # Start real-time recording with instant monitoring
-            self.test_stream = self.audio.open(
-                format=format_type,
-                channels=channels,
-                rate=sample_rate,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=256,  # Smaller buffer for lower latency
-                stream_callback=self._audio_callback
-            )
+            # Start real-time recording with fallback attempts
+            def try_open_test(fmt, ch, rate, dev):
+                return self.audio.open(
+                    format=fmt,
+                    channels=ch,
+                    rate=rate,
+                    input=True,
+                    input_device_index=dev,
+                    frames_per_buffer=256,
+                    stream_callback=self._audio_callback
+                )
+
+            opened = False
+            last_err = None
+            # Build sample-rate candidates: current, device default, common fallbacks
+            rate_opts = []
+            def _push_rate(val):
+                try:
+                    r = int(val)
+                    if r > 0 and r not in rate_opts:
+                        rate_opts.append(r)
+                except Exception:
+                    pass
+            _push_rate(sample_rate)
+            try:
+                dinfo = self.audio.get_device_info_by_index(device_index)
+                _push_rate(dinfo.get('defaultSampleRate'))
+            except Exception:
+                pass
+            _push_rate(48000)
+            _push_rate(44100)
+            _push_rate(32000)
+            _push_rate(16000)
+            ch_opts = [min(channels, max_channels)]
+            if 1 not in ch_opts:
+                ch_opts.append(1)
+            fmt_opts = [format_type]
+            if format_type != pyaudio.paInt16:
+                fmt_opts.append(pyaudio.paInt16)
+
+            for r in rate_opts:
+                for ch in ch_opts:
+                    for fmt in fmt_opts:
+                        try:
+                            # Probe when available
+                            if hasattr(self.audio, 'is_format_supported'):
+                                try:
+                                    self.audio.is_format_supported(r, input_device=device_index, input_channels=ch, input_format=fmt)
+                                except Exception as probe_err:
+                                    last_err = probe_err
+                                    continue
+                            self.test_stream = try_open_test(fmt, ch, r, device_index)
+                            opened = True
+                            # Keep monitor in same format
+                            self.monitor_stream = self.audio.open(
+                                format=fmt,
+                                channels=ch,
+                                rate=r,
+                                output=True,
+                                frames_per_buffer=256
+                            )
+                            # Persist last working input format for join to reuse
+                            try:
+                                from trackpro.config import config
+                                def _bits_from_fmt(f):
+                                    if f == pyaudio.paInt16:
+                                        return 16
+                                    if f == pyaudio.paInt24:
+                                        return 24
+                                    return 32
+                                config.set('voice_chat.last_working_input_device', device_index)
+                                config.set('voice_chat.last_working_sample_rate', r)
+                                config.set('voice_chat.last_working_channels', ch)
+                                config.set('voice_chat.last_working_bit_depth', _bits_from_fmt(fmt))
+                                config.save()
+                            except Exception:
+                                pass
+                            break
+                        except Exception as e:
+                            last_err = e
+                    if opened:
+                        break
+                if opened:
+                    break
+
+            if not opened:
+                raise RuntimeError(f"No supported mic format on device {device_index}: {last_err}")
             
             # Start output stream for instant monitoring
             self.monitor_stream = self.audio.open(
@@ -405,13 +499,27 @@ class VoiceSettingsDialog(QDialog):
             self.test_timer = None
             
         if self.test_stream:
-            self.test_stream.stop_stream()
-            self.test_stream.close()
+            try:
+                if self.test_stream.is_active():
+                    self.test_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.test_stream.close()
+            except Exception:
+                pass
             self.test_stream = None
             
         if hasattr(self, 'monitor_stream') and self.monitor_stream:
-            self.monitor_stream.stop_stream()
-            self.monitor_stream.close()
+            try:
+                if self.monitor_stream.is_active():
+                    self.monitor_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.monitor_stream.close()
+            except Exception:
+                pass
             self.monitor_stream = None
             
         self.is_testing_mic = False
@@ -437,10 +545,10 @@ class VoiceSettingsDialog(QDialog):
             audio_array = np.frombuffer(in_data, dtype=np.int16)
             rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
             level = min(rms / 32767.0, 1.0)  # Normalize to 0-1
-            
+
             # Store level for UI update
             self.current_audio_level = level
-            
+
             # DEBUG: Log audio level during testing
             if hasattr(self, '_last_test_debug_time'):
                 import time
@@ -451,13 +559,16 @@ class VoiceSettingsDialog(QDialog):
             else:
                 import time
                 self._last_test_debug_time = time.time()
-            
+
             # Send to monitor stream for instant feedback
             if hasattr(self, 'monitor_stream') and self.monitor_stream:
-                self.monitor_stream.write(in_data)
-                
+                try:
+                    self.monitor_stream.write(in_data)
+                except Exception:
+                    pass
+
             return (in_data, pyaudio.paContinue)
-            
+
         except Exception as e:
             logger.error(f"Audio callback error: {e}")
             return (None, pyaudio.paComplete)
@@ -600,7 +711,10 @@ class VoiceSettingsDialog(QDialog):
                                   
         except Exception as e:
             logger.error(f"Speaker test failed: {e}")
-            QMessageBox.warning(self, "Test Failed", f"Speaker test failed: {str(e)}")
+            try:
+                QMessageBox.warning(self, "Test Failed", f"Speaker test failed: {str(e)}")
+            except Exception:
+                pass
             self.test_status_label.setText("Test failed")
             self.test_status_label.setStyleSheet("color: #F44336;")
             
@@ -695,9 +809,12 @@ class VoiceSettingsDialog(QDialog):
         try:
             from trackpro.config import config
             
-            # Stop any active microphone test before applying settings
+            # Stop any active microphone test before applying settings (ignore stop errors)
             if hasattr(self, 'is_testing_mic') and self.is_testing_mic:
-                self.stop_microphone_test()
+                try:
+                    self.stop_microphone_test()
+                except Exception:
+                    pass
             
             # Get current settings
             settings = {
@@ -739,7 +856,10 @@ class VoiceSettingsDialog(QDialog):
             
             # Clean up audio resources before accepting
             if self.audio:
-                self.audio.terminate()
+                try:
+                    self.audio.terminate()
+                except Exception:
+                    pass
                 
             self.accept()
             
@@ -764,7 +884,10 @@ class VoiceSettingsDialog(QDialog):
             
             # Clean up audio resources before accepting
             if self.audio:
-                self.audio.terminate()
+                try:
+                    self.audio.terminate()
+                except Exception:
+                    pass
                 
             self.accept()
         

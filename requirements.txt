@@ -10,6 +10,7 @@ PyQt6-Charts>=6.4.0,<6.7.0     # Charts and graphs for telemetry visualization
 numpy>=1.19.0,<2.0.0           # Scientific computing foundation
 requests>=2.25.0,<3.0.0        # HTTP requests for APIs
 psutil>=5.9.0,<6.0.0           # System resource monitoring
+PyJWT>=2.8.0,<3.0.0            # JSON Web Token for authentication
 
 # ================================================================================================
 # IRACING & SIMULATION DEPENDENCIES  
