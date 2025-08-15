@@ -281,6 +281,13 @@ class PedalsPage(BasePage):
         curve_manager_widget.curve_changed.connect(
             lambda curve, p=pedal_name: self.curve_changed.emit(p, curve)
         )
+        # When a curve is loaded, refresh the UI widgets to show the new hardware state
+        curve_manager_widget.curve_changed.connect(
+            lambda curve: calibration_widget.load_existing_calibration_data()
+        )
+        curve_manager_widget.curve_changed.connect(
+            lambda curve: deadzone_widget.load_existing_deadzone_data()
+        )
         # Update both the page and the calibration widget when deadzone changes
         deadzone_widget.deadzone_changed.connect(
             lambda pedal, min_dz, max_dz: self.update_deadzone(pedal, min_dz, max_dz, calibration_widget)
@@ -381,6 +388,15 @@ class PedalsPage(BasePage):
                     # Persist for future sessions
                     if hasattr(self.hardware_input, 'save_axis_ranges'):
                         self.hardware_input.save_axis_ranges()
+                    
+                    # Save deadzone settings to cloud
+                    try:
+                        setattr(self.hardware_input, f'{pedal_name}_deadzone_min', min_deadzone)
+                        setattr(self.hardware_input, f'{pedal_name}_deadzone_max', max_deadzone)
+                        if hasattr(self.hardware_input, 'save_deadzone_settings'):
+                            self.hardware_input.save_deadzone_settings()
+                    except Exception as dz_e:
+                        logger.debug(f"Failed to save deadzone settings for {pedal_name}: {dz_e}")
         except Exception as e:
             logger.debug(f"Failed to apply deadzones to hardware for {pedal_name}: {e}")
     
@@ -541,6 +557,13 @@ class PedalsPage(BasePage):
         curve_manager_widget.curve_changed.connect(
             lambda curve, p=pedal_name: self.curve_changed.emit(p, curve)
         )
+        # When a curve is loaded, refresh the UI widgets to show the new hardware state
+        curve_manager_widget.curve_changed.connect(
+            lambda curve: calibration_widget.load_existing_calibration_data()
+        )
+        curve_manager_widget.curve_changed.connect(
+            lambda curve: deadzone_widget.load_existing_deadzone_data()
+        )
         # Update both the page and the calibration widget when deadzone changes
         deadzone_widget.deadzone_changed.connect(
             lambda pedal, min_dz, max_dz: self.update_deadzone(pedal, min_dz, max_dz, calibration_widget)
@@ -553,8 +576,10 @@ class PedalsPage(BasePage):
         return scroll_area
     
     def open_calibration_wizard(self):
+        wizard = None
         try:
             from ....pedals.calibration import CalibrationWizard
+            import gc
             
             # Fallback to global manager hardware if local reference not set yet
             if not getattr(self, 'hardware_input', None) and getattr(self, 'global_managers', None):
@@ -579,6 +604,25 @@ class PedalsPage(BasePage):
             logger.error(f"Failed to import CalibrationWizard: {e}")
         except Exception as e:
             logger.error(f"Error opening calibration wizard: {e}")
+        finally:
+            # BULLETPROOF CLEANUP - Force destruction of wizard and all its resources
+            if wizard:
+                try:
+                    # Force cleanup of all wizard resources
+                    wizard.cleanup_all_resources()
+                    wizard.close()
+                    wizard.deleteLater()
+                    wizard = None
+                    
+                    # Force garbage collection to free handles immediately
+                    import gc
+                    gc.collect()
+                    
+                    logger.info("Calibration wizard resources forcefully cleaned up")
+                except Exception as e:
+                    logger.error(f"Error during wizard cleanup: {e}")
+                    # Even if cleanup fails, ensure we don't hold references
+                    wizard = None
     
     def update_deadzone(self, pedal_name: str, min_deadzone: int, max_deadzone: int, calibration_widget):
         """Update the deadzone values in the calibration chart."""
@@ -601,6 +645,15 @@ class PedalsPage(BasePage):
                     # Persist for future sessions
                     if hasattr(self.hardware_input, 'save_axis_ranges'):
                         self.hardware_input.save_axis_ranges()
+                    
+                    # Save deadzone settings to cloud
+                    try:
+                        setattr(self.hardware_input, f'{pedal_name}_deadzone_min', min_deadzone)
+                        setattr(self.hardware_input, f'{pedal_name}_deadzone_max', max_deadzone)
+                        if hasattr(self.hardware_input, 'save_deadzone_settings'):
+                            self.hardware_input.save_deadzone_settings()
+                    except Exception as dz_e:
+                        logger.debug(f"Failed to save deadzone settings for {pedal_name}: {dz_e}")
         except Exception as e:
             logger.debug(f"Failed to apply deadzones to hardware for {pedal_name}: {e}")
     

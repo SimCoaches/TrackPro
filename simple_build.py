@@ -191,6 +191,10 @@ def create_optimized_installer():
     # Build executable with optimized PyInstaller
     print("Building executable with optimized settings...")
     
+    # Set environment variables for faster builds
+    os.environ['PYINSTALLER_COMPILE_BOOTLOADER'] = '0'  # Skip bootloader compilation
+    os.environ['PYINSTALLER_LOG_LEVEL'] = 'WARN'  # Reduce logging
+    
     try:
         import PyInstaller.__main__
         
@@ -201,6 +205,7 @@ def create_optimized_installer():
             '--clean',
             '--workpath=build',
             '--distpath=dist',
+            '--log-level=WARN',  # Reduce logging for faster builds
         ]
         
         PyInstaller.__main__.run(build_args)

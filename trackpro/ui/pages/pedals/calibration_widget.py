@@ -328,6 +328,9 @@ class PedalCalibrationWidget(QWidget):
         
         self.init_ui()
         
+        # Load existing calibration data from hardware
+        self.load_existing_calibration_data()
+        
     def init_ui(self):
         layout = QVBoxLayout()
         self.setLayout(layout)
@@ -360,6 +363,70 @@ class PedalCalibrationWidget(QWidget):
         
         # Update deadzone visualization after UI is created
         self.update_deadzone_visualization()
+        
+    def load_existing_calibration_data(self):
+        """Load existing calibration data from hardware input."""
+        try:
+            if not self.global_managers:
+                return
+                
+            hardware = getattr(self.global_managers, 'hardware', None)
+            if not hardware:
+                return
+                
+            # Load calibration curve if it exists
+            if hasattr(hardware, 'calibration') and hardware.calibration:
+                pedal_calibration = hardware.calibration.get(self.pedal_name, {})
+                if pedal_calibration:
+                    # Load curve points
+                    points = pedal_calibration.get('points', [])
+                    if points and len(points) > 0:
+                        # Convert points to x,y arrays
+                        try:
+                            self.curve_x = [pt[0] for pt in points]
+                            self.curve_y = [pt[1] for pt in points]
+                            logger.info(f"Loaded existing curve for {self.pedal_name}: {len(points)} points")
+                        except (IndexError, TypeError) as e:
+                            logger.debug(f"Invalid curve points format for {self.pedal_name}: {e}")
+                    
+                    # Load curve type
+                    curve_type = pedal_calibration.get('curve', 'Linear (Default)')
+                    if self.curve_selector:
+                        # Find and set the curve type in the selector
+                        for i in range(self.curve_selector.count()):
+                            if self.curve_selector.itemText(i) == curve_type:
+                                self.curve_selector.setCurrentIndex(i)
+                                break
+            
+            # Load axis ranges (calibration min/max)
+            if hasattr(hardware, 'axis_ranges') and hardware.axis_ranges:
+                axis_data = hardware.axis_ranges.get(self.pedal_name, {})
+                if axis_data:
+                    min_val = axis_data.get('min', 0)
+                    max_val = axis_data.get('max', 65535)
+                    self.set_calibration_range(min_val, max_val)
+                    logger.info(f"Loaded calibration range for {self.pedal_name}: {min_val}-{max_val}")
+                    
+                    # Load deadzones from axis ranges
+                    min_deadzone = axis_data.get('min_deadzone', 0)
+                    max_deadzone = axis_data.get('max_deadzone', 0)
+                    self.set_deadzone_values(min_deadzone, max_deadzone)
+                    logger.info(f"Loaded deadzones for {self.pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
+            
+            # Update the chart with loaded data
+            if hasattr(self, 'calibration_chart') and self.calibration_chart:
+                self.calibration_chart.set_curve_data(
+                    self.curve_x, 
+                    self.curve_y, 
+                    self.on_point_moved
+                )
+                self.update_deadzone_visualization()
+                logger.debug(f"Updated calibration chart for {self.pedal_name}")
+                
+        except Exception as e:
+            logger.debug(f"Failed to load existing calibration data for {self.pedal_name}: {e}")
+    
+
     
     def create_input_monitor(self, parent_layout):
         input_group = QGroupBox("Input Monitor")

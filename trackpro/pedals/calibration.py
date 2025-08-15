@@ -428,8 +428,22 @@ class PedalCalibrationPage(QWizardPage):
     def cleanupPage(self):
         """Called by QWizard when the user leaves this page."""
         try:
-            if self.timer and self.timer.isActive():
-                self.timer.stop()
+            if hasattr(self, 'timer') and self.timer:
+                if self.timer.isActive():
+                    self.timer.stop()
+                self.timer.deleteLater()
+                self.timer = None
+        except Exception:
+            pass
+            
+    def __del__(self):
+        """Destructor to ensure timer cleanup."""
+        try:
+            if hasattr(self, 'timer') and self.timer:
+                if self.timer.isActive():
+                    self.timer.stop()
+                self.timer.deleteLater()
+                self.timer = None
         except Exception:
             pass
 
@@ -887,72 +901,109 @@ class CalibrationWizard(QWizard):
         else:
             return -1
 
-    def handle_finish(self, result):
-        """Handle wizard completion."""
-        if result == QWizard.DialogCode.Accepted:
-            logger.info("Pedal calibration wizard completed successfully")
-            
-            try:
-                # Extract calibration results
-                selection_page = self.page(self.PAGE_SELECTION)
-                pedal_count = selection_page.get_pedal_count() if hasattr(selection_page, 'get_pedal_count') else 3
-                
-                # Build results dictionary
-                results = {}
-                
-                # Always include throttle and brake
-                pedals_to_process = ['throttle', 'brake']
-                if pedal_count == 3:
-                    pedals_to_process.append('clutch')
-                
-                for pedal in pedals_to_process:
-                    try:
-                        min_field = self.field(f"{pedal}_min")
-                        max_field = self.field(f"{pedal}_max")
-                        
-                        # Parse min/max from fields (labels)
-                        min_val = int(min_field.replace("Min: ", "")) if isinstance(min_field, str) and "Min: " in min_field else int(min_field) if min_field else 0
-                        max_val = int(max_field.replace("Max: ", "")) if isinstance(max_field, str) and "Max: " in max_field else int(max_field) if max_field else 65535
-
-                        # Read axis directly from the corresponding page attribute to avoid label parsing issues
-                        page_for_axis = {
-                            'throttle': self.page(self.PAGE_THROTTLE),
-                            'brake': self.page(self.PAGE_BRAKE),
-                            'clutch': self.page(self.PAGE_CLUTCH)
-                        }.get(pedal)
-                        axis_val = int(getattr(page_for_axis, 'detected_axis', -1)) if page_for_axis else -1
-                        
-                        results[pedal] = {
-                            'min': min_val,
-                            'max': max_val,
-                            'axis': axis_val
-                        }
-                        
-                        logger.info(f"Extracted {pedal}: min={min_val}, max={max_val}, axis={axis_val}")
-                    except Exception as e:
-                        logger.error(f"Error extracting {pedal} calibration: {e}")
-                        results[pedal] = {'min': 0, 'max': 65535, 'axis': -1}
-                
-                # Save calibration
-                self.save_calibration(results)
-                
-                # Emit completion signal
-                self.calibration_complete.emit(results)
-
-                # Proactively stop the per-page timers after finishing to avoid handle leaks
+    def cleanup_all_resources(self):
+        """Force cleanup of all Qt resources to prevent handle leaks."""
+        try:
+            # Stop and delete all timers from all pages
+            for page_id in [self.PAGE_SELECTION, self.PAGE_THROTTLE, self.PAGE_BRAKE, self.PAGE_CLUTCH]:
                 try:
-                    for page_id in [self.PAGE_THROTTLE, self.PAGE_BRAKE, self.PAGE_CLUTCH]:
-                        page = self.page(page_id)
-                        if page and hasattr(page, 'timer') and page.timer.isActive():
+                    page = self.page(page_id)
+                    if page and hasattr(page, 'timer') and page.timer:
+                        if page.timer.isActive():
                             page.timer.stop()
+                        page.timer.deleteLater()
+                        page.timer = None
                 except Exception:
                     pass
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            logger.info("Forced cleanup of all calibration wizard resources")
+        except Exception as e:
+            logger.error(f"Error during resource cleanup: {e}")
+
+    def closeEvent(self, event):
+        """Handle wizard close event with forced cleanup."""
+        self.cleanup_all_resources()
+        super().closeEvent(event)
+        
+    def reject(self):
+        """Handle wizard rejection with forced cleanup."""
+        logger.info("Pedal calibration wizard cancelled")
+        self.cleanup_all_resources()
+        super().reject()
+        
+    def __del__(self):
+        """Destructor to ensure all resources are freed."""
+        try:
+            self.cleanup_all_resources()
+        except Exception:
+            pass
+
+    def handle_finish(self, result):
+        """Handle wizard completion."""
+        try:
+            if result == QWizard.DialogCode.Accepted:
+                logger.info("Pedal calibration wizard completed successfully")
                 
-            except Exception as e:
-                logger.error(f"Error processing calibration results: {e}")
-                QMessageBox.critical(self, "Error", f"Failed to process calibration results: {e}")
-        else:
-            logger.info("Pedal calibration wizard cancelled")
+                try:
+                    # Extract calibration results
+                    selection_page = self.page(self.PAGE_SELECTION)
+                    pedal_count = selection_page.get_pedal_count() if hasattr(selection_page, 'get_pedal_count') else 3
+                    
+                    # Build results dictionary
+                    results = {}
+                    
+                    # Always include throttle and brake
+                    pedals_to_process = ['throttle', 'brake']
+                    if pedal_count == 3:
+                        pedals_to_process.append('clutch')
+                    
+                    for pedal in pedals_to_process:
+                        try:
+                            min_field = self.field(f"{pedal}_min")
+                            max_field = self.field(f"{pedal}_max")
+                            
+                            # Parse min/max from fields (labels)
+                            min_val = int(min_field.replace("Min: ", "")) if isinstance(min_field, str) and "Min: " in min_field else int(min_field) if min_field else 0
+                            max_val = int(max_field.replace("Max: ", "")) if isinstance(max_field, str) and "Max: " in max_field else int(max_field) if max_field else 65535
+
+                            # Read axis directly from the corresponding page attribute to avoid label parsing issues
+                            page_for_axis = {
+                                'throttle': self.page(self.PAGE_THROTTLE),
+                                'brake': self.page(self.PAGE_BRAKE),
+                                'clutch': self.page(self.PAGE_CLUTCH)
+                            }.get(pedal)
+                            axis_val = int(getattr(page_for_axis, 'detected_axis', -1)) if page_for_axis else -1
+                            
+                            results[pedal] = {
+                                'min': min_val,
+                                'max': max_val,
+                                'axis': axis_val
+                            }
+                            
+                            logger.info(f"Extracted {pedal}: min={min_val}, max={max_val}, axis={axis_val}")
+                        except Exception as e:
+                            logger.error(f"Error extracting {pedal} calibration: {e}")
+                            results[pedal] = {'min': 0, 'max': 65535, 'axis': -1}
+                    
+                    # Save calibration
+                    self.save_calibration(results)
+                    
+                    # Emit completion signal
+                    self.calibration_complete.emit(results)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing calibration results: {e}")
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, "Error", f"Failed to process calibration results: {e}")
+            else:
+                logger.info("Pedal calibration wizard cancelled")
+        finally:
+            # ALWAYS cleanup resources regardless of success/failure/cancellation
+            self.cleanup_all_resources()
 
     def save_calibration(self, results):
         """Save calibration results to hardware and storage."""

@@ -19,6 +19,9 @@ class CurveManagerWidget(QWidget):
         self.custom_curves_selector = None
         
         self.init_ui()
+        
+        # Load existing curve data from hardware
+        self.load_existing_curve_data()
     
     def init_ui(self):
         layout = QVBoxLayout()
@@ -170,6 +173,36 @@ class CurveManagerWidget(QWidget):
         # Populate the curve selector
         self.refresh_custom_curves()
         
+    def load_existing_curve_data(self):
+        """Load existing curve data from hardware input."""
+        try:
+            if not self.global_managers:
+                return
+                
+            hardware = getattr(self.global_managers, 'hardware', None)
+            if not hardware:
+                return
+                
+            # Refresh the curve list to show available curves from hardware
+            self.refresh_custom_curves()
+            
+            # Load the currently selected curve if it exists
+            if hasattr(hardware, 'calibration') and hardware.calibration:
+                pedal_calibration = hardware.calibration.get(self.pedal_name, {})
+                if pedal_calibration:
+                    current_curve = pedal_calibration.get('curve', 'Linear (Default)')
+                    
+                    # Try to set the current curve in the selector
+                    if self.custom_curves_selector:
+                        for i in range(self.custom_curves_selector.count()):
+                            if self.custom_curves_selector.itemText(i) == current_curve:
+                                self.custom_curves_selector.setCurrentIndex(i)
+                                logger.info(f"Set current curve for {self.pedal_name}: {current_curve}")
+                                break
+                                
+        except Exception as e:
+            logger.debug(f"Failed to load existing curve data for {self.pedal_name}: {e}")
+        
         # Connect curve selection change
         self.custom_curves_selector.currentTextChanged.connect(self.on_curve_selected)
     
@@ -191,16 +224,68 @@ class CurveManagerWidget(QWidget):
         
         logger.info(f"Saving custom curve '{curve_name}' for {self.pedal_name}")
         
+        # Save the curve directly to hardware 
+        if self.global_managers and hasattr(self.global_managers, 'hardware'):
+            hardware = self.global_managers.hardware
+            if hardware and hasattr(hardware, 'save_custom_curve'):
+                try:
+                    # Get current calibration data to save with the curve
+                    current_calibration = hardware.calibration.get(self.pedal_name, {})
+                    points = current_calibration.get('points', [[0,0],[25,25],[50,50],[75,75],[100,100]])
+                    curve_type = current_calibration.get('curve', 'Linear (Default)')
+                    
+                    # Save to hardware (which handles cloud sync)
+                    hardware.save_custom_curve(self.pedal_name, curve_name, points, curve_type)
+                    logger.info(f"✅ Saved custom curve '{curve_name}' for {self.pedal_name} to hardware")
+                    
+                    # Force cache invalidation so new curve shows up immediately
+                    if hasattr(hardware, 'curve_cache'):
+                        hardware.curve_cache.invalidate_pedal(self.pedal_name)
+                        logger.info(f"🔄 Invalidated curve cache for {self.pedal_name} to show new curve")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to save custom curve '{curve_name}' for {self.pedal_name}: {e}")
+        
         self.curve_saved.emit(self.pedal_name, curve_name)
         self.curve_name_input.clear()
         self.refresh_custom_curves()
     
     def delete_selected_curve(self):
         selected_curve = self.custom_curves_selector.currentText()
-        if selected_curve == "No custom curves":
+        if selected_curve == "No custom curves" or selected_curve == "New...":
+            return
+            
+        # Don't allow deletion of default curves
+        if selected_curve in self.get_default_curves():
+            logger.warning(f"Cannot delete default curve: '{selected_curve}'")
             return
         
         logger.info(f"Deleting custom curve '{selected_curve}' for {self.pedal_name}")
+        
+        # Delete the curve directly from hardware
+        if self.global_managers and hasattr(self.global_managers, 'hardware'):
+            hardware = self.global_managers.hardware
+            if hardware and hasattr(hardware, 'delete_custom_curve'):
+                try:
+                    hardware.delete_custom_curve(self.pedal_name, selected_curve)
+                    logger.info(f"✅ Deleted custom curve '{selected_curve}' for {self.pedal_name} from hardware")
+                    
+                    # Force cache invalidation so deleted curve disappears immediately
+                    if hasattr(hardware, 'curve_cache'):
+                        hardware.curve_cache.invalidate_pedal(self.pedal_name)
+                        logger.info(f"🔄 Invalidated curve cache for {self.pedal_name} after deletion")
+                    
+                    # Also clear any cached calibration data for this pedal
+                    if hasattr(hardware, 'calibration') and self.pedal_name in hardware.calibration:
+                        # Keep the current calibration but ensure stale curve references are cleared
+                        current_cal = hardware.calibration.get(self.pedal_name, {})
+                        if current_cal.get('curve_type') == selected_curve:
+                            # Reset to linear if we deleted the currently selected curve
+                            current_cal['curve_type'] = 'Linear (Default)'
+                            logger.info(f"Reset {self.pedal_name} to Linear after deleting active curve '{selected_curve}'")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to delete custom curve '{selected_curve}' for {self.pedal_name}: {e}")
         
         self.curve_deleted.emit(self.pedal_name, selected_curve)
         self.refresh_custom_curves()
@@ -209,17 +294,32 @@ class CurveManagerWidget(QWidget):
         current_text = self.custom_curves_selector.currentText()
         self.custom_curves_selector.clear()
         
+        # Force cache invalidation before refreshing to ensure we get latest data
+        if self.global_managers and hasattr(self.global_managers, 'hardware'):
+            hardware = self.global_managers.hardware
+            if hardware and hasattr(hardware, 'curve_cache'):
+                hardware.curve_cache.invalidate_pedal(self.pedal_name)
+                logger.info(f"🔄 Forced cache invalidation for {self.pedal_name} during refresh")
+        
+        # Always include a safe "New..." option first so users don't overwrite by accident
+        self.custom_curves_selector.addItem("New...")
+        self.custom_curves_selector.setEnabled(True)
+        
         custom_curves = self.get_custom_curves()
+        logger.info(f"Found {len(custom_curves)} custom curves for {self.pedal_name}: {custom_curves}")
+        
         if custom_curves:
             self.custom_curves_selector.addItems(custom_curves)
-            self.custom_curves_selector.setEnabled(True)
-            
-            if current_text in custom_curves:
+            # Restore selection when possible (avoid auto-selecting a curve if user was on New...)
+            if current_text and current_text in (["New..."] + custom_curves):
                 self.custom_curves_selector.setCurrentText(current_text)
+            else:
+                self.custom_curves_selector.setCurrentText("New...")
         else:
-            self.custom_curves_selector.addItem("No custom curves")
-            self.custom_curves_selector.setEnabled(False)
+            # No saved curves yet; keep only New...
+            self.custom_curves_selector.setCurrentText("New...")
     
+
     def get_default_curves(self):
         if self.pedal_name == 'brake':
             return ["Linear (Default)", "Threshold", "Trail Brake", "Endurance", "Rally", "ABS Friendly"]
@@ -232,17 +332,49 @@ class CurveManagerWidget(QWidget):
     
     def get_custom_curves(self):
         try:
-            from ....pedals.curve_cache import CurveCache
-            cache = CurveCache()
-            # CurveCache doesn't have get_custom_curves method, return empty for now
-            # TODO: Implement custom curve loading from the cache
-            return []
-        except ImportError:
-            logger.warning("CurveCache not available - custom curves disabled")
-            return []
+            # Prefer a directly injected hardware reference, otherwise ask global managers
+            hardware = getattr(self, 'hardware_input', None)
+            if not hardware and getattr(self, 'global_managers', None):
+                hardware = getattr(self.global_managers, 'hardware', None)
+                
+            logger.debug(f"Getting custom curves for {self.pedal_name}, hardware available: {hardware is not None}")
+
+            if hardware and hasattr(hardware, 'list_available_curves'):
+                curves = hardware.list_available_curves(self.pedal_name) or []
+                logger.debug(f"Hardware returned {len(curves)} curves for {self.pedal_name}: {curves}")
+                
+                # Filter out built-in preset names; only show user-saved curves here
+                presets = set(self._default_preset_names(self.pedal_name))
+                filtered = [c for c in curves if isinstance(c, str) and c.strip() and c not in presets]
+                logger.debug(f"After filtering presets, {len(filtered)} custom curves remain: {filtered}")
+                return filtered
+            else:
+                logger.warning(f"No hardware available or list_available_curves method missing for {self.pedal_name}")
         except Exception as e:
-            logger.debug(f"Custom curves not implemented yet for {self.pedal_name}")
-            return []
+            logger.error(f"Failed to load custom curves for {self.pedal_name}: {e}")
+        return []
+
+    def _default_preset_names(self, pedal: str):
+        if pedal == 'throttle':
+            return [
+                'Racing', 'Smooth', 'Aggressive', 'Precision Control', 'Traction Limited',
+                'Quick Response', 'Rain Mode', 'Drift Control', 'F1 Style', 'Rally',
+                'Dirt Track', 'Super Precise', 'Wet Weather Racing', 'Light Rain', 'Extreme Wet'
+            ]
+        if pedal == 'brake':
+            return [
+                'Hard Braking', 'Progressive', 'Trail Braking', 'Wet Weather', 'Wet Racing',
+                'Wet Circuit', 'Extreme Wet Braking', 'Initial Bite', 'GT3 Racing', 'Endurance',
+                'Technical Circuit', 'Oval Track', 'Street Car'
+            ]
+        if pedal == 'clutch':
+            return [
+                'Quick Engage', 'Gradual', 'Race Start', 'Slip Control', 'Bite Point Focus',
+                'Drift Initiation', 'Smooth Launch', 'Performance Launch', 'Drag Racing',
+                'Heel-Toe', 'Rally Start', 'Half Clutch Control', 'Wet Weather Launch',
+                'Wet Track Control', 'Wet Engagement'
+            ]
+        return []
     
     def add_custom_curve(self, curve_name: str):
         self.refresh_custom_curves()
@@ -254,6 +386,41 @@ class CurveManagerWidget(QWidget):
     
     def on_curve_selected(self, curve_name: str):
         """Handle curve selection change."""
+        if not curve_name:
+            return
+        if curve_name == "New...":
+            # Prepare for creating a new curve name without changing current calibration
+            try:
+                if self.curve_name_input:
+                    self.curve_name_input.clear()
+                    self.curve_name_input.setFocus()
+            except Exception:
+                pass
+            return
+        
+        # User selected an actual curve to load
         if curve_name and curve_name != "No custom curves":
             logger.info(f"Curve selected for {self.pedal_name}: {curve_name}")
+            
+            # Load the curve data directly to the hardware
+            if self.global_managers and hasattr(self.global_managers, 'hardware'):
+                hardware = self.global_managers.hardware
+                if hardware and hasattr(hardware, 'load_custom_curve'):
+                    try:
+                        curve_data = hardware.load_custom_curve(self.pedal_name, curve_name)
+                        if curve_data:
+                            # Use the hardware method to properly apply the curve AND deadzones
+                            if hardware.apply_curve_to_calibration(self.pedal_name, curve_name):
+                                logger.info(f"✅ Loaded and applied curve '{curve_name}' for {self.pedal_name}")
+                                # Emit signal so the UI can refresh with the newly applied data
+                                self.curve_changed.emit(curve_name)
+                            else:
+                                logger.error(f"❌ Failed to apply curve '{curve_name}' to hardware")
+
+                        else:
+                            logger.warning(f"❌ Failed to load curve data for '{curve_name}'")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to load curve '{curve_name}': {e}")
+            
             self.curve_changed.emit(curve_name)
+    

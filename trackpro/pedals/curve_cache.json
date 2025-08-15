@@ -1,0 +1,514 @@
+{
+  "throttle": {
+    ";lk;lk;lk": {
+      "metadata": {
+        "name": ";lk;lk;lk",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\;lk;lk;lk.json",
+        "last_modified": 1755224769.6262531,
+        "file_size": 96,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Aggressive": {
+      "metadata": {
+        "name": "Aggressive",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Aggressive.json",
+        "last_modified": 1753405786.8961506,
+        "file_size": 89,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Dirt Track": {
+      "metadata": {
+        "name": "Dirt Track",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Dirt Track.json",
+        "last_modified": 1753405786.9006603,
+        "file_size": 99,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Drift Control": {
+      "metadata": {
+        "name": "Drift Control",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Drift Control.json",
+        "last_modified": 1753405786.898655,
+        "file_size": 103,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Extreme Wet": {
+      "metadata": {
+        "name": "Extreme Wet",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Extreme Wet.json",
+        "last_modified": 1753405786.9026625,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "F1 Style": {
+      "metadata": {
+        "name": "F1 Style",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\F1 Style.json",
+        "last_modified": 1753405786.8996596,
+        "file_size": 106,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Light Rain": {
+      "metadata": {
+        "name": "Light Rain",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Light Rain.json",
+        "last_modified": 1753405786.9021595,
+        "file_size": 99,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Precision Control": {
+      "metadata": {
+        "name": "Precision Control",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Precision Control.json",
+        "last_modified": 1753405786.896649,
+        "file_size": 106,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Quick Response": {
+      "metadata": {
+        "name": "Quick Response",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Quick Response.json",
+        "last_modified": 1753405786.8971467,
+        "file_size": 94,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Racing": {
+      "metadata": {
+        "name": "Racing",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Racing.json",
+        "last_modified": 1753405786.8951492,
+        "file_size": 86,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Rain Mode": {
+      "metadata": {
+        "name": "Rain Mode",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Rain Mode.json",
+        "last_modified": 1753405786.8981507,
+        "file_size": 97,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Rally": {
+      "metadata": {
+        "name": "Rally",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Rally.json",
+        "last_modified": 1753405786.9001608,
+        "file_size": 95,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Smooth": {
+      "metadata": {
+        "name": "Smooth",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Smooth.json",
+        "last_modified": 1753405786.8956485,
+        "file_size": 86,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Super Precise": {
+      "metadata": {
+        "name": "Super Precise",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Super Precise.json",
+        "last_modified": 1753405786.9011595,
+        "file_size": 121,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Traction Limited": {
+      "metadata": {
+        "name": "Traction Limited",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Traction Limited.json",
+        "last_modified": 1753405786.8971467,
+        "file_size": 106,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    },
+    "Wet Weather Racing": {
+      "metadata": {
+        "name": "Wet Weather Racing",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\throttle\\Wet Weather Racing.json",
+        "last_modified": 1753405786.9016602,
+        "file_size": 126,
+        "checksum": null
+      },
+      "cached_time": 1755227370.7241716,
+      "is_valid": true
+    }
+  },
+  "clutch": {
+    "Bite Point Focus": {
+      "metadata": {
+        "name": "Bite Point Focus",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Bite Point Focus.json",
+        "last_modified": 1753405786.9151745,
+        "file_size": 116,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Drag Racing": {
+      "metadata": {
+        "name": "Drag Racing",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Drag Racing.json",
+        "last_modified": 1753405786.9171746,
+        "file_size": 111,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Drift Initiation": {
+      "metadata": {
+        "name": "Drift Initiation",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Drift Initiation.json",
+        "last_modified": 1753405786.9156747,
+        "file_size": 96,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Gradual": {
+      "metadata": {
+        "name": "Gradual",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Gradual.json",
+        "last_modified": 1753405786.9136746,
+        "file_size": 87,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Half Clutch Control": {
+      "metadata": {
+        "name": "Half Clutch Control",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Half Clutch Control.json",
+        "last_modified": 1753405786.9201832,
+        "file_size": 119,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Heel-Toe": {
+      "metadata": {
+        "name": "Heel-Toe",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Heel-Toe.json",
+        "last_modified": 1753405786.9181776,
+        "file_size": 97,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Performance Launch": {
+      "metadata": {
+        "name": "Performance Launch",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Performance Launch.json",
+        "last_modified": 1753405786.9166746,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Quick Engage": {
+      "metadata": {
+        "name": "Quick Engage",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Quick Engage.json",
+        "last_modified": 1753405786.9126768,
+        "file_size": 92,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Race Start": {
+      "metadata": {
+        "name": "Race Start",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Race Start.json",
+        "last_modified": 1753405786.914174,
+        "file_size": 100,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Rally Start": {
+      "metadata": {
+        "name": "Rally Start",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Rally Start.json",
+        "last_modified": 1753405786.919181,
+        "file_size": 101,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Slip Control": {
+      "metadata": {
+        "name": "Slip Control",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Slip Control.json",
+        "last_modified": 1753405786.914674,
+        "file_size": 112,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Smooth Launch": {
+      "metadata": {
+        "name": "Smooth Launch",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Smooth Launch.json",
+        "last_modified": 1753405786.9161744,
+        "file_size": 112,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Wet Engagement": {
+      "metadata": {
+        "name": "Wet Engagement",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Wet Engagement.json",
+        "last_modified": 1753405786.9216816,
+        "file_size": 114,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Wet Track Control": {
+      "metadata": {
+        "name": "Wet Track Control",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Wet Track Control.json",
+        "last_modified": 1753405786.9211848,
+        "file_size": 117,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    },
+    "Wet Weather Launch": {
+      "metadata": {
+        "name": "Wet Weather Launch",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\clutch\\Wet Weather Launch.json",
+        "last_modified": 1753405786.9206843,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1755227372.0063694,
+      "is_valid": true
+    }
+  },
+  "brake": {
+    "Endurance": {
+      "metadata": {
+        "name": "Endurance",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Endurance.json",
+        "last_modified": 1753405786.909675,
+        "file_size": 98,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Extreme Wet Braking": {
+      "metadata": {
+        "name": "Extreme Wet Braking",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Extreme Wet Braking.json",
+        "last_modified": 1753405786.9071631,
+        "file_size": 127,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "GT3 Racing": {
+      "metadata": {
+        "name": "GT3 Racing",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\GT3 Racing.json",
+        "last_modified": 1753405786.9086714,
+        "file_size": 109,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Hard Braking": {
+      "metadata": {
+        "name": "Hard Braking",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Hard Braking.json",
+        "last_modified": 1753405786.9046638,
+        "file_size": 92,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Initial Bite": {
+      "metadata": {
+        "name": "Initial Bite",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Initial Bite.json",
+        "last_modified": 1753405786.908167,
+        "file_size": 102,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Oval Track": {
+      "metadata": {
+        "name": "Oval Track",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Oval Track.json",
+        "last_modified": 1753405786.9111793,
+        "file_size": 100,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Progressive": {
+      "metadata": {
+        "name": "Progressive",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Progressive.json",
+        "last_modified": 1753405786.9051661,
+        "file_size": 91,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Street Car": {
+      "metadata": {
+        "name": "Street Car",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Street Car.json",
+        "last_modified": 1753405786.9121783,
+        "file_size": 90,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Technical Circuit": {
+      "metadata": {
+        "name": "Technical Circuit",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Technical Circuit.json",
+        "last_modified": 1753405786.910676,
+        "file_size": 117,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "TEST": {
+      "metadata": {
+        "name": "TEST",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\TEST.json",
+        "last_modified": 1755227397.7828205,
+        "file_size": 96,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Trail Braking": {
+      "metadata": {
+        "name": "Trail Braking",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Trail Braking.json",
+        "last_modified": 1753405786.9056666,
+        "file_size": 112,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Wet Circuit": {
+      "metadata": {
+        "name": "Wet Circuit",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Wet Circuit.json",
+        "last_modified": 1753405786.9071631,
+        "file_size": 110,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Wet Racing": {
+      "metadata": {
+        "name": "Wet Racing",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Wet Racing.json",
+        "last_modified": 1753405786.9066632,
+        "file_size": 118,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "Wet Weather": {
+      "metadata": {
+        "name": "Wet Weather",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\Wet Weather.json",
+        "last_modified": 1753405786.9061632,
+        "file_size": 99,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    },
+    "WOW": {
+      "metadata": {
+        "name": "WOW",
+        "file_path": "C:\\Users\\PRO Drift Simulator\\.trackpro\\curves\\brake\\WOW.json",
+        "last_modified": 1755227435.303344,
+        "file_size": 135,
+        "checksum": null
+      },
+      "cached_time": 1755227435.602027,
+      "is_valid": true
+    }
+  }
+}

@@ -20,6 +20,9 @@ class DeadzoneWidget(QWidget):
         self.max_deadzone_label = None
         
         self.init_ui()
+        
+        # Load existing deadzone data from hardware
+        self.load_existing_deadzone_data()
     
     def init_ui(self):
         layout = QVBoxLayout()
@@ -125,6 +128,39 @@ class DeadzoneWidget(QWidget):
         
         group_layout.addLayout(deadzone_controls)
         layout.addWidget(group)
+        
+    def load_existing_deadzone_data(self):
+        """Load existing deadzone data from hardware input."""
+        try:
+            if not self.global_managers:
+                return
+                
+            hardware = getattr(self.global_managers, 'hardware', None)
+            if not hardware:
+                return
+                
+            # Load deadzones from axis ranges
+            if hasattr(hardware, 'axis_ranges') and hardware.axis_ranges:
+                axis_data = hardware.axis_ranges.get(self.pedal_name, {})
+                if axis_data:
+                    min_deadzone = axis_data.get('min_deadzone', 0)
+                    max_deadzone = axis_data.get('max_deadzone', 0)
+                    
+                    self.min_deadzone = min_deadzone
+                    self.max_deadzone = max_deadzone
+                    
+                    # Update the UI labels
+                    if self.min_deadzone_label:
+                        self.min_deadzone_label.setText(f"Min: {min_deadzone}%")
+                    if self.max_deadzone_label:
+                        self.max_deadzone_label.setText(f"Max: {max_deadzone}%")
+                        
+                    logger.info(f"Loaded existing deadzones for {self.pedal_name}: min={min_deadzone}%, max={max_deadzone}%")
+                    
+        except Exception as e:
+            logger.debug(f"Failed to load existing deadzone data for {self.pedal_name}: {e}")
+    
+
     
     def set_global_pedal_system(self, hardware, output, data_queue):
         """Update the hardware input when it becomes available."""

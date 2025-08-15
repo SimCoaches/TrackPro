@@ -51,11 +51,12 @@ class HardwareInput:
             self.available_axes = self.joystick.get_numaxes()
             logger.info(f"Detected {self.available_axes} axes on the pedals")
         
-        # Load calibration data
-        self.calibration = self._load_calibration()
+        # Load all data from cloud first, then local files as fallback
+        self._load_all_data_from_cloud_and_local()
         
-        # Load axis mappings from file
-        self.axis_mappings = self._load_axis_mappings()
+        # Debug: check what we actually loaded
+        if supabase.is_authenticated():
+            logger.info(f"After loading - Calibration entries: {len(self.calibration)}, Axis mappings: {len(self.axis_mappings)}, Axis ranges: {len(self.axis_ranges)}")
         
         # Default axis mappings if not loaded
         if not self.axis_mappings:
@@ -86,6 +87,9 @@ class HardwareInput:
             'brake': {'min': 0, 'max': 65535},
             'clutch': {'min': 0, 'max': 65535}
         }
+        
+        # Set reference to global curve cache for invalidation
+        self.curve_cache = curve_cache
         
         # Load or calibrate axis ranges
         self._init_axis_ranges()
@@ -123,12 +127,201 @@ class HardwareInput:
             finally:
                 self._initializing_curves = False
     
+    def _load_all_data_from_cloud_and_local(self):
+        """Consolidated method to load all pedal data from cloud first, then local files."""
+        # Initialize data structures
+        self.calibration = {}
+        self.axis_mappings = {}
+        self.axis_ranges = {}
+        self._cloud_load_failed = False
+        
+        if supabase.is_authenticated():
+            cloud_loaded_any = False
+            try:
+                user = supabase.get_user()
+                if user and user.user and user.user.id:
+                    user_id = user.user.id
+                    logger.info("Loading pedal data from cloud...")
+                    
+                    # Load main calibration data (try new naming first, then old)
+                    try:
+                        main_calibration = calibration_manager.get_calibration(user_id, "pedal_calibration")
+                        if not main_calibration or 'data' not in main_calibration:
+                            # Fallback: try to reconstruct from individual pedal calibrations
+                            calibration_data = {}
+                            for pedal in ['throttle', 'brake', 'clutch']:
+                                try:
+                                    pedal_cal = calibration_manager.get_calibration(user_id, f"{pedal}_default")
+                                    if pedal_cal and 'data' in pedal_cal:
+                                        calibration_data[pedal] = pedal_cal['data']
+                                        cloud_loaded_any = True
+                                except Exception as pe:
+                                    logger.debug(f"Could not load {pedal} calibration from cloud: {pe}")
+                            if calibration_data:
+                                self.calibration = calibration_data
+                                logger.info("Loaded pedal calibration from individual pedal data")
+                        else:
+                            self.calibration = main_calibration['data']
+                            cloud_loaded_any = True
+                            logger.info("Loaded pedal calibration from cloud")
+                    except Exception as cal_e:
+                        logger.debug(f"Could not load calibration from cloud: {cal_e}")
+                    
+                    # Load axis mappings (try new naming first, then old)
+                    try:
+                        axis_mappings_data = calibration_manager.get_calibration(user_id, "pedal_axis_mappings")
+                        if not axis_mappings_data or 'data' not in axis_mappings_data:
+                            axis_mappings_data = calibration_manager.get_calibration(user_id, "axis_mappings")
+                        if axis_mappings_data and 'data' in axis_mappings_data:
+                            self.axis_mappings = axis_mappings_data['data']
+                            cloud_loaded_any = True
+                            logger.info("Loaded axis mappings from cloud")
+                    except Exception as map_e:
+                        logger.debug(f"Could not load axis mappings from cloud: {map_e}")
+                    
+                    # Load axis ranges (try new naming first, then old)
+                    try:
+                        axis_ranges_data = calibration_manager.get_calibration(user_id, "pedal_axis_ranges")
+                        if not axis_ranges_data or 'data' not in axis_ranges_data:
+                            axis_ranges_data = calibration_manager.get_calibration(user_id, "axis_ranges")
+                        if axis_ranges_data and 'data' in axis_ranges_data:
+                            self.axis_ranges = axis_ranges_data['data']
+                            cloud_loaded_any = True
+                            logger.info("Loaded axis ranges from cloud")
+                    except Exception as range_e:
+                        logger.debug(f"Could not load axis ranges from cloud: {range_e}")
+                        
+                    # Load deadzone settings
+                    try:
+                        deadzone_data = calibration_manager.get_calibration(user_id, "pedal_deadzone_settings")
+                        if deadzone_data and 'data' in deadzone_data:
+                            for pedal, deadzones in deadzone_data['data'].items():
+                                if pedal in ['throttle', 'brake', 'clutch']:
+                                    setattr(self, f'{pedal}_deadzone_min', deadzones.get('min', 0))
+                                    setattr(self, f'{pedal}_deadzone_max', deadzones.get('max', 0))
+                            cloud_loaded_any = True
+                            logger.info("Loaded user deadzone settings from cloud")
+                    except Exception as dz_e:
+                        logger.debug(f"Could not load deadzone settings from cloud: {dz_e}")
+                        
+            except Exception as e:
+                logger.warning(f"Failed to load data from cloud: {e}")
+                self._cloud_load_failed = True
+        
+        # Fall back to local files for any missing data
+        if not self.calibration:
+            self.calibration = self._load_calibration_from_file()
+            logger.info("Loaded pedal calibration from local file")
+            
+        if not self.axis_mappings:
+            self.axis_mappings = self._load_axis_mappings()
+            
+        if not self.axis_ranges:
+            self.axis_ranges = self._load_axis_ranges()
+            
+        # If cloud loading failed, schedule a retry for later
+        if self._cloud_load_failed and supabase.is_authenticated():
+            logger.info("Scheduling cloud sync retry for later")
+            self._cloud_synced = False  # Force retry on next ensure_cloud_synced call
+
     def ensure_cloud_synced(self):
         """Ensure cloud sync has been performed (called lazily when needed)."""
         if not self._cloud_synced:
             logger.info("Performing cloud sync on first access...")
+            
+            # If initial cloud loading failed, retry loading from cloud first
+            if hasattr(self, '_cloud_load_failed') and self._cloud_load_failed:
+                logger.info("Retrying cloud data loading after initial failure...")
+                self._retry_cloud_load()
+                
             self._sync_with_cloud()
             self._cloud_synced = True
+            
+    def _retry_cloud_load(self):
+        """Retry loading pedal data from cloud after initial failure."""
+        if not supabase.is_authenticated():
+            return
+            
+        try:
+            user = supabase.get_user()
+            if not user or not user.user or not user.user.id:
+                return
+                
+            user_id = user.user.id
+            logger.info("Retrying pedal data load from cloud...")
+            
+            # Retry loading calibration if we don't have it from cloud
+            if not self.calibration or self.calibration == self._load_calibration_from_file():
+                try:
+                    # Try individual pedal calibrations
+                    calibration_data = {}
+                    for pedal in ['throttle', 'brake', 'clutch']:
+                        pedal_cal = calibration_manager.get_calibration(user_id, f"{pedal}_default")
+                        if pedal_cal and 'data' in pedal_cal:
+                            calibration_data[pedal] = pedal_cal['data']
+                    if calibration_data:
+                        self.calibration = calibration_data
+                        logger.info("Successfully loaded pedal calibration from cloud on retry")
+                except Exception as e:
+                    logger.debug(f"Retry failed for calibration: {e}")
+            
+            # Retry loading axis mappings
+            if not self.axis_mappings or len(self.axis_mappings) == 0:
+                try:
+                    axis_mappings_data = calibration_manager.get_calibration(user_id, "axis_mappings")
+                    if axis_mappings_data and 'data' in axis_mappings_data:
+                        self.axis_mappings = axis_mappings_data['data']
+                        logger.info("Successfully loaded axis mappings from cloud on retry")
+                except Exception as e:
+                    logger.debug(f"Retry failed for axis mappings: {e}")
+            
+            # Retry loading axis ranges  
+            if not self.axis_ranges or len(self.axis_ranges) == 0:
+                try:
+                    axis_ranges_data = calibration_manager.get_calibration(user_id, "axis_ranges")
+                    if axis_ranges_data and 'data' in axis_ranges_data:
+                        self.axis_ranges = axis_ranges_data['data']
+                        logger.info("Successfully loaded axis ranges from cloud on retry")
+                except Exception as e:
+                    logger.debug(f"Retry failed for axis ranges: {e}")
+                    
+            # Retry loading deadzone settings
+            try:
+                deadzone_data = calibration_manager.get_calibration(user_id, "pedal_deadzone_settings")
+                if deadzone_data and 'data' in deadzone_data:
+                    for pedal, deadzones in deadzone_data['data'].items():
+                        if pedal in ['throttle', 'brake', 'clutch']:
+                            setattr(self, f'{pedal}_deadzone_min', deadzones.get('min', 0))
+                            setattr(self, f'{pedal}_deadzone_max', deadzones.get('max', 0))
+                    logger.info("Successfully loaded deadzone settings from cloud on retry")
+            except Exception as e:
+                logger.debug(f"Retry failed for deadzone settings: {e}")
+                
+            self._cloud_load_failed = False
+            
+        except Exception as e:
+            logger.warning(f"Cloud retry failed: {e}")
+
+    def force_reload_from_cloud(self):
+        """Force reload all pedal data from cloud (for debugging/manual retry)."""
+        if not supabase.is_authenticated():
+            logger.warning("Cannot reload from cloud - not authenticated")
+            return False
+            
+        logger.info("Force reloading all pedal data from cloud...")
+        
+        # Clear cloud sync flag to force reload
+        self._cloud_synced = False
+        self._cloud_load_failed = False
+        
+        # Try loading again
+        self._load_all_data_from_cloud_and_local()
+        
+        # Force cloud sync
+        self.ensure_cloud_synced()
+        
+        logger.info(f"Reload complete - Calibration: {len(self.calibration)}, Mappings: {len(self.axis_mappings)}, Ranges: {len(self.axis_ranges)}")
+        return len(self.calibration) > 0 or len(self.axis_mappings) > 0 or len(self.axis_ranges) > 0
 
     def _sync_with_cloud(self):
         """Sync calibration data with cloud if user is authenticated."""
@@ -412,15 +605,21 @@ class HardwareInput:
                             # Get user's calibrations
                             user_calibrations = calibration_manager.get_user_calibrations(user_id)
                             
-                            # Extract curve names
+                            # Extract curve names from both old and new naming conventions
                             for calibration in user_calibrations:
                                 name = calibration.get('name', '')
-                                if name.startswith(f"{pedal}_") and not name.endswith("_default"):
-                                    # Extract curve name (after pedal_ prefix)
+                                curve_name = None
+                                
+                                # New naming convention: pedal_{pedal}_curve_{name}
+                                if name.startswith(f"pedal_{pedal}_curve_"):
+                                    curve_name = name.replace(f"pedal_{pedal}_curve_", "")
+                                # Old naming convention: {pedal}_{name} (but not _default)
+                                elif name.startswith(f"{pedal}_") and not name.endswith("_default"):
                                     curve_name = name.split('_', 1)[1]
-                                    # Add if not already in local curves
-                                    if curve_name not in local_curves:
-                                        cloud_curves.append(curve_name)
+                                
+                                # Add if not already in local curves
+                                if curve_name and curve_name not in local_curves:
+                                    cloud_curves.append(curve_name)
                 except Exception as e:
                     logger.error(f"Error getting cloud curves: {e}")
             
@@ -455,9 +654,21 @@ class HardwareInput:
             curves_dir = self.get_pedal_curves_directory(pedal)
             curves_dir.mkdir(parents=True, exist_ok=True)
             
+            # Include current deadzones for this pedal in the saved curve
+            deadzones = {}
+            try:
+                axis_entry = self.axis_ranges.get(pedal, {}) if hasattr(self, 'axis_ranges') else {}
+                deadzones = {
+                    'min_deadzone': int(axis_entry.get('min_deadzone', 0)),
+                    'max_deadzone': int(axis_entry.get('max_deadzone', 0)),
+                }
+            except Exception:
+                deadzones = {'min_deadzone': 0, 'max_deadzone': 0}
+
             curve_data = {
                 'points': points,
-                'curve_type': curve_type
+                'curve_type': curve_type,
+                'deadzones': deadzones,
             }
             
             # Save to local file
@@ -465,12 +676,28 @@ class HardwareInput:
             with open(curve_file, 'w') as f:
                 json.dump(curve_data, f)
             
+            # Invalidate cache so new curve appears immediately
+            try:
+                curve_cache.invalidate_pedal(pedal)
+            except Exception:
+                pass
+            
             # Save to cloud if authenticated
             if supabase.is_authenticated():
                 user = supabase.get_user()
-                if user:
+                if user and user.user and user.user.id:
+                    user_id = user.user.id
+                    
+                    # Save custom curve with enhanced naming convention
                     calibration_manager.save_calibration(
-                        user_id=user.id,
+                        user_id=user_id,
+                        name=f"pedal_{pedal}_curve_{name}",
+                        data=curve_data
+                    )
+                    
+                    # Also save with backward compatibility naming
+                    calibration_manager.save_calibration(
+                        user_id=user_id,
                         name=f"{pedal}_{name}",
                         data=curve_data
                     )
@@ -524,6 +751,14 @@ class HardwareInput:
                             else:
                                 normalized_data['curve_type'] = curve_name
                             
+                            # Deadzones are optional; include if present
+                            dz = curve_data.get('deadzones') or {}
+                            if isinstance(dz, dict):
+                                normalized_data['deadzones'] = {
+                                    'min_deadzone': int(dz.get('min_deadzone', 0)),
+                                    'max_deadzone': int(dz.get('max_deadzone', 0)),
+                                }
+                            
                             local_curve = normalized_data
                             logger.info(f"Loaded curve '{curve_name}' from local file for {pedal}")
                 except Exception as e:
@@ -536,13 +771,33 @@ class HardwareInput:
                     if user:
                         user_id = user_manager._extract_user_id(user)
                         if user_id:
+                            # Try new naming convention first
                             cloud_curve_data = calibration_manager.get_calibration(
                                 user_id=user_id,
-                                name=f"{pedal}_{curve_name}"
+                                name=f"pedal_{pedal}_curve_{curve_name}"
                             )
+                            
+                            # Fall back to old naming convention if not found
+                            if not cloud_curve_data:
+                                cloud_curve_data = calibration_manager.get_calibration(
+                                    user_id=user_id,
+                                    name=f"{pedal}_{curve_name}"
+                                )
+                            
                             if cloud_curve_data and 'data' in cloud_curve_data:
                                 cloud_curve = cloud_curve_data['data']
                                 logger.info(f"Loaded curve '{curve_name}' from cloud for {pedal}")
+                                
+                                # Save to local file if we loaded from cloud successfully
+                                try:
+                                    curves_dir = self.get_pedal_curves_directory(pedal)
+                                    curves_dir.mkdir(parents=True, exist_ok=True)
+                                    local_file = curves_dir / f"{curve_name}.json"
+                                    with open(local_file, 'w') as f:
+                                        json.dump(cloud_curve, f)
+                                    logger.debug(f"Cached cloud curve '{curve_name}' locally for {pedal}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to cache cloud curve locally: {e}")
                 except Exception as e:
                     logger.warning(f"Error loading cloud curve '{curve_name}' for {pedal}: {e}")
             
@@ -558,8 +813,15 @@ class HardwareInput:
                             # Store only the necessary fields for local storage
                             save_data = {
                                 'points': cloud_curve.get('points', []),
-                                'curve_type': cloud_curve.get('curve_type', curve_name)
+                                'curve_type': cloud_curve.get('curve_type', curve_name),
                             }
+                            # Persist deadzones from cloud if present
+                            dzc = cloud_curve.get('deadzones') if isinstance(cloud_curve, dict) else {}
+                            if isinstance(dzc, dict):
+                                save_data['deadzones'] = {
+                                    'min_deadzone': int(dzc.get('min_deadzone', 0)),
+                                    'max_deadzone': int(dzc.get('max_deadzone', 0)),
+                                }
                             json.dump(save_data, f, indent=2)
                         logger.info(f"Saved cloud curve '{curve_name}' to local storage for {pedal}")
                     except Exception as e:
@@ -583,16 +845,27 @@ class HardwareInput:
             if curve_file.exists():
                 curve_file.unlink()
                 logger.info(f"Deleted local curve '{name}' for {pedal}")
+                try:
+                    curve_cache.invalidate_pedal(pedal)
+                except Exception:
+                    pass
             
             # Delete from cloud if authenticated
             if supabase.is_authenticated():
                 user = supabase.get_user()
-                if user:
-                    calibration_manager.delete_calibration(
-                        user_id=user.id,
-                        name=f"{pedal}_{name}"
-                    )
-                    logger.info(f"Deleted cloud curve '{name}' for {pedal}")
+                if user and user.user and user.user.id:
+                    user_id = user.user.id
+                    
+                    # Delete directly with old naming convention (which is what actually exists)
+                    try:
+                        calibration_manager.delete_calibration(
+                            user_id=user_id,
+                            name=f"{pedal}_{name}"
+                        )
+                        logger.info(f"✅ Successfully deleted cloud curve '{name}' for {pedal}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to delete cloud curve '{name}' for {pedal}: {e}")
+
             
             return True
         except Exception as e:
@@ -628,6 +901,21 @@ class HardwareInput:
                 'curve': curve_type
             }
             
+            # Apply saved deadzones to axis ranges if provided
+            try:
+                dz = curve_data.get('deadzones') if isinstance(curve_data, dict) else None
+                if isinstance(dz, dict):
+                    axis_entry = self.axis_ranges.get(pedal, {}) if hasattr(self, 'axis_ranges') else {}
+                    axis_entry['min_deadzone'] = int(dz.get('min_deadzone', axis_entry.get('min_deadzone', 0)))
+                    axis_entry['max_deadzone'] = int(dz.get('max_deadzone', axis_entry.get('max_deadzone', 0)))
+                    if hasattr(self, 'axis_ranges'):
+                        self.axis_ranges[pedal] = axis_entry
+                    # Persist deadzones so UI and future sessions reflect them
+                    if hasattr(self, 'save_axis_ranges'):
+                        self.save_axis_ranges()
+            except Exception:
+                pass
+
             # Save the updated calibration
             self.save_calibration(self.calibration)
             
@@ -643,17 +931,20 @@ class HardwareInput:
         config_dir.mkdir(exist_ok=True)
         return config_dir / "axis_mappings.json"
 
-    def _load_calibration(self) -> dict:
-        """Load calibration from file or return defaults."""
+    def _load_calibration_from_file(self) -> dict:
+        """Load calibration from local file or return defaults."""
         try:
             cal_file = self._get_calibration_file()
             if cal_file.exists():
                 with open(cal_file) as f:
-                    return json.load(f)
+                    local_calibration = json.load(f)
+                    logger.info("Loaded pedal calibration from local file")
+                    return local_calibration
         except Exception as e:
-            logger.warning(f"Failed to load calibration: {e}")
+            logger.warning(f"Failed to load calibration from file: {e}")
             
         # Return default calibration
+        logger.info("Using default pedal calibration")
         return {
             'throttle': {'points': [], 'curve': 'Linear'},
             'brake': {'points': [], 'curve': 'Linear'},
@@ -697,6 +988,33 @@ class HardwareInput:
         except Exception as e:
             logger.error(f"Failed to save axis mappings: {e}")
     
+
+    
+    def _load_axis_ranges(self) -> dict:
+        """Load axis ranges from cloud first, then file, or return defaults."""
+        # If already loaded from cloud during calibration load, return that
+        if hasattr(self, 'axis_ranges') and self.axis_ranges:
+            return self.axis_ranges
+            
+        # Try to load from local file
+        try:
+            cal_file = self._get_calibration_file().parent / "axis_ranges.json"
+            if cal_file.exists():
+                with open(cal_file) as f:
+                    ranges = json.load(f)
+                    logger.info("Loaded axis ranges from local file")
+                    return ranges
+        except Exception as e:
+            logger.warning(f"Failed to load axis ranges from file: {e}")
+            
+        # Return default ranges
+        logger.info("Using default axis ranges")
+        return {
+            'throttle': {'min': 0, 'max': 65535},
+            'brake': {'min': 0, 'max': 65535},
+            'clutch': {'min': 0, 'max': 65535}
+        }
+
     def update_axis_mapping(self, pedal, axis):
         """Update the axis mapping for a pedal."""
         if pedal in self.axis_mappings:
@@ -778,15 +1096,43 @@ class HardwareInput:
                         logger.error(f"Could not extract user ID from response: {user}")
                         raise ValueError("Could not extract user ID from response")
                     
-                    # Save each pedal's calibration
+                    # Save main calibration data 
+                    calibration_manager.save_calibration(
+                        user_id=user_id,
+                        name="pedal_calibration",
+                        data=calibration
+                    )
+                    
+                    # Save each pedal's calibration with enhanced data (for backward compatibility)
                     for pedal, data in calibration.items():
+                        # Include deadzone information in curve data
+                        enhanced_data = data.copy() if isinstance(data, dict) else {'curve': 'Linear', 'points': []}
+                        if hasattr(self, f'{pedal}_deadzone_min'):
+                            enhanced_data['deadzone_min'] = getattr(self, f'{pedal}_deadzone_min', 0)
+                        if hasattr(self, f'{pedal}_deadzone_max'):
+                            enhanced_data['deadzone_max'] = getattr(self, f'{pedal}_deadzone_max', 0)
+                        
                         calibration_manager.save_calibration(
                             user_id=user_id,
                             name=f"{pedal}_default",
-                            data=data
+                            data=enhanced_data
                         )
-                    # Also persist axis ranges and mappings for this user
+                        
+                        # Also save with new naming convention for enhanced functionality
+                        calibration_manager.save_calibration(
+                            user_id=user_id,
+                            name=f"pedal_{pedal}_curves",
+                            data=enhanced_data
+                        )
+                    
+                    # Save axis ranges and mappings with new naming for enhanced functionality
                     try:
+                        calibration_manager.save_calibration(
+                            user_id=user_id,
+                            name="pedal_axis_ranges",
+                            data=self.axis_ranges
+                        )
+                        # Keep backward compatibility
                         calibration_manager.save_calibration(
                             user_id=user_id,
                             name="axis_ranges",
@@ -795,6 +1141,12 @@ class HardwareInput:
                     except Exception as e:
                         logger.warning(f"Failed to save axis ranges to cloud: {e}")
                     try:
+                        calibration_manager.save_calibration(
+                            user_id=user_id,
+                            name="pedal_axis_mappings", 
+                            data=self.axis_mappings
+                        )
+                        # Keep backward compatibility
                         calibration_manager.save_calibration(
                             user_id=user_id,
                             name="axis_mappings",
@@ -1266,6 +1618,40 @@ class HardwareInput:
         cal_file = self._get_calibration_file()
         with open(cal_file, 'w') as f:
             json.dump(calibration, f)
+
+
+
+    def save_deadzone_settings(self):
+        """Save current deadzone settings to cloud storage."""
+        try:
+            if not supabase.is_authenticated():
+                return
+                
+            user = supabase.get_user()
+            if not user or not user.user or not user.user.id:
+                return
+                
+            user_id = user.user.id
+            
+            # Collect current deadzone settings
+            deadzone_data = {}
+            for pedal in ['throttle', 'brake', 'clutch']:
+                deadzone_data[pedal] = {
+                    'deadzone_min': getattr(self, f'{pedal}_deadzone_min', 0),
+                    'deadzone_max': getattr(self, f'{pedal}_deadzone_max', 0)
+                }
+            
+            # Save to cloud
+            calibration_manager.save_calibration(
+                user_id=user_id,
+                name="pedal_deadzone_settings",
+                data=deadzone_data
+            )
+            
+            logger.info("Saved deadzone settings to cloud")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save deadzone settings to cloud: {e}")
     
     # Threshold assist methods removed
     def set_telemetry_callback(self, callback_func):
