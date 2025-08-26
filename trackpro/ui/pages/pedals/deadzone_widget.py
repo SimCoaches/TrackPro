@@ -1,6 +1,7 @@
 import logging
+import time
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, QTimer
 from ...modern.shared.base_page import GlobalManagers
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,19 @@ class DeadzoneWidget(QWidget):
         
         self.min_deadzone_label = None
         self.max_deadzone_label = None
+        
+        # Debounce timer to prevent excessive cloud saves during slider adjustments
+        self._save_timer = QTimer()
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._delayed_emit)
+
+        # Register with global resource manager to prevent handle exhaustion
+        try:
+            from new_ui import global_qt_resource_manager
+            global_qt_resource_manager.track_timer(self._save_timer)
+        except:
+            pass
+        self._pending_emit = False
         
         self.init_ui()
         
@@ -171,17 +185,31 @@ class DeadzoneWidget(QWidget):
     def adjust_min_deadzone(self, direction: int):
         self.min_deadzone = max(0, min(50, self.min_deadzone + direction))
         self.min_deadzone_label.setText(f"Min Deadzone: {self.min_deadzone}%")
+        # Immediate update for responsive UI - emit signal directly without debounce
+        self.deadzone_changed.emit(self.pedal_name, self.min_deadzone, self.max_deadzone)
+        # Still use debounced save for cloud operations
         self.emit_deadzone_update()
         logger.debug(f"Min deadzone adjusted for {self.pedal_name}: {self.min_deadzone}%")
     
     def adjust_max_deadzone(self, direction: int):
         self.max_deadzone = max(0, min(50, self.max_deadzone + direction))
         self.max_deadzone_label.setText(f"Max Deadzone: {self.max_deadzone}%")
+        # Immediate update for responsive UI - emit signal directly without debounce
+        self.deadzone_changed.emit(self.pedal_name, self.min_deadzone, self.max_deadzone)
+        # Still use debounced save for cloud operations
         self.emit_deadzone_update()
         logger.debug(f"Max deadzone adjusted for {self.pedal_name}: {self.max_deadzone}%")
     
     def emit_deadzone_update(self):
-        self.deadzone_changed.emit(self.pedal_name, self.min_deadzone, self.max_deadzone)
+        """Debounced emit to prevent excessive cloud saves during slider adjustments."""
+        self._pending_emit = True
+        self._save_timer.start(500)  # Wait 500ms before actually saving
+    
+    def _delayed_emit(self):
+        """Actually emit the deadzone change after debounce period."""
+        if self._pending_emit:
+            self.deadzone_changed.emit(self.pedal_name, self.min_deadzone, self.max_deadzone)
+            self._pending_emit = False
     
     def set_deadzone_values(self, min_deadzone: int, max_deadzone: int):
         self.min_deadzone = max(0, min(50, min_deadzone))
@@ -195,3 +223,20 @@ class DeadzoneWidget(QWidget):
             'min_deadzone': self.min_deadzone,
             'max_deadzone': self.max_deadzone
         }
+    
+    def reset_deadzones(self):
+        """Reset deadzones to zero."""
+        self.min_deadzone = 0
+        self.max_deadzone = 0
+        
+        # Update the UI labels
+        if self.min_deadzone_label:
+            self.min_deadzone_label.setText("Min Deadzone: 0%")
+        if self.max_deadzone_label:
+            self.max_deadzone_label.setText("Max Deadzone: 0%")
+        
+        # Immediate update for responsive UI - emit signal directly without debounce
+        self.deadzone_changed.emit(self.pedal_name, self.min_deadzone, self.max_deadzone)
+        # Still use debounced save for cloud operations
+        self.emit_deadzone_update()
+        logger.info(f"Reset deadzones to zero for {self.pedal_name}")

@@ -5,6 +5,7 @@ import threading
 import traceback
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from trackpro.utils.timeutil import ensure_aware, now_utc
 import uuid
 import time
 import json as _json
@@ -47,7 +48,7 @@ class CommunityManager(QObject):
                     self._realtime_channels = []
                     self.is_realtime_active = False
                     self._last_realtime_event_ts = 0.0
-                    self._reconnect_backoff_s = 5.0
+                    self._reconnect_backoff_s = 15.0  # Start with longer backoff to reduce CPU contention
                     self._max_reconnect_backoff_s = 60.0
                     self._reconnect_in_progress = False
                     self._reconnect_timer = None
@@ -96,8 +97,10 @@ class CommunityManager(QObject):
                 return
             # Lazy import to avoid Qt coupling issues if not in UI thread
             from PyQt6.QtCore import QTimer
-            self._polling_timer = QTimer(self)
-            self._polling_timer.setInterval(5000)  # 5s
+            # DISABLED: Polling timer causing handle exhaustion
+            # self._polling_timer = QTimer(self)
+            # self._polling_timer.setInterval(5000)  # 5s
+            self._polling_timer = None
             self._last_poll_ts = None
 
             def _poll():
@@ -1236,7 +1239,7 @@ class CommunityManager(QObject):
         try:
             # Schedule emit on the Qt main thread to avoid cross-thread UI issues
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda m=message: self.message_received.emit(m))
+            # QTimer.singleShot  # DISABLED - timer exhaustion(0, lambda m=message: self.message_received.emit(m))
         except Exception:
             # Fallback to direct emit if Qt singleShot unavailable
             try:
@@ -1250,11 +1253,13 @@ class CommunityManager(QObject):
             from PyQt6.QtCore import QTimer
             if getattr(self, '_reconnect_timer', None):
                 return
-            self._reconnect_timer = QTimer(self)
-            self._reconnect_timer.setInterval(10000)
-            self._reconnect_timer.timeout.connect(self._realtime_health_tick)
-            self._reconnect_timer.start()
-            logger.info("🩺 Started realtime health monitor (10s interval)")
+            # DISABLED: Reconnect timer causing handle exhaustion
+            # self._reconnect_timer = QTimer(self)
+            # self._reconnect_timer.setInterval(10000)
+            # self._reconnect_timer.timeout.connect(self._realtime_health_tick)
+            # self._reconnect_timer.start()
+            self._reconnect_timer = None
+            logger.info("🩺 Realtime health monitor DISABLED to prevent handle exhaustion")
         except Exception as e:
             logger.debug(f"Health monitor init failed: {e}")
 
@@ -1264,7 +1269,12 @@ class CommunityManager(QObject):
             last = getattr(self, '_last_realtime_event_ts', 0.0) or 0.0
             unhealthy = self.is_realtime_active and (now - last > 60.0) and (not getattr(self, '_direct_rt_joined', False))
             if unhealthy:
-                logger.warning("⚠️ Realtime appears unhealthy (stale >60s); switching to polling and scheduling reconnect")
+                # Rate-limit realtime unhealthy backoff messages to ≤ 1 per 15s when unhealthy
+                if not hasattr(self, '_last_unhealthy_log'):
+                    self._last_unhealthy_log = 0
+                if now - self._last_unhealthy_log >= 15.0:
+                    logger.warning("⚠️ Realtime appears unhealthy (stale >60s); switching to polling and scheduling reconnect")
+                    self._last_unhealthy_log = now
                 self.is_realtime_active = False
                 try:
                     self._start_polling_fallback()
@@ -1279,14 +1289,14 @@ class CommunityManager(QObject):
                         ok = self._rebind_realtime()
                         if ok:
                             logger.info("✅ Realtime rebind successful; resetting backoff")
-                            self._reconnect_backoff_s = 5.0
+                            self._reconnect_backoff_s = 15.0  # Reduce aggressive rebind frequency
                         else:
                             self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._max_reconnect_backoff_s)
                     finally:
                         self._reconnect_in_progress = False
                 try:
                     from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(int(backoff * 1000), _do_rebind)
+                    # QTimer.singleShot  # DISABLED - timer exhaustion(int(backoff * 1000), _do_rebind)
                 except Exception:
                     _do_rebind()
         except Exception:
@@ -2270,7 +2280,7 @@ class CommunityManager(QObject):
             ).order("start_time").execute()
 
             events = []
-            now = datetime.now()
+            now = now_utc()
             data = getattr(response, "data", []) or []
 
             # Optionally fetch participant registrations per event
@@ -2285,6 +2295,10 @@ class CommunityManager(QObject):
                     end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00")) if isinstance(end_time, str) else end_time
                 except Exception:
                     end_dt = None
+
+                # Ensure timezone-aware for safe comparisons
+                start_dt = ensure_aware(start_dt)
+                end_dt = ensure_aware(end_dt)
 
                 status = "Upcoming"
                 if start_dt and end_dt and start_dt <= now <= end_dt:

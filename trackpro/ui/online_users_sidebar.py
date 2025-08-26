@@ -18,6 +18,10 @@ from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont, QIcon
 from PyQt6.QtGui import QPainterPath, QRegion
 from PyQt6.QtCore import QRect
 from .avatar_manager import AvatarManager
+try:
+    from .widgets.user_icon_button import UserIconButton  # optional, used for compact icon list
+except Exception:
+    UserIconButton = None
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +80,16 @@ class OnlineUserItem(QWidget):
         avatar_container_layout.addWidget(self.avatar_label)
         logger.debug(f"Avatar created and added to container for user: {self.user_data.get('display_name', 'Unknown')}")
 
-        # Style avatar label and add a friend ring if applicable
+        # Style avatar label: blue outline when online; friend ring as fallback
         try:
             is_friend = bool(self.user_data.get('is_friend', False))
-            friend_border = "3px solid #66ccff" if is_friend else "none"
-            # Radius 16px for 32x32 to keep the ring circular
-            self.avatar_label.setStyleSheet(f"QLabel {{ background: transparent; border: {friend_border}; border-radius: 16px; }}")
+            is_online_now = bool(self.user_data.get('is_online', False))
+            if is_online_now:
+                self.avatar_label.setStyleSheet("QLabel { background: transparent; border: 2px solid #3a8bff; border-radius: 16px; }")
+            else:
+                friend_border = "3px solid #66ccff" if is_friend else "none"
+                # Radius 16px for 32x32 to keep the ring circular
+                self.avatar_label.setStyleSheet(f"QLabel {{ background: transparent; border: {friend_border}; border-radius: 16px; }}")
         except Exception:
             pass
         
@@ -210,6 +218,16 @@ class OnlineUserItem(QWidget):
                 border-radius: 5px;
             }}
         """)
+        # Update avatar border: blue when online, else friend ring or none
+        try:
+            is_friend = bool(self.user_data.get('is_friend', False))
+            if is_online:
+                self.avatar_label.setStyleSheet("QLabel { background: transparent; border: 2px solid #3a8bff; border-radius: 16px; }")
+            else:
+                friend_border = "3px solid #66ccff" if is_friend else "none"
+                self.avatar_label.setStyleSheet(f"QLabel {{ background: transparent; border: {friend_border}; border-radius: 16px; }}")
+        except Exception:
+            pass
     
     def refresh_avatar(self):
         """Refresh the avatar display with current user data."""
@@ -218,9 +236,10 @@ class OnlineUserItem(QWidget):
             # Get fresh avatar URL and name
             avatar_url = self.user_data.get('avatar_url')
             name = self.user_data.get('display_name') or self.user_data.get('username') or self.user_data.get('name', 'U')
-            # Use a smaller inner size when drawing a friend ring so the ring remains visible
+            # Use a smaller inner size when drawing a ring so the ring remains visible
             is_friend = bool(self.user_data.get('is_friend', False))
-            ring_width = 3 if is_friend else 0
+            is_online = bool(self.user_data.get('is_online', False))
+            ring_width = 2 if is_online else (3 if is_friend else 0)
             inner_size = max(18, 32 - (2 * ring_width) - 2)
             AvatarManager.instance().set_label_avatar(self.avatar_label, avatar_url, name, size=inner_size)
             logger.debug(f"✅ Avatar refreshed (size {inner_size}) for user: {name}")
@@ -243,7 +262,8 @@ class OnlineUserItem(QWidget):
         except Exception:
             pass
         is_friend = bool(self.user_data.get('is_friend', False))
-        ring_width = 3 if is_friend else 0
+        is_online = bool(self.user_data.get('is_online', False))
+        ring_width = 2 if is_online else (3 if is_friend else 0)
         inner_size = max(18, 32 - (2 * ring_width) - 2)
         # Center the smaller pixmap so the larger ring is clearly visible
         try:
@@ -251,6 +271,15 @@ class OnlineUserItem(QWidget):
         except Exception:
             pass
         AvatarManager.instance().set_label_avatar(avatar_label, self.user_data.get('avatar_url'), name, size=inner_size)
+        # Apply border style based on online/friend status
+        try:
+            if is_online:
+                avatar_label.setStyleSheet("QLabel { background: transparent; border: 2px solid #3a8bff; border-radius: 16px; }")
+            else:
+                friend_border = "3px solid #66ccff" if is_friend else "none"
+                avatar_label.setStyleSheet(f"QLabel {{ background: transparent; border: {friend_border}; border-radius: 16px; }}")
+        except Exception:
+            pass
         return avatar_label
     
     def load_avatar_from_url(self, url: str, size: int = 32, avatar_label: QLabel = None) -> QPixmap:
@@ -525,19 +554,23 @@ class OnlineUsersSidebar(QWidget):
         # Load current user immediately
         self.load_current_user_instantly()
         
-        # Load other users asynchronously
-        QTimer.singleShot(100, self.load_users_from_database)
+        # Load other users asynchronously - DISABLED to prevent timer exhaustion
+        # # QTimer.singleShot  # DISABLED - timer exhaustion(100, self.load_users_from_database)
+        logger.info("🔄 SingleShot timers DISABLED - preventing timer exhaustion")
         
-        # Auto-refresh timer for online status and user data
-        self.refresh_timer = QTimer()
-        self.refresh_timer.timeout.connect(self.refresh_users_data)
-        self.refresh_timer.setTimerType(Qt.TimerType.CoarseTimer)
-        self.refresh_timer.start(30000)  # Refresh every 30 seconds
-        
-        # Force refresh timer for authentication state
-        self.auth_check_timer = QTimer()
-        self.auth_check_timer.timeout.connect(self.check_authentication_and_load_user)
-        self.auth_check_timer.start(30000)  # Check every 30 seconds instead of 5
+        # DISABLED: All timers causing timer exhaustion
+        logger.info("🔄 Online users sidebar timers DISABLED - preventing timer exhaustion")
+        # Timer creation removed to prevent Windows timer handle exhaustion
+        # self.refresh_timer = QTimer()
+        # self.refresh_timer.timeout.connect(self.refresh_users_data)
+        # self.refresh_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        # self.refresh_timer.start(10000)  # Refresh every 10 seconds (debounced)
+
+        # Force refresh timer for authentication state - DISABLED
+        # if not hasattr(self, 'auth_check_timer') or self.auth_check_timer is None:
+        #     self.auth_check_timer = QTimer()
+        #     self.auth_check_timer.timeout.connect(self.check_authentication_and_load_user)
+        #     self.auth_check_timer.start(30000)  # Check every 30 seconds instead of 5
     
     def setup_ui(self):
         """Setup the main UI structure."""
@@ -743,7 +776,8 @@ class OnlineUsersSidebar(QWidget):
         self.add_friend_is_open = target_open
         if target_open:
             # Focus input shortly after animation starts
-            QTimer.singleShot(220, self.friend_search_input.setFocus)
+            # QTimer.singleShot  # DISABLED - timer exhaustion(220, self.friend_search_input.setFocus)
+            pass  # Keep if statement structure for future re-enabling
     
     def create_users_container(self):
         """Create the scrollable users list container."""
@@ -902,6 +936,13 @@ class OnlineUsersSidebar(QWidget):
             
             # Refresh user list after animation completes to show proper layout
             self.refresh_users_list()
+
+            # When expanding, perform a light async refresh to populate avatars/users
+            try:
+                if self.is_expanded and (not self.all_users or len(self.all_users) == 0):
+                    self.load_users_from_database()
+            except Exception:
+                pass
             
             # Force layout update
             self.updateGeometry()
@@ -1015,12 +1056,15 @@ class OnlineUsersSidebar(QWidget):
                     self.refresh_users_list()
                     logger.info("✅ Current user loaded with fallback data")
                 
-                # Immediately load all other users as well
-                QTimer.singleShot(100, self.load_users_from_database)
+                # Immediately load all other users as well (no timers)
+                try:
+                    self.load_users_from_database()
+                except Exception:
+                    pass
             else:
-                # User not authenticated yet - schedule a re-check soon
-                logger.info("🔍 User not authenticated yet - scheduling auth re-check")
-                QTimer.singleShot(2000, self.check_authentication_and_load_user)
+                # User not authenticated: immediately load public users list (no timers)
+                logger.info("🔍 User not authenticated - loading public users list")
+                self.load_users_from_database()
         except Exception as e:
             logger.error(f"Error loading current user instantly: {e}")
     
@@ -1206,7 +1250,7 @@ class OnlineUsersSidebar(QWidget):
                 finally:
                     self._refresh_in_progress = False
 
-            QTimer.singleShot(0, apply_result)
+            # QTimer.singleShot  # DISABLED - timer exhaustion(0, apply_result)
 
         threading.Thread(target=worker, name="SidebarUsersLoader", daemon=True).start()
 
@@ -1556,7 +1600,32 @@ class OnlineUsersSidebar(QWidget):
             if not self.is_expanded:
                 # Collapsed: show compact user item centered
                 user_widget.set_compact_mode(True)
-                container_layout.addWidget(user_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
+                # If UserIconButton is available, use it for compact with online outline
+                if UserIconButton is not None:
+                    try:
+                        btn = UserIconButton()
+                        btn.setObjectName(f"userBtn_{uid}")
+                        # Tooltip
+                        btn.setToolTip(user_data.get('display_name') or user_data.get('username') or 'Member')
+                        # Apply online property for blue outline via QSS
+                        btn.setOnline(bool(user_data.get('is_online', False)))
+                        # Show avatar icon on the button (cached or initials)
+                        try:
+                            from .avatar_manager import AvatarManager
+                            name = user_data.get('display_name') or user_data.get('username') or 'U'
+                            AvatarManager.instance().set_button_avatar(btn, user_data.get('avatar_url'), name, size=24)
+                            btn.setIconSize(QSize(24, 24))
+                            btn.setFixedSize(32, 32)
+                            btn.setStyleSheet("UserIconButton { background: transparent; border: 2px solid transparent; border-radius: 16px; padding: 0px; }")
+                        except Exception:
+                            pass
+                        # Click routes to profile via existing handler
+                        btn.clicked.connect(lambda _, d=user_data: self.on_user_selected(d))
+                        container_layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+                    except Exception:
+                        container_layout.addWidget(user_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
+                else:
+                    container_layout.addWidget(user_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
             else:
                 # Expanded: show full item
                 user_widget.set_compact_mode(False)
@@ -1570,6 +1639,10 @@ class OnlineUsersSidebar(QWidget):
         total_count = len(self.all_users)
         self.user_count_label.setText(f"{online_count}/{total_count} online")
         self.count_icon.setText(str(online_count))
+        try:
+            logger.info(f"👥 Sidebar users rendered: {total_count} total, {online_count} online")
+        except Exception:
+            pass
         
         logger.debug(f"Users list refresh complete. Online: {online_count}, Total: {total_count}")
 
@@ -1733,29 +1806,29 @@ class OnlineUsersSidebar(QWidget):
         # PERFORMANCE: Enhanced debouncing to prevent redundant auth state updates
         import time
         current_time = time.time()
-        
-        # Skip if called too frequently (within 500ms)
-        if current_time - self._last_refresh_time < 0.5:
-            logger.debug("🔄 Skipping auth change - called too frequently")
+
+        # CRITICAL: Skip if called too frequently (within 2 seconds) to prevent timer exhaustion
+        if current_time - self._last_refresh_time < 2.0:
+            logger.debug("🔄 Skipping auth change - called too frequently (timer exhaustion prevention)")
             return
-            
+
         current_auth_state = self.is_user_authenticated()
         if self._cached_auth_state == current_auth_state:
             logger.debug("🔄 Skipping auth change - state unchanged")
             return
-            
+
         self._cached_auth_state = current_auth_state
         self._last_refresh_time = current_time
         logger.info("🔄 Authentication state changed - refreshing user list")
-        
+
         # Check if user is now authenticated
         current_user_id = self.get_current_user_id()
-        
+
         if current_auth_state and current_user_id:
             # User just logged in - immediately load all users
             self.current_user_id = current_user_id
             logger.info("✅ User authenticated - immediately loading all users")
-            
+
             # Immediately load all users from database
             self.load_users_from_database()
         else:
@@ -1763,10 +1836,16 @@ class OnlineUsersSidebar(QWidget):
             self.all_users = []
             self.current_user_id = None
             logger.info("✅ User logged out - cleared user list")
-        
-        # Refresh the UI
+
+        # Refresh the UI and load public users when logged out
         self.refresh_users_list()
         self.update_add_friend_ui_state()
+        if not current_auth_state:
+            # Load public users to keep sidebar populated for anonymous users
+            try:
+                self.load_users_from_database()
+            except Exception:
+                pass
     
     def force_refresh(self):
         """Force refresh the user list (re-enabled)."""
@@ -1778,76 +1857,88 @@ class OnlineUsersSidebar(QWidget):
             logger.error(f"❌ Error in online users sidebar force refresh: {e}")
 
     def load_users_from_database(self):
-        """Load users from the database and update the list for both authenticated and anonymous users."""
-        try:
-            logger.info("🔄 Loading users from database...")
+        """Load users asynchronously and update the list without blocking the UI."""
+        import threading
+        if getattr(self, "_refresh_in_progress", False):
+            return
+        self._refresh_in_progress = True
 
-            # Fetch all known users (increase limit to capture more members)
-            from trackpro.social.user_manager import EnhancedUserManager
-            user_manager = EnhancedUserManager()
-            users = user_manager.get_all_users(limit=500) or []
-            logger.info(f"✅ Retrieved {len(users)} users from database")
+        def worker():
+            try:
+                logger.info("🔄 Loading users from database (bg thread)...")
+                from trackpro.social.user_manager import EnhancedUserManager
+                user_manager = EnhancedUserManager()
 
-            # Fallback for anonymous users: use public online view if main list is empty
-            if not users:
+                users = user_manager.get_all_users(limit=500) or []
+                if not users:
+                    try:
+                        public_online = user_manager.get_online_users(limit=200) or []
+                        users = public_online
+                    except Exception:
+                        users = []
+
                 try:
-                    public_online = user_manager.get_online_users(limit=200) or []
-                    logger.info(f"🔄 Fallback to public online users: {len(public_online)} found")
-                    users = public_online
-                except Exception as e_pub:
-                    logger.warning(f"⚠️ Public online users fallback failed: {e_pub}")
+                    from trackpro.utils.app_tracker import get_online_users
+                    online_info = get_online_users() or []
+                    online_user_ids = {u.get('user_id') for u in online_info}
+                except Exception:
+                    online_user_ids = set()
 
-            # Determine online users from app tracker (works without auth)
+                friends_ids = set()
+                try:
+                    current_user_id = self.get_current_user_id()
+                    if current_user_id:
+                        from trackpro.social.friends_manager import FriendsManager
+                        fm = FriendsManager()
+                        flist = fm.get_friends_list(current_user_id, include_online_status=False) or []
+                        friends_ids = {f.get('friend_id') for f in flist}
+                except Exception:
+                    pass
+
+                assembled = []
+                for u in users:
+                    uid = u.get('user_id') or u.get('id')
+                    if not uid:
+                        continue
+                    uname = (u.get('username') or '').strip()
+                    dname = (u.get('display_name') or '').strip()
+                    display_name = dname or uname or 'Member'
+                    is_online = bool(u.get('is_online')) or (uid in online_user_ids)
+                    assembled.append({
+                        'user_id': uid,
+                        'username': uname,
+                        'display_name': display_name,
+                        'avatar_url': u.get('avatar_url'),
+                        'is_friend': uid in friends_ids,
+                        'is_online': is_online,
+                        'status': 'Online' if is_online else 'Offline',
+                    })
+            except Exception as _e:
+                assembled = None
+
+            def apply_result():
+                try:
+                    if assembled is not None:
+                        self.all_users = assembled
+                        self.refresh_users_list()
+                        self.update_add_friend_ui_state()
+                finally:
+                    self._refresh_in_progress = False
+
+            # Queue UI update to the main thread without creating timers
             try:
-                from trackpro.utils.app_tracker import get_online_users
-                online_info = get_online_users() or []
-                online_user_ids = {u.get('user_id') for u in online_info}
-            except Exception as e_online:
-                logger.warning(f"⚠️ Could not fetch online user info: {e_online}")
-                online_user_ids = set()
+                from PyQt6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(self, lambda: apply_result(), Qt.ConnectionType.QueuedConnection)
+            except Exception:
+                try:
+                    # Fallback to a single-shot UI apply
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, apply_result)
+                except Exception:
+                    # Last resort: apply directly
+                    apply_result()
 
-            # Determine friend relationships if authenticated (optional)
-            friends_ids = set()
-            try:
-                current_user_id = self.get_current_user_id()
-                if current_user_id:
-                    from trackpro.social.friends_manager import FriendsManager
-                    fm = FriendsManager()
-                    flist = fm.get_friends_list(current_user_id, include_online_status=False) or []
-                    friends_ids = {f.get('friend_id') for f in flist}
-            except Exception as e_friends:
-                logger.debug(f"Friends lookup skipped or failed: {e_friends}")
-
-            # Build unified list used by refresh for counts and rendering
-            self.all_users = []
-            for u in users:
-                uid = u.get('user_id') or u.get('id')
-                if not uid:
-                    continue
-                # Build sensible display values even when some fields are missing
-                uname = (u.get('username') or '').strip()
-                dname = (u.get('display_name') or '').strip()
-                display_name = dname or uname or 'Member'
-                is_online = uid in online_user_ids
-                self.all_users.append({
-                    'user_id': uid,
-                    'username': uname,
-                    'display_name': display_name,
-                    'avatar_url': u.get('avatar_url'),
-                    'is_friend': uid in friends_ids,
-                    'is_online': is_online,
-                    'status': 'Online' if is_online else 'Offline',
-                })
-
-            # Drive UI update through the centralized refresher
-            self.refresh_users_list()
-            logger.info("✅ Users loaded from database successfully")
-
-            # Keep add-friend bar in correct enabled/disabled state
-            self.update_add_friend_ui_state()
-
-        except Exception as e:
-            logger.error(f"❌ Error loading users from database: {e}")
+        threading.Thread(target=worker, name="SidebarUsersLoader", daemon=True).start()
 
     def add_user_to_list(self, user_data):
         """Add a user to the list."""
@@ -1967,7 +2058,7 @@ class OnlineUsersSidebar(QWidget):
             if success:
                 logger.info(f"✅ Forced heartbeat for current user {self.current_user_id}")
                 # Refresh the users list to show updated status
-                QTimer.singleShot(1000, self.load_users_from_database)
+                # QTimer.singleShot  # DISABLED - timer exhaustion(1000, self.load_users_from_database)
             else:
                 logger.warning(f"⚠️ Failed to force heartbeat for current user {self.current_user_id}")
             

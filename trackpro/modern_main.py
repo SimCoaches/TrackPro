@@ -12,6 +12,9 @@ import traceback
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer, Qt
 
+# Performance bootstrap - must be first
+from trackpro.system import perf_bootstrap  # noqa: F401  (side-effects)
+
 # Import authentication and database components
 from trackpro.database import supabase
 from trackpro.auth.oauth_handler import OAuthHandler
@@ -177,7 +180,9 @@ class ModernTrackProApp:
             try:
                 # Ensure we're on the main thread
                 if QThread.currentThread() == self.app.thread():
-                    QTimer.singleShot(100, self.perform_background_auth_check)
+                    # DISABLED: singleShot causing handle exhaustion
+                    # QTimer.singleShot(100, self.perform_background_auth_check)
+                    self.perform_background_auth_check()
                 else:
                     logger.warning("Not on main thread - skipping background auth check")
             except Exception as e:
@@ -206,11 +211,17 @@ class ModernTrackProApp:
             # DEFER: Schedule online status updates to prevent blocking/crashes
             from PyQt6.QtCore import QTimer
             if is_authenticated:
-                QTimer.singleShot(2000, lambda: self._deferred_online_status_update(True))
+                # DISABLED: singleShot causing handle exhaustion
+                # QTimer.singleShot(2000, lambda: self._deferred_online_status_update(True))
+                self._deferred_online_status_update(True)
                 # Enforce profile completion shortly after login
-                QTimer.singleShot(300, self.ensure_profile_completion)
+                # DISABLED: singleShot causing handle exhaustion
+                # QTimer.singleShot(300, self.ensure_profile_completion)
+                self.ensure_profile_completion()
             else:
-                QTimer.singleShot(2000, lambda: self._deferred_online_status_update(False))
+                # DISABLED: singleShot causing handle exhaustion
+                # QTimer.singleShot(2000, lambda: self._deferred_online_status_update(False))
+                self._deferred_online_status_update(False)
                 
         except Exception as e:
             logger.error(f"❌ Error handling auth state change: {e}")
@@ -359,7 +370,9 @@ class ModernTrackProApp:
                 if arg.startswith("trackpro://") or arg.startswith("app://"):
                     logger.info(f"Application launched with URL scheme: {arg}")
                     # Delay handling until window is ready
-                    QTimer.singleShot(1000, lambda: self.handle_oauth_redirect(arg))
+                    # DISABLED: singleShot causing handle exhaustion
+                    # QTimer.singleShot(1000, lambda: self.handle_oauth_redirect(arg))
+                    self.handle_oauth_redirect(arg)
                     break
         except Exception as e:
             logger.warning(f"Error setting up URL scheme handling: {e}")
@@ -402,11 +415,15 @@ class ModernTrackProApp:
             if "auth-complete" in url:
                 logger.info("OAuth authentication completion notification received")
                 if self.window:
-                    QTimer.singleShot(0, lambda: QMessageBox.information(
-                        self.window,
-                        "Authentication Complete",
-                        "You have been successfully logged in to TrackPro!"
-                    ))
+                    try:
+                        from PyQt6.QtWidgets import QMessageBox
+                        QMessageBox.information(
+                            self.window,
+                            "Authentication Complete",
+                            "You have been successfully logged in to TrackPro!"
+                        )
+                    except Exception:
+                        pass
                 return
             
             # Extract authorization code if present
@@ -518,9 +535,13 @@ class ModernTrackProApp:
         try:
             if self.app:
                 logger.info("🚪 Scheduling application quit...")
-                QTimer.singleShot(100, self.app.quit)  # Delayed quit
+                # DISABLED: singleShot causing handle exhaustion
+                # QTimer.singleShot(100, self.app.quit)  # Delayed quit
+                self.app.quit()
                 # Backup exit mechanism in case quit() doesn't work
-                QTimer.singleShot(1000, lambda: self.app.exit(0))
+                # DISABLED: singleShot causing handle exhaustion
+                # QTimer.singleShot(1000, lambda: self.app.exit(0))
+                self.app.exit(0)
         except Exception as e:
             logger.error(f"Error during force quit: {e}")
             # Last resort - force system exit

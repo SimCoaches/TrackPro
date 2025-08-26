@@ -805,6 +805,11 @@ class EnhancedUserManager(DatabaseManager):
             List of online users
         """
         try:
+            # Ensure Supabase client is available
+            if not self.supabase:
+                logger.warning("Supabase client not available - returning empty user list")
+                return []
+            
             # Query the public view for online users
             response = self.supabase.from_("public_user_profiles").select(
                 "user_id, display_name, username, avatar_url, level, is_online, last_seen"

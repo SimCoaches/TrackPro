@@ -12,8 +12,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file (best effort)
+try:
+    load_dotenv()
+except Exception:
+    pass
 
 # Initialize Supabase client (singleton)
 _supabase_client = None
@@ -27,13 +30,24 @@ def get_client() -> Client:
     """
     global _supabase_client
     
-    # Get Supabase credentials from environment variables
+    # Get Supabase credentials from environment variables first
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
     
+    # Fallback to TrackPro config and config.ini if missing
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        try:
+            from trackpro.config import config
+            if not SUPABASE_URL:
+                SUPABASE_URL = config.supabase_url
+            if not SUPABASE_KEY:
+                SUPABASE_KEY = config.supabase_key
+        except Exception:
+            pass
+    
     # Check if credentials are available
     if not SUPABASE_URL or not SUPABASE_KEY:
-        logger.error("Supabase credentials not found in .env file. Please ensure SUPABASE_URL and SUPABASE_KEY are set.")
+        logger.error("Supabase credentials not found in environment or config. Please ensure SUPABASE_URL and SUPABASE_KEY are set.")
         return None
     
     # Initialize client if not already initialized or if credentials have changed

@@ -56,7 +56,6 @@ class PedalSetSelectionPage(QWizardPage):
             }
             QGroupBox:hover {
                 border-color: #2a82da;
-                cursor: pointer;
             }
         """)
         # Make the entire group box clickable
@@ -101,7 +100,6 @@ class PedalSetSelectionPage(QWizardPage):
             }
             QGroupBox:hover {
                 border-color: #2a82da;
-                cursor: pointer;
             }
         """)
         # Make the entire group box clickable

@@ -3,6 +3,9 @@ from ctypes import wintypes
 import logging
 import time
 import os
+import sys
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,15 @@ VJD_STAT_MISS = 3
 
 AXIS_MIN = 0
 AXIS_MAX = 65535
+
+# vJoy scaling helper for proper range mapping
+_VJOY_MIN = 0x0001
+_VJOY_MAX = 0x8000  # 32768
+
+def _to_vjoy_i16(x: float) -> int:
+    """Clamp 0..1 then map to [1..32768] to satisfy vJoy/pyvjoy expected full range."""
+    x = 0.0 if x < 0.0 else 1.0 if x > 1.0 else float(x)
+    return int(round(_VJOY_MIN + x * (_VJOY_MAX - _VJOY_MIN)))
 
 class JOYSTICK_POSITION_V2(ctypes.Structure):
     _fields_ = [
@@ -81,14 +93,13 @@ class VirtualJoystick:
             raise RuntimeError("vJoy is not enabled")
             
         # Default device ID
-        self.vjoy_device_id = 4
+        # Prefer device 1 in production (most users have only ID 1 enabled)
+        self.vjoy_device_id = 1 if getattr(sys, 'frozen', False) else 4
         self.vjoy_acquired = False
         
         # Try multiple device IDs
-        # Prefer common defaults first (1..8). Many systems only enable ID 1 by default.
-        device_ids_to_try = [1]
-        if use_alt_devices:
-            device_ids_to_try.extend([2, 3, 4, 5, 6, 7, 8])
+        # Prefer ID 1 first (production default), then fallbacks
+        device_ids_to_try = [1, 4, 2, 3, 5, 6, 7, 8] if use_alt_devices else [1]
         
         # Try to acquire a vJoy device
         acquired = False
@@ -146,14 +157,19 @@ class VirtualJoystick:
             self.vjoy_acquired = False
     
     def update_axis(self, throttle: int, brake: int, clutch: int, handbrake: int = 0):
-        """Update the virtual joystick axes - ULTRA-FAST VERSION."""
+        """Update the virtual joystick axes - ULTRA-FAST VERSION.
+        
+        Args:
+            throttle, brake, clutch, handbrake: Values in 0-65535 range from calibration
+        """
+        
         if self.test_mode:
             # In test mode, just log the values occasionally
             if not hasattr(self, '_test_log_count'):
                 self._test_log_count = 0
             self._test_log_count += 1
             if self._test_log_count % 1000 == 0:  # Log every 1000 calls (1 second at 1000Hz)
-                logger.debug(f"🎮 Test mode - Axis values: T={throttle}, B={brake}, C={clutch}, H={handbrake}")
+                logger.debug(f"🎮 Test mode - Assetto detected, Axis values: T={throttle}, B={brake}, C={clutch}, H={handbrake}")
             return True
             
         if not hasattr(self, 'vjoy_acquired') or not self.vjoy_acquired:
@@ -166,57 +182,77 @@ class VirtualJoystick:
             return False
             
         try:
+            # Convert 0-65535 calibrated values to normalized 0.0-1.0, then apply vJoy scaling
+            norm_throttle = throttle / 65535.0
+            norm_brake = brake / 65535.0
+            norm_clutch = clutch / 65535.0
+            norm_handbrake = handbrake / 65535.0
+            
+            # Apply vJoy scaling to get proper range
+            vjoy_throttle = _to_vjoy_i16(norm_throttle)
+            vjoy_brake = _to_vjoy_i16(norm_brake)
+            vjoy_clutch = _to_vjoy_i16(norm_clutch)
+            vjoy_handbrake = _to_vjoy_i16(norm_handbrake)
+            
             # ULTRA-FAST: Direct API calls with minimal overhead
             # Set X axis (throttle) - critical for acceleration
-            if not self.vjoy_dll.SetAxis(throttle, self.vjoy_device_id, 0x30):  # HID_USAGE_X
+            if not self.vjoy_dll.SetAxis(vjoy_throttle, self.vjoy_device_id, 0x30):  # HID_USAGE_X
                 return False
             
             # Set Y axis (brake) - critical for braking
-            if not self.vjoy_dll.SetAxis(brake, self.vjoy_device_id, 0x31):  # HID_USAGE_Y
+            if not self.vjoy_dll.SetAxis(vjoy_brake, self.vjoy_device_id, 0x31):  # HID_USAGE_Y
                 return False
             
             # Set Z axis (clutch) - less critical but still fast
-            if not self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32):  # HID_USAGE_Z
+            if not self.vjoy_dll.SetAxis(vjoy_clutch, self.vjoy_device_id, 0x32):  # HID_USAGE_Z
                 return False
             
             # Set RX axis (handbrake) - additional axis for handbrake
             if handbrake > 0:  # Only update if handbrake value is provided
-                if not self.vjoy_dll.SetAxis(handbrake, self.vjoy_device_id, 0x33):  # HID_USAGE_RX
+                if not self.vjoy_dll.SetAxis(vjoy_handbrake, self.vjoy_device_id, 0x33):  # HID_USAGE_RX
                     return False
             
-            # Performance monitoring (very lightweight)
-            if not hasattr(self, '_update_count'):
-                self._update_count = 0
-                self._last_perf_log = time.time()
-            
-            self._update_count += 1
-            
-            # Log performance every 10 seconds without blocking
-            current_time = time.time()
-            if current_time - self._last_perf_log >= 10.0:
-                update_rate = self._update_count / (current_time - self._last_perf_log)
-                logger.info(f"🎯 vJoy PERFORMANCE: {update_rate:.0f} updates/sec (target: 1000Hz)")
-                self._update_count = 0
-                self._last_perf_log = current_time
+            # CRITICAL PERFORMANCE FIX: Remove ALL performance monitoring from hot path
+            # This was causing the massive performance degradation at 250Hz
+            # Performance logging moved to external monitoring if needed
             
             return True
             
         except Exception as e:
-            # Handle errors without blocking pedal processing
-            if not hasattr(self, '_vjoy_error_count'):
-                self._vjoy_error_count = 0
-                self._last_error_log = time.time()
-            
-            self._vjoy_error_count += 1
-            
-            # Only log errors occasionally to prevent log spam
-            current_time = time.time()
-            if current_time - self._last_error_log >= 5.0:  # Log every 5 seconds max
-                logger.error(f"⚠️ vJoy update error (last 5s: {self._vjoy_error_count} errors): {e}")
-                self._vjoy_error_count = 0
-                self._last_error_log = current_time
-            
+            # CRITICAL: Silent error handling - no logging or counting in hot path
+            # This was also causing performance degradation at 250Hz
             return False
+    
+    def vjoy_sweep_test(self, seconds: float = 3.0, axis="throttle"):
+        """Diagnostic method to test the full range of vJoy axis movement.
+        
+        Args:
+            seconds (float): Duration of the sweep test
+            axis (str): Which axis to test ("throttle" or "brake")
+        """
+        if self.test_mode:
+            logger.info(f"🎮 Test mode - Simulating {axis} sweep for {seconds} seconds")
+            return
+            
+        if not hasattr(self, 'vjoy_acquired') or not self.vjoy_acquired:
+            logger.error("❌ vJoy device not acquired - cannot perform sweep test")
+            return
+        
+        logger.info(f"🔧 Starting {axis} sweep test for {seconds} seconds...")
+        
+        # Determine which axis to use
+        axis_id = 0x30 if axis.startswith("t") else 0x31  # HID_USAGE_X for throttle, HID_USAGE_Y for brake
+        
+        steps = max(10, int(seconds * 60))
+        for i in range(steps + 1):
+            x = i / steps
+            val = _to_vjoy_i16(x)
+            self.vjoy_dll.SetAxis(val, self.vjoy_device_id, axis_id)
+            time.sleep(seconds / steps)
+        
+        # Reset to 0 at the end
+        self.vjoy_dll.SetAxis(_to_vjoy_i16(0.0), self.vjoy_device_id, axis_id)
+        logger.info(f"✅ {axis} sweep test completed")
     
     def __del__(self):
         """Clean up vJoy device."""
@@ -232,13 +268,22 @@ class VirtualJoystick:
         import os
         import ctypes
         
-        # Try to find the vJoy SDK DLL
+        # Try to find the vJoy SDK DLL (dev and production)
         dll_paths = [
+            # Standard install locations
             r"C:\Program Files\vJoy\x64\vJoyInterface.dll",
             r"C:\Program Files (x86)\vJoy\x86\vJoyInterface.dll",
+            # Dev tree fallbacks
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "vJoyInterface.dll"),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vJoyInterface.dll")
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vJoyInterface.dll"),
         ]
+        # PyInstaller bundle: alongside the executable
+        try:
+            import sys as _sys
+            if getattr(_sys, 'frozen', False):
+                dll_paths.insert(0, os.path.join(os.path.dirname(_sys.executable), "vJoyInterface.dll"))
+        except Exception:
+            pass
         
         for path in dll_paths:
             if os.path.exists(path):

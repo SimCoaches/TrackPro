@@ -56,11 +56,13 @@ import sys
 import os
 import logging
 import time
+import threading
+import weakref
 from pathlib import Path
 from typing import Optional
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFontDatabase, QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QCoreApplication
 import msvcrt
 import tempfile
 
@@ -96,6 +98,144 @@ except Exception:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Global Qt Resource Manager to prevent timer exhaustion
+class GlobalQtResourceManager(QObject):
+    """Global manager for Qt resources to prevent handle exhaustion."""
+
+    _instance = None
+    _lock = threading.Lock()
+    _initialized = False
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        # Only initialize once, even for singleton
+        if not GlobalQtResourceManager._initialized:
+            super().__init__()
+            self._timers = weakref.WeakSet()
+            self._widgets = weakref.WeakSet()
+            self._objects = weakref.WeakSet()
+            self._timer_count = 0
+            self._widget_count = 0
+            # Defer cleanup timer until a Qt application exists
+            self._cleanup_timer = None
+            self._maybe_start_cleanup_timer()
+            GlobalQtResourceManager._initialized = True
+            logger.info("✅ Global Qt Resource Manager initialized")
+
+    def _maybe_start_cleanup_timer(self):
+        try:
+            if self._cleanup_timer is None and QCoreApplication.instance() is not None:
+                self._cleanup_timer = QTimer(self)
+                self._cleanup_timer.timeout.connect(self._periodic_cleanup)
+                self._cleanup_timer.start(30000)  # Clean every 30 seconds
+        except Exception:
+            pass
+
+    def track_timer(self, timer: QTimer) -> None:
+        """Track a QTimer instance for cleanup."""
+        if timer and isinstance(timer, QTimer):
+            self._timers.add(timer)
+            self._timer_count += 1
+            # Add cleanup on timer destruction
+            timer.destroyed.connect(lambda: self._on_timer_destroyed(timer))
+            self._maybe_start_cleanup_timer()
+
+    def track_widget(self, widget) -> None:
+        """Track a QWidget instance for cleanup."""
+        if widget and hasattr(widget, 'deleteLater'):
+            self._widgets.add(widget)
+            self._widget_count += 1
+            # Add cleanup on widget destruction
+            widget.destroyed.connect(lambda: self._on_widget_destroyed(widget))
+            self._maybe_start_cleanup_timer()
+
+    def track_object(self, obj: QObject) -> None:
+        """Track a QObject instance for cleanup."""
+        if obj and isinstance(obj, QObject):
+            self._objects.add(obj)
+            obj.destroyed.connect(lambda: self._on_object_destroyed(obj))
+            self._maybe_start_cleanup_timer()
+
+    def _on_timer_destroyed(self, timer):
+        """Called when a tracked timer is destroyed."""
+        self._timer_count = max(0, self._timer_count - 1)
+
+    def _on_widget_destroyed(self, widget):
+        """Called when a tracked widget is destroyed."""
+        self._widget_count = max(0, self._widget_count - 1)
+
+    def _on_object_destroyed(self, obj):
+        """Called when a tracked object is destroyed."""
+        pass
+
+    def _periodic_cleanup(self):
+        """Periodic cleanup to prevent resource leaks."""
+        try:
+            # Clean up any stopped timers
+            active_timers = []
+            for timer in list(self._timers):
+                if timer and hasattr(timer, 'isActive') and not timer.isActive():
+                    try:
+                        timer.stop()
+                        timer.deleteLater()
+                    except:
+                        pass
+                elif timer:
+                    active_timers.append(timer)
+
+            # Log resource usage periodically
+            if self._timer_count > 100:
+                logger.warning(f"⚠️ High timer count: {self._timer_count} active timers")
+            if self._widget_count > 500:
+                logger.warning(f"⚠️ High widget count: {self._widget_count} active widgets")
+
+        except Exception as e:
+            logger.debug(f"Resource cleanup error: {e}")
+
+    def cleanup_all(self):
+        """Force cleanup of all tracked resources."""
+        logger.info("🧹 Force cleanup of all Qt resources")
+
+        # Stop and delete all timers
+        for timer in list(self._timers):
+            if timer:
+                try:
+                    timer.stop()
+                    timer.deleteLater()
+                except:
+                    pass
+
+        # Delete all widgets
+        for widget in list(self._widgets):
+            if widget:
+                try:
+                    widget.deleteLater()
+                except:
+                    pass
+
+        # Delete all objects
+        for obj in list(self._objects):
+            if obj:
+                try:
+                    obj.deleteLater()
+                except:
+                    pass
+
+        self._timers.clear()
+        self._widgets.clear()
+        self._objects.clear()
+        self._timer_count = 0
+        self._widget_count = 0
+
+# Global instance
+global_qt_resource_manager = GlobalQtResourceManager()
+
 # Global iRacing API instance for sharing across all screens/components
 global_iracing_api = None
 
@@ -106,6 +246,53 @@ global_hidhide = None
 global_pedal_thread = None
 global_pedal_stop_event = None
 global_pedal_data_queue = None
+
+# Global Qt resource manager to prevent handle exhaustion
+class QtResourceManager:
+    """Manages Qt resources to prevent handle exhaustion."""
+
+    def __init__(self):
+        self.timers = []
+        self.widgets = []
+        self.connections = []
+
+    def track_timer(self, timer):
+        """Track a timer for cleanup."""
+        self.timers.append(timer)
+
+    def track_widget(self, widget):
+        """Track a widget for cleanup."""
+        self.widgets.append(widget)
+
+    def cleanup_all(self):
+        """Clean up all tracked resources."""
+        # Stop and delete timers
+        for timer in self.timers:
+            if timer:
+                timer.stop()
+                timer.deleteLater()
+        self.timers.clear()
+
+        # Delete widgets
+        for widget in self.widgets:
+            if widget:
+                widget.deleteLater()
+        self.widgets.clear()
+
+        # Disconnect signals
+        for connection in self.connections:
+            try:
+                connection[0].disconnect(connection[1])
+            except:
+                pass
+        self.connections.clear()
+
+        # Force garbage collection
+        import gc
+        gc.collect()
+
+# Global resource manager
+global_qt_resource_manager = QtResourceManager()
 
 # Global handbrake hardware instance
 global_handbrake_hardware = None
@@ -307,10 +494,10 @@ def initialize_global_pedal_system():
         global_pedal_data_queue = Queue()
         global_pedal_stop_event = Event()
         
-        # Start the ultra-high performance pedal processing thread
-        logger.info("🚀 Starting ULTRA-HIGH PERFORMANCE pedal thread...")
+        # Start the pedal processing thread
+        logger.info("🚀 Starting pedal thread...")
         start_global_pedal_thread()
-        
+
         logger.info("🎮 ULTRA-HIGH PERFORMANCE pedal system initialized successfully!")
         
     except Exception as e:
@@ -369,14 +556,14 @@ def start_global_pedal_thread():
     
     # Create thread with ultra-high priority
     global_pedal_thread = Thread(
-        target=global_pedal_polling_loop, 
+        target=simple_pedal_loop, 
         name="TrackPro-Modern-Pedal-Thread",
         daemon=False  # Don't make it daemon so we can control shutdown
     )
     
     # Start the thread
     global_pedal_thread.start()
-    logger.info("🚀 ULTRA-FAST PEDAL THREAD: Started with maximum priority for modern UI")
+    logger.info("🚀 SIMPLE PEDAL THREAD: Started for modern UI")
 
 def global_pedal_polling_loop():
     """
@@ -598,6 +785,33 @@ def get_global_handbrake_hardware():
 def get_global_handbrake_data_queue():
     """Get the global handbrake data queue for UI updates."""
     return global_handbrake_data_queue
+
+def cleanup_qt_resources():
+    """Clean up all Qt resources to prevent handle exhaustion."""
+    global global_qt_resource_manager
+    try:
+        if global_qt_resource_manager:
+            global_qt_resource_manager.cleanup_all()
+        logger.info("🧹 Qt resources cleaned up successfully")
+    except Exception as e:
+        logger.error(f"Error cleaning up Qt resources: {e}")
+
+def start_periodic_cleanup():
+    """Start periodic cleanup to prevent resource accumulation."""
+    try:
+        from PyQt6.QtCore import QTimer
+        cleanup_timer = QTimer()
+        cleanup_timer.timeout.connect(cleanup_qt_resources)
+        cleanup_timer.start(300000)  # Clean up every 5 minutes
+        cleanup_timer.setTimerType(QTimer.TimerType.CoarseTimer)
+
+        # Track the timer for cleanup
+        global global_qt_resource_manager
+        global_qt_resource_manager.track_timer(cleanup_timer)
+
+        logger.info("🧹 Periodic resource cleanup started (every 5 minutes)")
+    except Exception as e:
+        logger.warning(f"Could not start periodic cleanup: {e}")
 
 def initialize_global_iracing_connection():
     """Initialize the global iRacing connection that all screens can access."""
@@ -1042,9 +1256,31 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
             finally:
                 # Only keep checking while not all systems are attached
                 if should_reschedule:
-                    QTimer.singleShot(500, _attach_when_ready)
+                    try:
+                        # Use a single persistent timer rather than recursion
+                        if not hasattr(trackpro_app, '_attach_timer') or trackpro_app._attach_timer is None:
+                            trackpro_app._attach_timer = QTimer()
+                            trackpro_app._attach_timer.setInterval(500)
+                            trackpro_app._attach_timer.timeout.connect(_attach_when_ready)
+                            trackpro_app._attach_timer.start()
+                            try:
+                                from new_ui import global_qt_resource_manager
+                                global_qt_resource_manager.track_timer(trackpro_app._attach_timer)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                else:
+                    # Stop and delete the timer if everything is attached
+                    try:
+                        if hasattr(trackpro_app, '_attach_timer') and trackpro_app._attach_timer:
+                            trackpro_app._attach_timer.stop()
+                            trackpro_app._attach_timer.deleteLater()
+                            trackpro_app._attach_timer = None
+                    except Exception:
+                        pass
 
-        QTimer.singleShot(500, _attach_when_ready)
+        _attach_when_ready()
 
         # Keep executor alive for the duration of startup
         try:
@@ -1070,10 +1306,32 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
                 if (getattr(trackpro_app, 'window', None) and trackpro_app.window.isVisible() and _ui_ready_flag['ready'] and elapsed >= min_visible_seconds):
                     splash.close()
                 else:
-                    QTimer.singleShot(500, _close_splash_when_ready)
+                    try:
+                        if not hasattr(trackpro_app, '_splash_timer') or trackpro_app._splash_timer is None:
+                            trackpro_app._splash_timer = QTimer()
+                            trackpro_app._splash_timer.setInterval(500)
+                            trackpro_app._splash_timer.timeout.connect(_close_splash_when_ready)
+                            trackpro_app._splash_timer.start()
+                            try:
+                                from new_ui import global_qt_resource_manager
+                                global_qt_resource_manager.track_timer(trackpro_app._splash_timer)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             except Exception:
-                QTimer.singleShot(2000, lambda: splash.close())
-        QTimer.singleShot(500, _close_splash_when_ready)
+                splash.close()
+            finally:
+                # Stop timer when done
+                try:
+                    if getattr(trackpro_app, 'window', None) and trackpro_app.window.isVisible() and _ui_ready_flag['ready'] and (time.perf_counter() - splash_shown_t0) >= min_visible_seconds:
+                        if hasattr(trackpro_app, '_splash_timer') and trackpro_app._splash_timer:
+                            trackpro_app._splash_timer.stop()
+                            trackpro_app._splash_timer.deleteLater()
+                            trackpro_app._splash_timer = None
+                except Exception:
+                    pass
+        _close_splash_when_ready()
 
         total_startup_time = time.time() - start_time
         logger.info(f"✅ Modern TrackPro UI initial window ready in {total_startup_time:.2f} seconds (background init continues)")
@@ -1124,6 +1382,10 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
             
             # Ensure window cleanup is called when app quits
             app.aboutToQuit.connect(lambda: window.cleanup() if hasattr(window, 'cleanup') else None)
+            app.aboutToQuit.connect(cleanup_qt_resources)
+
+            # Start periodic cleanup to prevent resource accumulation
+            start_periodic_cleanup()
             
             window.show()
             window.raise_()
@@ -1140,10 +1402,154 @@ def main(app: Optional[QApplication] = None, existing_splash: Optional["QSplashS
         traceback.print_exc()
         return 1
 
+def simple_pedal_polling_loop():
+    """
+    Simple pedal polling loop - read pedals, update UI, and send to vJoy
+    """
+    import time
+    from queue import Empty
+
+    loop_count = 0
+
+    while not global_pedal_stop_event.is_set():
+        loop_count += 1
+
+        # Read pedals and update UI
+        if global_hardware:
+            raw_values = global_hardware.read_pedals()
+
+            # CRITICAL: Update UI queue with pedal data for responsive UI
+            try:
+                # Clear old data from queue to prevent lag accumulation
+                while not global_pedal_data_queue.empty():
+                    try:
+                        global_pedal_data_queue.get_nowait()
+                    except Empty:
+                        break
+                # Add latest data non-blocking
+                global_pedal_data_queue.put_nowait(raw_values)
+
+                # Log pedal data occasionally for debugging
+                if loop_count % 50 == 0:  # More frequent logging for UI debugging
+                    logger.debug(f"🎮 Pedal data sent to UI: {raw_values}")
+
+            except Exception as e:
+                if loop_count % 100 == 0:
+                    logger.warning(f"UI queue error: {e}")
+
+            # Send to vJoy
+            if global_output:
+                try:
+                    # Apply calibration for vJoy output
+                    throttle = global_hardware.apply_calibration('throttle', raw_values.get('throttle', 0))
+                    brake = global_hardware.apply_calibration('brake', raw_values.get('brake', 0))
+                    clutch = global_hardware.apply_calibration('clutch', raw_values.get('clutch', 0))
+
+                    # Get handbrake if available
+                    handbrake = 0
+                    if global_handbrake_hardware:
+                        try:
+                            handbrake_data = global_handbrake_hardware.read_handbrake()
+                            handbrake = global_handbrake_hardware.apply_calibration('handbrake', handbrake_data.get('handbrake', 0))
+                        except Exception as e:
+                            if loop_count % 100 == 0:
+                                logger.debug(f"Handbrake read error: {e}")
+                            handbrake = 0
+
+                    # Send to vJoy
+                    global_output.update_axis(int(throttle), int(brake), int(clutch), int(handbrake))
+
+                    # Log vJoy updates occasionally
+                    if loop_count % 100 == 0:
+                        logger.debug(f"🎛️ vJoy updated: T:{int(throttle)} B:{int(brake)} C:{int(clutch)} H:{int(handbrake)}")
+
+                except Exception as e:
+                    if loop_count % 100 == 0:
+                        logger.warning(f"vJoy update error: {e}")
+
+        # Moderate polling rate for UI responsiveness
+        time.sleep(0.005)  # 200Hz - good balance of responsiveness and CPU usage
+
+
+def simple_pedal_loop():
+    """PEDAL PROCESSING WITH PROPER RESOURCE MANAGEMENT"""
+    import time
+    from queue import Empty
+
+    loop_count = 0
+    last_ui_update = 0
+    UI_UPDATE_INTERVAL = 0.016  # 60Hz UI updates
+
+    # Cache the pedals page widget to avoid searching every time
+    cached_pedals_page = None
+
+    while not global_pedal_stop_event.is_set():
+        loop_count += 1
+        current_time = time.time()
+
+        # Read pedals
+        if global_hardware:
+            raw_values = global_hardware.read_pedals()
+
+            # THROTTLED UI UPDATE - Only update UI at reasonable intervals
+            if current_time - last_ui_update >= UI_UPDATE_INTERVAL:
+                try:
+                    # Use cached widget reference if available
+                    if cached_pedals_page is None:
+                        from PyQt6.QtWidgets import QApplication
+                        app = QApplication.instance()
+                        if app:
+                            for widget in app.allWidgets():
+                                if hasattr(widget, 'page_name') and widget.page_name == 'pedals':
+                                    cached_pedals_page = widget
+                                    break
+
+                    if cached_pedals_page and hasattr(cached_pedals_page, 'update_pedal_values'):
+                        cached_pedals_page.update_pedal_values(raw_values)
+                        last_ui_update = current_time
+                except:
+                    # Reset cache on error
+                    cached_pedals_page = None
+
+            # Send to vJoy
+            if global_output:
+                try:
+                    throttle = global_hardware.apply_calibration('throttle', raw_values.get('throttle', 0))
+                    brake = global_hardware.apply_calibration('brake', raw_values.get('brake', 0))
+                    clutch = global_hardware.apply_calibration('clutch', raw_values.get('clutch', 0))
+
+                    handbrake = 0
+                    if global_handbrake_hardware:
+                        try:
+                            handbrake_data = global_handbrake_hardware.read_handbrake()
+                            handbrake = global_handbrake_hardware.apply_calibration('handbrake', handbrake_data.get('handbrake', 0))
+                        except:
+                            handbrake = 0
+
+                    global_output.update_axis(int(throttle), int(brake), int(clutch), int(handbrake))
+                except Exception as e:
+                    if loop_count % 100 == 0:
+                        logger.warning(f"vJoy error: {e}")
+
+        time.sleep(0.01)
+
+
 if __name__ == "__main__":
     # Developer-friendly bootstrap: show splash immediately, then hand off
     # Critical Qt attributes were set above at import-time.
+
+    # ULTIMATE FIX: Clean Qt application startup
     app = QApplication(sys.argv)
+
+    # Set conservative Qt timer policy to prevent exhaustion
+    try:
+        from PyQt6.QtCore import QEventLoop
+        # Use a more conservative timer handling approach
+        app.setAttribute(app.ApplicationAttribute.AA_DontCreateNativeWidgetSiblings, True)
+        app.setAttribute(app.ApplicationAttribute.AA_UseHighDpiPixmaps, False)
+    except:
+        pass
+
     splash = _show_instant_splash(app)
     rc = 0
     try:

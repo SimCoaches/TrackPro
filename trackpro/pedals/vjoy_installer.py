@@ -315,8 +315,18 @@ class VJoyInstaller:
         
         config_tool = info.get("configuration_tool")
         if not config_tool:
-            logger.warning("vJoy configuration tool not found")
-            return False
+            # Try bundled tool in production
+            try:
+                import sys as _sys, os as _os
+                if getattr(_sys, 'frozen', False):
+                    bundled = _os.path.join(_os.path.dirname(_sys.executable), "vJoyConf.exe")
+                    if _os.path.exists(bundled):
+                        config_tool = bundled
+            except Exception:
+                pass
+            if not config_tool:
+                logger.warning("vJoy configuration tool not found")
+                return False
         
         try:
             # Use vJoyConf to configure the device

@@ -1,4 +1,5 @@
 import logging
+import time
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLineEdit, QPushButton, QComboBox, QLabel
 from PyQt6.QtCore import pyqtSignal
 from ...modern.shared.base_page import GlobalManagers
@@ -18,10 +19,22 @@ class CurveManagerWidget(QWidget):
         self.curve_name_input = None
         self.custom_curves_selector = None
         
+        # Debounce cache invalidation to prevent excessive invalidation
+        self._last_inval = {}
+        
         self.init_ui()
         
         # Load existing curve data from hardware
         self.load_existing_curve_data()
+    
+    def _debounced_cache_invalidate(self, pedal_name: str, curve_cache):
+        """Debounce cache invalidation: only once per pedal per second."""
+        now = time.monotonic()
+        last = self._last_inval.get(pedal_name, 0)
+        if now - last > 1.0:
+            curve_cache.invalidate_pedal(pedal_name)
+            self._last_inval[pedal_name] = now
+            logger.info(f"🔄 Invalidated curve cache for {pedal_name}")
     
     def init_ui(self):
         layout = QVBoxLayout()
@@ -238,10 +251,9 @@ class CurveManagerWidget(QWidget):
                     hardware.save_custom_curve(self.pedal_name, curve_name, points, curve_type)
                     logger.info(f"✅ Saved custom curve '{curve_name}' for {self.pedal_name} to hardware")
                     
-                    # Force cache invalidation so new curve shows up immediately
+                    # Debounce cache invalidation: only once per pedal per second
                     if hasattr(hardware, 'curve_cache'):
-                        hardware.curve_cache.invalidate_pedal(self.pedal_name)
-                        logger.info(f"🔄 Invalidated curve cache for {self.pedal_name} to show new curve")
+                        self._debounced_cache_invalidate(self.pedal_name, hardware.curve_cache)
                     
                 except Exception as e:
                     logger.error(f"Failed to save custom curve '{curve_name}' for {self.pedal_name}: {e}")
@@ -270,10 +282,9 @@ class CurveManagerWidget(QWidget):
                     hardware.delete_custom_curve(self.pedal_name, selected_curve)
                     logger.info(f"✅ Deleted custom curve '{selected_curve}' for {self.pedal_name} from hardware")
                     
-                    # Force cache invalidation so deleted curve disappears immediately
+                    # Debounce cache invalidation: only once per pedal per second
                     if hasattr(hardware, 'curve_cache'):
-                        hardware.curve_cache.invalidate_pedal(self.pedal_name)
-                        logger.info(f"🔄 Invalidated curve cache for {self.pedal_name} after deletion")
+                        self._debounced_cache_invalidate(self.pedal_name, hardware.curve_cache)
                     
                     # Also clear any cached calibration data for this pedal
                     if hasattr(hardware, 'calibration') and self.pedal_name in hardware.calibration:
@@ -298,8 +309,7 @@ class CurveManagerWidget(QWidget):
         if self.global_managers and hasattr(self.global_managers, 'hardware'):
             hardware = self.global_managers.hardware
             if hardware and hasattr(hardware, 'curve_cache'):
-                hardware.curve_cache.invalidate_pedal(self.pedal_name)
-                logger.info(f"🔄 Forced cache invalidation for {self.pedal_name} during refresh")
+                self._debounced_cache_invalidate(self.pedal_name, hardware.curve_cache)
         
         # Always include a safe "New..." option first so users don't overwrite by accident
         self.custom_curves_selector.addItem("New...")

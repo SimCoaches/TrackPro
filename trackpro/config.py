@@ -11,33 +11,83 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file with proper path resolution
 def _load_env_file():
-    """Load .env file from the correct location for both dev and built executable."""
+    """Load .env file from robust set of locations for both dev and built executable."""
     import sys
     
-    # Possible locations for .env file
+    # Allow explicit override via environment variable
+    explicit_env_file = os.getenv('TRACKPRO_ENV_FILE') or os.getenv('SUPABASE_ENV_FILE')
+    if explicit_env_file:
+        env_path = Path(explicit_env_file)
+        if env_path.exists():
+            logger.info(f"Loading environment variables from explicit path: {env_path}")
+            load_dotenv(env_path)
+            return True
+        else:
+            logger.warning(f"Explicit env path not found: {env_path}")
+    
+    # Build candidate locations
     possible_env_paths = []
     
-    # For development: relative to this file's parent directory (project root)
-    possible_env_paths.append(Path(__file__).parent.parent / ".env")
+    # Development: project root and parents
+    module_dir = Path(__file__).parent
+    project_root = module_dir.parent
+    possible_env_paths.append(project_root / ".env")
+    possible_env_paths.append(module_dir / ".env")
+    possible_env_paths.append(project_root.parent / ".env")
     
-    # For built executable: relative to executable directory
-    if getattr(sys, 'frozen', False):
-        # Running as built executable
-        exe_dir = Path(sys.executable).parent
+    # Executable contexts
+    exe_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else None
+    if exe_dir:
         possible_env_paths.append(exe_dir / ".env")
         possible_env_paths.append(exe_dir.parent / ".env")
+        possible_env_paths.append((exe_dir / "resources") / ".env")
+        possible_env_paths.append((exe_dir.parent / "resources") / ".env")
+        # Some installers place config beside the launcher shortcut target
+        possible_env_paths.append((exe_dir / "config") / ".env")
+    
+    # Script path
+    try:
+        script_dir = Path(sys.argv[0]).resolve().parent
+        possible_env_paths.append(script_dir / ".env")
+        possible_env_paths.append(script_dir.parent / ".env")
+    except Exception:
+        pass
+    
+    # User config directory
+    try:
+        possible_env_paths.append((Path.home() / ".trackpro") / ".env")
+    except Exception:
+        pass
     
     # Current working directory
     possible_env_paths.append(Path.cwd() / ".env")
     
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_paths = []
+    for p in possible_env_paths:
+        try:
+            rp = p.resolve()
+        except Exception:
+            rp = p
+        if rp not in seen:
+            seen.add(rp)
+            unique_paths.append(p)
+    
     # Try to load .env from each possible location
-    for env_path in possible_env_paths:
+    tried = []
+    for env_path in unique_paths:
+        tried.append(str(env_path))
         if env_path.exists():
             logger.info(f"Loading environment variables from: {env_path}")
             load_dotenv(env_path)
             return True
     
     logger.warning("No .env file found - using system environment variables only")
+    try:
+        logger.info(f".env search paths tried: {tried}")
+    except Exception:
+        pass
     return False
 
 _load_env_file()
@@ -241,6 +291,28 @@ class Config:
         """Get Supabase URL from config or environment."""
         url = os.getenv('SUPABASE_URL') or self.get('supabase.url', '')
         if not url:
+            # Fallback: read from config.ini like Twilio settings
+            try:
+                import configparser
+                import sys
+                possible_paths = []
+                possible_paths.append(Path(__file__).parent.parent / "config.ini")
+                if getattr(sys, 'frozen', False):
+                    exe_dir = Path(sys.executable).parent
+                    possible_paths.append(exe_dir / "config.ini")
+                    possible_paths.append(exe_dir.parent / "config.ini")
+                possible_paths.append(Path.cwd() / "config.ini")
+                for config_ini_path in possible_paths:
+                    if config_ini_path.exists():
+                        config_parser = configparser.ConfigParser()
+                        config_parser.read(config_ini_path)
+                        if 'supabase' in config_parser and 'url' in config_parser['supabase']:
+                            ini_url = config_parser['supabase']['url'].strip()
+                            if ini_url:
+                                logger.info(f"Found Supabase URL in config.ini at: {config_ini_path}")
+                                return ini_url
+            except Exception as e:
+                logger.warning(f"Error reading config.ini for Supabase URL: {e}")
             logger.warning("Supabase URL not found in environment or config")
         else:
             logger.info("Found Supabase URL")
@@ -251,6 +323,28 @@ class Config:
         """Get Supabase key from config or environment."""
         key = os.getenv('SUPABASE_KEY') or self.get('supabase.key', '')
         if not key:
+            # Fallback: read from config.ini like Twilio settings
+            try:
+                import configparser
+                import sys
+                possible_paths = []
+                possible_paths.append(Path(__file__).parent.parent / "config.ini")
+                if getattr(sys, 'frozen', False):
+                    exe_dir = Path(sys.executable).parent
+                    possible_paths.append(exe_dir / "config.ini")
+                    possible_paths.append(exe_dir.parent / "config.ini")
+                possible_paths.append(Path.cwd() / "config.ini")
+                for config_ini_path in possible_paths:
+                    if config_ini_path.exists():
+                        config_parser = configparser.ConfigParser()
+                        config_parser.read(config_ini_path)
+                        if 'supabase' in config_parser and 'key' in config_parser['supabase']:
+                            ini_key = config_parser['supabase']['key'].strip()
+                            if ini_key:
+                                logger.info(f"Found Supabase key in config.ini at: {config_ini_path}")
+                                return ini_key
+            except Exception as e:
+                logger.warning(f"Error reading config.ini for Supabase key: {e}")
             logger.warning("Supabase key not found in environment or config")
         else:
             logger.info("Found Supabase key")

@@ -8,7 +8,8 @@ from collections import deque
 from .telemetry_saver import TelemetrySaver
 # from .integrate_simple_timing import SimpleSectorTimingIntegration  # REMOVED: Use main sector timing instead
 from .sector_timing import SectorTimingCollector
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+import random
 import queue
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,47 @@ class SimpleIRacingAPI(QObject):
         self._start_processing_workers()
         
         logger.info("SimpleIRacingAPI initialized with producer-consumer architecture")
+        # Backoff state for connection retry
+        self._retry_ms = 500
+        self._last_warned_disconnected = False
+
+    def _schedule_connect_retry(self):
+        try:
+            self._retry_ms = min(int(self._retry_ms * 1.6), 10000)
+            jitter = random.randint(0, 300)
+            QTimer.singleShot(self._retry_ms + jitter, self._attempt_basic_connect)
+        except Exception:
+            pass
+
+    def _attempt_basic_connect(self):
+        try:
+            if hasattr(self.ir, 'is_connected') and self.ir.is_connected:
+                self._retry_ms = 500
+                self._last_warned_disconnected = False
+                return
+            ok = False
+            try:
+                ok = bool(self.ir.startup())
+            except Exception:
+                ok = False
+            if ok and getattr(self.ir, 'is_connected', False):
+                self._is_connected = True
+                self.state.ir_connected = True
+                self._retry_ms = 500
+                self._last_warned_disconnected = False
+                # Notify callbacks once on connect
+                for cb in list(self._connection_callbacks):
+                    try:
+                        cb(True, {})
+                    except Exception:
+                        pass
+            else:
+                if not self._last_warned_disconnected:
+                    logger.warning("🔌 [TELEMETRY CONNECTION] Not connected to iRacing - telemetry collection paused")
+                    self._last_warned_disconnected = True
+                self._schedule_connect_retry()
+        except Exception:
+            self._schedule_connect_retry()
     
     def __del__(self):
         """Clean up resources when this object is garbage collected."""

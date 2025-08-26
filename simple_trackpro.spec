@@ -112,6 +112,7 @@ datas_list = [
 
 # Add optional files only if they exist
 optional_files = [
+    ('.env', '.'),
     ('race_coach.db', '.'),
     ('curve_cache.json', '.'),
     ('ai_coach_volume.json', '.'),

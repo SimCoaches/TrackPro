@@ -108,8 +108,10 @@ class SmartDebouncer:
     def trigger(self, name: str, *args, **kwargs):
         """Trigger a debounced action."""
         if name not in self.actions:
-            logger.warning(f"Unknown debounced action: {name}")
-            return
+            # Auto-register unknown actions with default 300ms debounce
+            # Treat unknowns as 300ms debounce by default to prevent blocking
+            logger.info(f"Auto-registering unknown debounced action: {name} (300ms delay)")
+            self.register_action(name, lambda *a, **kw: None, delay=0.3, max_delay=2.0)
             
         self.operation_stats[name]["triggers"] += 1
         self.actions[name].trigger(*args, **kwargs)
@@ -117,7 +119,9 @@ class SmartDebouncer:
     def execute_immediately(self, name: str, *args, **kwargs):
         """Execute an action immediately, bypassing debouncing."""
         if name not in self.actions:
-            logger.warning(f"Unknown debounced action: {name}")
+            # Auto-register unknown actions with default 300ms debounce
+            logger.info(f"Auto-registering unknown debounced action: {name} for immediate execution")
+            self.register_action(name, lambda *a, **kw: None, delay=0.3, max_delay=2.0)
             return
             
         # Cancel pending execution

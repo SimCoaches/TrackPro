@@ -14,13 +14,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush
 
-# Import graph widgets from the widgets directory
-from trackpro.race_coach.widgets.throttle_graph import ThrottleGraphWidget
-from trackpro.race_coach.widgets.brake_graph import BrakeGraphWidget
-from trackpro.race_coach.widgets.steering_graph import SteeringGraphWidget
-from trackpro.race_coach.widgets.speed_graph import SpeedGraphWidget
-from trackpro.race_coach.widgets.gear_graph import GearGraphWidget
-from trackpro.race_coach.widgets.gaze_graph import GazeGraphWidget
+# Import graph widgets from the widgets directory using relative imports
+# Python imports are package-path sensitive and require proper package structure
+# References: Discussions on Python.org, Stack Overflow
+from ..widgets.throttle_graph import ThrottleGraphWidget
+from ..widgets.brake_graph import BrakeGraphWidget
+from ..widgets.steering_graph import SteeringGraphWidget
+from ..widgets.speed_graph import SpeedGraphWidget
+from ..widgets.gear_graph import GearGraphWidget
+from ..widgets.gaze_graph import GazeGraphWidget
 
 logger = logging.getLogger(__name__)
 

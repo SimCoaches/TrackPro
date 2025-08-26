@@ -5,7 +5,7 @@ from PyQt6.QtGui import QIcon, QAction
 from ..discord_navigation import DiscordNavigation
 from ..online_users_sidebar import OnlineUsersSidebar
 from .shared.base_page import GlobalManagers
-from .performance_manager import PerformanceManager, ThreadPriorityManager, CPUCoreManager
+# NO performance manager - pedal thread handles UI directly
 # Import only what we need immediately to avoid circular imports
 from ..pages.home import HomePage
 from ..pages.community import CommunityPage
@@ -36,8 +36,8 @@ class ModernMainWindow(QMainWindow):
         self.global_output = None
         self.global_pedal_data_queue = None
         
-        # UI update timer for pedal data
-        self.ui_update_timer = None
+        # NO UI update timer - pedal thread handles UI directly
+        pass
         
         # Custom title bar variables
         self.custom_title_bar = None
@@ -315,28 +315,12 @@ class ModernMainWindow(QMainWindow):
     
     def init_performance_optimization(self):
         try:
-            if CPUCoreManager:
-                # Opt-in affinity: read from central config
-                try:
-                    from trackpro.config import config as global_config
-                    if getattr(global_config, 'cpu_affinity_enabled', False):
-                        CPUCoreManager.set_process_affinity()
-                except Exception:
-                    pass
-                recommendations = CPUCoreManager.get_performance_recommendations()
-                for rec in recommendations:
-                    logger.info(rec)
+            # NO CPU affinity management - keeping it simple
             
-            if ThreadPriorityManager:
-                ThreadPriorityManager.set_ui_thread_priority()
+            # NO thread priority management - keeping it simple
             
-            if PerformanceManager:
-                self.global_managers.performance = PerformanceManager()
-                self.global_managers.performance.ui_update_ready.connect(self.handle_optimized_ui_update)
-                self.global_managers.performance.performance_warning.connect(self.handle_performance_warning)
-                logger.info("🚀 PERFORMANCE: Modern UI optimized for ultra-smooth operation")
-            else:
-                logger.warning("Performance manager not available - using basic UI updates")
+            # NO performance manager - pedal thread handles UI directly
+            logger.info("🚀 PERFORMANCE: Simple UI - pedal thread handles updates directly")
                 
         except Exception as e:
             logger.error(f"Performance optimization setup failed: {e}")
@@ -381,7 +365,7 @@ class ModernMainWindow(QMainWindow):
             logger.debug(f"Calibration cloud sync skipped: {e}")
 
         # Start UI update timer for real-time pedal visualization
-        self.start_ui_update_timer()
+        # NO UI update timer - pedal thread handles UI directly
         
         # Pass to pages
         for page in self.pages.values():
@@ -406,14 +390,9 @@ class ModernMainWindow(QMainWindow):
                 page.set_global_handbrake_system(handbrake_hardware, handbrake_data_queue)
     
     def start_ui_update_timer(self):
-        """Start the UI update timer for real-time pedal data visualization."""
-        if self.ui_update_timer is None:
-            from PyQt6.QtCore import QTimer
-            self.ui_update_timer = QTimer()
-            self.ui_update_timer.timeout.connect(self.update_pedal_ui)
-            self.ui_update_timer.setInterval(17)  # ~60Hz UI updates for smooth visualization
-            self.ui_update_timer.start()
-            logger.info("🖥️ UI update timer started at 60Hz for smooth pedal visualization")
+        """DISABLED: UI update timer causing pedal lag - pedal thread handles UI updates directly now."""
+        logger.info("🖥️ UI update timer DISABLED - pedal thread handles updates directly to prevent lag")
+        # Timer disabled to prevent interference with 250Hz pedal processing
     
     def update_pedal_ui(self):
         """Update the UI with the latest pedal data from the global queue."""
@@ -421,30 +400,59 @@ class ModernMainWindow(QMainWindow):
             return
             
         try:
+            import time
             from queue import Empty
-            # Get the latest data from the queue, non-blocking
-            raw_values = self.global_pedal_data_queue.get_nowait()
+            # Drop old frames to prevent UI lag - only process the latest
+            latest_data = None
+            frames_dropped = 0
+            
+            while True:
+                try:
+                    latest_data = self.global_pedal_data_queue.get_nowait()
+                    frames_dropped += 1
+                except Empty:
+                    break
+            
+            if latest_data is None:
+                return  # No new data
+            
+            if frames_dropped > 1:
+                # Log frame drops occasionally for performance monitoring
+                if not hasattr(self, '_frame_drop_count'):
+                    self._frame_drop_count = 0
+                    self._last_drop_log = time.time()
+                
+                self._frame_drop_count += frames_dropped - 1
+                current_time = time.time()
+                if current_time - self._last_drop_log >= 5.0:
+                    logger.debug(f"UI dropped {self._frame_drop_count} frames in last 5s (normal for performance)")
+                    self._frame_drop_count = 0
+                    self._last_drop_log = current_time
             
             # Update current page if it has pedal update methods
             current_widget = self.content_stack.currentWidget()
             if current_widget and hasattr(current_widget, 'update_pedal_values'):
-                current_widget.update_pedal_values(raw_values)
+                current_widget.update_pedal_values(latest_data)
                 
-        except Empty:
-            # This is normal, means no new data from the pedal thread
-            pass
+            # Throttle sidebar refresh when on pedals page for better performance
+            if hasattr(self, 'online_users_sidebar') and current_widget:
+                page_name = getattr(current_widget, 'page_name', '')
+                if page_name == 'pedals':
+                    # Pause sidebar refresh during pedals page for better performance
+                    if hasattr(self.online_users_sidebar, 'pause_refresh'):
+                        self.online_users_sidebar.pause_refresh(True)
+                else:
+                    # Resume sidebar refresh on other pages
+                    if hasattr(self.online_users_sidebar, 'pause_refresh'):
+                        self.online_users_sidebar.pause_refresh(False)
+                
         except Exception as e:
             logger.error(f"❌ Error updating pedal UI: {e}")
     
     def start_handbrake_ui_update_timer(self):
-        """Start the UI update timer for real-time handbrake data visualization."""
-        if not hasattr(self, 'handbrake_ui_update_timer') or self.handbrake_ui_update_timer is None:
-            from PyQt6.QtCore import QTimer
-            self.handbrake_ui_update_timer = QTimer()
-            self.handbrake_ui_update_timer.timeout.connect(self.update_handbrake_ui)
-            self.handbrake_ui_update_timer.setInterval(50)  # ~20Hz UI updates for handbrake
-            self.handbrake_ui_update_timer.start()
-            logger.info("🤚 Handbrake UI update timer started at 20Hz")
+        """DISABLED: Handbrake UI update timer causing pedal lag."""
+        logger.info("🤚 Handbrake UI update timer DISABLED - preventing interference with pedal processing")
+        # Timer disabled to prevent interference with 250Hz pedal processing
     
     def update_handbrake_ui(self):
         """Update the UI with the latest handbrake data from the global queue."""
@@ -557,7 +565,8 @@ class ModernMainWindow(QMainWindow):
         main_container_layout.addWidget(content_widget)
         
         self.navigation = self.create_navigation()
-        self.content_stack = QStackedWidget()
+        if not hasattr(self, 'content_stack') or self.content_stack is None:
+            self.content_stack = QStackedWidget()
         
         main_layout.addWidget(self.navigation, 0)
         main_layout.addWidget(self.content_stack, 1)
@@ -568,6 +577,13 @@ class ModernMainWindow(QMainWindow):
         
         self.create_pages()
         self.switch_to_page("home")
+
+        # Wire navigation page signals without altering styles/behavior
+        try:
+            if hasattr(self.navigation, 'page_requested'):
+                self.navigation.page_requested.connect(self.switch_to_page)
+        except Exception:
+            pass
         
         # Force an immediate auth refresh so nav/avatar renders the real icon ASAP
         try:
@@ -576,7 +592,7 @@ class ModernMainWindow(QMainWindow):
             pass
         # Follow up with a short delayed refresh to catch late session restoration
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(300, self.refresh_auth_state)
+        # QTimer.singleShot  # DISABLED - timer exhaustion(300, self.refresh_auth_state)
         
         # Set up keyboard shortcuts
         self.setup_keyboard_shortcuts()
@@ -657,30 +673,43 @@ class ModernMainWindow(QMainWindow):
         except Exception:
             pass
     
-    def create_placeholder_page(self, page_name: str):
-        from PyQt6.QtWidgets import QLabel
+    def create_placeholder_page(self, page_name: str, error: str = ""):
+        from PyQt6.QtWidgets import QLabel, QPushButton
         from PyQt6.QtCore import Qt
         
-        # Special handling for account page - create actual account page
-        if page_name == "account":
-            return self.create_account_page()
-        
         placeholder = QWidget()
+        placeholder.setObjectName(f"{page_name}Placeholder")
         layout = QVBoxLayout(placeholder)
         
         label = QLabel(f"{page_name.title().replace('_', ' ')} Page")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setStyleSheet("font-size: 24px; color: #fefefe;")
         
-        sublabel = QLabel("Coming Soon...")
+        sublabel = QLabel("Coming Soon..." if not error else f"{error}")
         sublabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sublabel.setStyleSheet("font-size: 16px; color: #c0c0c0;")
-        
+        sublabel.setWordWrap(True)
+
         layout.addStretch()
         layout.addWidget(label)
         layout.addWidget(sublabel)
+
+        # Optional retry clears failure flag; actual load happens on next navigation
+        try:
+            retry_btn = QPushButton("Retry load")
+            def _retry():
+                try:
+                    if hasattr(self, "_lazy_failures") and page_name in self._lazy_failures:
+                        self._lazy_failures.remove(page_name)
+                        logger.info("Cleared lazy-load failure flag; navigate again to retry.")
+                except Exception:
+                    pass
+            retry_btn.clicked.connect(_retry)
+            layout.addWidget(retry_btn)
+        except Exception:
+            pass
+
         layout.addStretch()
-        
         return placeholder
     
     def switch_to_page(self, page_name: str):
@@ -688,6 +717,10 @@ class ModernMainWindow(QMainWindow):
         if getattr(self, '_is_shutting_down', False):
             return
         
+        # Route alias: settings -> account
+        if page_name == "settings":
+            page_name = "account"
+
         # LAZY LOADING: Create page if it doesn't exist yet
         if page_name not in self.pages:
             self._create_lazy_page(page_name)
@@ -759,10 +792,27 @@ class ModernMainWindow(QMainWindow):
                 self.navigation.set_active_page(page_name)
             
             self.current_page = page_name
-            logger.info(f"📄 Switched to page: {page_name}")
+            try:
+                obj_name = getattr(page_widget, 'objectName', lambda: '')() or ''
+            except Exception:
+                obj_name = ''
+            logger.info(f"📄 Switched to page: {page_name} ({obj_name})")
+            if page_name == "account":
+                try:
+                    logger.info(f"🔎 Account widget class: {type(page_widget).__name__}")
+                    assert type(page_widget).__name__ == "AccountPage", "Not using real AccountPage!"
+                except AssertionError as _ae:
+                    logger.warning(str(_ae))
     
     def _create_lazy_page(self, page_name: str):
         """Create a page on-demand for lazy loading."""
+        # Guard set to avoid repeated crashing attempts
+        self._lazy_failures = getattr(self, "_lazy_failures", set())
+        if page_name in self._lazy_failures:
+            logger.warning(f"⚠️ Skipping lazy load for {page_name} due to previous failure")
+            placeholder = self.create_placeholder_page(page_name)
+            return
+
         if not hasattr(self, '_lazy_pages') or page_name not in self._lazy_pages:
             logger.warning(f"⚠️ Unknown page requested: {page_name}")
             return
@@ -785,7 +835,7 @@ class ModernMainWindow(QMainWindow):
                 from ..pages.community import CommunityPage
                 page_widget = CommunityPage(self.global_managers)
             elif page_name == "pedals":
-                from ..pages.pedals import PedalsPage
+                from ..pages.pedals.pedals_page import PedalsPage
                 page_widget = PedalsPage(self.global_managers)
             elif page_name == "race_coach":
                 from ..pages.race_coach.telemetry_page import TelemetryPage
@@ -813,7 +863,17 @@ class ModernMainWindow(QMainWindow):
                 except Exception:
                     pass
             elif page_name == "account":
-                page_widget = self.create_account_page()
+                try:
+                    page_widget = self.create_account_page()
+                except Exception as e:
+                    logger.error(f"❌ LAZY LOADING: Failed to create {page_name} page: {e}", exc_info=True)
+                    # Mark failure and install a placeholder to avoid loops
+                    self._lazy_failures.add(page_name)
+                    placeholder = self.create_placeholder_page(page_name)
+                    self.content_stack.addWidget(placeholder)
+                    self.pages[page_name] = placeholder
+                    page_config["created"] = True
+                    return
                 
                 # Connect avatar upload signal to sidebar refresh
                 if hasattr(self, 'online_users_sidebar') and hasattr(page_widget, 'avatar_uploaded'):
@@ -824,10 +884,10 @@ class ModernMainWindow(QMainWindow):
                     page_widget.avatar_uploaded.connect(self.navigation.on_avatar_updated)
                 
                 # Connect avatar upload signal to home page refresh
-                if hasattr(self, 'pages') and 'home' in self.pages:
+                if hasattr(self, 'pages') and 'home' in self.pages and hasattr(page_widget, 'avatar_uploaded'):
                     page_widget.avatar_uploaded.connect(lambda: self.pages['home'].on_auth_state_changed())
                 # Connect avatar upload signal to community page refresh if available
-                if hasattr(self, 'pages') and 'community' in self.pages and hasattr(self.pages['community'], 'on_avatar_updated'):
+                if hasattr(self, 'pages') and 'community' in self.pages and hasattr(self.pages['community'], 'on_avatar_updated') and hasattr(page_widget, 'avatar_uploaded'):
                     page_widget.avatar_uploaded.connect(self.pages['community'].on_avatar_updated)
             elif page_config["class"]:
                 # Standard page creation
@@ -839,6 +899,13 @@ class ModernMainWindow(QMainWindow):
             # Add to content stack and store reference
             self.content_stack.addWidget(page_widget)
             self.pages[page_name] = page_widget
+            if page_name == "account":
+                try:
+                    from ..pages.account.account_page import AccountPage as _AP
+                    if isinstance(page_widget, _AP):
+                        logger.info("✅ Real AccountPage added to stack and routed")
+                except Exception:
+                    pass
             
             # Special signal connections
             if page_name == "pedals" and hasattr(page_widget, 'pedal_calibrated'):
@@ -852,6 +919,10 @@ class ModernMainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"❌ LAZY LOADING: Failed to create {page_name} page: {e}")
             # Create a placeholder as fallback
+            try:
+                self._lazy_failures.add(page_name)
+            except Exception:
+                pass
             placeholder = self.create_placeholder_page(page_name)
             self.content_stack.addWidget(placeholder)
             self.pages[page_name] = placeholder
@@ -887,35 +958,36 @@ class ModernMainWindow(QMainWindow):
         return self.content_stack
     
     def create_account_page(self):
-        """Create the modern account page with sidebar navigation."""
-        from ..pages.account.account_page import AccountPage
-        
-        # Create the account page with global managers
-        account_page = AccountPage(self.global_managers)
-        
-        # Store reference for authentication updates
-        account_page.update_auth_status = lambda authenticated: self.update_account_page_auth_status(authenticated)
-        
-        # Connect avatar upload signal to refresh navigation
-        account_page.avatar_uploaded.connect(self.on_avatar_uploaded)
-        
-        # Connect avatar upload signal to sidebar refresh
-        if hasattr(self, 'online_users_sidebar'):
-            account_page.avatar_uploaded.connect(self.online_users_sidebar.on_avatar_updated)
-        
-        # Connect avatar upload signal to navigation refresh
-        if hasattr(self, 'navigation'):
-            account_page.avatar_uploaded.connect(self.navigation.on_avatar_updated)
-        
-        # Connect avatar upload signal to home page refresh
-        if hasattr(self, 'pages') and 'home' in self.pages:
-            account_page.avatar_uploaded.connect(lambda: self.pages['home'].on_auth_state_changed())
-        # Connect avatar upload signal to community page refresh if available
-        if hasattr(self, 'pages') and 'community' in self.pages and hasattr(self.pages['community'], 'on_avatar_updated'):
-            account_page.avatar_uploaded.connect(self.pages['community'].on_avatar_updated)
-        
-        logger.info("✅ Modern Account page created with sidebar navigation")
-        return account_page
+        from importlib import import_module
+
+        try:
+            # One-time auto-fix (restore neutralized except/finally and fill empty suites) before import
+            try:
+                from pathlib import Path
+                from trackpro.utils.py_sanitizer import sanitize_python_file as _sanitize
+                _ap_path = Path(__file__).resolve().parent.parent / "pages" / "account" / "account_page.py"
+                if _sanitize(str(_ap_path)):
+                    logger.info("🛠️ Sanitized account_page.py before import")
+                else:
+                    logger.warning("⚠️ Sanitizer reported no changes or failed validation; importing anyway")
+            except Exception as _fxe:
+                logger.warning(f"⚠️ Skipping account_page sanitizer: {_fxe}")
+
+            # Try importing the real AccountPage
+            mod = import_module("trackpro.ui.pages.account.account_page")
+            AccountPage = getattr(mod, "AccountPage")
+            page = AccountPage(self)
+            logger.info("✅ Loaded real AccountPage")
+            return page
+        except Exception as e:
+            # Log full error but do not crash; show a small notice
+            logger.exception("❌ Failed to load AccountPage; falling back to placeholder: %s", e)
+            from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+            w = QWidget(self)
+            lay = QVBoxLayout(w)
+            msg = QLabel("Account page failed to load. Check logs for details.", w)
+            lay.addWidget(msg)
+            return w
     
     def create_user_profile_form(self):
         """Create a user profile form for entering personal information."""
@@ -1468,10 +1540,10 @@ class ModernMainWindow(QMainWindow):
                     logger.debug("🔄 Skipping duplicate auth state update during startup")
                     return
             
-            # Skip if called too frequently (within 100ms)
+            # CRITICAL: Skip if called too frequently (within 2 seconds) to prevent timer exhaustion
             if hasattr(self, '_last_auth_update_time'):
-                if current_time - self._last_auth_update_time < 0.1:
-                    logger.debug("🔄 Skipping auth state update - called too frequently")
+                if current_time - self._last_auth_update_time < 2.0:
+                    logger.debug("🔄 Skipping auth state update - called too frequently (timer exhaustion prevention)")
                     return
             
             # Skip if auth refresh is in progress
@@ -1546,9 +1618,14 @@ class ModernMainWindow(QMainWindow):
         
         # Emit signal for other components (ISOLATED)
         try:
-            logger.info("🔄 Emitting auth state changed signal...")
-            self.auth_state_changed.emit(authenticated)
-            logger.info("✅ Auth state changed signal emitted")
+            # CRITICAL: Only emit auth state changed if it's been more than 2 seconds since last emission
+            if not hasattr(self, '_last_auth_signal_time') or current_time - self._last_auth_signal_time > 2.0:
+                logger.info("🔄 Emitting auth state changed signal...")
+                self.auth_state_changed.emit(authenticated)
+                self._last_auth_signal_time = current_time
+                logger.info("✅ Auth state changed signal emitted")
+            else:
+                logger.debug("🔄 Skipping auth state signal emission - too frequent (timer exhaustion prevention)")
         except Exception as signal_error:
             logger.error(f"❌ Error emitting auth state signal: {signal_error}")
             import traceback
@@ -1580,7 +1657,7 @@ class ModernMainWindow(QMainWindow):
             logger.info("🔄 Scheduling deferred page updates...")
             from PyQt6.QtCore import QTimer
             # Defer page updates to reduce immediate crash risk
-            QTimer.singleShot(500, lambda: self._update_pages_auth_state())
+            # QTimer.singleShot  # DISABLED - timer exhaustion(500, lambda: self._update_pages_auth_state())
             logger.info("✅ Page updates scheduled")
         except Exception as page_schedule_error:
             logger.error(f"❌ Error scheduling page updates: {page_schedule_error}")
@@ -1588,7 +1665,7 @@ class ModernMainWindow(QMainWindow):
         # Schedule sidebar refresh (deferred)
         try:
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(1000, lambda: self._deferred_sidebar_refresh())
+            # QTimer.singleShot  # DISABLED - timer exhaustion(1000, lambda: self._deferred_sidebar_refresh())
         except Exception as sidebar_schedule_error:
             logger.error(f"❌ Error with sidebar refresh scheduling: {sidebar_schedule_error}")
         
@@ -1707,7 +1784,7 @@ class ModernMainWindow(QMainWindow):
                 try:
                     user_id_for_refresh = current_user.id
                     from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(0, lambda: self._auto_refresh_iracing_snapshot(user_id_for_refresh))
+                    # QTimer.singleShot  # DISABLED - timer exhaustion(0, lambda: self._auto_refresh_iracing_snapshot(user_id_for_refresh))
                 except Exception as _:
                     pass
                 
@@ -1775,7 +1852,7 @@ class ModernMainWindow(QMainWindow):
                         try:
                             user_id_for_refresh = authenticated_user.id
                             from PyQt6.QtCore import QTimer
-                            QTimer.singleShot(0, lambda: self._auto_refresh_iracing_snapshot(user_id_for_refresh))
+                            # QTimer.singleShot  # DISABLED - timer exhaustion(0, lambda: self._auto_refresh_iracing_snapshot(user_id_for_refresh))
                         except Exception as _:
                             pass
                         
@@ -1811,7 +1888,7 @@ class ModernMainWindow(QMainWindow):
 
     def _auto_refresh_iracing_snapshot(self, user_id: str) -> None:
         """Best-effort: if the user has linked iRacing (cookies saved), refresh their stats and upsert to DB.
-        Runs non-blocking via QTimer.singleShot from the caller. Silent on failures.
+        Runs non-blocking via # QTimer.singleShot  # DISABLED - timer exhaustion from the caller. Silent on failures.
         """
         try:
             if not user_id:

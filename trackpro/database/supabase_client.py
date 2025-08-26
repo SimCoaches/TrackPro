@@ -79,6 +79,16 @@ def get_supabase_client():
                     _initialization_complete = True
                     return None
             
+            # If we are offline but credentials are now present, attempt initialization
+            try:
+                if (_supabase_manager 
+                    and getattr(_supabase_manager, '_offline_mode', True)
+                    and config.supabase_enabled and config.supabase_url and config.supabase_key):
+                    logger.info("🔌 Credentials detected while offline – attempting to bring Supabase online")
+                    _supabase_manager.initialize()
+            except Exception as bringup_err:
+                logger.warning(f"Failed to bring Supabase online with new credentials: {bringup_err}")
+            
             # Return the client (this will trigger initialization if needed)
             client = _supabase_manager.client if _supabase_manager else None
             if client is None and _supabase_manager:
@@ -823,13 +833,27 @@ class SupabaseManager:
         try:
             logger.info("Initializing Supabase client...")
             
+            # Read latest credentials dynamically from config
+            url = config.supabase_url
+            key = config.supabase_key
+            if not url or not key:
+                logger.error("Supabase credentials not configured (url/key missing). Staying offline.")
+                self._offline_mode = True
+                self._client = None
+                return
+
             # Create the client
-            self._client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            self._client = create_client(url, key)
             
             # If client creation was successful, disable offline mode
             if self._client:
                 self._offline_mode = False
                 logger.info("✅ Supabase client created successfully, disabled offline mode")
+                try:
+                    # Cache hostname for connection checks
+                    self._hostname = urlparse(url).netloc
+                except Exception:
+                    self._hostname = None
 
                 # Detect realtime channel support for Discord-like messaging
                 try:
@@ -1707,13 +1731,22 @@ class SupabaseManager:
                     base_url = self._client.rest_url
                     # Include API key headers to avoid 401s on some PostgREST configs
                     headers = {
-                        "apikey": SUPABASE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "apikey": config.supabase_key,
+                        "Authorization": f"Bearer {config.supabase_key}",
                     }
                     response = session.get(f"{base_url}/health", timeout=3, headers=headers)
                     if response.status_code == 200:
                         logger.info("Verified Supabase connection via health check")
                         return True
+                    elif response.status_code == 404:
+                        logger.info("Supabase /health returned 404; attempting lightweight DB query as fallback")
+                        try:
+                            resp = self._client.from_("public_user_profiles").select("user_id").limit(1).execute()
+                            if resp is not None:
+                                logger.info("✅ Verified Supabase connectivity via fallback query")
+                                return True
+                        except Exception:
+                            pass
                     else:
                         logger.warning(f"Supabase health check returned status {response.status_code}")
                 except Exception as e:
@@ -1740,6 +1773,15 @@ class SupabaseManager:
                     return False
                     
                 logger.info(f"Successfully resolved {self._hostname} to {ips[0]}")
+                # Attempt a tiny DB query in case /health is disabled
+                try:
+                    client = self.client
+                    if client:
+                        resp = client.from_("public_user_profiles").select("user_id").limit(1).execute()
+                        if resp is not None:
+                            return True
+                except Exception:
+                    pass
                 return True
             else:
                 # Extract hostname from URL if not already done
@@ -1753,6 +1795,14 @@ class SupabaseManager:
                     return False
                     
                 logger.info(f"Successfully resolved {self._hostname} to {ips[0]}")
+                try:
+                    client = self.client
+                    if client:
+                        resp = client.from_("public_user_profiles").select("user_id").limit(1).execute()
+                        if resp is not None:
+                            return True
+                except Exception:
+                    pass
                 return True
                 
         except Exception as e:

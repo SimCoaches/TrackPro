@@ -14,9 +14,15 @@ import win32api
 import win32security
 import time
 import subprocess
+from configparser import ConfigParser
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Load config for performance settings
+_cfg = ConfigParser()
+_cfg.read("config.ini")
+_MUTE = _cfg.getboolean("Performance", "mute_hidhide_cli_errors", fallback=True)
 
 # Only add handlers if none exist to prevent duplicate logging
 if not logger.handlers and not logging.getLogger().handlers:
@@ -126,6 +132,26 @@ def safe_device_io_control(handle, ioctl_code, input_buffer=None, output_buffer_
         logger.warning(f"DeviceIoControl failed for IOCTL {hex(ioctl_code)}: {e}")
         return False, None
 
+def should_hide_device(dev):
+    """Determine if a device should be hidden by HidHide.
+    
+    Policy: Never hide vJoy devices. Only hide physical Sim Coaches hardware.
+    Filter by name/VID/PID; skip anything whose friendly name contains "vJoy" (case-insensitive).
+    """
+    name = (getattr(dev, 'friendly_name', '') or "").lower()
+    hardware_id = (getattr(dev, 'hardware_id', '') or "").lower()
+    
+    # Never hide vJoy - this is critical for game compatibility
+    # Check for vJoy by name (case-insensitive) and known VID/PID
+    if "vjoy" in name or "vid_1234&pid_bead" in hardware_id:
+        logger.info(f"Refusing to hide vJoy device: {name}")
+        return False
+    
+    # Only hide our physical pedals/handbrake
+    return any(tag in name for tag in [
+        "sim coaches", "p1 pro", "handbrake"
+    ])
+
 class HidHideClient:
     """Interface to HidHide using the CLI tool."""
     
@@ -142,6 +168,13 @@ class HidHideClient:
         self.fail_silently = fail_silently
         self.config_file = Path.home() / "AppData" / "Local" / "TrackPro" / "hidhide_config.json"
         self.config = None
+        
+        # Check admin privileges early - required for HidHide operations
+        # If elevation is missing, do nothing silently; do not try to register anything
+        if not is_admin():
+            logger.info("HidHide not elevated; skipping device registration (safe default).")
+            self.functioning = False
+            return
         
         try:
             # Check if HidHide is installed
@@ -333,6 +366,46 @@ class HidHideClient:
         logger.error("Could not find HidHideCLI.exe")
         return None
     
+    def _run_cli_once(self, args, check_output=False) -> bool:
+        """Run HidHideCLI once without retries."""
+        try:
+            cmd = [self.cli_path] + args
+            logger.debug(f"Running command: {cmd}")
+            
+            # Set up subprocess run parameters
+            run_kwargs = {
+                'capture_output': True,
+                'text': True,
+                'timeout': 5
+            }
+            
+            # Hide console window on Windows
+            if sys.platform == "win32":
+                CREATE_NO_WINDOW = 0x08000000
+                run_kwargs['creationflags'] = CREATE_NO_WINDOW
+            
+            result = subprocess.run(cmd, **run_kwargs)
+            
+            if result.returncode != 0:
+                if not _MUTE:
+                    logger.error(f"CLI command failed with code {result.returncode}")
+                return False
+            
+            if check_output:
+                return result.stdout
+            return True
+            
+        except PermissionError:
+            if _MUTE:
+                # do not retry; log once and continue so we don't starve vJoy/UI
+                logger.warning("HidHide CLI access denied; continuing without automation.")
+                return False
+            raise
+        except Exception as e:
+            if not _MUTE:
+                logger.error(f"CLI command error: {e}")
+            return False
+
     def _run_cli(self, args, check_output=False, retry_count=2, ignore_errors=False):
         """Run HidHideCLI with given arguments.
         
@@ -345,6 +418,11 @@ class HidHideClient:
         if not self.functioning or not self.cli_path:
             logger.warning(f"HidHide not functioning, skipping CLI command: {args}")
             return None if check_output else False
+        
+        # Use single attempt when muted to prevent stalling
+        if _MUTE:
+            result = self._run_cli_once(args, check_output)
+            return result if result else (None if check_output else False)
             
         original_retry = retry_count
         while retry_count >= 0:
@@ -409,6 +487,11 @@ class HidHideClient:
         """Register application with HidHide using CLI method only."""
         if not self.functioning:
             logger.warning("HidHide not functioning, skipping application registration")
+            return False
+        
+        # Check admin privileges
+        if not is_admin():
+            logger.warning("HidHide requires elevation to register applications; skipping.")
             return False
             
         logger.info(f"Registering application: {app_path}")
@@ -536,8 +619,23 @@ class HidHideClient:
         """Hide a device by its instance path."""
         logger.info(f"Hiding device: {instance_path}")
         
+        # Check admin privileges
+        if not is_admin():
+            logger.warning("HidHide requires elevation to hide devices; skipping.")
+            return False
+        
         # Normalize the path to ensure proper format
         instance_path = instance_path.replace('"', '')
+        
+        # Safety check: Never hide vJoy devices (case-insensitive)
+        if "vjoy" in instance_path.lower():
+            logger.warning(f"Refusing to hide vJoy device: {instance_path}")
+            return False
+        
+        # Additional VID/PID safety check for vJoy
+        if "vid_1234&pid_bead" in instance_path.lower():
+            logger.warning(f"Refusing to hide vJoy device by VID/PID: {instance_path}")
+            return False
         
         # First check if already hidden
         hidden_devices = self._run_cli(["--dev-list"], check_output=True)

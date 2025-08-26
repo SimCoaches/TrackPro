@@ -1,7 +1,10 @@
 import logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton, QProgressBar, QComboBox
-from PyQt6.QtCore import pyqtSignal, Qt, QEvent, QPointF
+from PyQt6.QtCore import pyqtSignal, Qt, QEvent, QPointF, QRect
+from PyQt6.QtGui import QPainter, QPen, QBrush
 from ...modern.shared.base_page import GlobalManagers
+from ....pedals.mapping import map_raw, eval_curve
+from ....pedals.input_processing import apply_deadzones_norm
 
 logger = logging.getLogger(__name__)
 
@@ -60,18 +63,49 @@ class DraggablePlotWidget:
             self.curve_x[-1] = self.last_x_anchor
             self.curve_y[-1] = max(0, min(100, self.curve_y[-1]))
         
-        # Clear existing items
-        self.plot_widget.clear()
-        
-        # Plot the line
-        self.curve_line = self.plot_widget.plot(self.curve_x, self.curve_y, 
-                                               pen=self.pg.mkPen('#fba43b', width=2))
-        
-        # Create scatter points
-        self.scatter = self.pg.ScatterPlotItem(x=self.curve_x, y=self.curve_y,
-                                          symbol='o', symbolBrush='#00ff00', symbolSize=12,
-                                          pen=self.pg.mkPen('#00ff00', width=2))
-        self.plot_widget.addItem(self.scatter)
+        # Update or create line and scatter without clearing the plot (preserves response dot and overlays)
+        if self.curve_line is None:
+            self.curve_line = self.plot_widget.plot(self.curve_x, self.curve_y,
+                                                    pen=self.pg.mkPen('#fba43b', width=2))
+            try:
+                self.curve_line.setDownsampling(mode='peak')
+                self.curve_line.setClipToView(True)
+            except Exception:
+                pass
+        else:
+            try:
+                self.curve_line.setData(self.curve_x, self.curve_y)
+            except Exception:
+                # Fallback: re-create if setData fails
+                try:
+                    self.plot_widget.removeItem(self.curve_line)
+                except Exception:
+                    pass
+                self.curve_line = self.plot_widget.plot(self.curve_x, self.curve_y,
+                                                        pen=self.pg.mkPen('#fba43b', width=2))
+                try:
+                    self.curve_line.setDownsampling(mode='peak')
+                    self.curve_line.setClipToView(True)
+                except Exception:
+                    pass
+
+        if self.scatter is None:
+            self.scatter = self.pg.ScatterPlotItem(x=self.curve_x, y=self.curve_y,
+                                                   symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                                                   pen=self.pg.mkPen('#00ff00', width=2))
+            self.plot_widget.addItem(self.scatter)
+        else:
+            try:
+                self.scatter.setData(self.curve_x, self.curve_y)
+            except Exception:
+                try:
+                    self.plot_widget.removeItem(self.scatter)
+                except Exception:
+                    pass
+                self.scatter = self.pg.ScatterPlotItem(x=self.curve_x, y=self.curve_y,
+                                                       symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                                                       pen=self.pg.mkPen('#00ff00', width=2))
+                self.plot_widget.addItem(self.scatter)
 
     def set_endpoints(self, first_x: float, last_x: float):
         """Anchor the first and last control points to the given x positions."""
@@ -425,6 +459,13 @@ class PedalCalibrationWidget(QWidget):
                 
         except Exception as e:
             logger.debug(f"Failed to load existing calibration data for {self.pedal_name}: {e}")
+        
+        # Ensure the response dot is present and positioned after loading
+        try:
+            self._ensure_response_dot()
+            self.update_input_value(self.current_input)
+        except Exception:
+            pass
     
 
     
@@ -557,9 +598,12 @@ class PedalCalibrationWidget(QWidget):
             self.calibration_chart.setXRange(0, 100)
             self.calibration_chart.setYRange(0, 100)
             self.calibration_chart.setLimits(xMin=0, xMax=100, yMin=0, yMax=100)
-            # Enable high-performance, immediate mode updates for smooth dot motion
+            
+            # Apply pyqtgraph performance optimizations
             try:
-                self.calibration_chart.setClipToView(True)  # reduce overdraw
+                plot_item = self.calibration_chart.getPlotItem()
+                plot_item.setClipToView(True)          # draw only visible region
+                plot_item.setDownsampling(mode='peak') # keep detail without overdraw
             except Exception:
                 pass
             try:
@@ -593,14 +637,15 @@ class PedalCalibrationWidget(QWidget):
             
             chart_layout.addWidget(self.calibration_chart)
             
-            # Add live response dot
+            # Add live response dot with persistent PlotDataItem for smooth updates
+            # pyqtgraph recommends updating existing items rather than re-adding new ones
             try:
-                # Use a single-symbol, low-overhead marker for faster updates
-                self.response_dot = self.draggable_plot.pg.ScatterPlotItem(
-                    x=[0], y=[0], symbol='o', size=10,
-                    brush=self.draggable_plot.pg.mkBrush('#ffffff'),
-                    pen=self.draggable_plot.pg.mkPen('#000000', width=1)
-                )
+                import pyqtgraph as pg
+                self.response_dot = pg.PlotDataItem([], [], symbol='o', pen=None)  # pen=None = just the symbol
+                self.response_dot.setSymbolSize(10)
+                self.response_dot.setSymbolBrush('#ffffff')
+                self.response_dot.setSymbolPen('#000000', width=1)
+                self.response_dot.setZValue(1000)  # draw on top
                 self.calibration_chart.addItem(self.response_dot)
             except Exception:
                 self.response_dot = None
@@ -683,18 +728,51 @@ class PedalCalibrationWidget(QWidget):
                 self.draggable_plot.curve_x = self.curve_x.copy()
                 self.draggable_plot.curve_y = self.curve_y.copy()
                 
-                # Clear and redraw
-                self.draggable_plot.plot_widget.clear()
-                self.draggable_plot.curve_line = self.draggable_plot.plot_widget.plot(
-                    self.curve_x, self.curve_y, 
-                    pen=self.draggable_plot.pg.mkPen('#fba43b', width=2)
-                )
-                self.draggable_plot.scatter = self.draggable_plot.pg.ScatterPlotItem(
-                    x=self.curve_x, y=self.curve_y,
-                    symbol='o', symbolBrush='#00ff00', symbolSize=12,
-                    pen=self.draggable_plot.pg.mkPen('#00ff00', width=2)
-                )
-                self.draggable_plot.plot_widget.addItem(self.draggable_plot.scatter)
+                # Update existing items without clearing (preserves overlays/response dot)
+                if getattr(self.draggable_plot, 'curve_line', None) is None:
+                    self.draggable_plot.curve_line = self.draggable_plot.plot_widget.plot(
+                        self.curve_x, self.curve_y,
+                        pen=self.draggable_plot.pg.mkPen('#fba43b', width=2)
+                    )
+                    try:
+                        self.draggable_plot.curve_line.setDownsampling(mode='peak')
+                        self.draggable_plot.curve_line.setClipToView(True)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.draggable_plot.curve_line.setData(self.curve_x, self.curve_y)
+                    except Exception:
+                        try:
+                            self.draggable_plot.plot_widget.removeItem(self.draggable_plot.curve_line)
+                        except Exception:
+                            pass
+                        self.draggable_plot.curve_line = self.draggable_plot.plot_widget.plot(
+                            self.curve_x, self.curve_y,
+                            pen=self.draggable_plot.pg.mkPen('#fba43b', width=2)
+                        )
+
+                if getattr(self.draggable_plot, 'scatter', None) is None:
+                    self.draggable_plot.scatter = self.draggable_plot.pg.ScatterPlotItem(
+                        x=self.curve_x, y=self.curve_y,
+                        symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                        pen=self.draggable_plot.pg.mkPen('#00ff00', width=2)
+                    )
+                    self.draggable_plot.plot_widget.addItem(self.draggable_plot.scatter)
+                else:
+                    try:
+                        self.draggable_plot.scatter.setData(self.curve_x, self.curve_y)
+                    except Exception:
+                        try:
+                            self.draggable_plot.plot_widget.removeItem(self.draggable_plot.scatter)
+                        except Exception:
+                            pass
+                        self.draggable_plot.scatter = self.draggable_plot.pg.ScatterPlotItem(
+                            x=self.curve_x, y=self.curve_y,
+                            symbol='o', symbolBrush='#00ff00', symbolSize=12,
+                            pen=self.draggable_plot.pg.mkPen('#00ff00', width=2)
+                        )
+                        self.draggable_plot.plot_widget.addItem(self.draggable_plot.scatter)
                 
                 # Restore the callback
                 self.draggable_plot.on_point_moved = original_callback
@@ -758,23 +836,25 @@ class PedalCalibrationWidget(QWidget):
                 except Exception as e:
                     logger.debug(f"Error getting deadzone values: {e}")
 
-            # Draw min deadzone rectangle
+            # Draw min deadzone rectangle - red barrier always visible when deadzone > 0
             if min_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
                 self.min_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
                     values=[0, float(min_deadzone)],
                     orientation='vertical',
-                    brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
-                    pen=self.draggable_plot.pg.mkPen(200, 50, 50)
+                    brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 120),  # More opaque red
+                    pen=self.draggable_plot.pg.mkPen(200, 50, 50, width=2),
+                    movable=False  # Prevent accidental dragging
                 )
                 self.calibration_chart.addItem(self.min_deadzone_rect)
 
-            # Draw max deadzone rectangle
+            # Draw max deadzone rectangle - red barrier always visible when deadzone > 0
             if max_deadzone > 0 and hasattr(self, 'draggable_plot') and self.draggable_plot:
                 self.max_deadzone_rect = self.draggable_plot.pg.LinearRegionItem(
                     values=[100.0 - float(max_deadzone), 100.0],
                     orientation='vertical',
-                    brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 100),
-                    pen=self.draggable_plot.pg.mkPen(200, 50, 50)
+                    brush=self.draggable_plot.pg.mkBrush(200, 50, 50, 120),  # More opaque red
+                    pen=self.draggable_plot.pg.mkPen(200, 50, 50, width=2),
+                    movable=False  # Prevent accidental dragging
                 )
                 self.calibration_chart.addItem(self.max_deadzone_rect)
 
@@ -845,9 +925,15 @@ class PedalCalibrationWidget(QWidget):
         range_layout.addWidget(self.max_label)
         
         button_layout = QHBoxLayout()
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QCursor
+        
         set_min_btn = QPushButton("Set Min")
+        set_min_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         set_max_btn = QPushButton("Set Max")
+        set_max_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         reset_btn = QPushButton("Reset")
+        reset_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         
         # Blue styling for Set Min/Max buttons
         blue_style = """
@@ -1016,95 +1102,81 @@ class PedalCalibrationWidget(QWidget):
                 self.output_progress.setValue(out_int)
                 self._last_output_progress = out_int
         
-        # Update the response dot on the curve respecting deadzones
+        # Update the response dot - stays exactly on the orange curve line (deadzone-aware)
         try:
             if PYTQTGRAPH_AVAILABLE and self.response_dot:
-                if self.max_value != self.min_value:
-                    normalized_input = ((value - self.min_value) / (self.max_value - self.min_value)) * 100.0
+                # 1) Normalize raw input to 0..1
+                if self.max_value > self.min_value:
+                    n = (value - self.min_value) / (self.max_value - self.min_value)
                 else:
-                    normalized_input = 0.0
-                normalized_input = max(0.0, min(100.0, normalized_input))
+                    n = value / 65535
+                n = 0.0 if n < 0.0 else (1.0 if n > 1.0 else n)
 
-                lower = float(getattr(self, 'min_deadzone', 0))
-                upper = 100.0 - float(getattr(self, 'max_deadzone', 0))
-                if upper < lower:
-                    upper = lower
+                # 2) Apply deadzones to get effective position in 0..1
+                eff = apply_deadzones_norm(
+                    v=n,
+                    dz_min=getattr(self, 'min_deadzone', 0) / 100.0,
+                    dz_max=getattr(self, 'max_deadzone', 0) / 100.0,
+                )
 
-                # Sort points to guarantee correct interpolation
-                points = sorted(zip(self.curve_x, self.curve_y), key=lambda p: p[0])
-                first_x, first_y = points[0]
-                last_x, last_y = points[-1]
-
-                # Clamp x to deadzone bounds for visualization
-                if normalized_input <= lower:
-                    x_in = lower
-                    # If lower is left of first_x, still use first point's y (0% expected)
-                    y_out = first_y
-                elif normalized_input >= upper:
-                    x_in = upper
-                    y_out = last_y
+                # 3) Map effective 0..1 into the anchored chart domain [min_dz .. 100-max_dz]
+                anchor_min = float(getattr(self, 'min_deadzone', 0))
+                anchor_max = 100.0 - float(getattr(self, 'max_deadzone', 0))
+                span = anchor_max - anchor_min
+                if span <= 0.0:
+                    # Degenerate span: pin to anchor_min
+                    x_pos = anchor_min
                 else:
-                    x_in = normalized_input
-                    # Interpolate along the orange line
-                    y_out = last_y  # fallback
-                    for i in range(len(points) - 1):
-                        x1, y1 = points[i]
-                        x2, y2 = points[i + 1]
-                        if x1 <= x_in <= x2:
-                            t = 0.0 if x2 == x1 else (x_in - x1) / (x2 - x1)
-                            y_out = y1 + t * (y2 - y1)
-                            break
+                    x_pos = anchor_min + eff * span
 
-                # Keep the dot glued to the orange line
-                self.response_dot.setData([x_in], [y_out])
-                self._last_dot_x, self._last_dot_y = x_in, y_out
+                # 4) Evaluate orange curve at that anchored X position for Y
+                # Use the ACTUAL points being rendered by the draggable plot (anchored endpoints)
+                if hasattr(self, 'draggable_plot') and self.draggable_plot:
+                    px = self.draggable_plot.curve_x
+                    py = self.draggable_plot.curve_y
+                else:
+                    px = self.curve_x
+                    py = self.curve_y
+                curve_points_01 = [(x/100.0, y/100.0) for x, y in zip(px, py)]
+                y_pos = eval_curve(x_pos / 100.0, curve_points_01) * 100.0
+
+                # 5) Move the dot (fast path)
+                self.response_dot.setData([x_pos], [y_pos])
         except Exception:
             pass
     
     def calculate_output_with_curve(self, raw_value: int) -> float:
-        """Calculate output percentage based on input and current curve."""
-        if self.max_value == self.min_value:
-            return 0.0
-        
-        # Normalize input to 0-100 range
-        normalized_input = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
-        normalized_input = max(0, min(100, normalized_input))
-        
-        # Apply deadzones: delay 0% by min_deadzone, and reach 100% early by max_deadzone
-        min_dz = float(getattr(self, 'min_deadzone', 0))
-        max_dz = float(getattr(self, 'max_deadzone', 0))
-        if normalized_input <= min_dz:
-            return 0.0
-        if normalized_input >= (100.0 - max_dz):
-            normalized_input = 100.0
-        # Rescale mid-range (min_dz..(100-max_dz)) to fill 0..100 output span
-        usable = 100.0 - min_dz - max_dz
-        if usable > 0 and min_dz < normalized_input < (100.0 - max_dz):
-            normalized_input = ((normalized_input - min_dz) / usable) * 100.0
-            normalized_input = max(0.0, min(100.0, normalized_input))
-        
-        # Sort points by x-coordinate for proper interpolation
-        points = list(zip(self.curve_x, self.curve_y))
-        points.sort(key=lambda p: p[0])
-        sorted_x, sorted_y = zip(*points)
-        
-        # Interpolate between curve points
-        if normalized_input <= 0:
-            return sorted_y[0]
-        elif normalized_input >= 100:
-            return sorted_y[-1]
-        else:
-            # Find the two points to interpolate between
-            for i in range(len(sorted_x) - 1):
-                x1, y1 = sorted_x[i], sorted_y[i]
-                x2, y2 = sorted_x[i + 1], sorted_y[i + 1]
-                
-                if x1 <= normalized_input <= x2:
-                    # Linear interpolation
-                    ratio = (normalized_input - x1) / (x2 - x1)
-                    return y1 + ratio * (y2 - y1)
-        
-        return normalized_input  # Fallback to linear
+        """Calculate output percentage based on input and current curve using unified math."""
+        try:
+            # Use unified curve math for consistency
+            rng = AxisRanges(self.min_value, self.max_value)
+            dz = Deadzone(
+                getattr(self, 'min_deadzone', 0) / 100.0,
+                getattr(self, 'max_deadzone', 0) / 100.0
+            )
+            
+            # Convert curve points to 0..1 range for eval_piecewise_linear
+            curve_points = [(x/100.0, y/100.0) for x, y in zip(self.curve_x, self.curve_y)]
+            
+            # Use the unified mapping pipeline
+            _, _, output_norm = map_raw(
+                raw=float(raw_value),
+                rmin=float(rng.raw_min),
+                rmax=float(rng.raw_max),
+                dz_min=dz.min_pct,
+                dz_max=dz.max_pct,
+                curve_points=curve_points
+            )
+            
+            # Convert back to percentage for UI display
+            return output_norm * 100.0
+            
+        except Exception:
+            # Fallback to linear if anything fails
+            if self.max_value == self.min_value:
+                return 0.0
+            normalized = ((raw_value - self.min_value) / (self.max_value - self.min_value)) * 100
+            return max(0.0, min(100.0, normalized))
     
     def set_current_as_min(self):
         """Set current input value as minimum."""
@@ -1132,12 +1204,87 @@ class PedalCalibrationWidget(QWidget):
         self.curve_x = [0, 25, 50, 75, 100]
         self.curve_y = [0, 25, 50, 75, 100]
         
+        # Reset deadzones to zero when resetting response curve
+        self.min_deadzone = 0
+        self.max_deadzone = 0
+        
+        # Find and reset deadzone widget if available
+        try:
+            deadzone_widget = self._find_deadzone_widget()
+            if deadzone_widget and hasattr(deadzone_widget, 'reset_deadzones'):
+                deadzone_widget.reset_deadzones()
+        except Exception as e:
+            logger.debug(f"Could not reset deadzone widget: {e}")
+        
         # Update the chart if available
         if hasattr(self, 'draggable_plot') and self.draggable_plot:
             self.draggable_plot.set_curve_data(self.curve_x, self.curve_y, self.on_curve_points_changed)
         
+        # Update deadzone visualization to remove red barriers
+        self.update_deadzone_visualization()
+        
+        # Re-add the response dot after clearing the chart
+        self._ensure_response_dot()
+        
         self.emit_calibration_update()
         # logger.info(f"Reset calibration for {self.pedal_name}")
+    
+    def set_deadzone_values(self, min_deadzone: int, max_deadzone: int):
+        """Set deadzone values and update visualization immediately."""
+        self.min_deadzone = min_deadzone
+        self.max_deadzone = max_deadzone
+        # Immediate visualization update - no delays or debouncing
+        try:
+            from PyQt6.QtCore import QTimer
+            # Use QTimer.singleShot(0) to ensure this runs on the next event loop cycle
+            # This prevents any blocking and ensures immediate visual feedback
+            QTimer.singleShot(0, self.update_deadzone_visualization)
+        except:
+            # Fallback to direct call if timer fails
+            self.update_deadzone_visualization()
+    
+    def _find_deadzone_widget(self):
+        """Find the deadzone widget for this pedal."""
+        try:
+            if hasattr(self.parent(), 'layout') and self.parent() is not None:
+                layout = self.parent().layout()
+                if layout:
+                    for i in range(layout.count()):
+                        item = layout.itemAt(i)
+                        if item and item.widget():
+                            widget = item.widget()
+                            if hasattr(widget, 'pedal_name') and widget.pedal_name == self.pedal_name:
+                                if hasattr(widget, '__class__') and 'DeadzoneWidget' in widget.__class__.__name__:
+                                    return widget
+        except Exception as e:
+            logger.debug(f"Error finding deadzone widget: {e}")
+        return None
+    
+    def _ensure_response_dot(self):
+        """Ensure the response dot exists and is added to the chart."""
+        try:
+            if PYTQTGRAPH_AVAILABLE and hasattr(self, 'calibration_chart') and self.calibration_chart:
+                # Remove existing dot if it exists
+                if hasattr(self, 'response_dot') and self.response_dot:
+                    try:
+                        self.calibration_chart.removeItem(self.response_dot)
+                    except:
+                        pass
+                
+                # Create new response dot
+                import pyqtgraph as pg
+                self.response_dot = pg.PlotDataItem([], [], symbol='o', pen=None)  # pen=None = just the symbol
+                self.response_dot.setSymbolSize(10)
+                self.response_dot.setSymbolBrush('#ffffff')
+                self.response_dot.setSymbolPen('#000000', width=1)
+                self.response_dot.setZValue(1000)  # draw on top
+                self.calibration_chart.addItem(self.response_dot)
+                
+                # Reset dot position cache
+                self._last_dot_x = None
+                self._last_dot_y = None
+        except Exception as e:
+            logger.debug(f"Error ensuring response dot: {e}")
     
     def on_curve_changed(self, curve_name: str):
         # logger.info(f"Curve changed for {self.pedal_name}: {curve_name}")
@@ -1175,6 +1322,13 @@ class PedalCalibrationWidget(QWidget):
                 pass
         
         self.emit_calibration_update()
+        
+        # Make sure the response dot remains and is repositioned to the new curve immediately
+        try:
+            self._ensure_response_dot()
+            self.update_input_value(self.current_input)
+        except Exception:
+            pass
     
     def emit_calibration_update(self):
         data = {
@@ -1211,3 +1365,45 @@ class PedalCalibrationWidget(QWidget):
             self.update_deadzone_visualization()
         except Exception:
             pass
+
+    def cleanup(self):
+        """Clean up Qt resources to prevent handle exhaustion."""
+        try:
+            # Clean up plot widget
+            if hasattr(self, 'plot') and self.plot:
+                if hasattr(self.plot, 'plot_widget'):
+                    self.plot.plot_widget.deleteLater()
+                self.plot = None
+
+            # Clean up combo boxes
+            for attr in ['curve_combo', 'curve_selector']:
+                if hasattr(self, attr):
+                    widget = getattr(self, attr)
+                    if widget:
+                        widget.clear()
+                        widget.deleteLater()
+                        setattr(self, attr, None)
+
+            # Clean up buttons
+            for attr in ['reset_btn', 'save_btn', 'load_btn']:
+                if hasattr(self, attr):
+                    widget = getattr(self, attr)
+                    if widget:
+                        widget.deleteLater()
+                        setattr(self, attr, None)
+
+            # Clean up labels and progress bars
+            for attr in ['value_label', 'output_label', 'progress_bar', 'title_label']:
+                if hasattr(self, attr):
+                    widget = getattr(self, attr)
+                    if widget:
+                        widget.deleteLater()
+                        setattr(self, attr, None)
+
+        except Exception as e:
+            logger.debug(f"Error cleaning up calibration widget: {e}")
+
+    def closeEvent(self, event):
+        """Handle widget close event."""
+        self.cleanup()
+        super().closeEvent(event) if hasattr(super(), 'closeEvent') else None

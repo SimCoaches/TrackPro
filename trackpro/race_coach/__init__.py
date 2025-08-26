@@ -3,6 +3,9 @@
 import logging
 from PyQt6.QtWidgets import QApplication
 
+# Import ui submodule for convenience
+from . import ui
+
 # Remove redundant library silencing - this is now handled by logging_config.py
 # for library in ['urllib3', 'httpcore', 'httpx', 'hpack', 'gotrue', 'postgrest']:
 #     logging.getLogger(library).setLevel(logging.WARNING)

@@ -32,30 +32,14 @@ class PerformanceManager(QObject):
         logger.info("✅ PerformanceManager initialized (timers deferred)")
     
     def setup_performance_monitoring(self):
-        """Setup performance monitoring timers - called when actually needed."""
-        if self._timers_started:
-            return
-            
-        self.ui_timer = QTimer()
-        self.ui_timer.timeout.connect(self.process_ui_updates)
-        self.ui_timer.start(16)
-        
-        self.chart_timer = QTimer()
-        self.chart_timer.timeout.connect(self.process_chart_updates)
-        self.chart_timer.start(33)
-        
-        self.perf_timer = QTimer()
-        self.perf_timer.timeout.connect(self.log_performance)
-        self.perf_timer.start(5000)
-        
-        self._timers_started = True
-        logger.info("✅ Performance monitoring timers started")
+        """DISABLED - Performance manager no longer used."""
+        logger.info("🛑 Performance manager DISABLED - pedal thread handles UI directly")
+        return
     
     def queue_ui_update(self, pedal_data):
-        """Queue UI update - starts timers if not already started."""
-        if not self._timers_started:
-            self.setup_performance_monitoring()
-            
+        """DISABLED - Performance manager no longer used."""
+        return
+
         try:
             while not self.ui_update_queue.empty():
                 try:
@@ -85,7 +69,7 @@ class PerformanceManager(QObject):
     def process_ui_updates(self):
         start_time = time.perf_counter()
         updates_processed = 0
-        
+
         while not self.ui_update_queue.empty() and updates_processed < 5:
             try:
                 data = self.ui_update_queue.get_nowait()
@@ -144,9 +128,10 @@ class ChartOptimizer(QObject):
         self.last_chart_update = {}
         self.update_threshold = 0.033
         self.batch_updates = {}
-        self.batch_timer = QTimer()
-        self.batch_timer.timeout.connect(self.flush_batched_updates)
-        self.batch_timer.start(16)
+        # DISABLED: ChartOptimizer timer causing handle exhaustion
+        # self.batch_timer = QTimer()
+        # self.batch_timer.timeout.connect(self.flush_batched_updates)
+        # self.batch_timer.start(16)
     
     def should_update_chart(self, chart_id: str, current_time: float):
         last_update = self.last_chart_update.get(chart_id, 0)
