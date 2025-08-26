@@ -1,7 +1,9 @@
 """Homepage with user welcome, date, and announcements."""
 
 import logging
+import time
 from datetime import datetime
+from typing import Dict, Any
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QScrollArea, QFrame, QGridLayout, QPushButton, QSizePolicy, QGraphicsDropShadowEffect, QGraphicsOpacityEffect)
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
@@ -9,6 +11,7 @@ from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QBrush, QColor, QPen
 from ...avatar_manager import AvatarManager
 from ...modern.shared.base_page import BasePage
+from ...state_manager import get_state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +20,19 @@ class HomePage(BasePage):
     
     def __init__(self, global_managers=None):
         super().__init__("home", global_managers)
+        
+        # PERFORMANCE: Use central state manager to prevent cascades
+        self.state_manager = get_state_manager()
+        self.state_manager.register_component('home_page', self)
+        
+        # Connect to central state manager signals
+        self.state_manager.auth_state_changed.connect(self._on_central_auth_change)
+        self.state_manager.user_profile_changed.connect(self._on_central_user_profile_change)
+        
+        # Legacy auth tracking (deprecated - use central state manager)
         self._auth_check_completed = False
         self._cached_auth_state = None
+        
         self.setup_ui()
         
     def init_page(self):
@@ -1156,22 +1170,24 @@ class HomePage(BasePage):
     def initialize_avatar(self):
         """Initialize the avatar with current user or default."""
         try:
-            # Try to get complete user profile first (includes avatar_url)
+            # PERFORMANCE OPTIMIZATION: Use optimized user service with cached data
             try:
-                from ....social import enhanced_user_manager
-                complete_profile = enhanced_user_manager.get_complete_user_profile()
+                from ...optimized_user_service import get_user_service
+                user_service = get_user_service()
+                complete_profile = user_service.get_cached_user_profile()  # Use cached data first
+                
                 if complete_profile:
                     # Update welcome message
                     name = complete_profile.get('display_name') or complete_profile.get('username') or complete_profile.get('name', 'User')
                     self.welcome_label.setText(f"Welcome back, {name}!")
                     
-                    # Update avatar with complete user data (includes avatar_url)
-                    self.update_user_avatar(complete_profile)
+                    # PERFORMANCE: Start avatar loading in background thread
+                    self._load_avatar_async(complete_profile)
                     
-                    logger.info(f"✅ Avatar initialized with complete profile: {name}")
+                    logger.info(f"🚀 Avatar initialization optimized for: {name}")
                     return
             except Exception as profile_error:
-                logger.debug(f"Could not get complete user profile: {profile_error}")
+                logger.debug(f"Optimized profile loading failed: {profile_error}")
             
             # Fallback to basic user manager
             from ....auth.user_manager import get_current_user
@@ -1199,6 +1215,24 @@ class HomePage(BasePage):
             logger.error(f"Error initializing avatar: {e}")
             # Fallback to default
             self.create_avatar_with_initials("TP", "TrackPro")
+    
+    def _load_avatar_async(self, user_profile: Dict[str, Any]):
+        """Load user avatar in background thread to prevent UI blocking."""
+        import threading
+        
+        def _background_avatar_load():
+            try:
+                # Use the existing update_user_avatar method but in background
+                from PyQt6.QtCore import QTimer
+                # Schedule the avatar update on the main thread
+                QTimer.singleShot(100, lambda: self.update_user_avatar(user_profile))
+                logger.debug("🚀 Avatar loading scheduled in background")
+            except Exception as e:
+                logger.debug(f"Background avatar loading failed: {e}")
+        
+        # Start background thread
+        thread = threading.Thread(target=_background_avatar_load, daemon=True)
+        thread.start()
             
     def show_signup_dialog(self):
         """Show the signup dialog."""
@@ -1285,7 +1319,20 @@ class HomePage(BasePage):
 
     def refresh_header(self):
         """Refresh the header with current user information."""
+        import time
+        
         try:
+            # PERFORMANCE: Prevent multiple header refreshes during startup
+            current_time = time.time()
+            if not hasattr(self, '_last_header_refresh_time'):
+                self._last_header_refresh_time = 0
+            
+            # Skip if called too frequently (within 0.5 seconds)
+            if current_time - self._last_header_refresh_time < 0.5:
+                logger.debug("🔄 Skipping header refresh - called too frequently")
+                return
+                
+            self._last_header_refresh_time = current_time
             logger.info("🔄 Home page refresh_header started...")
             
             # Get current user
@@ -1311,20 +1358,30 @@ class HomePage(BasePage):
                     except Exception as auth_error:
                         logger.error(f"❌ Error hiding auth buttons container: {auth_error}")
 
-                # NEW: ensure avatar is updated after authentication using the full profile
+                # NEW: ensure avatar is updated after authentication using cached profile from main window
                 try:
-                    from ....social.user_manager import EnhancedUserManager
-                    profile = EnhancedUserManager().get_complete_user_profile(current_user.id)
-                    if profile:
-                        self.update_user_avatar(profile)
-                        logger.info("✅ Avatar updated from complete profile")
+                    # Try to get cached profile from parent main window first
+                    cached_profile = None
+                    if hasattr(self.parent(), 'get_current_user_info'):
+                        cached_profile = self.parent().get_current_user_info()
+                    
+                    if cached_profile:
+                        self.update_user_avatar(cached_profile)
+                        logger.info("✅ Avatar updated from cached profile (prevents DB query)")
                     else:
-                        # Fallback to minimal structure if profile unavailable
-                        self.update_user_avatar({
-                            'avatar_url': None,
-                            'display_name': current_user.name or current_user.email,
-                            'username': None,
-                        })
+                        # Fallback to direct query only if cache unavailable
+                        from ....social.user_manager import EnhancedUserManager
+                        profile = EnhancedUserManager().get_complete_user_profile(current_user.id)
+                        if profile:
+                            self.update_user_avatar(profile)
+                            logger.info("✅ Avatar updated from complete profile")
+                        else:
+                            # Fallback to minimal structure if profile unavailable
+                            self.update_user_avatar({
+                                'avatar_url': None,
+                                'display_name': current_user.name or current_user.email,
+                                'username': None,
+                            })
                 except Exception as avatar_err:
                     logger.debug(f"Avatar refresh skipped: {avatar_err}")
                 
@@ -1380,3 +1437,53 @@ class HomePage(BasePage):
         self._cached_auth_state = None
         # Check authentication state when page is activated
         self.on_auth_state_changed()
+    
+    # === CENTRAL STATE MANAGER HANDLERS ===
+    
+    def _on_central_auth_change(self, is_authenticated: bool):
+        """Handle authentication state changes from central state manager."""
+        try:
+            logger.info(f"🏛️ Home page: Central auth state change: {is_authenticated}")
+            
+            # Only refresh if this is a meaningful auth change
+            current_auth_state = self.state_manager.get_component_state('home_page', 'last_auth_state')
+            if current_auth_state == is_authenticated:
+                logger.debug("🔄 Home page: Auth state unchanged - skipping refresh")
+                return
+            
+            # Update component state
+            self.state_manager.set_component_state('home_page', 'last_auth_state', is_authenticated)
+            
+            # Use central coordination to schedule header refresh
+            operation_name = "home_page_header_refresh"
+            if self.state_manager.register_operation(operation_name):
+                try:
+                    # Schedule coordinated header refresh
+                    self.state_manager.schedule_deferred_operation(
+                        "home_page_auth_refresh",
+                        self.refresh_header,
+                        100  # 100ms delay to allow auth to settle
+                    )
+                    logger.info("✅ Home page: Scheduled coordinated auth refresh")
+                finally:
+                    self.state_manager.complete_operation(operation_name)
+            else:
+                logger.debug("🔄 Home page: Header refresh already scheduled - skipping")
+            
+        except Exception as e:
+            logger.error(f"❌ Home page: Error handling central auth change: {e}")
+    
+    def _on_central_user_profile_change(self, user_profile: dict):
+        """Handle user profile changes from central state manager."""
+        try:
+            logger.info(f"🏛️ Home page: Central user profile change: {user_profile.get('name', 'Unknown')}")
+            
+            # Update avatar with new profile using central coordination
+            self.state_manager.schedule_deferred_operation(
+                "home_page_avatar_update",
+                lambda: self.update_user_avatar(user_profile),
+                50  # 50ms delay
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Home page: Error handling central user profile change: {e}")

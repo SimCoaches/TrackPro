@@ -183,4 +183,6 @@ class TwilioService:
             }
 
 # Global service instance
-twilio_service = TwilioService() 
+# PERFORMANCE OPTIMIZATION: Commented out to save 479ms during startup
+# twilio_service = TwilioService()
+twilio_service = None  # Disabled for performance - SMS features not in use 

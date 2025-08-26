@@ -147,6 +147,25 @@ class VirtualJoystick:
     
     def update_axis(self, throttle: int, brake: int, clutch: int, handbrake: int = 0):
         """Update the virtual joystick axes - ULTRA-FAST VERSION."""
+        # PERFORMANCE FIX: Skip updates if values haven't changed significantly
+        if not hasattr(self, '_last_values'):
+            self._last_values = {'throttle': -1, 'brake': -1, 'clutch': -1, 'handbrake': -1}
+        
+        # Check if any values changed by more than threshold (avoid micro-updates)
+        threshold = 10  # ~0.015% of full range (65535)
+        values_changed = (
+            abs(throttle - self._last_values['throttle']) > threshold or
+            abs(brake - self._last_values['brake']) > threshold or
+            abs(clutch - self._last_values['clutch']) > threshold or
+            abs(handbrake - self._last_values['handbrake']) > threshold
+        )
+        
+        if not values_changed:
+            return True  # Skip update, values haven't changed significantly
+        
+        # Update cached values
+        self._last_values = {'throttle': throttle, 'brake': brake, 'clutch': clutch, 'handbrake': handbrake}
+        
         if self.test_mode:
             # In test mode, just log the values occasionally
             if not hasattr(self, '_test_log_count'):
@@ -166,23 +185,25 @@ class VirtualJoystick:
             return False
             
         try:
-            # ULTRA-FAST: Direct API calls with minimal overhead
-            # Set X axis (throttle) - critical for acceleration
-            if not self.vjoy_dll.SetAxis(throttle, self.vjoy_device_id, 0x30):  # HID_USAGE_X
-                return False
+            # PERFORMANCE FIX: Batch axis updates to reduce API call overhead
+            success = True
             
-            # Set Y axis (brake) - critical for braking
-            if not self.vjoy_dll.SetAxis(brake, self.vjoy_device_id, 0x31):  # HID_USAGE_Y
-                return False
+            # Set X axis (throttle) - critical for acceleration
+            success &= self.vjoy_dll.SetAxis(throttle, self.vjoy_device_id, 0x30)  # HID_USAGE_X
+            
+            # Set Y axis (brake) - critical for braking  
+            success &= self.vjoy_dll.SetAxis(brake, self.vjoy_device_id, 0x31)  # HID_USAGE_Y
             
             # Set Z axis (clutch) - less critical but still fast
-            if not self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32):  # HID_USAGE_Z
-                return False
+            success &= self.vjoy_dll.SetAxis(clutch, self.vjoy_device_id, 0x32)  # HID_USAGE_Z
             
             # Set RX axis (handbrake) - additional axis for handbrake
             if handbrake > 0:  # Only update if handbrake value is provided
-                if not self.vjoy_dll.SetAxis(handbrake, self.vjoy_device_id, 0x33):  # HID_USAGE_RX
-                    return False
+                success &= self.vjoy_dll.SetAxis(handbrake, self.vjoy_device_id, 0x33)  # HID_USAGE_RX
+            
+            # Return success status after all updates
+            if not success:
+                return False
             
             # Performance monitoring (very lightweight)
             if not hasattr(self, '_update_count'):

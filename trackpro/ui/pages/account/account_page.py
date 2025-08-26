@@ -537,9 +537,40 @@ class AccountPage(QWidget):
             pass
 
     def select_section(self, section_key: str):
-        """Select a section by key and update nav + content."""
+        """Select a section by key and update nav + content. Uses lazy loading for performance."""
         if section_key not in self.pages:
             return
+            
+        # LAZY LOADING: Create sections on first access
+        if hasattr(self, '_lazy_pages') and section_key in self._lazy_pages:
+            lazy_info = self._lazy_pages[section_key]
+            if not lazy_info["created"]:
+                logger.info(f"Lazy loading {section_key} section on first access...")
+                try:
+                    # Get the method to create this section
+                    method_name = lazy_info["method"]
+                    create_method = getattr(self, method_name, None)
+                    if create_method:
+                        # Create the actual section content
+                        actual_section = create_method()
+                        
+                        # Replace the placeholder with the actual content
+                        placeholder_index = self.content_area.indexOf(self.pages[section_key])
+                        self.content_area.removeWidget(self.pages[section_key])
+                        self.pages[section_key].deleteLater()  # Clean up placeholder
+                        
+                        # Add the real section
+                        self.pages[section_key] = actual_section
+                        self.content_area.insertWidget(placeholder_index, actual_section)
+                        
+                        # Mark as created
+                        lazy_info["created"] = True
+                        logger.info(f"Successfully lazy loaded {section_key} section")
+                    else:
+                        logger.error(f"Method {method_name} not found for section {section_key}")
+                except Exception as e:
+                    logger.error(f"Failed to lazy load {section_key}: {e}")
+        
         # Update buttons
         if hasattr(self, 'nav_buttons'):
             for key, btn in self.nav_buttons.items():
@@ -549,24 +580,42 @@ class AccountPage(QWidget):
         logger.info(f"Switched to account section: {section_key}")
     
     def create_pages(self):
-        """Create all content sections."""
-        self.pages = {
-            "profile": self.create_profile_section(),
-            "security": self.create_security_section(),
-            "notifications": self.create_notifications_section(),
-            "racing": self.create_racing_section(),
-            "connections": self.create_connections_section(),
-            "privacy": self.create_privacy_section()
+        """Create all content sections using lazy loading for performance."""
+        # Initialize lazy loading system
+        self._lazy_pages = {
+            "profile": {"created": False, "method": "create_profile_section"},
+            "security": {"created": False, "method": "create_security_section"}, 
+            "notifications": {"created": False, "method": "create_notifications_section"},
+            "racing": {"created": False, "method": "create_racing_section"},
+            "connections": {"created": False, "method": "create_connections_section"},
+            "privacy": {"created": False, "method": "create_privacy_section"}
         }
         
-        # Add admin/hierarchy sections based on user permissions
+        # Create placeholders for all sections
+        self.pages = {}
+        for section_name in self._lazy_pages.keys():
+            if section_name == "profile":
+                # Pre-load profile section since it's the default
+                try:
+                    self.pages[section_name] = self.create_profile_section()
+                    self._lazy_pages[section_name]["created"] = True
+                except Exception as e:
+                    logger.error(f"Failed to preload profile section: {e}")
+                    self.pages[section_name] = self._create_placeholder_widget(section_name)
+            else:
+                # Create placeholder for all other sections
+                self.pages[section_name] = self._create_placeholder_widget(section_name)
+        
+        # Add admin/hierarchy sections based on user permissions (also lazy)
         try:
             from trackpro.auth.hierarchy_manager import hierarchy_manager
             user = get_current_user()
             if user and hierarchy_manager.is_user_dev(user.id):
-                self.pages["admin"] = self.create_admin_section()
+                self._lazy_pages["admin"] = {"created": False, "method": "create_admin_section"}
+                self.pages["admin"] = self._create_placeholder_widget("admin")
             if user and (hierarchy_manager.is_user_dev(user.id) or hierarchy_manager.is_user_moderator(user.id)):
-                self.pages["hierarchy"] = self.create_hierarchy_section()
+                self._lazy_pages["hierarchy"] = {"created": False, "method": "create_hierarchy_section"}
+                self.pages["hierarchy"] = self._create_placeholder_widget("hierarchy")
         except Exception:
             pass
         
@@ -585,6 +634,24 @@ class AccountPage(QWidget):
         else:
             paddock_layout.addWidget(QLabel("Race Pass coming soon!"))
         self.content_area.addWidget(self.paddock_pass_section)
+    
+    def _create_placeholder_widget(self, section_name: str):
+        """Create a loading placeholder widget for a section."""
+        placeholder = QWidget()
+        placeholder_layout = QVBoxLayout(placeholder)
+        loading_label = QLabel(f"Loading {section_name.title()}...")
+        loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading_label.setStyleSheet("""
+            QLabel {
+                color: #888888;
+                font-size: 16px;
+                font-weight: 500;
+                padding: 50px;
+                background: transparent;
+            }
+        """)
+        placeholder_layout.addWidget(loading_label)
+        return placeholder
     
     def create_profile_section(self):
         """Create the user profile section."""
@@ -756,6 +823,20 @@ class AccountPage(QWidget):
         layout.addWidget(save_btn)
         
         layout.addStretch()
+        
+        # CRITICAL: Load user data immediately after profile section is created
+        logger.info("🔄 Profile section created, loading user data from Supabase...")
+        try:
+            from PyQt6.QtCore import QTimer
+            # Load user data with a short delay to ensure all UI elements are ready
+            QTimer.singleShot(100, self.load_user_data)
+        except Exception:
+            # Fallback: load synchronously if QTimer unavailable
+            try:
+                self.load_user_data()
+            except Exception as e:
+                logger.error(f"Failed to load user data: {e}")
+        
         # Best-effort immediate prefill from current user (no network)
         try:
             from ....auth.user_manager import get_current_user as _get_current_user
@@ -3224,16 +3305,31 @@ Total: ~128.0 MB | Last updated: Just now"""
                 profile = mgr.get_complete_user_profile()
                 logger.info(f"✅ Got profile: {profile}")
                 if profile:
-                    # Defensive: always refresh canonical social fields (username/display_name/bio)
+                    # CRITICAL FIX: Query BOTH user_profiles AND user_details tables
                     try:
-                        up = supabase_client.from_("user_profiles").select("username, display_name, bio").eq("user_id", user_response.user.id).single().execute()
+                        # Query user_profiles table for social/display fields
+                        up = supabase_client.from_("user_profiles").select("username, display_name, bio, first_name, last_name").eq("user_id", user_response.user.id).single().execute()
                         if up and up.data:
+                            logger.info(f"✅ Profile data from user_profiles: {up.data}")
                             if up.data.get('username'):
                                 profile['username'] = up.data['username']
                             if up.data.get('display_name'):
                                 profile['display_name'] = up.data['display_name']
                             if up.data.get('bio') is not None:
                                 profile['bio'] = up.data['bio'] or ""
+                            if up.data.get('first_name'):
+                                profile['first_name'] = up.data['first_name']
+                            if up.data.get('last_name'):
+                                profile['last_name'] = up.data['last_name']
+                                
+                        # Query user_details table for personal information  
+                        ud = supabase_client.from_("user_details").select("date_of_birth, phone_number").eq("user_id", user_response.user.id).single().execute()
+                        if ud and ud.data:
+                            logger.info(f"✅ Details data from user_details: {ud.data}")
+                            if ud.data.get('date_of_birth'):
+                                profile['date_of_birth'] = ud.data['date_of_birth']
+                            if ud.data.get('phone_number'):
+                                profile['phone_number'] = ud.data['phone_number']
                     except Exception:
                         pass
                         # As an extra fast-path, check public display info for username
@@ -3301,10 +3397,12 @@ Total: ~128.0 MB | Last updated: Just now"""
                         "bio": md.get('bio', ""),
                         "date_of_birth": md.get('date_of_birth', '1995-01-01')
                     }
-                    # Try to backfill canonical profile fields directly from DB
+                    # CRITICAL FIX: Query BOTH user_profiles AND user_details tables
                     try:
+                        # Query user_profiles table (contains: username, display_name, bio, first_name, last_name)
                         up = supabase_client.from_("user_profiles").select("username, display_name, bio, first_name, last_name").eq("user_id", user_response.user.id).single().execute()
                         if up and up.data:
+                            logger.info(f"✅ Loaded from user_profiles: {up.data}")
                             if up.data.get('username'):
                                 local_user_data['username'] = up.data['username']
                             if up.data.get('display_name'):
@@ -3316,131 +3414,189 @@ Total: ~128.0 MB | Last updated: Just now"""
                                 local_user_data['first_name'] = up.data['first_name']
                             if up.data.get('last_name'):
                                 local_user_data['last_name'] = up.data['last_name']
-                    except Exception:
+                        else:
+                            logger.warning("⚠️ No data found in user_profiles table")
+                        
+                        # Query user_details table (contains: date_of_birth, phone_number, etc.)
+                        ud = supabase_client.from_("user_details").select("date_of_birth, phone_number").eq("user_id", user_response.user.id).single().execute()
+                        if ud and ud.data:
+                            logger.info(f"✅ Loaded from user_details: {ud.data}")
+                            if ud.data.get('date_of_birth'):
+                                local_user_data['date_of_birth'] = ud.data['date_of_birth']
+                            if ud.data.get('phone_number'):
+                                local_user_data['phone_number'] = ud.data['phone_number']
+                        else:
+                            logger.warning("⚠️ No data found in user_details table")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error loading profile data from database: {e}")
                         pass
             except Exception:
                 local_user_data = None
 
-            def _apply():
-                logger.info("🔄 _apply() called - applying data to UI")
-                try:
-                    if local_user_data is None:
-                        logger.warning("⚠️ No user data to apply, retrying...")
-                        try:
-                            QTimer.singleShot(750, self.load_user_data)
-                        except Exception as e:
-                            logger.error(f"❌ Error scheduling retry: {e}")
-                        return
-                    self.user_data = local_user_data
-                    logger.info(f"Loading user data: {self.user_data}")
-                    
-                    # Ensure all UI elements exist before trying to populate them
-                    required_elements = ['first_name_input', 'last_name_input', 'display_name_input', 'email_input', 'bio_input']
-                    missing_elements = [elem for elem in required_elements if not hasattr(self, elem)]
-                    
-                    if missing_elements:
-                        logger.error(f"Missing UI elements: {missing_elements}")
-                        # Retry loading after a short delay
-                        QTimer.singleShot(200, self.load_user_data)
-                        return
-                    
-                    logger.info("All required UI elements found, proceeding with data population")
-                    
-                    if hasattr(self, 'first_name_input'):
-                        # Always prefer the canonical username/display_name from DB over any early prefill
-                        # Prefer canonical username from user_profiles; fallback to display_name
-                        canonical_username = (self.user_data.get("username") or "").strip() or (self.user_data.get("display_name") or "").strip()
-                        logger.info(f"Setting canonical username: '{canonical_username}'")
-                        
-                        self.first_name_input.setText(self.user_data.get("first_name", ""))
-                        self.last_name_input.setText(self.user_data.get("last_name", ""))
-                        
-                        if canonical_username:
-                            # Clear any placeholder text and set the actual value
-                            self.display_name_input.clear()
-                            self.display_name_input.setText(canonical_username)
-                            logger.info(f"Set display_name_input to: '{canonical_username}'")
-                            # Verify the value was actually set
-                            actual_value = self.display_name_input.text()
-                            logger.info(f"Verified display_name_input now contains: '{actual_value}'")
-                        else:
-                            logger.warning("No canonical username found!")
-                            
-                        self.email_input.setText(self.user_data.get("email", ""))
-                        
-                        # QTextEdit expects plain text; ensure we set it correctly
-                        bio_text = (self.user_data.get("bio") if self.user_data.get("bio") is not None else "") or ""
-                        logger.info(f"Setting bio to: '{bio_text}'")
-                        try:
-                            # Clear any placeholder text and set the actual value
-                            self.bio_input.clear()
-                            # Always display saved bio from Supabase if available; default to empty string
-                            self.bio_input.setPlainText(bio_text)
-                            logger.info(f"Successfully set bio_input to: '{bio_text}'")
-                            # Verify the value was actually set
-                            actual_bio = self.bio_input.toPlainText()
-                            logger.info(f"Verified bio_input now contains: '{actual_bio}'")
-                        except Exception as e:
-                            logger.error(f"Error setting bio with setPlainText: {e}")
-                            # Fallback for environments where setPlainText may not be available
-                            try:
-                                self.bio_input.setText(bio_text)
-                                logger.info(f"Fallback: set bio_input with setText to: '{bio_text}'")
-                                # Verify the value was actually set
-                                actual_bio = self.bio_input.toPlainText()
-                                logger.info(f"Fallback verified bio_input now contains: '{actual_bio}'")
-                            except Exception as e2:
-                                logger.error(f"Error setting bio with setText: {e2}")
-                        # Date of birth
-                        try:
-                            from PyQt6.QtCore import QDate
-                            dob_str = self.user_data.get("date_of_birth", "")
-                            if dob_str:
-                                dob_date = QDate.fromString(dob_str, "yyyy-MM-dd")
-                                if dob_date.isValid():
-                                    self.dob_input.setDate(dob_date)
-                        except Exception:
-                            pass
-                        # Avatar
-                        # Prefer canonical avatar_url; fall back to known auth metadata variants
-                        alt_keys = ["avatar_url", "auth_avatar_url", "picture", "avatar", "image_url", "photoURL"]
-                        avatar_url = None
-                        for k in alt_keys:
-                            v = self.user_data.get(k)
-                            if isinstance(v, str) and len(v.strip()) > 0:
-                                avatar_url = v.strip()
-                                break
-                        if avatar_url:
-                            self.load_avatar_from_url(avatar_url)
-                        else:
-                            first_val = self.user_data.get("first_name") or "User"
-                            last_val = self.user_data.get("last_name") or ""
-                            display_name = f"{first_val} {last_val}".strip()
-                            try:
-                                AvatarManager.instance().set_label_avatar(
-                                    self.profile_avatar,
-                                    None,
-                                    display_name,
-                                    size=self.profile_avatar.width()
-                                )
-                            except Exception:
-                                # Fallback to initials text if avatar manager unavailable
-                                first_initial = (first_val[0] if len(first_val) > 0 else "U").upper()
-                                last_initial = (last_val[0] if len(last_val) > 0 else "").upper()
-                                self.profile_avatar.setText(f"{first_initial}{last_initial}")
-                finally:
-                    try:
-                        self.refresh_hierarchy_status()
-                    except Exception:
-                        pass
-
+            # CRITICAL FIX: Store data and trigger UI update
+            logger.info(f"🔄 Worker finished, applying data to UI. Data loaded: {local_user_data is not None}")
+            self._pending_user_data = local_user_data
             try:
-                QTimer.singleShot(0, _apply)
-            except Exception:
-                _apply()
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self._apply_user_data_to_ui)
+                logger.info("✅ Scheduled UI update via QTimer")
+            except Exception as e:
+                logger.error(f"❌ Error scheduling UI update: {e}")
+                # Direct fallback
+                try:
+                    self._apply_user_data_to_ui()
+                    logger.info("✅ Applied UI update directly")
+                except Exception as e2:
+                    logger.error(f"❌ Error applying UI update directly: {e2}")
 
         self._user_load_thread = threading.Thread(target=_worker, name="AccountUserLoad", daemon=True)
         self._user_load_thread.start()
+
+    def _apply_user_data_to_ui(self):
+        """Apply loaded user data to UI elements - runs on main UI thread."""
+        if not hasattr(self, '_pending_user_data'):
+            logger.warning("⚠️ No pending user data to apply")
+            return
+            
+        local_user_data = self._pending_user_data
+        logger.info("🔄 _apply_user_data_to_ui() called - applying data to UI")
+        try:
+            if local_user_data is None:
+                logger.warning("⚠️ No user data to apply, retrying...")
+                try:
+                    QTimer.singleShot(750, self.load_user_data)
+                except Exception as e:
+                    logger.error(f"❌ Error scheduling retry: {e}")
+                return
+            
+            self.user_data = local_user_data
+            logger.info(f"Loading user data: {self.user_data}")
+            
+            # Ensure all UI elements exist before trying to populate them
+            required_elements = ['first_name_input', 'last_name_input', 'display_name_input', 'email_input', 'bio_input']
+            missing_elements = [elem for elem in required_elements if not hasattr(self, elem)]
+            
+            if missing_elements:
+                logger.error(f"Missing UI elements: {missing_elements}")
+                # Retry loading after a short delay
+                QTimer.singleShot(200, self.load_user_data)
+                return
+            
+            logger.info("All required UI elements found, proceeding with data population")
+            
+            logger.info(f"🔍 RAW DATABASE DATA: {self.user_data}")
+            
+            # Extract and log all field values
+            username = self.user_data.get("username") or self.user_data.get("display_name") or ""
+            bio = self.user_data.get("bio") or ""
+            first_name = self.user_data.get("first_name") or ""
+            last_name = self.user_data.get("last_name") or ""
+            email = self.user_data.get("email") or ""
+            dob = self.user_data.get("date_of_birth") or ""
+            
+            logger.info(f"📋 EXTRACTED FIELD VALUES:")
+            logger.info(f"   Username: '{username}' (length: {len(username)})")
+            logger.info(f"   Bio: '{bio}' (length: {len(bio)})")
+            logger.info(f"   First Name: '{first_name}' (length: {len(first_name)})")
+            logger.info(f"   Last Name: '{last_name}' (length: {len(last_name)})")
+            logger.info(f"   Email: '{email}' (length: {len(email)})")
+            logger.info(f"   Date of Birth: '{dob}' (length: {len(dob)})")
+            
+            # Apply to UI fields with verification
+            if hasattr(self, 'first_name_input'):
+                self.first_name_input.setText(first_name)
+                logger.info(f"✅ First name field set, verification: '{self.first_name_input.text()}'")
+                
+            if hasattr(self, 'last_name_input'):
+                self.last_name_input.setText(last_name)
+                logger.info(f"✅ Last name field set, verification: '{self.last_name_input.text()}'")
+                
+            if hasattr(self, 'display_name_input'):
+                self.display_name_input.clear()
+                self.display_name_input.setText(username)
+                logger.info(f"✅ Username field set to: '{username}', verification: '{self.display_name_input.text()}'")
+                    
+            if hasattr(self, 'email_input'):
+                self.email_input.setText(email)
+                logger.info(f"✅ Email field set, verification: '{self.email_input.text()}'")
+                
+            # BIO FIELD - Clear and set from database
+            if hasattr(self, 'bio_input'):
+                try:
+                    self.bio_input.clear()
+                    self.bio_input.setPlainText(bio)
+                    logger.info(f"✅ Bio field set to: '{bio}', verification: '{self.bio_input.toPlainText()}'")
+                except Exception as e:
+                    logger.error(f"❌ Error setting bio with setPlainText: {e}")
+                    try:
+                        self.bio_input.setText(bio)
+                        logger.info(f"✅ Bio field set with setText fallback, verification: '{self.bio_input.toPlainText()}'")
+                    except Exception as e2:
+                        logger.error(f"❌ Error setting bio with setText: {e2}")
+                
+            # DATE OF BIRTH FIELD - Set from database
+            if hasattr(self, 'dob_input') and dob:
+                try:
+                    from PyQt6.QtCore import QDate
+                    dob_date = QDate.fromString(dob, "yyyy-MM-dd")
+                    if dob_date.isValid():
+                        self.dob_input.setDate(dob_date)
+                        logger.info(f"✅ DOB field set to: '{dob}' -> {dob_date.toString()}, verification: {self.dob_input.date().toString()}")
+                    else:
+                        logger.warning(f"⚠️ Invalid date format in database: '{dob}'")
+                except Exception as e:
+                    logger.error(f"❌ Error setting date of birth: {e}")
+            elif hasattr(self, 'dob_input'):
+                logger.info("ℹ️ No Date of Birth in database - keeping default")
+                
+            # AVATAR - Set from database or fallback to initials
+            if hasattr(self, 'profile_avatar'):
+                alt_keys = ["avatar_url", "auth_avatar_url", "picture", "avatar", "image_url", "photoURL"]
+                avatar_url = None
+                for k in alt_keys:
+                    v = self.user_data.get(k)
+                    if isinstance(v, str) and len(v.strip()) > 0:
+                        avatar_url = v.strip()
+                        break
+                
+                if avatar_url:
+                    logger.info(f"✅ Avatar URL found: {avatar_url[:50]}...")
+                    self.load_avatar_from_url(avatar_url)
+                else:
+                    logger.info("ℹ️ No avatar URL, using initials")
+                    first_val = first_name or "User"
+                    last_val = last_name or ""
+                    display_name = f"{first_val} {last_val}".strip()
+                    try:
+                        AvatarManager.instance().set_label_avatar(
+                            self.profile_avatar,
+                            None,
+                            display_name,
+                            size=self.profile_avatar.width()
+                        )
+                    except Exception:
+                        # Fallback to initials text if avatar manager unavailable
+                        first_initial = (first_val[0] if len(first_val) > 0 else "U").upper()
+                        last_initial = (last_val[0] if len(last_val) > 0 else "").upper()
+                        self.profile_avatar.setText(f"{first_initial}{last_initial}")
+                
+            logger.info("🎯 ALL PROFILE FIELDS POPULATED FROM DATABASE!")
+                
+        except Exception as e:
+            logger.error(f"❌ Error applying user data to UI: {e}")
+            import traceback
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+        
+        # Always refresh hierarchy status
+        try:
+            self.refresh_hierarchy_status()
+        except Exception as e:
+            logger.error(f"❌ Error refreshing hierarchy status: {e}")
+        
+        # Clear pending data after successful application
+        if hasattr(self, '_pending_user_data'):
+            delattr(self, '_pending_user_data')
 
     def refresh_hierarchy_status(self):
         """Refresh the displayed hierarchy level and moderation status for the current user."""

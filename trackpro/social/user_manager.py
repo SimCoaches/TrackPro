@@ -21,7 +21,7 @@ class EnhancedUserManager(DatabaseManager):
     # =====================================================
     
     def get_complete_user_profile(self, user_id: str = None) -> Optional[Dict[str, Any]]:
-        """Get complete user profile with stats and social data.
+        """Get complete user profile with stats and social data using optimized service.
         
         Args:
             user_id: User ID to get profile for (defaults to current user)
@@ -30,64 +30,37 @@ class EnhancedUserManager(DatabaseManager):
             Complete user profile data or None
         """
         try:
-            if not user_id:
-                # Ensure we have a valid supabase client
-                if not self.supabase:
-                    self.supabase = get_supabase_client()
-                    if not self.supabase:
-                        logger.error("No Supabase client available for user profile query")
-                        return None
-                
-                user_response = self.supabase.auth.get_user()
-                if not user_response or not user_response.user:
-                    logger.warning("No authenticated user found for profile query")
-                    return None
-                user_id = user_response.user.id
+            # PERFORMANCE OPTIMIZATION: Use centralized optimized user service
+            # This eliminates duplicate database queries and uses concurrent loading + caching
+            from ..ui.optimized_user_service import get_user_service
+            user_service = get_user_service()
             
-            # Get data from both user_profiles and user_details tables
-            profile_data = {}
+            # Get optimized profile data (concurrent queries + caching)
+            profile_data = user_service.get_complete_user_profile(user_id)
             
-            # Try to get from user_profiles table
-            try:
-                profile_response = self.supabase.from_("user_profiles").select("*").eq("user_id", user_id).limit(1).execute()
-                if profile_response.data:
-                    profile_data.update(profile_response.data[0])
-                    logger.info(f"Found user {user_id} in user_profiles table")
-            except Exception as e:
-                logger.warning(f"Error querying user_profiles table: {e}")
+            if not profile_data:
+                logger.warning(f"No profile data found for user {user_id or 'current'}")
+                return None
             
-            # Try to get from user_details table (for additional account details)
-            try:
-                details_response = self.supabase.from_("user_details").select("*").eq("user_id", user_id).limit(1).execute()
-                if details_response.data:
-                    # SAFETY: do not overwrite canonical social fields from user_profiles with
-                    # empty/None values that might exist in legacy schemas. Prefer non-null values.
-                    details_row = details_response.data[0]
-                    for field_name, field_value in details_row.items():
-                        # Never let details override these if they already exist from profiles
-                        if field_name in {"username", "display_name", "bio"}:
-                            if field_name not in profile_data or not profile_data.get(field_name):
-                                if field_value is not None and field_value != "":
-                                    profile_data[field_name] = field_value
-                            continue
-                        # For all other fields, prefer non-null values from details
-                        if field_value is not None:
-                            profile_data[field_name] = field_value
-                    logger.info(f"Found user {user_id} in user_details table")
+            logger.debug(f"✅ OPTIMIZED: Got complete profile via optimized service for user {user_id or 'current'}")
+            
+            # PERFORMANCE: The optimized service already combines data from both tables
+            # and handles all the field merging logic, so we can directly return it
+            
+            # Ensure we have the user_id for compatibility
+            if 'user_id' not in profile_data:
+                if user_id:
+                    profile_data['user_id'] = user_id
                 else:
-                    logger.info(f"User {user_id} not found in user_details table")
-            except Exception as e:
-                logger.warning(f"Error querying user_details table: {e}")
+                    # Extract from current user if not provided
+                    if not self.supabase:
+                        self.supabase = get_supabase_client()
+                    if self.supabase:
+                        user_response = self.supabase.auth.get_user()
+                        if user_response and user_response.user:
+                            profile_data['user_id'] = user_response.user.id
             
-            # If we have any data, return it
-            if profile_data:
-                # Ensure we have the user_id
-                profile_data['user_id'] = user_id
-                return profile_data
-            
-            # If no data found in either table, return None
-            logger.warning(f"User {user_id} not found in either user_profiles or user_details table")
-            return None
+            return profile_data
             
         except Exception as e:
             logger.error(f"Error getting complete user profile: {e}")

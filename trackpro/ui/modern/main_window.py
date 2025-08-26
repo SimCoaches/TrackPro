@@ -1,4 +1,5 @@
 import logging
+import time
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QPushButton, QLabel, QSystemTrayIcon, QMenu
 from PyQt6.QtCore import pyqtSignal, Qt, QPoint
 from PyQt6.QtGui import QIcon, QAction
@@ -11,6 +12,8 @@ from ..pages.home import HomePage
 from ..pages.community import CommunityPage
 # App tracking
 from trackpro.utils.app_tracker import start_app_tracking, stop_app_tracking, update_user_online_status, update_app_tracker_user_id
+# Central state management
+from ..state_manager import get_state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +46,20 @@ class ModernMainWindow(QMainWindow):
         self.custom_title_bar = None
         self.drag_position = QPoint()
         
-        # PERFORMANCE: Prevent multiple auth checks during startup
+        # PERFORMANCE: Use central state manager to prevent cascades
+        self.state_manager = get_state_manager()
+        self.state_manager.register_component('main_window', self)
+        
+        # Connect to central state manager signals INSTEAD of creating our own
+        self.state_manager.auth_state_changed.connect(self._on_central_auth_change)
+        self.state_manager.user_profile_changed.connect(self._on_central_user_profile_change)
+        
+        # Legacy compatibility - but these should eventually be removed
         self._startup_auth_check_completed = False
         self._cached_user_info = None
+        self._user_info_cache_time = 0
+        self._user_info_cache_ttl = 30
+        self._auth_state_update_in_progress = False
         
         self.init_performance_optimization()
         self.init_global_managers()
@@ -1246,9 +1260,16 @@ class ModernMainWindow(QMainWindow):
             
             user_id = user.user.id
             
-            # Fetch profile from database (combine user_details + user_profiles)
-            details_result = supabase.client.table('user_details').select('*').eq('user_id', user_id).execute()
-            profiles_result = supabase.client.table('user_profiles').select('first_name, last_name, bio, username, display_name').eq('user_id', user_id).execute()
+            # PERFORMANCE OPTIMIZATION: Use optimized user service instead of separate queries
+            from ..optimized_user_service import get_user_service
+            user_service = get_user_service()
+            combined_profile = user_service.get_complete_user_profile(user_id)
+            
+            # Convert to legacy format for compatibility
+            details_result = type('MockResult', (), {'data': [combined_profile] if combined_profile else []})()
+            profiles_result = type('MockResult', (), {'data': [combined_profile] if combined_profile else []})()
+            
+            logger.debug(f"✅ OPTIMIZED: Load user profile via optimized service")
             
             if (details_result.data and len(details_result.data) > 0) or (profiles_result.data and len(profiles_result.data) > 0):
                 profile = {}
@@ -1451,8 +1472,40 @@ class ModernMainWindow(QMainWindow):
             )
     
     def update_auth_state(self, authenticated):
-        """Update the entire UI based on authentication state."""
+        """Update the entire UI based on authentication state via central state manager."""
         logger.info(f"🔄 update_auth_state called with authenticated={authenticated}")
+        
+        # PERFORMANCE: Use central state manager to prevent cascades
+        try:
+            # Get current user info if authenticated
+            user_info = None
+            if authenticated:
+                user_info = self.get_current_user_info()
+                if not user_info:
+                    logger.warning("⚠️ No user info available for authenticated state")
+                    authenticated = False
+            
+            # Delegate to central state manager
+            state_changed = self.state_manager.set_auth_state(authenticated, user_info)
+            
+            if state_changed:
+                logger.info(f"✅ Auth state updated via central manager: {authenticated}")
+            else:
+                logger.debug(f"🔄 Auth state unchanged: {authenticated}")
+            
+            return
+            
+        except Exception as e:
+            logger.error(f"❌ Error in update_auth_state: {e}")
+            return
+        
+        # === LEGACY CODE BELOW - SHOULD BE REMOVED ONCE CENTRAL MANAGER IS STABLE ===
+        # PERFORMANCE: Prevent concurrent auth state updates
+        if self._auth_state_update_in_progress:
+            logger.debug("🔄 Auth state update already in progress, skipping duplicate call")
+            return
+        
+        self._auth_state_update_in_progress = True
         
         # CRITICAL: Use defensive programming to prevent crashes
         # Each operation is isolated so failures don't cascade
@@ -1605,6 +1658,9 @@ class ModernMainWindow(QMainWindow):
             except:
                 logger.error("❌ Failed to emit fallback auth state signal")
                 pass
+        finally:
+            # PERFORMANCE: Reset flag to allow future auth state updates
+            self._auth_state_update_in_progress = False
     
     def refresh_auth_state(self):
         """Manually refresh authentication state - useful for fixing sync issues."""
@@ -1903,9 +1959,15 @@ class ModernMainWindow(QMainWindow):
             pass
     
     def get_current_user_info(self):
-        """Get current user information."""
+        """Get current user information via central state manager."""
         try:
-            logger.info("🔄 get_current_user_info started...")
+            # Use central state manager cache instead of local cache
+            user_info = self.state_manager.get_user_profile()
+            if user_info:
+                logger.debug("🏛️ CENTRAL CACHE HIT: Returning user info from state manager")
+                return user_info
+            
+            logger.info("🔄 get_current_user_info started (cache miss)...")
             
             # Try to get user from user manager first
             logger.info("🔍 Getting user from user manager...")
@@ -1915,27 +1977,19 @@ class ModernMainWindow(QMainWindow):
             if current_user and current_user.is_authenticated:
                 logger.info(f"✅ Found authenticated user in user manager: {current_user.email}")
                 
-                # Get complete user profile if available
-                logger.info("🔍 Getting complete user profile...")
+                # Get complete user profile using optimized service
+                logger.info("🔍 Getting complete user profile via optimized service...")
                 try:
-                    from trackpro.social.user_manager import EnhancedUserManager
-                    user_manager = EnhancedUserManager()
-                    complete_profile = user_manager.get_complete_user_profile(current_user.id)
+                    from ..optimized_user_service import get_user_service
+                    user_service = get_user_service()
+                    complete_profile = user_service.get_complete_user_profile(current_user.id)
                     
                     if complete_profile:
                         logger.info(f"✅ Got complete profile for user: {complete_profile.get('display_name', 'Unknown')}")
                         # If avatar_url missing, pull from public view or auth metadata immediately
                         avatar_url = complete_profile.get('avatar_url')
-                        if not avatar_url:
-                            try:
-                                from trackpro.database.supabase_client import get_supabase_client
-                                supa = get_supabase_client()
-                                if supa:
-                                    pub = supa.from_("public_user_profiles").select("avatar_url").eq("user_id", current_user.id).single().execute()
-                                    if pub and pub.data and pub.data.get('avatar_url'):
-                                        avatar_url = pub.data.get('avatar_url')
-                            except Exception:
-                                pass
+                        # Avatar URL is already included in the optimized service data
+                        # No need for separate database query
                         if not avatar_url:
                             try:
                                 md = getattr(current_user, 'user_metadata', {}) or {}
@@ -1955,6 +2009,11 @@ class ModernMainWindow(QMainWindow):
                             'display_name': complete_profile.get('display_name')
                         }
                         logger.info(f"✅ Returning complete user info: {user_info.get('name', 'Unknown')}")
+                        
+                        # Cache the result to prevent repeated queries
+                        current_time = time.time()
+                        self._cached_user_info = user_info
+                        self._user_info_cache_time = current_time
                         return user_info
                     else:
                         logger.warning("⚠️ No complete profile found, using basic user info")
@@ -1972,9 +2031,15 @@ class ModernMainWindow(QMainWindow):
                     'display_name': current_user.name or current_user.email
                 }
                 logger.info(f"✅ Returning basic user info: {user_info.get('name', 'Unknown')}")
+                
+                # Update central state manager cache
+                current_time = time.time()
+                self.state_manager.set_auth_state(True, user_info)
                 return user_info
             else:
                 logger.info("ℹ️ No authenticated user found in user manager")
+                # Update central state manager
+                self.state_manager.set_auth_state(False)
                 return None
                 
         except Exception as e:
@@ -2522,6 +2587,166 @@ class ModernMainWindow(QMainWindow):
             import sys
             sys.exit(1)
     
+    # === CENTRAL STATE MANAGER HANDLERS ===
+    
+    def _on_central_auth_change(self, is_authenticated: bool):
+        """Handle authentication state changes from central state manager."""
+        try:
+            logger.info(f"🏛️ Central auth state change: {is_authenticated}")
+            
+            # Prevent recursive auth updates
+            operation_name = "main_window_auth_update"
+            if not self.state_manager.register_operation(operation_name):
+                logger.debug("🔄 Main window auth update already in progress - skipping")
+                return
+            
+            try:
+                # Only update UI elements that depend on auth state
+                # Don't trigger cascading refreshes!
+                
+                # Update navigation
+                self._update_navigation_auth_state(is_authenticated)
+                
+                # Update account page
+                self._update_account_page_auth_state(is_authenticated) 
+                
+                # Update menu elements
+                self._update_menu_elements_auth_state(is_authenticated)
+                
+                # Handle app tracking (with idempotency)
+                self._update_app_tracking_auth_state(is_authenticated)
+                
+                # Schedule deferred UI updates using central coordination
+                self.state_manager.schedule_deferred_operation(
+                    "main_window_deferred_updates",
+                    lambda: self._deferred_auth_ui_updates(is_authenticated),
+                    1000  # 1 second delay
+                )
+                
+                # Emit our own signal for legacy compatibility (but components should migrate to central)
+                self.auth_state_changed.emit(is_authenticated)
+                
+                logger.info("✅ Central auth state change handled")
+                
+            finally:
+                self.state_manager.complete_operation(operation_name)
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling central auth change: {e}")
+    
+    def _on_central_user_profile_change(self, user_profile: dict):
+        """Handle user profile changes from central state manager."""
+        try:
+            logger.info(f"🏛️ Central user profile change: {user_profile.get('name', 'Unknown')}")
+            
+            # Update navigation with new profile
+            self._update_navigation_with_profile(user_profile)
+            
+            logger.info("✅ Central user profile change handled")
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling central user profile change: {e}")
+    
+    def _update_navigation_auth_state(self, is_authenticated: bool):
+        """Update navigation based on auth state."""
+        try:
+            if hasattr(self, 'navigation') and self.navigation:
+                if is_authenticated:
+                    user_info = self.state_manager.get_user_profile()
+                    if user_info:
+                        self.navigation.update_user_info(user_info)
+                else:
+                    self.navigation.clear_user_info()
+                logger.debug("✅ Navigation auth state updated")
+        except Exception as e:
+            logger.error(f"❌ Error updating navigation auth state: {e}")
+    
+    def _update_navigation_with_profile(self, user_profile: dict):
+        """Update navigation with user profile."""
+        try:
+            if hasattr(self, 'navigation') and self.navigation:
+                self.navigation.update_user_info(user_profile)
+                logger.debug("✅ Navigation profile updated")
+        except Exception as e:
+            logger.error(f"❌ Error updating navigation profile: {e}")
+    
+    def _update_account_page_auth_state(self, is_authenticated: bool):
+        """Update account page based on auth state."""
+        try:
+            if hasattr(self, 'pages') and 'account' in self.pages:
+                account_page = self.pages['account']
+                if hasattr(account_page, 'set_auth_state'):
+                    account_page.set_auth_state(is_authenticated)
+                logger.debug("✅ Account page auth state updated")
+        except Exception as e:
+            logger.error(f"❌ Error updating account page auth state: {e}")
+    
+    def _update_menu_elements_auth_state(self, is_authenticated: bool):
+        """Update menu elements based on auth state."""
+        try:
+            # Update menu visibility based on auth state
+            if hasattr(self, 'login_btn'):
+                self.login_btn.setVisible(not is_authenticated)
+            if hasattr(self, 'logout_btn'):
+                self.logout_btn.setVisible(is_authenticated)
+            if hasattr(self, 'signup_btn'):
+                self.signup_btn.setVisible(not is_authenticated)
+            logger.debug("✅ Menu elements auth state updated")
+        except Exception as e:
+            logger.error(f"❌ Error updating menu elements auth state: {e}")
+    
+    def _update_app_tracking_auth_state(self, is_authenticated: bool):
+        """Update app tracking based on auth state with idempotency."""
+        try:
+            if is_authenticated:
+                user_profile = self.state_manager.get_user_profile()
+                if user_profile and user_profile.get('id'):
+                    # Only start tracking if not already tracking this user
+                    operation_name = f"app_tracking_{user_profile['id']}"
+                    if self.state_manager.register_operation(operation_name):
+                        try:
+                            success = update_app_tracker_user_id(user_profile['id'])
+                            if success:
+                                logger.debug(f"✅ App tracking started for user: {user_profile['id']}")
+                            else:
+                                logger.warning(f"⚠️ Failed to start app tracking for user: {user_profile['id']}")
+                        finally:
+                            self.state_manager.complete_operation(operation_name)
+                    else:
+                        logger.debug(f"🔄 App tracking already active for user: {user_profile['id']}")
+            else:
+                operation_name = "app_tracking_stop"
+                if self.state_manager.register_operation(operation_name):
+                    try:
+                        self.stop_app_tracking()
+                        logger.debug("✅ App tracking stopped")
+                    finally:
+                        self.state_manager.complete_operation(operation_name)
+        except Exception as e:
+            logger.error(f"❌ Error updating app tracking auth state: {e}")
+    
+    def _deferred_auth_ui_updates(self, is_authenticated: bool):
+        """Handle deferred UI updates after auth state change."""
+        try:
+            logger.debug(f"🏛️ Executing deferred auth UI updates: {is_authenticated}")
+            
+            # Update sidebar using central coordination
+            self.state_manager.schedule_deferred_operation(
+                "sidebar_refresh",
+                self._force_refresh_sidebar,
+                500  # 500ms delay
+            )
+            
+            # Update pages using central coordination
+            self.state_manager.schedule_deferred_operation(
+                "page_auth_updates", 
+                self._update_pages_auth_state,
+                200  # 200ms delay
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error in deferred auth UI updates: {e}")
+
     def closeEvent(self, event):
         """Handle application closing with proper cleanup."""
         logger.info("🧹 Window close event triggered...")

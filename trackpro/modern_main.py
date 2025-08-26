@@ -16,6 +16,7 @@ from PyQt6.QtCore import QTimer, Qt
 from trackpro.database import supabase
 from trackpro.auth.oauth_handler import OAuthHandler
 from trackpro.ui.modern import ModernMainWindow
+from trackpro.ui.state_manager import get_state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class ModernTrackProApp:
     """Modern TrackPro application with complete authentication system."""
     
     def __init__(self, oauth_handler=None, start_time=None, app=None):
-        """Initialize the modern TrackPro application."""
+        """Initialize the modern TrackPro application with central state management."""
         self.start_time = start_time
         self.oauth_handler = oauth_handler
         self.window = None
@@ -32,6 +33,10 @@ class ModernTrackProApp:
         self.cleanup_completed = False
         # Track if the user has already completed profile requirements this session
         self.profile_completion_done = False
+        
+        # PERFORMANCE: Initialize central state manager early
+        self.state_manager = get_state_manager()
+        self.state_manager.register_component('modern_main', self)
         
         # Initialize OAuth callback server attributes early
         self.oauth_callback_server = None
@@ -193,24 +198,55 @@ class ModernTrackProApp:
             raise
     
     def handle_auth_state_change(self, is_authenticated):
-        """Handle authentication state changes - SIMPLIFIED TO PREVENT CRASHES."""
+        """Handle authentication state changes via central state manager."""
         try:
             logger.info(f"🔐 Authentication state changed: {is_authenticated}")
             
-            # SIMPLIFIED: Only update the main window's auth state
-            # Defer all other operations to prevent immediate crashes
-            if hasattr(self.window, 'update_auth_state'):
-                self.window.update_auth_state(is_authenticated)
-                logger.info("✅ Main window auth state updated")
+            # PERFORMANCE: Use central state manager for coordinated auth state updates
+            operation_name = "modern_main_auth_change"
+            if not self.state_manager.register_operation(operation_name):
+                logger.debug("🏛️ Auth state change already in progress via central state manager - skipping")
+                return
             
-            # DEFER: Schedule online status updates to prevent blocking/crashes
-            from PyQt6.QtCore import QTimer
-            if is_authenticated:
-                QTimer.singleShot(2000, lambda: self._deferred_online_status_update(True))
-                # Enforce profile completion shortly after login
-                QTimer.singleShot(300, self.ensure_profile_completion)
-            else:
-                QTimer.singleShot(2000, lambda: self._deferred_online_status_update(False))
+            try:
+                # Get user info if authenticated
+                user_info = None
+                if is_authenticated and hasattr(self.window, 'get_current_user_info'):
+                    user_info = self.window.get_current_user_info()
+                
+                # Delegate to central state manager - this will coordinate all UI updates
+                state_changed = self.state_manager.set_auth_state(is_authenticated, user_info)
+                
+                if state_changed:
+                    logger.info("✅ Auth state updated via central state manager")
+                    
+                    # Schedule additional operations using central coordination
+                    if is_authenticated:
+                        # Schedule online status update
+                        self.state_manager.schedule_deferred_operation(
+                            "online_status_update",
+                            lambda: self._deferred_online_status_update(True),
+                            2000
+                        )
+                        
+                        # Schedule profile completion check
+                        self.state_manager.schedule_deferred_operation(
+                            "profile_completion_check",
+                            self.ensure_profile_completion,
+                            300
+                        )
+                    else:
+                        # Schedule offline status update
+                        self.state_manager.schedule_deferred_operation(
+                            "online_status_update",
+                            lambda: self._deferred_online_status_update(False),
+                            2000
+                        )
+                else:
+                    logger.debug("🔄 Auth state unchanged - no updates needed")
+                    
+            finally:
+                self.state_manager.complete_operation(operation_name)
                 
         except Exception as e:
             logger.error(f"❌ Error handling auth state change: {e}")

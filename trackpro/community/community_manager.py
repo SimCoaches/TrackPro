@@ -46,10 +46,13 @@ class CommunityManager(QObject):
                     self.current_user_id = None
                     self._realtime_channels = []
                     self.is_realtime_active = False
-                    self._last_realtime_event_ts = 0.0
                     self._reconnect_backoff_s = 5.0
-                    self._max_reconnect_backoff_s = 60.0
+                    self._max_reconnect_backoff_s = 120.0  # Longer max backoff
                     self._reconnect_in_progress = False
+                    # Initialize timestamps to current time to avoid false stale detection
+                    current_time = time.time()
+                    self._last_realtime_event_ts = current_time
+                    self._last_heartbeat_ts = current_time  # Track connection-level activity
                     self._reconnect_timer = None
                     self._typing_channels: dict[str, Any] = {}
                     self._pm_channels: dict[str, Any] = {}
@@ -259,17 +262,32 @@ class CommunityManager(QObject):
                             if status == 'ok':
                                 try:
                                     self._direct_rt_joined = True
+                                    self._last_heartbeat_ts = time.time()  # Track connection activity
                                 except Exception:
                                     pass
                                 logger.info("✅ Direct realtime websocket joined 'realtime:public'")
                             else:
                                 logger.error(f"❌ Direct realtime join reply not ok: {msg}")
                             continue
+                        
+                        # Handle heartbeat responses to track connection health
+                        if msg.get('event') == 'phx_reply' and msg.get('topic') == 'phoenix':
+                            try:
+                                self._last_heartbeat_ts = time.time()
+                            except Exception:
+                                pass
+                            continue
 
                         if msg.get('event') == 'postgres_changes':
                             payload = msg.get('payload') or {}
                             table = (payload.get('table') or '').lower()
                             et = (payload.get('type') or payload.get('eventType') or '').upper()
+                            # Track any message as connection activity
+                            try:
+                                self._last_heartbeat_ts = time.time()
+                            except Exception:
+                                pass
+                                
                             if table == 'community_messages' and et == 'INSERT':
                                 try:
                                     self._on_message_inserted(payload)
@@ -378,11 +396,34 @@ class CommunityManager(QObject):
                 {"event": "UPDATE", "schema": "public", "table": "community_participants"},
                 self._on_participant_changed,
             )
+            # Add error callback to handle subscription failures
+            def _on_subscription_error(error):
+                logger.warning(f"⚠️ Realtime subscription error: {error}")
+                self.is_realtime_active = False
+                
+            def _on_subscription_success():
+                logger.info("✅ Realtime subscription confirmed")
+                try:
+                    self._last_realtime_event_ts = time.time()
+                    self._last_heartbeat_ts = time.time()
+                except Exception:
+                    pass
+                    
+            # Subscribe with callbacks if supported
+            try:
+                if hasattr(channel, 'on_error'):
+                    channel.on_error(_on_subscription_error)
+                if hasattr(channel, 'on_join'):
+                    channel.on_join(_on_subscription_success)
+            except Exception:
+                pass
+                
             channel.subscribe()
             self._realtime_channels.append(channel)
             logger.info("✅ Subscribed to realtime via single multiplexed channel")
             try:
                 self._last_realtime_event_ts = time.time()
+                self._last_heartbeat_ts = time.time()
             except Exception:
                 pass
             return True
@@ -1255,35 +1296,116 @@ class CommunityManager(QObject):
             self._reconnect_timer.timeout.connect(self._realtime_health_tick)
             self._reconnect_timer.start()
             logger.info("🩺 Started realtime health monitor (10s interval)")
+            
+            # Also start a keepalive timer for client connections
+            try:
+                if not getattr(self, '_keepalive_timer', None):
+                    self._keepalive_timer = QTimer(self)
+                    self._keepalive_timer.setInterval(30000)  # Every 30 seconds
+                    self._keepalive_timer.timeout.connect(self._send_keepalive)
+                    self._keepalive_timer.start()
+                    logger.debug("🫀 Started realtime keepalive (30s interval)")
+            except Exception:
+                pass
+                
         except Exception as e:
             logger.debug(f"Health monitor init failed: {e}")
+            
+    def _send_keepalive(self) -> None:
+        """Send keepalive signal to maintain connection activity tracking."""
+        try:
+            # For client connections, just update our heartbeat timestamp
+            # This helps distinguish between "no data events" vs "connection dead"
+            if self.is_realtime_active and not getattr(self, '_direct_rt_joined', False):
+                # Only update if we haven't received real events recently
+                now = time.time()
+                last_event = getattr(self, '_last_realtime_event_ts', 0.0) or 0.0
+                if now - last_event > 25:  # No real events in 25s
+                    self._last_heartbeat_ts = now
+                    logger.debug("🫀 Keepalive: Updated heartbeat timestamp")
+        except Exception:
+            pass
 
     def _realtime_health_tick(self) -> None:
         try:
             now = time.time()
-            last = getattr(self, '_last_realtime_event_ts', 0.0) or 0.0
-            unhealthy = self.is_realtime_active and (now - last > 60.0) and (not getattr(self, '_direct_rt_joined', False))
+            last_event = getattr(self, '_last_realtime_event_ts', 0.0) or 0.0
+            last_heartbeat = getattr(self, '_last_heartbeat_ts', 0.0) or 0.0
+            last_connection_activity = max(last_event, last_heartbeat)
+            
+            # Handle invalid timestamps (0 means never set)
+            if last_connection_activity <= 0:
+                # Connection just started or timestamps are invalid - reset them
+                logger.debug("Invalid connection timestamps detected, initializing to current time")
+                self._last_heartbeat_ts = now
+                self._last_realtime_event_ts = now
+                last_connection_activity = now
+            
+            time_since_activity = now - last_connection_activity
+            
+            # Sanity check - if time seems crazy (more than 24 hours), reset
+            if time_since_activity > 86400:  # 24 hours
+                logger.warning(f"Detected invalid timestamp calculation ({int(time_since_activity)}s), resetting to current time")
+                self._last_heartbeat_ts = now
+                self._last_realtime_event_ts = now
+                time_since_activity = 0
+            
+            # More reasonable stale detection: 5 minutes without ANY activity (data or heartbeat)
+            # and distinguish between client vs direct websocket connections
+            is_direct_ws = getattr(self, '_direct_rt_joined', False)
+            
+            if is_direct_ws:
+                # Direct websocket has heartbeats every 25s, so 90s timeout is reasonable
+                timeout_threshold = 90.0
+            else:
+                # Client connections might not have heartbeats, so use longer timeout
+                timeout_threshold = 300.0  # 5 minutes
+                
+            unhealthy = (
+                self.is_realtime_active and 
+                (time_since_activity > timeout_threshold)
+            )
+            
             if unhealthy:
-                logger.warning("⚠️ Realtime appears unhealthy (stale >60s); switching to polling and scheduling reconnect")
+                logger.warning(f"⚠️ Realtime connection stale >{int(timeout_threshold)}s (last activity: {int(time_since_activity)}s ago)")
+                logger.info("🔄 Switching to polling fallback and scheduling reconnect")
                 self.is_realtime_active = False
                 try:
                     self._start_polling_fallback()
                 except Exception:
                     pass
+            
+            # Only attempt reconnection if truly disconnected and not already in progress
             if (not self.is_realtime_active) and (not self._reconnect_in_progress):
                 self._reconnect_in_progress = True
                 backoff = max(0.0, min(self._reconnect_backoff_s, self._max_reconnect_backoff_s))
-                logger.info(f"🔁 Attempting realtime rebind in {int(backoff)}s (backoff)")
+                logger.info(f"🔁 Attempting realtime rebind in {int(backoff)}s (exponential backoff: {backoff:.1f}s)")
+                
                 def _do_rebind():
                     try:
+                        # Try to refresh auth token before reconnecting
+                        try:
+                            from ..database.supabase_client import supabase_manager
+                            if supabase_manager and hasattr(supabase_manager, '_restore_session_safely'):
+                                supabase_manager._restore_session_safely()
+                        except Exception as e:
+                            logger.debug(f"Token refresh before rebind failed: {e}")
+                        
                         ok = self._rebind_realtime()
                         if ok:
                             logger.info("✅ Realtime rebind successful; resetting backoff")
                             self._reconnect_backoff_s = 5.0
                         else:
-                            self._reconnect_backoff_s = min(self._reconnect_backoff_s * 2.0, self._max_reconnect_backoff_s)
+                            # Exponential backoff with jitter to prevent thundering herd
+                            import random
+                            self._reconnect_backoff_s = min(
+                                self._reconnect_backoff_s * (1.5 + random.random() * 0.5), 
+                                self._max_reconnect_backoff_s
+                            )
+                            logger.debug(f"Rebind failed, increasing backoff to {self._reconnect_backoff_s:.1f}s")
                     finally:
                         self._reconnect_in_progress = False
+                        
                 try:
                     from PyQt6.QtCore import QTimer
                     QTimer.singleShot(int(backoff * 1000), _do_rebind)
@@ -1295,10 +1417,14 @@ class CommunityManager(QObject):
     def _rebind_realtime(self) -> bool:
         """Tear down existing realtime resources and attempt a clean re-subscribe."""
         try:
+            # Stop direct websocket if running
             try:
                 self._direct_rt_stop = True
+                self._direct_rt_joined = False
             except Exception:
                 pass
+                
+            # Clean up client channels
             try:
                 for ch in getattr(self, "_realtime_channels", []):
                     try:
@@ -1308,8 +1434,34 @@ class CommunityManager(QObject):
                 self._realtime_channels = []
             except Exception:
                 self._realtime_channels = []
+                
+            # Reset connection tracking to current time (not 0!)
+            try:
+                current_time = time.time()
+                self._last_realtime_event_ts = current_time
+                self._last_heartbeat_ts = current_time
+                logger.debug(f"Reset connection timestamps to {current_time}")
+            except Exception:
+                pass
+            
+            # Wait a moment for cleanup to complete
+            try:
+                import time
+                time.sleep(0.5)
+            except Exception:
+                pass
+                
+            # Attempt fresh connection
+            logger.info("🔄 Attempting fresh realtime connection")
             self._setup_realtime_subscriptions()
-            return bool(self.is_realtime_active)
+            
+            success = bool(self.is_realtime_active)
+            if success:
+                logger.info("✅ Realtime rebind successful")
+            else:
+                logger.warning("❌ Realtime rebind failed")
+            return success
+            
         except Exception as e:
             logger.debug(f"Realtime rebind error: {e}")
             return False
@@ -2270,7 +2422,8 @@ class CommunityManager(QObject):
             ).order("start_time").execute()
 
             events = []
-            now = datetime.now()
+            from datetime import timezone
+            now = datetime.now(timezone.utc)  # Make timezone-aware to match database timestamps
             data = getattr(response, "data", []) or []
 
             # Optionally fetch participant registrations per event

@@ -209,9 +209,15 @@ class HandbrakeInput:
             # Return mock data when no handbrake is connected
             return {'handbrake': 0}
         
+        # PERFORMANCE FIX: Only pump pygame events every 5 calls (20Hz from 100Hz)
+        if not hasattr(self, '_pump_counter'):
+            self._pump_counter = 0
+        self._pump_counter += 1
+        
         try:
-            # Update joystick state
-            pygame.event.pump()
+            # Update joystick state less frequently
+            if self._pump_counter % 5 == 0:  # Every 5 calls = 20Hz
+                pygame.event.pump()
             
             # Read handbrake axis (typically axis 0 on Arduino Leonardo)
             if self.HANDBRAKE_AXIS < self.joystick.get_numaxes():

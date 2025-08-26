@@ -6,6 +6,7 @@ and eventually will be able to chat with each other.
 """
 
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
@@ -18,6 +19,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QBrush, QColor, QPen, QFont, QIcon
 from PyQt6.QtGui import QPainterPath, QRegion
 from PyQt6.QtCore import QRect
 from .avatar_manager import AvatarManager
+from .state_manager import get_state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -514,6 +516,19 @@ class OnlineUsersSidebar(QWidget):
         self.current_user_id = None
         self.user_widgets = []  # Initialize user_widgets list
         self._user_id_to_widget: dict[str, OnlineUserItem] = {}
+        
+        # PERFORMANCE: Use central state manager to prevent repeated database queries
+        self.state_manager = get_state_manager()
+        self.state_manager.register_component('online_users_sidebar', self)
+        
+        # Connect to central state manager signals
+        self.state_manager.auth_state_changed.connect(self._on_central_auth_change)
+        
+        # Legacy cache (deprecated - use central state manager instead)
+        self._users_cache = None
+        self._users_cache_time = 0
+        self._users_cache_ttl = 30  # Cache for 30 seconds
+        self._db_load_in_progress = False
         
         # PERFORMANCE: Cache auth state to prevent duplicate calls
         self._cached_auth_state = None
@@ -1025,56 +1040,53 @@ class OnlineUsersSidebar(QWidget):
             logger.error(f"Error loading current user instantly: {e}")
     
     def get_current_user_real_data(self) -> Optional[Dict[str, Any]]:
-        """Get current user's real data from database."""
+        """Get current user's real data using optimized service."""
         try:
-            from ..database.supabase_client import get_supabase_client
-            client = get_supabase_client()
-            
-            if not client or not self.current_user_id:
+            if not self.current_user_id:
                 return None
             
-            # Fetch user profile from database - handle missing columns gracefully
-            try:
-                # Try to fetch with all fields first
-                response = client.table("user_profiles").select(
-                    "user_id, username, display_name, email, first_name, last_name, bio, created_at, avatar_url"
-                ).eq("user_id", self.current_user_id).single().execute()
-            except Exception as column_error:
-                # If first_name column doesn't exist, try without it
-                logger.warning(f"Some columns may not exist, trying fallback query: {column_error}")
-                response = client.table("user_profiles").select(
-                    "user_id, username, display_name, email, bio, created_at"
-                ).eq("user_id", self.current_user_id).single().execute()
+            # PERFORMANCE OPTIMIZATION: Use centralized optimized user service
+            # This eliminates duplicate database queries and uses concurrent loading + caching
+            from .optimized_user_service import get_user_service
+            user_service = get_user_service()
             
-            if response.data:
-                user_data = response.data
-                logger.debug(f"Raw user data from database: {user_data}")
-                
-                # Generate display name from real data
-                display_name = self._generate_display_name(user_data)
-                logger.debug(f"Generated display name: '{display_name}'")
-                
-                # Get current iRacing status if available
-                iracing_status = self._get_current_user_iracing_status()
-                
-                result = {
-                    'user_id': user_data['user_id'],
-                    'username': user_data.get('username', 'currentuser'),
-                    'display_name': display_name,
-                    'email': user_data.get('email'),
-                    'first_name': user_data.get('first_name', ''),  # Safe fallback
-                    'last_name': user_data.get('last_name', ''),    # Safe fallback
-                    'bio': user_data.get('bio'),
-                    'created_at': user_data.get('created_at'),
-                    'status': iracing_status or 'Online',
-                    'is_online': True,  # Current user is always online
-                    'is_friend': False,  # Can't be friends with yourself
-                    'avatar_url': user_data.get('avatar_url')
-                }
-                logger.debug(f"Final user data for sidebar: {result}")
-                return result
+            # Get optimized profile data (concurrent queries + caching)
+            profile_data = user_service.get_complete_user_profile(self.current_user_id)
             
-            return None
+            if not profile_data:
+                logger.debug(f"No profile data found for current user {self.current_user_id}")
+                return None
+            
+            logger.debug(f"✅ OPTIMIZED: Got current user data via optimized service")
+            
+            # The optimized service returns combined data from both tables
+            # Format it for sidebar compatibility with existing processing logic
+            user_data = profile_data
+            logger.debug(f"Raw user data from optimized service: {user_data}")
+            
+            # Generate display name from real data
+            display_name = self._generate_display_name(user_data)
+            logger.debug(f"Generated display name: '{display_name}'")
+            
+            # Get current iRacing status if available
+            iracing_status = self._get_current_user_iracing_status()
+            
+            result = {
+                'user_id': user_data['user_id'],
+                'username': user_data.get('username', 'currentuser'),
+                'display_name': display_name,
+                'email': user_data.get('email'),
+                'first_name': user_data.get('first_name', ''),  # Safe fallback
+                'last_name': user_data.get('last_name', ''),    # Safe fallback
+                'bio': user_data.get('bio'),
+                'created_at': user_data.get('created_at'),
+                'status': iracing_status or 'Online',
+                'is_online': True,  # Current user is always online
+                'is_friend': False,  # Can't be friends with yourself
+                'avatar_url': user_data.get('avatar_url')
+            }
+            logger.debug(f"Final user data for sidebar: {result}")
+            return result
             
         except Exception as e:
             logger.error(f"Error fetching current user data: {e}")
@@ -1157,24 +1169,23 @@ class OnlineUsersSidebar(QWidget):
             current_user_id = self.get_current_user_id()
             
             if is_authenticated and current_user_id:
-                # User is now authenticated - load all users
-                self.current_user_id = current_user_id
-                logger.info("✅ User authenticated - loading all users")
-                
-                # Load all users from database
-                self.load_users_from_database()
+                # Check if user state actually changed to avoid redundant loads
+                if self.current_user_id != current_user_id:
+                    # User state changed - load all users
+                    self.current_user_id = current_user_id
+                    logger.info("✅ User authenticated - loading all users")
+                    self.load_users_from_database()
+                else:
+                    # User already loaded, just refresh the list display
+                    logger.debug("✅ User already authenticated - refreshing display only")
+                    self.refresh_users_list()
             else:
-                # User not authenticated - only log once per minute to reduce spam
-                import time
-                current_time = time.time()
-                if not hasattr(self, '_last_unauth_log') or current_time - self._last_unauth_log > 60:
-                    self._last_unauth_log = current_time
+                # User not authenticated - only clear if we had users before
+                if self.all_users or self.current_user_id:
                     logger.info("✅ User not authenticated - cleared user list")
-                
-                # Clear the list silently
-                self.all_users = []
-                self.current_user_id = None
-                self.refresh_users_list()
+                    self.all_users = []
+                    self.current_user_id = None
+                    self.refresh_users_list()
         except Exception as e:
             logger.error(f"Error checking authentication and loading user: {e}")
     
@@ -1731,11 +1742,10 @@ class OnlineUsersSidebar(QWidget):
     def on_authentication_changed(self):
         """Handle authentication state changes (login/logout)."""
         # PERFORMANCE: Enhanced debouncing to prevent redundant auth state updates
-        import time
         current_time = time.time()
         
-        # Skip if called too frequently (within 500ms)
-        if current_time - self._last_refresh_time < 0.5:
+        # Skip if called too frequently (within 1 second to match database load debouncing)
+        if current_time - self._last_refresh_time < 1.0:
             logger.debug("🔄 Skipping auth change - called too frequently")
             return
             
@@ -1770,6 +1780,20 @@ class OnlineUsersSidebar(QWidget):
     
     def force_refresh(self):
         """Force refresh the user list (re-enabled)."""
+        import time
+        
+        # Debounce force refresh calls to prevent spam during startup
+        current_time = time.time()
+        if not hasattr(self, '_last_force_refresh_time'):
+            self._last_force_refresh_time = 0
+            
+        # Allow force refresh but with reasonable debouncing (0.5 seconds)
+        if current_time - self._last_force_refresh_time < 0.5:
+            logger.debug("🔄 Skipping force refresh - called too frequently")
+            return
+            
+        self._last_force_refresh_time = current_time
+        
         try:
             logger.info("🔄 Online users sidebar force refresh started...")
             self.load_users_from_database()
@@ -1778,8 +1802,38 @@ class OnlineUsersSidebar(QWidget):
             logger.error(f"❌ Error in online users sidebar force refresh: {e}")
 
     def load_users_from_database(self):
-        """Load users from the database and update the list for both authenticated and anonymous users."""
+        """Load users from the database and update the list via central state manager coordination."""
+        import time
+        
+        # PERFORMANCE: Use central state manager operation coordination
+        operation_name = "sidebar_load_users"
+        if not self.state_manager.register_operation(operation_name):
+            logger.debug("🏛️ Sidebar users load already in progress via central state manager - skipping")
+            return
+        
         try:
+            current_time = time.time()
+            
+            # Check cache first to prevent repeated database queries
+            if (self._users_cache is not None and 
+                (current_time - self._users_cache_time) < self._users_cache_ttl):
+                logger.debug("🚀 CACHE HIT: Using cached users data (prevents repeated DB queries)")
+                self.all_users = self._users_cache
+                self.refresh_users_list()
+                logger.info("✅ Users loaded from cache successfully")
+                return
+            
+            # PERFORMANCE: Enhanced debouncing to prevent redundant database calls
+            if not hasattr(self, '_last_db_load_time'):
+                self._last_db_load_time = 0
+                
+            # Skip if called too frequently (within 1 second)  
+            if current_time - self._last_db_load_time < 1.0:
+                logger.debug("🔄 Skipping user database load - called too frequently")
+                return
+                
+            self._last_db_load_time = current_time
+        
             logger.info("🔄 Loading users from database...")
 
             # Fetch all known users (increase limit to capture more members)
@@ -1842,12 +1896,21 @@ class OnlineUsersSidebar(QWidget):
             # Drive UI update through the centralized refresher
             self.refresh_users_list()
             logger.info("✅ Users loaded from database successfully")
+            
+            # Cache the result to prevent repeated queries
+            self._users_cache = self.all_users.copy()
+            self._users_cache_time = current_time
 
             # Keep add-friend bar in correct enabled/disabled state
             self.update_add_friend_ui_state()
 
         except Exception as e:
             logger.error(f"❌ Error loading users from database: {e}")
+        finally:
+            # Complete the operation in central state manager
+            self.state_manager.complete_operation(operation_name)
+            # Reset flag to allow future loads (legacy)
+            self._db_load_in_progress = False
 
     def add_user_to_list(self, user_data):
         """Add a user to the list."""
@@ -1992,3 +2055,37 @@ class OnlineUsersSidebar(QWidget):
         except Exception as e:
             logger.error(f"Error checking heartbeat status: {e}")
             return None
+    
+    # === CENTRAL STATE MANAGER HANDLERS ===
+    
+    def _on_central_auth_change(self, is_authenticated: bool):
+        """Handle authentication state changes from central state manager."""
+        try:
+            logger.info(f"🏛️ Sidebar: Central auth state change: {is_authenticated}")
+            
+            # Only refresh users if this is a meaningful auth change
+            current_auth_state = self.state_manager.get_component_state('online_users_sidebar', 'last_auth_state')
+            if current_auth_state == is_authenticated:
+                logger.debug("🔄 Sidebar: Auth state unchanged - skipping refresh")
+                return
+            
+            # Update component state
+            self.state_manager.set_component_state('online_users_sidebar', 'last_auth_state', is_authenticated)
+            
+            if is_authenticated:
+                logger.info("✅ User authenticated - scheduling coordinated user refresh")
+                # Use central coordination for the user refresh
+                self.state_manager.schedule_deferred_operation(
+                    "sidebar_auth_refresh",
+                    self.load_users_from_database,
+                    200  # 200ms delay
+                )
+            else:
+                logger.info("ℹ️ User logged out - clearing user list")
+                self.all_users = []
+                self.refresh_users_list()
+            
+            logger.info("✅ Sidebar: Central auth state change handled")
+            
+        except Exception as e:
+            logger.error(f"❌ Sidebar: Error handling central auth change: {e}")
